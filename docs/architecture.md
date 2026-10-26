@@ -9677,18 +9677,18 @@ whole batch and every refusal is reported, so `400` carries a `ValidationProblem
 **What it persists.** One additive column: `PickListRefillLines.MachineId`, nullable, with the same
 composite `(BusinessId, MachineId)` foreign key on the machines' `(BusinessId, Id)` key, restricted on
 delete, that every other column naming a local machine carries. **It is therefore a fifth place a machine
-is referred to, and machine deletion (issue #896) has to count it.** The restricted key is already the
-database's own answer — a machine a recorded allocation names cannot be deleted, proved on that reference
-alone in `EfMultiMachinePickListRefillStoreTests`, with the allocation's movement deliberately naming no
-machine so the refusal cannot be coming from the `StockAdjustments` reference an ordinary batch also
-leaves. What the database cannot supply is the operator-facing sentence:
-`Inventory.Domain.Machines.LocalMachineDeletionReferences` counts `MachineStockCounts`,
-`StockAdjustments`, `PickListRefills` (the batch header's own machine) and `OperatingExpenses`, and a
-batch leaves `PickListRefills.MachineId` `NULL`, so a machine referred to **only** by an allocation is
-refused by the foreign key's translated refusal rather than by the counted one that names what is in the
-way. Adding `PickListRefillLines` to that count (and its "pick list refill allocation" wording to
-`MachineDeletionPolicy`) is the one piece of this integration that belongs in the deletion code rather
-than here. A batch stores no machine on `PickListRefills` and one
+is referred to, and machine deletion (issue #896) counts it.** The restricted key is the database's own
+answer — a machine a recorded allocation names cannot be deleted, proved on that reference alone in
+`EfMultiMachinePickListRefillStoreTests`, with the allocation's movement deliberately naming no machine
+so the refusal cannot be coming from the `StockAdjustments` reference an ordinary batch also leaves. The
+operator-facing answer counts it too: a batch leaves `PickListRefills.MachineId` `NULL`, so
+`Inventory.Domain.Machines.LocalMachineDeletionReferences` has its own `PickListRefillAllocations`
+count of `PickListRefillLines.MachineId`, which both the delete (inside its write lock) and the machine
+reads' advisory `canDelete`/`deletionRefusal` project, and `MachineDeletionPolicy` names it as
+"pick list refill allocation". `EfLocalMachineStoreDeletionTests` proves, for a machine named by an
+allocation alone, that the reads publish the refusal and the delete gives the same counted refusal
+rather than the foreign key's. See [Deleting a machine added by
+mistake](#deleting-a-machine-added-by-mistake-issue-896). A batch stores no machine on `PickListRefills` and one
 machine on each of its lines; a single-machine refill is the other way round, and nothing copies one into
 the other. The migration `AddPickListRefillLineMachine` rebuilds `PickListRefillLines` — SQLite cannot
 add a foreign key to an existing table — and backfills nothing: a line recorded before it keeps `NULL`,
@@ -11523,10 +11523,11 @@ business's (the central tenant query filters, so another business's id is simply
 caller named), `400` with the reason otherwise — the same shape every other refusal on this resource
 uses.
 
-**The four protected references.** Exactly four tables hold `Machines.Id`, each as a composite
+**The five protected references.** Exactly five columns hold `Machines.Id`, each as a composite
 `(BusinessId, MachineId)` foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on
 delete: `MachineStockCount.MachineId` and `StockAdjustment.MachineId` (issue #741),
-`PickListRefill.MachineId` (issue #743) and `OperatingExpense.MachineId` (issue #780). Any row in any
+`PickListRefill.MachineId` (issue #743), `OperatingExpense.MachineId` (issue #780) and
+`PickListRefillLine.MachineId`, a multi-machine refill's per-allocation machine (issue #897). Any row in any
 of them refuses the delete, with the kinds and counts named — "2 machine stock counts, 1 operating
 expense" — so an operator knows where to look. **Nothing is cascaded, nulled, reassigned or
 compensated for**: every stored count, movement, refill and expense stays exactly where it is, which
@@ -11551,7 +11552,7 @@ on success so a refusal leaves the row it is about on screen. The eligibility is
 describes rows as they were read.
 
 **The check and the delete are one operation, under the link's own write lock.** `EfLocalMachineStore.DeleteAsync`
-reads the machine, counts the four tables and removes the row inside one `BEGIN IMMEDIATE`
+reads the machine, counts the five references and removes the row inside one `BEGIN IMMEDIATE`
 transaction (`SqliteWriteLockTransaction`, the shape issues #522, #537 and #743 each use), and
 `EfProviderMachineLinkStore` takes **that same** lock. That is the race the foreign keys cannot stop:
 linking is a write to the machine row itself, not a reference to it, so a deferred transaction would

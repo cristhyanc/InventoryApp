@@ -253,7 +253,7 @@ public class LocalMachineDeletionConcurrencyTests : IDisposable
             Assert.Equal(LocalMachineWriteOutcome.Refused, attempt.Outcome);
             Assert.Equal(
                 MachineDeletionPolicy.Refusal(
-                    isProviderNamed: false, provider: null, new LocalMachineDeletionReferences(0, 0, 0, 1)),
+                    isProviderNamed: false, provider: null, new LocalMachineDeletionReferences(0, 0, 0, 1, 0)),
                 attempt.Refusal);
             Assert.Null(expenseFailure);
             Assert.Single(machines);

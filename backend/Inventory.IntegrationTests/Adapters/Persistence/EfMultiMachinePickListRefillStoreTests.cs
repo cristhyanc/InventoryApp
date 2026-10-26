@@ -420,8 +420,8 @@ public class EfMultiMachinePickListRefillStoreTests
     ///
     /// <para>This is the database's backstop, not an operator-facing refusal: the counted,
     /// message-bearing refusal lives in <c>Inventory.Domain.Machines.MachineDeletionPolicy</c>, whose
-    /// reference count must learn about this column too - see the closing note in
-    /// <c>docs/architecture.md</c> § Multi-machine refill batch.</para>
+    /// reference count includes this column as its own <c>PickListRefillAllocations</c> kind, proved
+    /// for the reads and the delete in <c>EfLocalMachineStoreDeletionTests</c>.</para>
     /// </summary>
     [Fact]
     public async Task A_machine_a_recorded_allocation_names_cannot_be_deleted_by_its_own_reference_alone()

@@ -34,7 +34,7 @@ namespace Inventory.Infrastructure.Persistence;
 ///
 /// <para><strong>The delete is the one write that counts other tables</strong> (issue #896). It runs
 /// under the same <c>BEGIN IMMEDIATE</c> write lock the provider machine review's apply takes
-/// (<see cref="SqliteWriteLockTransaction"/>), counts the four tables that name a machine inside it,
+/// (<see cref="SqliteWriteLockTransaction"/>), counts the five places that name a machine inside it,
 /// and applies <see cref="MachineDeletionPolicy"/>; the restricted foreign keys are the database's own
 /// backstop behind that count, and a violation of one becomes the same refusal rather than an
 /// unhandled failure. Nothing is cascaded, nulled or reassigned.</para>
@@ -233,7 +233,7 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
 
     /// <summary>
     /// Everything that already refers to the machine, counted in one place so
-    /// <see cref="MachineDeletionPolicy"/> can say what is in the way. These are the four tables that
+    /// <see cref="MachineDeletionPolicy"/> can say what is in the way. These are the five places that
     /// hold <c>Machines.Id</c>; the provider's own stored data names the provider's machine number
     /// and is not a reference to this row (AGENTS.md § Database and migrations), which is why a
     /// machine the provider names is refused outright rather than counted.
@@ -247,7 +247,9 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
             PickListRefills: await _db.PickListRefills
                 .CountAsync(refill => refill.MachineId == id, cancellationToken),
             OperatingExpenses: await _db.OperatingExpenses
-                .CountAsync(expense => expense.MachineId == id, cancellationToken));
+                .CountAsync(expense => expense.MachineId == id, cancellationToken),
+            PickListRefillAllocations: await _db.PickListRefillLines
+                .CountAsync(line => line.MachineId == id, cancellationToken));
 
     /// <summary>
     /// Whether SQLite refused the statement because one of the restricted machine foreign keys
@@ -269,7 +271,7 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
     }
 
     /// <summary>
-    /// The chosen machines with the four reference counts beside them, in one statement: the counts
+    /// The chosen machines with the five reference counts beside them, in one statement: the counts
     /// are correlated subqueries rather than a read per machine, so a list of machines stays one
     /// round trip. The caller filters and orders <paramref name="machines"/> on the entity, because
     /// neither translates once the projection has happened. Tenant scoping is the central query
@@ -285,7 +287,8 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
                 _db.MachineStockCounts.Count(count => count.MachineId == machine.Id),
                 _db.StockAdjustments.Count(adjustment => adjustment.MachineId == machine.Id),
                 _db.PickListRefills.Count(refill => refill.MachineId == machine.Id),
-                _db.OperatingExpenses.Count(expense => expense.MachineId == machine.Id)));
+                _db.OperatingExpenses.Count(expense => expense.MachineId == machine.Id),
+                _db.PickListRefillLines.Count(line => line.MachineId == machine.Id)));
 
     /// <summary>
     /// Turns the rows into records with their deletion eligibility decided by the one rule
@@ -318,9 +321,15 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
         int MachineStockCounts,
         int StockMovements,
         int PickListRefills,
-        int OperatingExpenses)
+        int OperatingExpenses,
+        int PickListRefillAllocations)
     {
         public LocalMachineDeletionReferences References =>
-            new(MachineStockCounts, StockMovements, PickListRefills, OperatingExpenses);
+            new(
+                MachineStockCounts,
+                StockMovements,
+                PickListRefills,
+                OperatingExpenses,
+                PickListRefillAllocations);
     }
 }

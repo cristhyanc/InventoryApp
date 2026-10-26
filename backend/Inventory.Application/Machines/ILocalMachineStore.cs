@@ -49,7 +49,7 @@ public interface ILocalMachineStore
     /// <para>It exists because a read taken inside a write lock must be the read the rule needs and
     /// no more (issue #897): <see cref="ListOrderedByNameAsync"/> and <see cref="FindByIdAsync"/>
     /// also resolve a machine's name, its provider link and its deletion eligibility, and that last
-    /// one counts four other tables per machine and may read the business's sales provider (issue
+    /// one counts five other places per machine and may read the business's sales provider (issue
     /// #896). None of it decides a refill, and every other picker waits on the lock it would be read
     /// under.</para>
     /// </summary>
