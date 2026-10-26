@@ -100,20 +100,36 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     return { fixture, host, navigate, update, create, getAll };
   }
 
-  it('navigates to the product editor when a non-action part of the row is clicked', async () => {
-    const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
+  /**
+   * A row is not a link any more: clicking it, or pressing Enter in it, leaves the user on Needs
+   * Ordering. Only the controls inside the row (Name, checkbox, Stock) do anything, and the row
+   * no longer carries the `table-row-link` pointer cursor that advertised it as clickable.
+   */
+  it('does not navigate when a non-action part of the row is clicked', async () => {
+    const { host, navigate } = await render([product({ id: 9, name: 'Widget', category: { id: 1, name: 'Snacks' } })]);
+    const navigateByUrl = jest.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
 
     const row = host.querySelector('tbody tr') as HTMLTableRowElement;
-    const nameCell = row.querySelectorAll('td')[1] as HTMLTableCellElement;
-    nameCell.click();
+    (row.querySelectorAll('td')[1] as HTMLTableCellElement).click();
+    (row.querySelectorAll('td')[2] as HTMLTableCellElement).click();
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
-    expect(navigate).toHaveBeenCalledWith(['/products', 9, 'edit']);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  it('does not style the row as a link', async () => {
+    const { host } = await render([product({ id: 9, name: 'Widget' })]);
+
+    const row = host.querySelector('tbody tr') as HTMLTableRowElement;
+    expect(row.classList.contains('table-row')).toBe(true);
+    expect(row.classList.contains('table-row-link')).toBe(false);
   });
 
   /**
    * The name anchor is a real, focusable link with an accessible label, and the row is still not a
    * focusable `role="link"`. Where it points changed with issue #790 (D of #786): it is now a
-   * Google search for the product rather than the product editor, which the row click still opens.
+   * Google search for the product rather than the product editor, which this page no longer opens.
    * The encoding and the label are that issue's own spec file's.
    */
   it('gives keyboard users a real, labelled link in the Name cell instead of a focusable row with role="link"', async () => {
@@ -129,23 +145,20 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(nameLink.textContent?.trim()).toBe('Widget');
   });
 
-  it('defers Enter on the focusable Name anchor to the anchor itself instead of double-navigating', async () => {
+  it('leaves Enter on the focusable Name anchor to the anchor itself, with no in-app navigation', async () => {
     const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
 
-    // The Name anchor is the real keyboard target (it is focusable); the row's own
-    // keydown.enter handler must recognize the event originated in an own control
-    // and defer to the anchor instead of firing a second, possibly conflicting navigation.
-    const editLink = host.querySelector('tbody tr a.table-row-anchor') as HTMLAnchorElement;
-    editLink.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    const nameLink = host.querySelector('tbody tr a.table-row-anchor') as HTMLAnchorElement;
+    nameLink.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it('does not remove the Edit button twice when the name link itself is clicked', async () => {
+  it('does not navigate in the app when the name link itself is ctrl-clicked', async () => {
     const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
 
-    const editLink = host.querySelector('tbody tr a.table-row-anchor') as HTMLAnchorElement;
-    editLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+    const nameLink = host.querySelector('tbody tr a.table-row-anchor') as HTMLAnchorElement;
+    nameLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
 
     expect(navigate).not.toHaveBeenCalled();
   });
@@ -156,7 +169,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     ['Shift', { shiftKey: true }],
     ['Alt', { altKey: true }],
     ['middle-button', { button: 1 }]
-  ])('leaves a %s click on a non-action cell to the browser instead of navigating in place', async (_label, init) => {
+  ])('does not navigate on a %s click on a non-action cell', async (_label, init) => {
     const { host, navigate } = await render([product({ id: 9, name: 'Widget', category: { id: 1, name: 'Snacks' } })]);
 
     const categoryCell = host.querySelectorAll('tbody tr td')[2] as HTMLTableCellElement;
@@ -200,32 +213,17 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
   });
 
   /**
-   * Delete is still gone from this page (issue #498). The Edit link is back, and deliberately so:
-   * #498 removed it because the Name anchor was itself a focusable link to the editor, and issue
-   * #790 pointed that anchor at Google. Without a control of its own the editor would be reachable
-   * only by clicking a row, which no keyboard can do - see the Edit-link specs in
-   * `product-needs-ordering.component.purchase-costs.spec.ts`. What #498 established - no Delete,
-   * no confirmation dialog, and a row click that opens the editor - is unchanged.
+   * Delete is still gone from this page (issue #498), and so is Edit: the owner removed both the
+   * row click and the Edit link, so Needs Ordering deliberately has no route to the product editor
+   * (products are edited from All products). Stock is the row's only action.
    */
-  it('keeps Delete off Needs Ordering, and offers Edit as a focusable link to the editor', async () => {
+  it('keeps Delete and Edit off Needs Ordering, leaving Stock as the only row action', async () => {
     const { host } = await render([product({ id: 9, name: 'Widget' })]);
 
-    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
-    expect(deleteButton).toBeUndefined();
+    const actions = Array.from(host.querySelectorAll('tbody tr a.btn, tbody tr button')).map((el) => el.textContent?.trim());
+    expect(actions).toEqual(['Stock']);
+    expect(host.querySelector('a[href="/products/9/edit"]')).toBeNull();
     expect(host.textContent).not.toContain('Confirm delete');
-
-    const editLink = Array.from(host.querySelectorAll('a, button')).find((el) => el.textContent?.trim() === 'Edit');
-    expect(editLink?.tagName).toBe('A');
-    expect(editLink?.getAttribute('href')).toBe('/products/9/edit');
-  });
-
-  it('does not navigate through the row when the Edit link is clicked', async () => {
-    const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
-
-    const editLink = host.querySelector('a[href="/products/9/edit"]') as HTMLAnchorElement;
-    editLink.click();
-
-    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('sorts by name ascending then descending, with a visible and accessible active sort indicator', async () => {

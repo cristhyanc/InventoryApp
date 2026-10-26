@@ -1,7 +1,7 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { EMPTY, Observable, Subject } from 'rxjs';
 import { catchError, switchMap, take, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
@@ -173,7 +173,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     private supplierOrderService: SupplierOrderService,
     private purchaseCostService: ProductPurchaseCostService,
     private toastService: ToastService,
-    private router: Router,
     private access: AccessService,
     supportSession: SupportSessionService
   ) {
@@ -570,34 +569,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         this.toastService.error('Failed to create supplier order.');
       }
     });
-  }
-
-  /**
-   * Row click/Enter navigates to the product editor, unless it originated from a nested control
-   * (the name's Google search link, the checkbox, Stock, Edit) or is a modified/non-primary click
-   * the browser should handle. Since issue #790 the name anchor is a Google search for the product,
-   * so deferring to it is what keeps one click from doing two things.
-   *
-   * This is a convenience over the row, never the only way to the editor: a keyboard cannot click a
-   * row - the `<tr>` takes no focus and every focusable child is deferred to - so the row's own
-   * `Edit` anchor is what reaches the editor from the keyboard.
-   */
-  onRowActivate(product: Product, rowEvent: Event): void {
-    // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
-    const event = rowEvent as MouseEvent | KeyboardEvent;
-    const ownControl = (event.target as Element | null)?.closest('a, button, input, select, textarea, label');
-    const browserHandlesIt =
-      event.defaultPrevented ||
-      (event instanceof MouseEvent && event.button !== 0) ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey;
-    if (ownControl || browserHandlesIt) {
-      return;
-    }
-
-    this.router.navigate(['/products', product.id, 'edit']);
   }
 
   get sortedProducts(): Product[] {
