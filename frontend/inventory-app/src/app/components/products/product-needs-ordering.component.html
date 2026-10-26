@@ -231,6 +231,42 @@
           <span class="field-label">Notes</span>
           <textarea name="notes" [(ngModel)]="orderForm.notes"></textarea>
         </label>
+        <!--
+          Add product (issue #907): a product that is not on the Needs ordering list - or was on
+          it but not ticked - reaches this order without closing the dialog and losing the fields
+          and quantities already entered. Typing searches the active catalogue; a result already a
+          line in the order (ticked here or added earlier) is never offered again.
+        -->
+        <label class="field mt-4">
+          <span class="field-label">Add product</span>
+          <input
+            type="text"
+            name="addProductQuery"
+            placeholder="Search by product name"
+            [disabled]="savingOrder"
+            [value]="addProductQuery"
+            (input)="onAddProductQueryChange($event)"
+          />
+        </label>
+        @if (addProductSearchState === 'failed') {
+          <p class="text-md-body value-negative" role="alert">Product search failed. Try again.</p>
+        } @else if (addProductSearchState === 'loaded' && addableProducts.length === 0 && addProductQuery.trim()) {
+          <p class="field-hint">No matching products.</p>
+        } @else if (addProductSearchState === 'loaded' && addableProducts.length > 0) {
+          <ul class="mt-2 divide-y divide-md-gray-200 rounded border border-md-gray-200">
+            @for (candidate of addableProducts; track candidate.id) {
+              <li>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-secondary w-full justify-start"
+                  [disabled]="savingOrder"
+                  [attr.aria-label]="'Add ' + candidate.name + ' to order'"
+                  (click)="addProduct(candidate)"
+                >{{ candidate.name }}</button>
+              </li>
+            }
+          </ul>
+        }
         <div class="mt-4 overflow-x-auto">
           <table class="table">
             <thead class="table-head">
@@ -243,7 +279,7 @@
               </tr>
             </thead>
             <tbody>
-              @for (product of selectedProducts(); track product.id) {
+              @for (product of orderLines(); track product.id) {
                 <tr class="table-row">
                   <td class="table-cell">{{ product.name }}</td>
                   <td class="table-cell table-num">{{ product.quantityInStock }}</td>
@@ -258,7 +294,7 @@
                     <button
                       type="button"
                       class="btn btn-sm btn-secondary"
-                      [disabled]="savingOrder || sessionActive || selectedProducts().length <= 1"
+                      [disabled]="savingOrder || sessionActive || orderLines().length <= 1"
                       [attr.aria-label]="'Remove ' + product.name + ' from order'"
                       (click)="removeProduct(product.id)"
                     >Remove</button>
