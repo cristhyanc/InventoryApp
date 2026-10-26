@@ -1,4 +1,9 @@
-<div class="card">
+<!--
+  `mb-6` is the spacing between this filter card and the results card below it (issue #877): the
+  routed page is one flex child of the shell's `.page`, so the page's own 1.5rem gap falls between
+  the header and this component, never between the two cards inside it.
+-->
+<div class="card mb-6">
   <div class="card-body flex flex-wrap gap-4">
     <input class="max-w-[220px]" [ngModel]="search" (ngModelChange)="onSearchChange($event)" placeholder="Search name or SKU" />
 
