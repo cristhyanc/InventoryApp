@@ -12091,6 +12091,52 @@ membership as everywhere else. `PUT api/products/{id}` now also binds `name` and
 `unitPrice` too until issue #792 removed the field (see [A product carries no selling
 price](#a-product-carries-no-selling-price-issue-792)).
 
+**Create and update validation, and the unit label's deliberate asymmetry** (issue #895).
+`Inventory.Domain.Products.ProductCataloguePolicy` is the one statement of the invariants on the
+fields an operator maintains by hand, and it holds two: a product has a **name**, and a product has
+a **unit label**. The name rule is symmetric and unchanged — `CreateProduct` and `UpdateProduct`
+both call `Validate`, so a product cannot be edited into a state it could not have been created in.
+The unit label is required **asymmetrically**, and that is the rule rather than a concession to it:
+
+- `POST api/products` refuses a null, empty or whitespace `unit` with `400` and
+  `ProductCataloguePolicy.UnitRequiredMessage`, and saves nothing — not the product, and not the
+  opening stock movement a quantity would have recorded. The check is `ValidateUnit`, applied by
+  `CreateProduct`, because a create's answer depends on nothing but the request: a new product has no
+  stored label to preserve. `EfProductStore.CreateAsync` applies it again at the write, exactly as it
+  does for the name, so the column cannot be written blank by a future caller that forgets.
+- `PUT api/products/{id}` refuses a null, empty or whitespace `unit` **only while the stored label is
+  nonblank**, with the same `400` and the same message. So **no request can erase a label**, and a
+  product whose stored label is already blank — a row from before this rule, which nothing ever gave
+  one — is still accepted with none and keeps the blank it has. That exception exists because
+  activation is written through the *whole* product: `ProductListComponent.writeActive` sends every
+  field back with `isActive` flipped (issue #825's Deactivate, and issue #900's Reactivate), so a
+  blanket required rule on `PUT` would have made every such legacy product impossible to deactivate
+  or reactivate from the list. The rule is `ProductCataloguePolicy.UnitChangeRefusal`, and it is
+  decided by `EfProductStore.UpdateAsync` — inside the write's own transaction, on the row that
+  transaction read — for the same reason the provider-managed and category refusals are: it compares
+  a *stored* value, so the read, the comparison and the write have to be one operation. `UpdateProduct`
+  deliberately does not check it; checking the request alone could only either blank a label or
+  strand a legacy row out of use.
+- An accepted label is stored **trimmed** on both routes (`NormalizeUnit`) — trailing space is not a
+  different unit — and the column's length and type limits are unchanged. The wire contract is
+  unchanged too: `unit` stays nullable on `ProductCreateDto`/`ProductUpdateDto`, because what changed
+  is which values are *accepted*, not which are bound.
+- **Nothing is backfilled, and the provider paths are untouched.** A legacy product with no label
+  stays readable with its history exactly as it is, and gets a label only when a person edits it.
+  The catalogue import and the catalogue review still create a product without setting `Unit`, so the
+  `Product.Unit` entity default `"unit"` applies, and a linked product keeps its own local label; no
+  provider field is read for the unit, because the authoritative Lynx product contract publishes no
+  unit or volume label at all (see [Provider catalogue
+  review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). Proposing one
+  from the provider is issue #902.
+
+`ProductFormComponent` matches the server rather than wording a second rule: **New Product** and
+**Edit Product** label the field `Unit Label *`, mark the input `required`, show
+"Unit label is required." beside it and disable Save while it is blank, submit the trimmed value, and
+keep the `"unit"` default on New Product. Editing a product whose stored label is null or blank opens
+the field **empty** — the `p.unit ?? 'unit'` prefill is gone — so the operator chooses the label
+instead of having one substituted and silently saved.
+
 **Provider-managed fields.** `Inventory.Domain.Providers.ProviderManagedCatalogueFields` is the one
 statement of which fields a provider owns: a product carrying an `ExternalProductId` has its `name`
 and `categoryId` managed, a category carrying an `ExternalCategoryId` has its `name` managed, and a

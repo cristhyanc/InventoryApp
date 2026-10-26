@@ -69,8 +69,9 @@ public class EfProductCatalogueWriteTests : IDisposable
         string name = "Coke",
         int quantityInStock = 0,
         long? categoryId = null,
-        decimal? initialUnitCost = null) =>
-        new(name, "SKU-1", "A can", quantityInStock, 5, 10, "can", categoryId, true, initialUnitCost);
+        decimal? initialUnitCost = null,
+        string? unit = "can") =>
+        new(name, "SKU-1", "A can", quantityInStock, 5, 10, unit, categoryId, true, initialUnitCost);
 
     private static ProductUpdateFields UpdateFields(
         string name = "Coke",
@@ -284,6 +285,142 @@ public class EfProductCatalogueWriteTests : IDisposable
     }
 
     /// <summary>
+    /// A hand-maintained product has a unit label, and what is stored is the trimmed value (issue
+    /// #895): trailing space is not a different unit.
+    /// </summary>
+    [Fact]
+    public async Task A_created_unit_label_is_stored_trimmed()
+    {
+        long productId;
+        await using (var db = TestAppDbContext.For(_options, BusinessA))
+        {
+            var created = await StoreFor(db).CreateAsync(
+                CreateFields(unit: "  bottle  "), CancellationToken.None);
+
+            Assert.Equal(ProductWriteOutcome.Succeeded, created.Outcome);
+            productId = created.ProductId!.Value;
+        }
+
+        await using var verify = TestAppDbContext.For(_options, BusinessA);
+        Assert.Equal("bottle", (await verify.Products.AsNoTracking().SingleAsync(p => p.Id == productId)).Unit);
+    }
+
+    /// <summary>
+    /// A create with no unit label is refused and writes nothing at all - not the product, and not
+    /// the opening stock movement a created product with a quantity would otherwise record (issue
+    /// #895).
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_create_with_no_unit_label_is_refused_and_persists_nothing(string? unit)
+    {
+        await using (var db = TestAppDbContext.For(_options, BusinessA))
+        {
+            var created = await StoreFor(db).CreateAsync(
+                CreateFields(quantityInStock: 4, initialUnitCost: 1.5m, unit: unit), CancellationToken.None);
+
+            Assert.Equal(ProductWriteOutcome.Refused, created.Outcome);
+            Assert.Equal(ProductCataloguePolicy.UnitRequiredMessage, created.Refusal);
+            Assert.Null(created.ProductId);
+        }
+
+        await using var verify = TestAppDbContext.For(_options, BusinessA);
+        Assert.False(await verify.Products.AnyAsync());
+        Assert.False(await verify.StockAdjustments.AnyAsync());
+    }
+
+    /// <summary>
+    /// No request may blank a label a product already has (issue #895), and the refusal leaves the
+    /// whole row as it was - including the active flag the same request carried.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task An_update_may_not_blank_a_stored_unit_label(string? unit)
+    {
+        var productId = await SeedProductAsync(externalProductId: null, name: "Coke", unit: "bag");
+
+        await using (var db = TestAppDbContext.For(_options, BusinessA))
+        {
+            var updated = await StoreFor(db).UpdateAsync(
+                productId, UpdateFields(unit: unit, isActive: false), CancellationToken.None);
+
+            Assert.Equal(ProductWriteOutcome.Refused, updated.Outcome);
+            Assert.Equal(ProductCataloguePolicy.UnitRequiredMessage, updated.Refusal);
+        }
+
+        await using var verify = TestAppDbContext.For(_options, BusinessA);
+        var product = await verify.Products.AsNoTracking().SingleAsync(p => p.Id == productId);
+        Assert.Equal(("bag", true), (product.Unit, product.IsActive));
+    }
+
+    /// <summary>
+    /// The asymmetry issue #895 exists for: a legacy product whose stored label is missing is still
+    /// updatable with no label, because the Products list's Deactivate and Reactivate send the whole
+    /// product back through this same write and a blanket rule would strand such a row forever. The
+    /// label stays missing - nothing substitutes one and nothing is backfilled.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_product_with_no_unit_label_can_still_be_deactivated_and_reactivated()
+    {
+        var productId = await SeedProductAsync(externalProductId: null, name: "Coke", unit: null);
+
+        await using (var db = TestAppDbContext.For(_options, BusinessA))
+        {
+            Assert.Equal(
+                ProductWriteOutcome.Succeeded,
+                (await StoreFor(db).UpdateAsync(
+                    productId, UpdateFields(unit: null, isActive: false), CancellationToken.None)).Outcome);
+        }
+
+        await using (var verify = TestAppDbContext.For(_options, BusinessA))
+        {
+            var deactivated = await verify.Products.AsNoTracking().SingleAsync(p => p.Id == productId);
+            Assert.False(deactivated.IsActive);
+            Assert.True(string.IsNullOrWhiteSpace(deactivated.Unit));
+        }
+
+        await using (var db = TestAppDbContext.For(_options, BusinessA))
+        {
+            Assert.Equal(
+                ProductWriteOutcome.Succeeded,
+                (await StoreFor(db).UpdateAsync(
+                    productId, UpdateFields(unit: null, isActive: true), CancellationToken.None)).Outcome);
+        }
+
+        await using var after = TestAppDbContext.For(_options, BusinessA);
+        var reactivated = await after.Products.AsNoTracking().SingleAsync(p => p.Id == productId);
+        Assert.True(reactivated.IsActive);
+        Assert.True(string.IsNullOrWhiteSpace(reactivated.Unit));
+    }
+
+    /// <summary>
+    /// A legacy row is given its label by the ordinary edit, trimmed like any other (issue #895),
+    /// and an existing label is replaced the same way.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("bag")]
+    public async Task An_updated_unit_label_is_stored_trimmed(string? storedUnit)
+    {
+        var productId = await SeedProductAsync(externalProductId: null, name: "Coke", unit: storedUnit);
+
+        await using (var db = TestAppDbContext.For(_options, BusinessA))
+        {
+            Assert.Equal(
+                ProductWriteOutcome.Succeeded,
+                (await StoreFor(db).UpdateAsync(
+                    productId, UpdateFields(unit: "  bottle  "), CancellationToken.None)).Outcome);
+        }
+
+        await using var verify = TestAppDbContext.For(_options, BusinessA);
+        Assert.Equal("bottle", (await verify.Products.AsNoTracking().SingleAsync(p => p.Id == productId)).Unit);
+    }
+
+    /// <summary>
     /// A category of another business is not a category this product may point at, and it is refused
     /// with the same message as one that does not exist at all: the tenant query filters make the
     /// two indistinguishable, deliberately (AGENTS.md § Tenant ownership and data isolation). The
@@ -494,7 +631,12 @@ public class EfProductCatalogueWriteTests : IDisposable
         CostTransitionBaseline,
     }
 
-    private async Task<long> SeedProductAsync(string? externalProductId, string name)
+    /// <summary>
+    /// <paramref name="unit"/> is the stored unit label, which the unit-label tests of issue #895
+    /// choose explicitly: a legacy product whose label was never set reads as a blank one, and the
+    /// entity's own "unit" default would hide exactly that case.
+    /// </summary>
+    private async Task<long> SeedProductAsync(string? externalProductId, string name, string? unit = "can")
     {
         await using var seed = TestAppDbContext.For(_options, BusinessA);
         var product = new Product
@@ -503,6 +645,7 @@ public class EfProductCatalogueWriteTests : IDisposable
             ExternalProductId = externalProductId,
             LowStockThreshold = 5,
             RestockTo = 10,
+            Unit = unit,
         };
         seed.Products.Add(product);
         await seed.SaveChangesAsync();

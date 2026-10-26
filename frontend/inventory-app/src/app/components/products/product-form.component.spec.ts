@@ -1136,3 +1136,103 @@ describe('ProductFormComponent deletion notice (issue #825)', () => {
     expect(navigate).toHaveBeenCalledWith(['/products']);
   });
 });
+
+describe('ProductFormComponent requiring a Unit Label (issue #895)', () => {
+  /** Every `.field-error` paragraph on the page - the page's own error and the inline field messages. */
+  const errors = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('.field-error')).map((paragraph) => paragraph.textContent?.trim());
+
+  const unitInput = (host: HTMLElement) => host.querySelector('[name="unit"]') as HTMLInputElement;
+
+  const unitLabelText = (host: HTMLElement) =>
+    unitInput(host).closest('label')?.querySelector('.field-label')?.textContent?.trim();
+
+  it('marks Unit Label required on Edit Product, with the field accessibly labelled', async () => {
+    const { host } = await render();
+
+    expect(unitInput(host).required).toBe(true);
+    expect(unitLabelText(host)).toBe('Unit Label *');
+    expect(errors(host)).not.toContain('Unit label is required.');
+  });
+
+  it('refuses to save an edited product whose Unit Label was cleared, and says why', async () => {
+    const { fixture, component, host, update, navigate } = await render();
+
+    component.form.unit = '   ';
+    fixture.detectChanges();
+
+    expect(errors(host)).toContain('Unit label is required.');
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
+  });
+
+  /**
+   * The prefill issue #895 removed: a legacy product whose stored label is missing used to open with
+   * "unit" substituted, so an operator saved a label they never chose. The field opens empty and
+   * required instead, and nothing is written until they choose one.
+   */
+  it.each([[null], ['']])('opens a product whose stored label is %p empty and required', async (unit) => {
+    const { component, host, update } = await render({ product: product({ unit }) });
+
+    expect(component.form.unit).toBe('');
+    expect(unitInput(host).value).toBe('');
+    expect(unitInput(host).required).toBe(true);
+    expect(errors(host)).toContain('Unit label is required.');
+
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
+  });
+
+  it('gives a legacy product the label the operator chose, trimmed', async () => {
+    const { component, update, navigate } = await render({ product: product({ unit: null }) });
+
+    component.form.unit = '  bottle  ';
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ unit: 'bottle' }));
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('keeps the "unit" default on New Product and marks it required', async () => {
+    const { component, host } = await render({ routeParams: {} });
+
+    expect(component.form.unit).toBe('unit');
+    expect(unitInput(host).value).toBe('unit');
+    expect(unitInput(host).required).toBe(true);
+    expect(unitLabelText(host)).toBe('Unit Label *');
+    expect(errors(host)).not.toContain('Unit label is required.');
+  });
+
+  it('refuses to create a product with no Unit Label', async () => {
+    const { fixture, component, host, create } = await render({ routeParams: {} });
+
+    component.form.name = 'New Snack';
+    component.form.unit = '';
+    fixture.detectChanges();
+
+    expect(errors(host)).toContain('Unit label is required.');
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
+  });
+
+  it('creates the product with the entered label, trimmed', async () => {
+    const { component, create } = await render({ routeParams: {} });
+
+    component.form.name = 'New Snack';
+    component.form.unit = '  bag  ';
+    component.save();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ unit: 'bag' }));
+  });
+});

@@ -337,6 +337,43 @@ public class ProductsControllerTests
     }
 
     /// <summary>
+    /// Issue #895 at the API boundary: <c>POST api/products</c> refuses a missing unit label with the
+    /// route's existing 400 convention and persists nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Create_WithNoUnitLabel_ReturnsBadRequestAndPersistsNothing(string? unit)
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", null, null, 0, 5, 10, unit, null, true),
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.UnitRequiredMessage, badRequest.Value);
+        Assert.Empty(await db.Products.ToListAsync());
+    }
+
+    /// <summary>
+    /// An accepted unit label is stored trimmed (issue #895).
+    /// </summary>
+    [Fact]
+    public async Task Create_TrimsTheUnitLabel()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", null, null, 0, 5, 10, "  bottle  ", null, true),
+            CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+        Assert.Equal("bottle", (await db.Products.SingleAsync()).Unit);
+    }
+
+    /// <summary>
     /// The fields the update route started accepting in issue #736, less the selling price issue
     /// #792 removed. The refusals a provider-linked product gets are proved against the real
     /// relational adapter in
@@ -370,6 +407,95 @@ public class ProductsControllerTests
 
         Assert.IsType<BadRequestObjectResult>(result);
         Assert.Equal("Coke", (await db.Products.FindAsync(1L))!.Name);
+    }
+
+    /// <summary>
+    /// Issue #895: <c>PUT api/products/{id}</c> refuses a blank unit label while the stored one is
+    /// nonblank - no request may blank a label - and changes nothing, not even the active flag the
+    /// same request carried.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Update_BlankingANonblankUnitLabel_ReturnsBadRequestAndChangesNothing(string? unit)
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product
+        {
+            Id = 1,
+            Name = "Coke",
+            Unit = "bag",
+            LowStockThreshold = 5,
+            RestockTo = 10,
+            IsActive = true,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Update(
+            1, new ProductUpdateDto("Coke", null, null, 5, 10, unit, null, false));
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.UnitRequiredMessage, badRequest.Value);
+        var product = await db.Products.FindAsync(1L);
+        Assert.Equal(("bag", true), (product!.Unit, product.IsActive));
+    }
+
+    /// <summary>
+    /// The legacy row the rule is asymmetric for (issue #895): a product whose stored label is
+    /// already blank is updated with a blank one, which is what the Products list's Deactivate and
+    /// Reactivate send for such a product. The label stays blank - nothing is substituted.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public async Task Update_OfABlankStoredUnitLabel_SucceedsAndLeavesItBlank(string? storedUnit)
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product
+        {
+            Id = 1,
+            Name = "Coke",
+            Unit = storedUnit,
+            LowStockThreshold = 5,
+            RestockTo = 10,
+            IsActive = true,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Update(
+            1, new ProductUpdateDto("Coke", null, null, 5, 10, null, null, false));
+
+        Assert.IsType<NoContentResult>(result);
+        var product = await db.Products.FindAsync(1L);
+        Assert.False(product!.IsActive);
+        Assert.True(string.IsNullOrWhiteSpace(product.Unit));
+    }
+
+    /// <summary>
+    /// An accepted unit label is stored trimmed on an update too (issue #895), including the one
+    /// that gives a legacy product its first label.
+    /// </summary>
+    [Fact]
+    public async Task Update_TrimsTheUnitLabel()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product
+        {
+            Id = 1,
+            Name = "Coke",
+            Unit = null,
+            LowStockThreshold = 5,
+            RestockTo = 10,
+            IsActive = true,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Update(
+            1, new ProductUpdateDto("Coke", null, null, 5, 10, "  bottle  ", null, true));
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Equal("bottle", (await db.Products.FindAsync(1L))!.Unit);
     }
 
     /// <summary>

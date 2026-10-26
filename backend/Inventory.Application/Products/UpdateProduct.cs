@@ -14,11 +14,17 @@ namespace Inventory.Application.Products;
 ///
 /// <para>Since issue #736 the submitted fields also carry the product's name and category - and,
 /// until issue #792 removed the field, its selling price. The deterministic invariant over them
-/// lives in <see cref="ProductCataloguePolicy"/> and is checked here, before anything is written; the two
-/// refusals that depend on the stored row - a provider-managed name or category being changed, and a
-/// category this business does not own - are decided by the store, inside the same operation as the
-/// write (see <see cref="IProductStore.UpdateAsync"/>). Both reach the caller as this use case's
+/// lives in <see cref="ProductCataloguePolicy"/> and is checked here, before anything is written; the
+/// refusals that depend on the stored row - a provider-managed name or category being changed, a
+/// category this business does not own, and (since issue #895) a request that would blank a nonblank
+/// stored unit label - are decided by the store, inside the same operation as the write (see
+/// <see cref="IProductStore.UpdateAsync"/>). Each reaches the caller as this use case's
 /// <see cref="UpdateProductOutcome.Invalid"/> outcome with the refusal's own message.</para>
+///
+/// <para>The unit label is deliberately <strong>not</strong> validated here: whether a blank one is
+/// acceptable depends on the stored label, so checking it against the request alone would either
+/// blank a label or strand a legacy product with none out of use. The create's half of that rule,
+/// which depends on the request alone, is in <see cref="CreateProduct"/>.</para>
 /// </summary>
 public sealed class UpdateProduct
 {

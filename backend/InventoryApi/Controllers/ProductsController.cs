@@ -218,6 +218,11 @@ public class ProductsController : ControllerBase
     /// answers a generic 500 that carries no exception message - the same shape issue #59 gave
     /// <c>StockController</c>. Pinned by
     /// <c>InventoryApi.Tests.Controllers.ProductsControllerTests</c>'s update error-path tests.
+    ///
+    /// <para>Since issue #895 one more refusal reaches that same <c>400</c>: a request that would
+    /// blank a unit label the product already has. A product whose stored label is blank still
+    /// accepts a blank one, so the Products list's Deactivate and Reactivate - which send the whole
+    /// product back through this action - keep working for a legacy row.</para>
     /// </summary>
     [HttpPut("{id:long}")]
     public async Task<IActionResult> Update(long id, ProductUpdateDto dto)
@@ -252,8 +257,8 @@ public class ProductsController : ControllerBase
     /// </summary>
     /// <response code="201">The created product, with its database-assigned id.</response>
     /// <response code="400">
-    /// A validation refusal with its message: no name, negative restock settings, or a category
-    /// this business does not own.
+    /// A validation refusal with its message: no name, no unit label (issue #895), negative restock
+    /// settings, or a category this business does not own.
     /// </response>
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
