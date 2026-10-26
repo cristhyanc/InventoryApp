@@ -10,6 +10,8 @@ using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -120,7 +122,17 @@ public class MachineStockSyncTests
         var store = new EfMachineStockEventStore(
             db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db));
         return (
-            new SyncMachineStockFromNayax(nayax, store, new EfNayaxProductLinkStore(db)),
+            new SyncMachineStockFromNayax(
+                nayax,
+                store,
+                new EfNayaxProductLinkStore(db),
+                // The successful-fetch coverage of issue #891 is not what these fixtures are about:
+                // they are given a usable connection and an in-memory coverage store, so the sync
+                // behaves exactly as it does in production and records its claim somewhere nothing
+                // here reads. MachineRestockSyncCoverageTests is where that claim is the subject.
+                new FakeClock(EventTime),
+                new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
+                new FakeMachineRestockSyncCoverageStore()),
             new ApplyMachineStockSync(store));
     }
 

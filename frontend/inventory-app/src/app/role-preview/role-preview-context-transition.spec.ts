@@ -30,6 +30,13 @@ const MACHINES = '/api/machines';
 const SITES = '/api/sites';
 const LOW_STOCK = '/api/products/alerts/low-stock';
 const SUMMARY = '/api/dashboard/summary';
+/**
+ * The Dashboard's machine restock-sync reminder (issue #891). It is answered here as withheld,
+ * because this suite is about which role's figures are on screen and the reminder carries none;
+ * what matters is that the request exists and is made in the context the page is being asked as.
+ */
+const REMINDER = '/api/machine-restock-sync/reminder';
+const HIDDEN_REMINDER = { applicable: false as const, reason: 'NoProviderMachines' };
 
 /** One answer's Dashboard, as the figures a test can recognise on screen. */
 interface Figures {
@@ -271,7 +278,10 @@ async function render(options: { at?: string; answer?: boolean } = {}): Promise<
 /** Everything the routed Dashboard asked for, answered as one set of figures. */
 function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: string | null): TestRequest[] {
   const answered: TestRequest[] = [];
-  const answer = (url: string, body: Machine[] | Site[] | DashboardSummary | null): void => {
+  const answer = (
+    url: string,
+    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | null
+  ): void => {
     for (const request of rendered.httpMock.match((candidate) => candidate.url === url)) {
       answered.push(request);
       request.flush(body);
@@ -280,7 +290,9 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: str
 
   // The summary first: since issue #727 the Dashboard asks it whether the business has a usable
   // provider and only then synchronizes sales and loads Sites and Machines, so those three
-  // requests do not exist until this one is answered.
+  // requests do not exist until this one is answered. Issue #891's reminder is asked for by its
+  // own child component as the page renders, so it is already outstanding by now.
+  answer(REMINDER, HIDDEN_REMINDER);
   answer(LOW_STOCK, []);
   answer(SUMMARY, summary(figures));
   answer(SYNC, null);

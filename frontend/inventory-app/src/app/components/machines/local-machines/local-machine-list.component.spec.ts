@@ -16,6 +16,7 @@ interface ServiceDouble {
   rename: jest.Mock;
   deactivate: jest.Mock;
   reactivate: jest.Mock;
+  delete: jest.Mock;
 }
 
 function serviceDouble(machines: LocalMachine[]): ServiceDouble {
@@ -24,7 +25,8 @@ function serviceDouble(machines: LocalMachine[]): ServiceDouble {
     create: jest.fn(() => of(localMachine())),
     rename: jest.fn(() => of(undefined)),
     deactivate: jest.fn(() => of(undefined)),
-    reactivate: jest.fn(() => of(undefined))
+    reactivate: jest.fn(() => of(undefined)),
+    delete: jest.fn(() => of(undefined))
   };
 }
 
@@ -163,7 +165,7 @@ describe('LocalMachineListComponent (issue #740)', () => {
     expect(component.error).toBe('Machine name is required.');
   });
 
-  it('deactivates and reactivates a machine, and never deletes one', async () => {
+  it('deactivates and reactivates a machine, and offers no Delete unless the server allows one', async () => {
     const { component, service, host } = await render({ machines: [localMachine({ id: 7 })] });
 
     component.deactivate(localMachine({ id: 7 }));
@@ -172,6 +174,7 @@ describe('LocalMachineListComponent (issue #740)', () => {
     component.reactivate(localMachine({ id: 7, isActive: false }));
     expect(service.reactivate).toHaveBeenCalledWith(7);
 
+    // `canDelete` absent: a response that did not resolve the question is not permission.
     expect(buttonLabelled(host, 'Delete')).toBeUndefined();
   });
 
@@ -240,22 +243,127 @@ describe('LocalMachineListComponent for a machine the provider names', () => {
 });
 
 /**
+ * Deleting a machine added by mistake (issue #896). Delete is offered only where the API says it is
+ * allowed - `canDelete` is the server's own answer from the one deletion policy - and a machine that
+ * may not be deleted explains why in the server's own words, so the row never offers an action that
+ * must fail and never invents a second wording for the refusal.
+ */
+describe('LocalMachineListComponent deleting an unused machine (issue #896)', () => {
+  const deletable = (overrides: Partial<LocalMachine> = {}) =>
+    localMachine({ id: 7, name: 'Added by mistake', canDelete: true, ...overrides });
+
+  const refusal = 'This machine cannot be deleted because its history refers to it (1 operating expense).';
+
+  it('offers Delete only for a machine the server says may be deleted', async () => {
+    const allowed = await render({ machines: [deletable()] });
+    expect(buttonLabelled(allowed.host, 'Delete')).toBeDefined();
+
+    TestBed.resetTestingModule();
+
+    const refused = await render({
+      machines: [localMachine({ id: 7, canDelete: false, deletionRefusal: refusal })]
+    });
+    expect(buttonLabelled(refused.host, 'Delete')).toBeUndefined();
+  });
+
+  it('never offers Delete for a machine the provider names', async () => {
+    // The API answers `canDelete: false` for one, so this is belt and braces - a provider machine is
+    // managed at the provider, exactly as its rename and deactivation are.
+    const { host, component } = await render({
+      machines: [deletable({ isProviderNamed: true })]
+    });
+
+    expect(buttonLabelled(host, 'Delete')).toBeUndefined();
+    expect(component.canDelete(deletable({ isProviderNamed: true }))).toBe(false);
+  });
+
+  it("explains an ineligible machine with the server's own refusal", async () => {
+    const { host } = await render({
+      machines: [localMachine({ id: 7, canDelete: false, deletionRefusal: refusal })]
+    });
+
+    expect(host.textContent).toContain(refusal);
+  });
+
+  it('asks for confirmation naming the machine, and sends nothing until it is confirmed', async () => {
+    const { host, component, service, fixture } = await render({ machines: [deletable()] });
+
+    buttonLabelled(host, 'Delete')!.click();
+    fixture.detectChanges();
+
+    expect(host.textContent).toContain("Delete machine 'Added by mistake'?");
+    expect(service.delete).not.toHaveBeenCalled();
+
+    component.cancelDelete();
+    fixture.detectChanges();
+
+    // Cancel performs no request at all, and leaves the row exactly as it was.
+    expect(service.delete).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Delete machine 'Added by mistake'?");
+    expect(buttonLabelled(host, 'Delete')).toBeDefined();
+  });
+
+  it('sends one request on confirmation and reloads the list', async () => {
+    const { component, service } = await render({ machines: [deletable()] });
+
+    component.confirmDelete(deletable());
+    component.deleteConfirmed();
+
+    expect(service.delete).toHaveBeenCalledTimes(1);
+    expect(service.delete).toHaveBeenCalledWith(7);
+    expect(service.getAll).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends one request however many times the confirmation is clicked', async () => {
+    const { component, service } = await render({ machines: [deletable()] });
+
+    component.confirmDelete(deletable());
+    component.deleteConfirmed();
+    component.deleteConfirmed();
+
+    expect(service.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the row and shows the server's refusal when the delete is refused", async () => {
+    const service = serviceDouble([deletable()]);
+    service.delete.mockReturnValue(throwError(() => new HttpErrorResponse({ status: 400, error: refusal })));
+    const { component } = await render({ service });
+
+    component.confirmDelete(deletable());
+    component.deleteConfirmed();
+
+    expect(component.error).toBe(refusal);
+    // Only the initial load: a refused delete must not be followed by a reload that looks like
+    // success, so the row the refusal is about is still on screen.
+    expect(service.getAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
  * A read-only support session grants `Inventory.Operate`, which is what this surface would otherwise
  * gate its writes on, so the controls are hidden rather than left to be refused (issues #554, #658).
  * The list itself stays readable: that is what a support session is for.
  */
 describe('LocalMachineListComponent in a support session (issue #658)', () => {
   it('hides every write control and still lists the machines', async () => {
-    const { host } = await render({ machines: [localMachine({ id: 7 })], sessionActive: true });
+    const { host } = await render({
+      machines: [localMachine({ id: 7, canDelete: true })],
+      sessionActive: true
+    });
 
     expect(host.textContent).toContain('Atrium');
     expect(addForm(host)).toBeNull();
     expect(buttonLabelled(host, 'Rename')).toBeUndefined();
     expect(buttonLabelled(host, 'Deactivate')).toBeUndefined();
+    // Including Delete, even for a machine the server says may be deleted (issue #896).
+    expect(buttonLabelled(host, 'Delete')).toBeUndefined();
   });
 
   it('refuses the writes in code too, so they are unavailable rather than merely invisible', async () => {
-    const { component, service } = await render({ machines: [localMachine({ id: 7 })], sessionActive: true });
+    const { component, service } = await render({
+      machines: [localMachine({ id: 7, canDelete: true })],
+      sessionActive: true
+    });
 
     component.newName = 'Smuggled in';
     component.add();
@@ -264,10 +372,13 @@ describe('LocalMachineListComponent in a support session (issue #658)', () => {
     component.saveRename();
     component.deactivate(localMachine({ id: 7 }));
     component.reactivate(localMachine({ id: 7 }));
+    component.confirmDelete(localMachine({ id: 7, canDelete: true }));
+    component.deleteConfirmed();
 
     expect(service.create).not.toHaveBeenCalled();
     expect(service.rename).not.toHaveBeenCalled();
     expect(service.deactivate).not.toHaveBeenCalled();
     expect(service.reactivate).not.toHaveBeenCalled();
+    expect(service.delete).not.toHaveBeenCalled();
   });
 });

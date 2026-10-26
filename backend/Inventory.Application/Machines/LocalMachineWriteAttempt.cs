@@ -3,15 +3,16 @@ namespace Inventory.Application.Machines;
 /// <summary>What a machine write did (issue #740).</summary>
 public enum LocalMachineWriteOutcome
 {
-    /// <summary>The machine was created, renamed, deactivated or reactivated.</summary>
+    /// <summary>The machine was created, renamed, deactivated, reactivated or deleted.</summary>
     Succeeded,
 
     /// <summary>No machine with that id is visible to the caller's business.</summary>
     NotFound,
 
     /// <summary>
-    /// The write was refused with a message a caller may be shown: a missing name, or a rename or
-    /// deactivation of a machine the business's sales provider names.
+    /// The write was refused with a message a caller may be shown: a missing name, a rename or
+    /// deactivation of a machine the business's sales provider names, or a delete of a machine that
+    /// has history or that the provider names (issue #896).
     /// </summary>
     Refused,
 }

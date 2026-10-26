@@ -30,8 +30,14 @@ namespace InventoryApi.Controllers;
 ///
 /// <para><strong>A machine's provider id is not writable and not published as an identifier.</strong>
 /// No request field corresponds to it, and the response carries only whether the business's provider
-/// names the machine. Nothing here deletes a machine either: stored sales, refills, counts and
-/// expenses refer to one, so a machine that stops trading is deactivated rather than removed.</para>
+/// names the machine.</para>
+///
+/// <para><strong>A machine may be deleted only while nothing refers to it</strong> (issue #896). A
+/// machine added by mistake is removed; a machine with machine stock counts, stock movements,
+/// pick-list refills or operating expenses, and a machine the provider names, are refused with the
+/// reason - a machine that stops trading is deactivated and keeps all of its history. The list and
+/// the single-machine read publish that same answer as <c>canDelete</c>/<c>deletionRefusal</c>, so
+/// the page offers Delete only where this resource allows it.</para>
 /// </summary>
 [ApiController]
 [Route("api/local-machines")]
@@ -45,19 +51,22 @@ public class LocalMachinesController : ControllerBase
     private readonly CreateLocalMachine _createLocalMachine;
     private readonly RenameLocalMachine _renameLocalMachine;
     private readonly SetLocalMachineActivation _setLocalMachineActivation;
+    private readonly DeleteLocalMachine _deleteLocalMachine;
 
     public LocalMachinesController(
         ListLocalMachines listLocalMachines,
         GetLocalMachine getLocalMachine,
         CreateLocalMachine createLocalMachine,
         RenameLocalMachine renameLocalMachine,
-        SetLocalMachineActivation setLocalMachineActivation)
+        SetLocalMachineActivation setLocalMachineActivation,
+        DeleteLocalMachine deleteLocalMachine)
     {
         _listLocalMachines = listLocalMachines;
         _getLocalMachine = getLocalMachine;
         _createLocalMachine = createLocalMachine;
         _renameLocalMachine = renameLocalMachine;
         _setLocalMachineActivation = setLocalMachineActivation;
+        _deleteLocalMachine = deleteLocalMachine;
     }
 
     /// <summary>
@@ -127,8 +136,9 @@ public class LocalMachinesController : ControllerBase
 
     /// <summary>
     /// Takes the machine out of service. It stays listed and keeps every stored sale, refill, count
-    /// and expense that refers to it; there is no delete. A machine the business's sales provider
-    /// names is taken out of service there and is refused.
+    /// and expense that refers to it - which is what a machine with history gets instead of a
+    /// delete. A machine the business's sales provider names is taken out of service there and is
+    /// refused.
     /// </summary>
     /// <response code="204">The machine is inactive.</response>
     /// <response code="400">The refusal message: the provider names the machine.</response>
@@ -149,6 +159,33 @@ public class LocalMachinesController : ControllerBase
     public async Task<IActionResult> Reactivate(long id, CancellationToken cancellationToken) =>
         Result(await _setLocalMachineActivation.Handle(id, isActive: true, cancellationToken));
 
+    /// <summary>
+    /// Deletes a machine the business added by mistake, when it may be deleted at all (issue #896).
+    ///
+    /// <para><strong>Only a machine nothing refers to.</strong> A machine with machine stock counts,
+    /// stock movements, pick-list refills or operating expenses is refused with the count of what is
+    /// in the way, and a machine the business's sales provider names is refused for its own reason:
+    /// it is managed at the provider. In both cases nothing is written, and <c>deactivate</c> above
+    /// is how a machine that stops trading is retired. Nothing is cascaded, nulled or reassigned, and
+    /// no stock movement is recorded (<c>Inventory.Domain.Machines.MachineDeletionPolicy</c>).</para>
+    ///
+    /// <para>The reference count and the delete are one operation inside the store's write
+    /// transaction, so a machine that gains a reference or a provider link after a caller read it is
+    /// refused rather than deleted - which is also why a client has to show this refusal even when
+    /// the response it is working from said the machine was deletable.</para>
+    /// </summary>
+    /// <response code="204">The machine was deleted.</response>
+    /// <response code="400">
+    /// The refusal message: what refers to the machine, or which provider manages it.
+    /// </response>
+    /// <response code="404">No such machine in this business.</response>
+    [HttpDelete("{id:long}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(long id, CancellationToken cancellationToken) =>
+        Result(await _deleteLocalMachine.Handle(id, cancellationToken));
+
     private IActionResult Result(LocalMachineWriteAttempt attempt) =>
         attempt.Outcome switch
         {
@@ -157,6 +194,18 @@ public class LocalMachinesController : ControllerBase
             _ => BadRequest(attempt.Refusal),
         };
 
+    /// <summary>
+    /// The wire shape of one machine. <c>canDelete</c>/<c>deletionRefusal</c> come straight from the
+    /// record's own eligibility (issue #896), which the store decided with the same rule the delete
+    /// applies - the controller adds no second answer of its own, and a record that did not resolve
+    /// the question publishes neither.
+    /// </summary>
     private static LocalMachineResponse ToResponse(LocalMachineRecord record) =>
-        new(record.Id, record.Name, record.IsActive, record.IsProviderNamed);
+        new(
+            record.Id,
+            record.Name,
+            record.IsActive,
+            record.IsProviderNamed,
+            record.DeletionEligibility?.Allowed,
+            record.DeletionEligibility?.Refusal);
 }
