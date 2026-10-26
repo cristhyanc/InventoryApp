@@ -146,7 +146,7 @@
                 (categoryIdChange)="onCategorySelected($event)"
               ></app-product-category-picker>
 
-              <!-- Required since issue #895, and still defaulted to "unit" for a new product. -->
+              <!-- Required since issue #895, and empty on a new product: the operator chooses the label. -->
               <label class="field">
                 <span class="field-label">Unit Label *</span>
                 <input [(ngModel)]="form.unit" name="unit" required placeholder="e.g. bag, can, bottle" />
