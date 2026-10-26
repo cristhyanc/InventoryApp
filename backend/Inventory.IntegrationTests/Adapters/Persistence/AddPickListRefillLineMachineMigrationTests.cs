@@ -29,7 +29,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// </summary>
 public class AddPickListRefillLineMachineMigrationTests
 {
-    private const string PreviousMigration = "20261024094143_AddPlatformOptionVisibility";
+    private const string PreviousMigration = "20261025093410_AddMachineRestockSyncCoverage";
     private const string MachineColumnMigration = "AddPickListRefillLineMachine";
 
     private const string RefillsTable = "PickListRefills";
