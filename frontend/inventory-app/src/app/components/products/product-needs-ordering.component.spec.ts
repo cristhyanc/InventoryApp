@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { Observable, Subject, of } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
 import { AccessService } from '../../access/access.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -57,11 +57,13 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       update?: jest.Mock;
       create?: jest.Mock;
       suppliers?: Supplier[];
+      getAll?: jest.Mock;
     } = {}
   ) {
     const navigate = jest.fn();
     const update = options.update ?? jest.fn(() => of(undefined));
     const create = options.create ?? jest.fn(() => of(undefined));
+    const getAll = options.getAll ?? jest.fn(() => of([]));
     await TestBed.configureTestingModule({
       imports: [ProductNeedsOrderingComponent],
       providers: [
@@ -72,6 +74,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
             // Machine-aware, the mode a business with a usable provider gets (issue #726): the
             // storage-only listing and its label are this page's provider-optional spec's.
             getLowStock: () => of({ products, mode: 'MachineAware', machineNeedUnavailableReason: null }),
+            getAll,
             update
           }
         },
@@ -93,7 +96,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     const fixture = TestBed.createComponent(ProductNeedsOrderingComponent);
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
-    return { fixture, host, navigate, update, create };
+    return { fixture, host, navigate, update, create, getAll };
   }
 
   it('navigates to the product editor when a non-action part of the row is clicked', async () => {
@@ -653,6 +656,202 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       fixture.detectChanges();
       expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana']);
       expect(create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * Adding a product to the order from inside the dialog (issue #907): any active catalogue
+   * product, including one that never appeared on the Needs ordering list, can join the order
+   * being built without closing the dialog and losing it. Depends on #906's Remove, which is what
+   * drops an added row the same way as any other.
+   */
+  describe('Add product (issue #907)', () => {
+    function typeAddProductQuery(host: HTMLElement, value: string): void {
+      const input = host.querySelector('input[name="addProductQuery"]') as HTMLInputElement;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+    }
+
+    function addProductButton(host: HTMLElement, name: string): HTMLButtonElement {
+      return host.querySelector(`[aria-label="Add ${name} to order"]`) as HTMLButtonElement;
+    }
+
+    it('searches the active catalogue with the typed text and offers a match not already on the order', async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const getAll = jest.fn(() => of([carrot]));
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      typeAddProductQuery(host, 'Car');
+      fixture.detectChanges();
+
+      expect(getAll).toHaveBeenCalledWith({ search: 'Car' });
+      expect(component.addableProducts.map((p) => p.name)).toEqual(['Carrot']);
+      expect(addProductButton(host, 'Carrot')).not.toBeNull();
+    });
+
+    it('does not offer a product already in the order, or a retired product the search returned', async () => {
+      const banana = product({ id: 1, name: 'Banana', needToOrder: 4 });
+      const retired = product({ id: 7, name: 'Old Thing', isActive: false });
+      const getAll = jest.fn(() => of([banana, retired]));
+      const { fixture, host } = await render([banana], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      typeAddProductQuery(host, 'an');
+      fixture.detectChanges();
+
+      expect(component.addableProducts).toEqual([]);
+      expect(host.textContent).toContain('No matching products.');
+    });
+
+    it("starts an added product's order quantity at its need-to-order when that is above 0, and shows its current stock and on-order quantity", async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 6, quantityInStock: 3, onOrderQuantity: 2 });
+      const getAll = jest.fn(() => of([carrot]));
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      typeAddProductQuery(host, 'Car');
+      fixture.detectChanges();
+      addProductButton(host, 'Carrot').click();
+      fixture.detectChanges();
+
+      expect(component.orderLines().map((p) => p.name)).toEqual(['Banana', 'Carrot']);
+      expect(component.orderQuantities[5]).toBe(6);
+      const row = Array.from(host.querySelectorAll('tbody tr')).find((tr) => tr.textContent?.includes('Carrot')) as HTMLTableRowElement;
+      const cells = row.querySelectorAll('td');
+      expect(cells[1].textContent?.trim()).toBe('3');
+      expect(cells[2].textContent?.trim()).toBe('2');
+    });
+
+    it("defaults an added product's order quantity to 1 when it has no need-to-order", async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const getAll = jest.fn(() => of([carrot]));
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      typeAddProductQuery(host, 'Car');
+      fixture.detectChanges();
+      addProductButton(host, 'Carrot').click();
+      fixture.detectChanges();
+
+      expect(component.orderQuantities[5]).toBe(1);
+    });
+
+    it('keeps the supplier, dates, reference, notes and already-entered quantities when a product is added', async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const getAll = jest.fn(() => of([carrot]));
+      const { fixture, host } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 })],
+        { getAll, suppliers: [{ id: 3, name: 'Acme' }] }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderForm.expectedDate = '2026-11-01';
+      component.orderForm.reference = 'PO-9';
+      component.orderForm.notes = 'Rush';
+      component.orderQuantities[1] = 9;
+      fixture.detectChanges();
+
+      typeAddProductQuery(host, 'Car');
+      fixture.detectChanges();
+      addProductButton(host, 'Carrot').click();
+      fixture.detectChanges();
+
+      expect(component.orderForm.supplierId).toBe(3);
+      expect(component.orderForm.expectedDate).toBe('2026-11-01');
+      expect(component.orderForm.reference).toBe('PO-9');
+      expect(component.orderForm.notes).toBe('Rush');
+      expect(component.orderQuantities[1]).toBe(9);
+    });
+
+    it('sends the added product in Create order alongside the already-listed lines', async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const getAll = jest.fn(() => of([carrot]));
+      const create = jest.fn(() => of(undefined));
+      const { fixture, host } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 })],
+        { getAll, create, suppliers: [{ id: 3, name: 'Acme' }] }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 4;
+
+      typeAddProductQuery(host, 'Car');
+      fixture.detectChanges();
+      addProductButton(host, 'Carrot').click();
+      fixture.detectChanges();
+      component.orderQuantities[5] = 2;
+
+      component.saveOrder();
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [
+            { productId: 1, quantityOrdered: 4 },
+            { productId: 5, quantityOrdered: 2 }
+          ]
+        })
+      );
+    });
+
+    it('shows an error and keeps the dialog open with its contents when the product search fails', async () => {
+      const getAll = jest.fn(() => throwError(() => new Error('search failed')));
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.reference = 'PO-1';
+
+      typeAddProductQuery(host, 'Car');
+      fixture.detectChanges();
+
+      expect(component.showOrderForm).toBe(true);
+      expect(component.orderForm.reference).toBe('PO-1');
+      expect(component.orderLines().map((p) => p.name)).toEqual(['Banana']);
+      expect(host.textContent).toContain('Product search failed');
+    });
+
+    it('removes an added row with the same Remove button as the other rows, leaving the page list unaffected', async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const getAll = jest.fn(() => of([carrot]));
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      typeAddProductQuery(host, 'Car');
+      fixture.detectChanges();
+      addProductButton(host, 'Carrot').click();
+      fixture.detectChanges();
+
+      (host.querySelector('[aria-label="Remove Carrot from order"]') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(component.orderLines().map((p) => p.name)).toEqual(['Banana']);
+      expect(component.selectedProductIds.has(1)).toBe(true);
     });
   });
 

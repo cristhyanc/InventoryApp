@@ -96,6 +96,24 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   };
 
   /**
+   * Products added to the order being built from the Add product search (issue #907), which are
+   * not necessarily on the Needs ordering list at all - that is the whole point of the search. See
+   * {@link orderLines}, which is what the dialog actually shows.
+   */
+  addedProducts: Product[] = [];
+
+  /** The text currently in the dialog's Add product search box. */
+  addProductQuery = '';
+
+  /** The active search's own matches, before {@link addableProducts} removes what is already a line. */
+  addProductResults: Product[] = [];
+
+  /** Whether {@link addProductResults} is a real answer for the text currently in the box. */
+  addProductSearchState: 'idle' | 'loading' | 'loaded' | 'failed' = 'idle';
+
+  private readonly addProductQuery$ = new Subject<string>();
+
+  /**
    * Whether a support session is active (issue #661): Mark as ordered is hidden and the status
    * toggle disabled while it is, because a session grants `InventoryOperate` - the capability this
    * page's two writes would otherwise be shown for - and the backend refuses them only by its
@@ -174,6 +192,16 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     createFilterTrigger$(this.search$, this.immediateFilter$)
       .pipe(
         switchMap(() => this.fetchProducts()),
+        takeUntil(this.destroy$)
+      )
+      .subscribe();
+
+    // `switchMap` here cancels a search that is still outstanding when a newer one is typed, the
+    // same reason the purchase-cost request above uses it: only the latest typed text's answer can
+    // ever land in `addProductResults`.
+    this.addProductQuery$
+      .pipe(
+        switchMap((term) => this.searchAddableProducts(term)),
         takeUntil(this.destroy$)
       )
       .subscribe();
@@ -342,6 +370,10 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     // one.
     this.orderForm.supplierId = null;
     this.orderQuantities = Object.fromEntries(selectedProducts.map((product) => [product.id, product.needToOrder]));
+    this.addedProducts = [];
+    this.addProductQuery = '';
+    this.addProductResults = [];
+    this.addProductSearchState = 'idle';
     this.showOrderForm = true;
   }
 
@@ -350,11 +382,87 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Drops a product from the order being built, without cancelling the dialog (issue #906). The
-   * dialog's rows are {@link selectedProducts}, which reads live from `selectedProductIds` - the
-   * same set the page's checkboxes are bound to - so this is also what unticks the product on the
-   * Needs ordering list, and leaves every other row's entered quantity and the order's own fields
-   * untouched. Refused below the last remaining row, because an order needs at least one line.
+   * Every row the dialog shows (issue #907): the Needs ordering rows ticked when it was opened,
+   * plus any product the Add product search added since. {@link selectedProducts} alone no longer
+   * describes the dialog, because an added product is never required to be one of `this.products` -
+   * that is the point of searching the wider catalogue for it - so it is left exactly as it reads
+   * today and this is what the template and {@link saveOrder} use instead.
+   */
+  orderLines(): Product[] {
+    return [...this.selectedProducts(), ...this.addedProducts];
+  }
+
+  /**
+   * The Add product search's own matches, minus whatever is already a line in the order being
+   * built - a product already on it is never offered a second time.
+   */
+  get addableProducts(): Product[] {
+    const alreadyInOrder = new Set(this.orderLines().map((product) => product.id));
+    return this.addProductResults.filter((product) => !alreadyInOrder.has(product.id));
+  }
+
+  onAddProductQueryChange(event: Event): void {
+    const value = (event.target as HTMLInputElement).value;
+    this.addProductQuery = value;
+    this.addProductQuery$.next(value);
+  }
+
+  /**
+   * Searches the catalogue for a product to add to the order being built (issue #907). `getAll`
+   * without `includeRetired` already answers active products only; the same defence
+   * {@link fetchProducts} applies against the reorder-alert listing is repeated here, so a response
+   * that ever carried a retired product still cannot be offered.
+   */
+  private searchAddableProducts(term: string): Observable<unknown> {
+    const trimmed = term.trim();
+    if (!trimmed) {
+      this.addProductResults = [];
+      this.addProductSearchState = 'idle';
+      return EMPTY;
+    }
+
+    this.addProductSearchState = 'loading';
+    return this.productService.getAll({ search: trimmed }).pipe(
+      tap((results) => {
+        this.addProductResults = results.filter((product) => product.isActive !== false);
+        this.addProductSearchState = 'loaded';
+      }),
+      catchError(() => {
+        this.addProductResults = [];
+        this.addProductSearchState = 'failed';
+        return EMPTY;
+      })
+    );
+  }
+
+  /**
+   * Adds a product the Add product search found to the order being built (issue #907), without
+   * disturbing the supplier, dates, reference, notes or any quantity already entered for another
+   * row. Starts at the product's own need-to-order when that is positive, otherwise at 1.
+   *
+   * Guarded the same way {@link removeProduct} is, and for the same reasons: refused during a
+   * support session, and once {@link saveOrder} has sent its lines, so a line can never be added
+   * after the request that would have had to carry it.
+   */
+  addProduct(product: Product): void {
+    if (this.savingOrder || this.sessionActive) {
+      return;
+    }
+    this.addedProducts = [...this.addedProducts, product];
+    this.orderQuantities[product.id] = product.needToOrder > 0 ? product.needToOrder : 1;
+    this.addProductQuery = '';
+    this.addProductResults = [];
+    this.addProductSearchState = 'idle';
+  }
+
+  /**
+   * Drops a product from the order being built, without cancelling the dialog (issue #906). A row
+   * ticked on the Needs ordering list is dropped from `selectedProductIds` - the same set the
+   * page's checkboxes are bound to, so this is also what unticks it there - and a row the Add
+   * product search added (issue #907) is dropped from {@link addedProducts} instead; the page's own
+   * list is never touched for one of those, since it was never on it. Either way every other row's
+   * entered quantity and the order's own fields are left untouched. Refused below the last
+   * remaining row, because an order needs at least one line.
    *
    * Refused as well while an order is in flight (`savingOrder`) or during a support session. Once
    * {@link saveOrder} has sent its lines, the order being created is fixed: dropping a row then
@@ -364,10 +472,14 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
    * a session grants `InventoryOperate`, so the page refuses its writes itself (issue #661).
    */
   removeProduct(productId: number): void {
-    if (this.savingOrder || this.sessionActive || this.selectedProductIds.size <= 1) {
+    if (this.savingOrder || this.sessionActive || this.orderLines().length <= 1) {
       return;
     }
-    this.selectedProductIds.delete(productId);
+    if (this.selectedProductIds.has(productId)) {
+      this.selectedProductIds.delete(productId);
+    } else {
+      this.addedProducts = this.addedProducts.filter((product) => product.id !== productId);
+    }
   }
 
   saveOrder(): void {
@@ -379,7 +491,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const lines = this.selectedProducts().map((product) => ({
+    const lines = this.orderLines().map((product) => ({
       productId: product.id,
       quantityOrdered: this.orderQuantities[product.id]
     }));
