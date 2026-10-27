@@ -99,7 +99,13 @@ public class AddBusinessSupplierPresetsCopiedAtMigrationTests
             Assert.Equal(new DateTime(2026, 9, 1, 6, 0, 0, DateTimeKind.Utc), businesses[1].AppliedAtUtc);
 
             // No supplier was invented for either business, and the one that existed is intact.
-            var supplier = Assert.Single(await after.Suppliers.AsNoTracking().ToListAsync());
+            // Projected for the same reason the businesses above are: a column a later migration
+            // adds (issue #934's link and "Not used" switch) is in the model and not in this
+            // database.
+            var supplier = Assert.Single(await after.Suppliers
+                .AsNoTracking()
+                .Select(row => new { row.Name, row.Url, row.BusinessId })
+                .ToListAsync());
             Assert.Equal(("Wholesale Co", "https://wholesale.invalid", 1), (supplier.Name, supplier.Url, supplier.BusinessId));
 
             // The platform's own suggestions are exactly the rows AddSupplierPresets seeded: this

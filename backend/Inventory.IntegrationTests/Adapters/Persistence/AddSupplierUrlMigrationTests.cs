@@ -79,7 +79,25 @@ public class AddSupplierUrlMigrationTests
 
         await using var after = TestAppDbContext.Unrestricted(options);
 
-        var suppliers = await after.Suppliers.OrderBy(supplier => supplier.Id).ToListAsync();
+        // Projected rather than read as whole entities: the schema here is deliberately the one
+        // this migration produced, and a column a later migration adds (issue #934's
+        // SupplierPresetId and IsHidden, for example) exists in the model but not in this database.
+        var suppliers = await after.Suppliers
+            .OrderBy(supplier => supplier.Id)
+            .Select(supplier => new
+            {
+                supplier.Name,
+                supplier.ContactName,
+                supplier.Phone,
+                supplier.Email,
+                supplier.Address,
+                supplier.Url,
+                supplier.BusinessId,
+                supplier.ProductLineGstDefault,
+                supplier.DeliveryGstDefault,
+                supplier.PackageGstDefault,
+            })
+            .ToListAsync();
         Assert.Equal(2, suppliers.Count);
         Assert.Equal(
             ("Wholesale Co", "Pat", "555", "pat@wholesale.invalid", "1 Road", (string?)null),
@@ -94,8 +112,8 @@ public class AddSupplierUrlMigrationTests
         Assert.Equal((2, "Other Business Co", (string?)null), (suppliers[1].BusinessId, suppliers[1].Name, suppliers[1].Url));
 
         // The rows that name a supplier still do.
-        Assert.Equal(1, (await after.Receipts.SingleAsync()).SupplierId);
-        Assert.Equal(1, (await after.SupplierOrders.SingleAsync()).SupplierId);
+        Assert.Equal(1, await after.Receipts.Select(receipt => receipt.SupplierId).SingleAsync());
+        Assert.Equal(1, await after.SupplierOrders.Select(order => order.SupplierId).SingleAsync());
         Assert.Empty(await ForeignKeyViolationsAsync(connection));
     }
 
@@ -112,10 +130,12 @@ public class AddSupplierUrlMigrationTests
         var indexesBefore = await MigrationSchemaProbe.IndexNamesAsync(connection, "Suppliers");
         await MigrateAsync(options, TargetMigration);
 
-        await using (var write = TestAppDbContext.Unrestricted(options))
+        // Written with SQL rather than through the context, for the reason the read below gives:
+        // the EF model carries columns a later migration adds and this schema does not have.
+        await using (var write = connection.CreateCommand())
         {
-            (await write.Suppliers.SingleAsync(supplier => supplier.Id == 1)).Url = "https://wholesale.invalid";
-            await write.SaveChangesAsync();
+            write.CommandText = "UPDATE Suppliers SET Url = 'https://wholesale.invalid' WHERE Id = 1;";
+            await write.ExecuteNonQueryAsync();
         }
 
         Assert.Equal("https://wholesale.invalid", await ScalarAsync(

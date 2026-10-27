@@ -238,6 +238,10 @@ public class OperatorReadableFinancialFigureTests
         "PUT api/Products/{id:long}",
         "PUT api/Products/{id:long}/gst-rule",
         "PUT api/Suppliers/{id:int}",
+        // The "Not used" switch of issue #934 answers a status code, or a refusal sentence saying
+        // that only a supplier from the platform's list can be marked "Not used". It carries no
+        // figure of any kind: what it decides is whether a supplier appears in a picker.
+        "PUT api/Suppliers/{id:int}/not-used",
 
         // The machine write surface of issue #740: the business's own machine records. A machine is
         // name-only - it carries no revenue, cost or valuation of any kind - and each of these

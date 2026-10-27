@@ -158,6 +158,44 @@ public record SupplierDto(string Name, string? ContactName, string? Phone, strin
 public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
 /// <summary>
+/// A supplier as the <c>/api/suppliers</c> endpoints publish it (issue #934): the seven fields of
+/// <see cref="SupplierResponse"/> in the same order and under the same names, plus the four that
+/// say what this business may do to this row.
+///
+/// <para>It is a separate record rather than four fields added to <see cref="SupplierResponse"/>
+/// because that type is schema-identical to the legacy <c>Supplier</c> component every nested
+/// <c>supplier</c> object in a purchase, a supplier order and an operating expense references;
+/// widening it would change all three of those contracts to carry a lock state that is about the
+/// Suppliers page. Here the four fields are additive, so a client reading the seven it already
+/// knew is unaffected.</para>
+///
+/// <para>All four come from <c>Inventory.Domain.Suppliers.SupplierPresetLinkPolicy</c> and are
+/// published rather than left to the client to derive: <c>isLinked</c> is the fact, and
+/// <c>canRename</c>/<c>canDelete</c> are that one policy's answers, so a page cannot offer a write
+/// the API will refuse. They are eligibility, never authorization - the endpoints refuse a linked
+/// copy's rename and delete whatever a client renders.</para>
+/// </summary>
+public record SupplierDetailResponse(
+    int Id,
+    string Name,
+    string? ContactName,
+    string? Phone,
+    string? Email,
+    string? Address,
+    string? Url,
+    bool IsLinked,
+    bool IsHidden,
+    bool CanRename,
+    bool CanDelete);
+
+/// <summary>
+/// The body of <c>PUT /api/suppliers/{id}/not-used</c> (issue #934): the state the "Not used"
+/// switch is being set to. It carries nothing else - no name, no supplier id, no business - because
+/// this request decides one boolean about one row the route already named.
+/// </summary>
+public record SupplierNotUsedDto(bool IsHidden);
+
+/// <summary>
 /// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).
 /// <c>gstClassification</c> is optional: omitting it leaves a new line unclassified and an edited
 /// line's stored classification untouched. The classification's provenance is never submitted -
