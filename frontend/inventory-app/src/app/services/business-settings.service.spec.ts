@@ -9,7 +9,8 @@ const SETTINGS: BusinessSettings = {
   contactEmail: 'owner@example.com',
   abn: '51824753556',
   gstRegistered: true,
-  timeZoneId: 'Australia/Sydney'
+  timeZoneId: 'Australia/Sydney',
+  state: 'NSW'
 };
 
 const SAVE_REQUEST: BusinessApplicationRequest = {
@@ -17,7 +18,8 @@ const SAVE_REQUEST: BusinessApplicationRequest = {
   contactEmail: 'owner@example.com',
   abn: null,
   gstRegistered: true,
-  timeZoneId: 'Australia/Brisbane'
+  timeZoneId: 'Australia/Brisbane',
+  state: 'QLD'
 };
 
 function createService(apiBaseUrl = '/api'): {
@@ -85,7 +87,7 @@ describe('BusinessSettingsService (issue #549)', () => {
 });
 
 describe('isLegacyBusinessProfile (issue #549)', () => {
-  it('is false once both the contact email and the GST registration are recorded', () => {
+  it('is false once the contact email, the GST registration and the state are all recorded', () => {
     expect(isLegacyBusinessProfile(SETTINGS)).toBe(false);
   });
 
@@ -97,5 +99,12 @@ describe('isLegacyBusinessProfile (issue #549)', () => {
   it('is true for an unrecorded GST registration, regardless of its value once stated', () => {
     expect(isLegacyBusinessProfile({ ...SETTINGS, gstRegistered: null })).toBe(true);
     expect(isLegacyBusinessProfile({ ...SETTINGS, gstRegistered: false })).toBe(false);
+  });
+
+  /** Issue #933: a business that predates the state column is asked to record one. */
+  it('is true for an unrecorded state or territory', () => {
+    expect(isLegacyBusinessProfile({ ...SETTINGS, state: null })).toBe(true);
+    expect(isLegacyBusinessProfile({ ...SETTINGS, state: '   ' })).toBe(true);
+    expect(isLegacyBusinessProfile({ ...SETTINGS, state: 'ACT' })).toBe(false);
   });
 });

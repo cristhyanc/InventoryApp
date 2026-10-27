@@ -42,7 +42,7 @@ public class ApplyForBusinessTests
         var world = new World { Onboarding = FakeSelfServiceOnboardingFlag.Disabled };
 
         // Deliberately an invalid submission: it must not be the thing that decides the answer.
-        var outcome = await world.Apply(new BusinessApplicationSubmission(null, null, null, null, null));
+        var outcome = await world.Apply(new BusinessApplicationSubmission(null, null, null, null, null, null));
 
         Assert.False(outcome.Enabled);
         Assert.Null(outcome.Application);
@@ -152,7 +152,7 @@ public class ApplyForBusinessTests
         var world = new World();
 
         await Assert.ThrowsAsync<DomainValidationException>(() => world.Apply(
-            new BusinessApplicationSubmission("Coastal Vending", "owner@", null, true, "Australia/Sydney")));
+            new BusinessApplicationSubmission("Coastal Vending", "owner@", null, true, "Australia/Sydney", "NSW")));
 
         Assert.Equal(0, world.RateLimiter.TrackedIdentities);
         Assert.Equal(0, world.Memberships.QueryCount);
@@ -335,7 +335,8 @@ public class ApplyForBusinessTests
                 "owner@coastal.example.com",
                 "51 824 753 556",
                 true,
-                "Australia/Brisbane")));
+                "Australia/Brisbane",
+                "QLD")));
 
         Assert.Equal(1, world.RateLimiter.TrackedIdentities);
     }
@@ -467,10 +468,10 @@ public class ApplyForBusinessTests
     }
 
     private static BusinessApplicationSubmission Submission() =>
-        new("Coastal Vending", "owner@coastal.example.com", "51 824 753 556", true, "Australia/Brisbane");
+        new("Coastal Vending", "owner@coastal.example.com", "51 824 753 556", true, "Australia/Brisbane", "QLD");
 
     private static BusinessSettings Validated() =>
-        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane");
+        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "QLD");
 
     private static ActorBusinessMembership Membership(
         int businessId,

@@ -59,6 +59,9 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     public const string PendingContactEmail = "owner@coastal.example.com";
     public const string PendingAbn = "51824753556";
 
+    /// <summary>The state the pending application recorded (issue #933).</summary>
+    public const string PendingState = "QLD";
+
     public static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
     public static readonly DateTime AppliedAt = new(2026, 9, 1, 6, 0, 0, DateTimeKind.Utc);
     public static readonly DateTime RejectedAt = new(2026, 9, 20, 7, 0, 0, DateTimeKind.Utc);
@@ -197,6 +200,8 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
             ContactEmail = PendingContactEmail,
             Abn = PendingAbn,
             GstRegistered = true,
+            // The state the application recorded (issue #933), which the review has to show.
+            State = PendingState,
             AppliedAtUtc = AppliedAt,
             CreatedAtUtc = AppliedAt,
         };

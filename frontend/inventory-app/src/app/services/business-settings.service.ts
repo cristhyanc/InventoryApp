@@ -6,10 +6,10 @@ import { BusinessApplicationRequest } from '../access/business-application-rules
 
 /**
  * `GET`/`PUT /api/business/settings`'s response body (issue #548): the business's own name,
- * contact address, ABN, GST registration and time zone. `contactEmail`, `abn` and `gstRegistered`
- * are nullable because "not recorded" is a real state for the business that predates the
- * application form - the migrated business - which is exactly what the legacy prompt (issue #549)
- * watches for.
+ * contact address, ABN, GST registration, time zone and the state or territory it trades in
+ * (issue #933). `contactEmail`, `abn`, `gstRegistered` and `state` are nullable because "not
+ * recorded" is a real state for the business that predates the application form - the migrated
+ * business - which is exactly what the legacy prompt (issue #549) watches for.
  */
 export interface BusinessSettings {
   readonly name: string;
@@ -17,21 +17,29 @@ export interface BusinessSettings {
   readonly abn: string | null;
   readonly gstRegistered: boolean | null;
   readonly timeZoneId: string;
+  readonly state: string | null;
 }
 
 /**
- * Whether `settings` is missing the contact email or the GST registration the application form
- * would have collected (issue #549) - the migrated business that predates it. An empty or
- * whitespace-only contact address counts as missing, the same as `null`.
+ * Whether `settings` is missing the contact email, the GST registration or the state the
+ * application form would have collected (issue #549, and issue #933 for the state) - the migrated
+ * business that predates it. An empty or whitespace-only contact address or state counts as
+ * missing, the same as `null`.
  */
 export function isLegacyBusinessProfile(settings: BusinessSettings): boolean {
-  return settings.contactEmail === null || settings.contactEmail.trim().length === 0 || settings.gstRegistered === null;
+  return (
+    settings.contactEmail === null ||
+    settings.contactEmail.trim().length === 0 ||
+    settings.gstRegistered === null ||
+    settings.state === null ||
+    settings.state.trim().length === 0
+  );
 }
 
 /**
  * Reads and saves the signed-in Owner's own business settings, behind `Business.Manage` on both
  * `GET` and `PUT /api/business/settings` (issue #548). The save body is
- * `BusinessApplicationRequest` because it is the exact same five settings `BusinessSettingsPolicy`
+ * `BusinessApplicationRequest` because it is the exact same six settings `BusinessSettingsPolicy`
  * validates for an application - this service sends the whole set together, exactly as the API
  * requires, and interprets no refusal itself.
  *

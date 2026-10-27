@@ -42,7 +42,8 @@ public sealed class EfBusinessSettingsStore : IBusinessSettingsStore
                 business.ContactEmail,
                 business.Abn,
                 business.GstRegistered,
-                business.TimeZoneId))
+                business.TimeZoneId,
+                business.State))
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -75,7 +76,8 @@ public sealed class EfBusinessSettingsStore : IBusinessSettingsStore
             business.ContactEmail,
             business.Abn,
             business.GstRegistered,
-            business.TimeZoneId);
+            business.TimeZoneId,
+            business.State);
         var changed = BusinessSettingsPolicy.ChangedFields(current, submitted);
 
         business.Name = submitted.Name;
@@ -83,6 +85,7 @@ public sealed class EfBusinessSettingsStore : IBusinessSettingsStore
         business.Abn = submitted.Abn;
         business.GstRegistered = submitted.GstRegistered;
         business.TimeZoneId = submitted.TimeZoneId;
+        business.State = submitted.State;
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 

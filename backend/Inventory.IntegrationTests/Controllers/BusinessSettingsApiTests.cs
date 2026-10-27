@@ -47,6 +47,9 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
     private const string SpacedAbn = "51 824 753 556";
     private const string NormalizedAbn = "51824753556";
 
+    /// <summary>A valid state or territory (issue #933), which every save has to carry.</summary>
+    private const string Nsw = "NSW";
+
     private readonly ApiFactory _factory;
 
     public BusinessSettingsApiTests(ApiFactory factory) => _factory = factory;
@@ -61,16 +64,18 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var json = await ReadJsonAsync(response);
         Assert.Equal(
-            ["abn", "contactEmail", "gstRegistered", "name", "timeZoneId"],
+            ["abn", "contactEmail", "gstRegistered", "name", "state", "timeZoneId"],
             json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal(ApiFactory.BusinessName, json.GetProperty("name").GetString());
         Assert.Equal(ApiFactory.BusinessTimeZoneId, json.GetProperty("timeZoneId").GetString());
 
         // The business that predates the application form records none of the profile details, and
-        // the read reports exactly that rather than inventing a value for any of them.
+        // the read reports exactly that rather than inventing a value for any of them - including
+        // the state, which no existing business has recorded (issue #933).
         Assert.Equal(JsonValueKind.Null, json.GetProperty("contactEmail").ValueKind);
         Assert.Equal(JsonValueKind.Null, json.GetProperty("abn").ValueKind);
         Assert.Equal(JsonValueKind.Null, json.GetProperty("gstRegistered").ValueKind);
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("state").ValueKind);
     }
 
     /// <summary>
@@ -97,16 +102,110 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         Assert.Equal(NormalizedAbn, json.GetProperty("abn").GetString());
         Assert.True(json.GetProperty("gstRegistered").GetBoolean());
         Assert.Equal("Australia/Sydney", json.GetProperty("timeZoneId").GetString());
+        Assert.Equal(Nsw, json.GetProperty("state").GetString());
 
         var reread = await ReadJsonAsync(await client.GetAsync(Uri));
         Assert.Equal("Saved Vending Co", reread.GetProperty("name").GetString());
         Assert.Equal(NormalizedAbn, reread.GetProperty("abn").GetString());
+        Assert.Equal(Nsw, reread.GetProperty("state").GetString());
 
         var stored = await _factory.StoredAsync(ApiFactory.SaveBusinessId);
         Assert.Equal("Saved Vending Co", stored.Name);
         Assert.Equal("owner@example.com", stored.ContactEmail);
         Assert.Equal(NormalizedAbn, stored.Abn);
         Assert.True(stored.GstRegistered);
+        Assert.Equal(Nsw, stored.State);
+    }
+
+    /// <summary>
+    /// The criterion issue #933 adds to this endpoint: an Owner records the state a business that
+    /// predates the column has none of, changes it afterwards, and the value a person typed in
+    /// lower case is stored as its canonical abbreviation. Every other setting the request carried
+    /// is unchanged by the second save, which is what makes it a change to the state alone.
+    /// </summary>
+    [Fact]
+    public async Task An_owner_records_and_then_changes_the_state()
+    {
+        await _factory.SeedAsync();
+        var client = _factory.Authenticated(ApiFactory.StateOwnerObjectId);
+
+        Assert.Equal(
+            JsonValueKind.Null,
+            (await ReadJsonAsync(await client.GetAsync(Uri))).GetProperty("state").ValueKind);
+
+        var recorded = await client.PutAsync(Uri, Body(
+            name: "State Vending Co",
+            contactEmail: "state@example.com",
+            abn: null,
+            gstRegistered: true,
+            timeZoneId: "Australia/Sydney",
+            state: " qld "));
+
+        Assert.Equal(HttpStatusCode.OK, recorded.StatusCode);
+        Assert.Equal("QLD", (await ReadJsonAsync(recorded)).GetProperty("state").GetString());
+        Assert.Equal("QLD", (await _factory.StoredAsync(ApiFactory.StateBusinessId)).State);
+
+        var changed = await client.PutAsync(Uri, Body(
+            name: "State Vending Co",
+            contactEmail: "state@example.com",
+            abn: null,
+            gstRegistered: true,
+            timeZoneId: "Australia/Sydney",
+            state: "ACT"));
+
+        Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+        var stored = await _factory.StoredAsync(ApiFactory.StateBusinessId);
+        Assert.Equal("ACT", stored.State);
+        Assert.Equal("State Vending Co", stored.Name);
+        Assert.Equal("state@example.com", stored.ContactEmail);
+        Assert.Null(stored.Abn);
+        Assert.True(stored.GstRegistered);
+        Assert.Equal("Australia/Sydney", stored.TimeZoneId);
+        Assert.Equal(BusinessStatus.Active, stored.Status);
+    }
+
+    /// <summary>
+    /// Every value outside the eight states and territories is refused with <c>400</c> and stores
+    /// nothing - a missing one, a blank one, a long name, and another country's subdivision - so a
+    /// business is never recorded as trading somewhere it does not.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("New South Wales")]
+    [InlineData("NSWW")]
+    [InlineData("NZ")]
+    [InlineData("CA")]
+    public async Task A_state_that_is_not_one_of_the_eight_is_refused_with_400(string? state)
+    {
+        await _factory.SeedAsync();
+        var before = await _factory.StoredAsync(ApiFactory.StateValidationBusinessId);
+
+        var response = await _factory.Authenticated(ApiFactory.StateValidationOwnerObjectId)
+            .PutAsync(Uri, Body(
+                name: "Refused Vending Co",
+                contactEmail: "refused@example.com",
+                abn: null,
+                gstRegistered: true,
+                timeZoneId: "Australia/Sydney",
+                state: state));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var after = await _factory.StoredAsync(ApiFactory.StateValidationBusinessId);
+        Assert.Equal(before.Name, after.Name);
+        Assert.Equal(before.State, after.State);
+        Assert.Equal(before.ContactEmail, after.ContactEmail);
+        Assert.Equal(before.GstRegistered, after.GstRegistered);
+
+        // The refusal names the rule and the eight values, never the value submitted.
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains(AustralianStates.InvalidMessage, body, StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(state))
+        {
+            Assert.DoesNotContain($"\"{state}\"", body, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -134,6 +233,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         Assert.Equal(before.ContactEmail, after.ContactEmail);
         Assert.Equal(before.Abn, after.Abn);
         Assert.Equal(before.GstRegistered, after.GstRegistered);
+        Assert.Equal(before.State, after.State);
         Assert.Equal(before.Status, after.Status);
     }
 
@@ -272,6 +372,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         Assert.Equal(before.ContactEmail, after.ContactEmail);
         Assert.Equal(before.Abn, after.Abn);
         Assert.Equal(before.GstRegistered, after.GstRegistered);
+        Assert.Equal(before.State, after.State);
     }
 
     /// <summary>
@@ -314,6 +415,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         Assert.Equal(before.Abn, after.Abn);
         Assert.Equal(before.GstRegistered, after.GstRegistered);
         Assert.Equal(before.TimeZoneId, after.TimeZoneId);
+        Assert.Equal(before.State, after.State);
 
         Assert.DoesNotContain(
             _factory.LogMessages,
@@ -373,7 +475,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
             ApiFactory.AuditBusinessId.ToString(CultureInfo.InvariantCulture),
             audit,
             StringComparison.Ordinal);
-        foreach (var field in new[] { "Name", "ContactEmail", "Abn", "GstRegistered", "TimeZoneId" })
+        foreach (var field in new[] { "Name", "ContactEmail", "Abn", "GstRegistered", "TimeZoneId", "State" })
         {
             Assert.Contains(field, audit, StringComparison.Ordinal);
         }
@@ -402,7 +504,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         var audit = Assert.Single(_factory.LogMessages.Where(message =>
             message.Contains("Business settings changed", StringComparison.Ordinal)));
         Assert.Contains("Name", audit, StringComparison.Ordinal);
-        foreach (var unchanged in new[] { "ContactEmail", "GstRegistered", "TimeZoneId" })
+        foreach (var unchanged in new[] { "ContactEmail", "GstRegistered", "TimeZoneId", "State" })
         {
             Assert.DoesNotContain(unchanged, audit, StringComparison.Ordinal);
         }
@@ -430,12 +532,18 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
             message => message.Contains("Business settings changed", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The request body as a client sends it. <paramref name="state"/> defaults to a valid one
+    /// (issue #933) so every test that is about another setting reads as being about that setting;
+    /// the state's own rules are asserted by the tests that pass it explicitly.
+    /// </summary>
     private static StringContent Body(
         string? name,
         string? contactEmail,
         string? abn,
         bool? gstRegistered,
-        string? timeZoneId)
+        string? timeZoneId,
+        string? state = Nsw)
     {
         var json = JsonSerializer.Serialize(new Dictionary<string, object?>(StringComparer.Ordinal)
         {
@@ -444,6 +552,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
             ["abn"] = abn,
             ["gstRegistered"] = gstRegistered,
             ["timeZoneId"] = timeZoneId,
+            ["state"] = state,
         });
 
         return new StringContent(json, Encoding.UTF8, "application/json");
@@ -469,6 +578,8 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         public const int PartialAuditBusinessId = 9;
         public const int IsolationBusinessId = 10;
         public const int MalformedEmailBusinessId = 11;
+        public const int StateBusinessId = 12;
+        public const int StateValidationBusinessId = 13;
 
         public const string DirectoryTenantId = "88888888-8888-8888-8888-888888888888";
         public const string OwnerObjectId = "11111111-1111-1111-1111-111111111111";
@@ -484,6 +595,8 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         public const string PartialAuditOwnerObjectId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
         public const string IsolationOwnerObjectId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
         public const string MalformedEmailOwnerObjectId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+        public const string StateOwnerObjectId = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+        public const string StateValidationOwnerObjectId = "12121212-1212-1212-1212-121212121212";
 
         private static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
 
@@ -577,7 +690,9 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
                 Business(NoChangeBusinessId, "No Change Vending Co", BusinessTimeZoneId),
                 Business(PartialAuditBusinessId, "Partial Vending Co", BusinessTimeZoneId),
                 Business(IsolationBusinessId, "Isolation Vending Co", BusinessTimeZoneId),
-                Business(MalformedEmailBusinessId, "Malformed Vending Co", BusinessTimeZoneId));
+                Business(MalformedEmailBusinessId, "Malformed Vending Co", BusinessTimeZoneId),
+                Business(StateBusinessId, "State Vending Co", BusinessTimeZoneId),
+                Business(StateValidationBusinessId, "State Validation Vending Co", BusinessTimeZoneId));
 
             db.BusinessMemberships.AddRange(
                 Membership(BusinessId, OwnerObjectId, BusinessRole.Owner),
@@ -591,7 +706,9 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
                 Membership(NoChangeBusinessId, NoChangeOwnerObjectId, BusinessRole.Owner),
                 Membership(PartialAuditBusinessId, PartialAuditOwnerObjectId, BusinessRole.Owner),
                 Membership(IsolationBusinessId, IsolationOwnerObjectId, BusinessRole.Owner),
-                Membership(MalformedEmailBusinessId, MalformedEmailOwnerObjectId, BusinessRole.Owner));
+                Membership(MalformedEmailBusinessId, MalformedEmailOwnerObjectId, BusinessRole.Owner),
+                Membership(StateBusinessId, StateOwnerObjectId, BusinessRole.Owner),
+                Membership(StateValidationBusinessId, StateValidationOwnerObjectId, BusinessRole.Owner));
 
             await db.SaveChangesAsync();
             _seeded = true;

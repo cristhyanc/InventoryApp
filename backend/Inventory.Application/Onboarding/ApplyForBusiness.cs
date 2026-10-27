@@ -21,7 +21,8 @@ public sealed record BusinessApplicationSubmission(
     string? ContactEmail,
     string? Abn,
     bool? GstRegistered,
-    string? TimeZoneId);
+    string? TimeZoneId,
+    string? State);
 
 /// <summary>
 /// The outcome of submitting a business application (issue #541): it was recorded, this deployment
@@ -211,7 +212,8 @@ public sealed class ApplyForBusiness
             submission.ContactEmail,
             submission.Abn,
             submission.GstRegistered,
-            submission.TimeZoneId);
+            submission.TimeZoneId,
+            submission.State);
 
         // Claimed before the membership read and the write, so several simultaneous submissions cost
         // one allowance each rather than all passing a count nothing has incremented yet.

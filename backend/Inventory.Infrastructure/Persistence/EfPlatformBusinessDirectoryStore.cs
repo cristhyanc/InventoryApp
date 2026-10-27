@@ -76,6 +76,9 @@ public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirector
                 business.DecidedAtUtc,
                 business.ContactEmail,
                 business.Abn,
+                // The state the application recorded (issue #933): one more column of the same
+                // fixed set of the business's own published details, never a tenant-owned value.
+                business.State,
                 ActiveMemberCount = business.Memberships.Count(membership => membership.IsActive),
             })
             .ToListAsync(cancellationToken)
@@ -97,6 +100,7 @@ public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirector
                 business.DecidedAtUtc,
                 business.ContactEmail,
                 business.Abn,
+                business.State,
                 business.ActiveMemberCount,
                 configured.Contains(business.Id)))
             .ToList();

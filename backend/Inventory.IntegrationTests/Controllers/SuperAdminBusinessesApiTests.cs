@@ -125,6 +125,15 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
             SuperAdminBusinessesApiFactory.PendingContactEmail,
             businesses[0].GetProperty("contactEmail").GetString());
         Assert.Equal(SuperAdminBusinessesApiFactory.PendingAbn, businesses[0].GetProperty("abn").GetString());
+        // The state the application recorded is shown when it is reviewed (issue #933), and a
+        // business that recorded none reports it as unrecorded rather than as a guess.
+        Assert.Equal(SuperAdminBusinessesApiFactory.PendingState, businesses[0].GetProperty("state").GetString());
+        Assert.Equal(
+            JsonValueKind.Null,
+            businesses
+                .Single(business => business.GetProperty("businessId").GetInt32() == _factory.RejectedBusinessId)
+                .GetProperty("state")
+                .ValueKind);
         Assert.Equal(1, businesses[0].GetProperty("activeMemberCount").GetInt32());
         Assert.False(businesses[0].GetProperty("nayaxConfigured").GetBoolean());
         Assert.Equal(
@@ -146,7 +155,7 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
 
     /// <summary>
     /// The acceptance criterion "no tenant data in responses", asserted structurally and by value:
-    /// the response objects carry exactly the ten declared properties, and a seeded product name and
+    /// the response objects carry exactly the eleven declared properties, and a seeded product name and
     /// Nayax token ciphertext appear nowhere in the body - while the connection's existence is
     /// still reported as the yes/no it is meant to be.
     /// </summary>
@@ -178,6 +187,7 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
                     "decidedAtUtc",
                     "name",
                     "nayaxConfigured",
+                    "state",
                     "status",
                 ],
                 business.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));

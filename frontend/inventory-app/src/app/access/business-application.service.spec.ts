@@ -9,7 +9,8 @@ const REQUEST: BusinessApplicationRequest = {
   contactEmail: 'owner@example.com',
   abn: null,
   gstRegistered: true,
-  timeZoneId: 'Australia/Sydney'
+  timeZoneId: 'Australia/Sydney',
+  state: 'NSW'
 };
 
 const SUBMITTED = { name: 'Corner Store', status: 'PendingApproval', appliedAtUtc: '2026-10-13T00:00:00Z' };
@@ -22,7 +23,7 @@ function createService(apiBaseUrl = '/api'): { service: BusinessApplicationServi
 
 /** `BusinessApplicationService` (issue #543): the form's one call, `POST /api/onboarding/business-applications`. */
 describe('BusinessApplicationService (issue #543)', () => {
-  it('posts the five settings to the onboarding endpoint', (done) => {
+  it('posts the six settings to the onboarding endpoint', (done) => {
     const { service, http } = createService();
 
     service.submit(REQUEST).subscribe((submitted) => {

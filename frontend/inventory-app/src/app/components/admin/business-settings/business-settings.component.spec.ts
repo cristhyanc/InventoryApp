@@ -19,7 +19,8 @@ const SETTINGS: BusinessSettings = {
   contactEmail: 'owner@example.com',
   abn: '51824753556',
   gstRegistered: true,
-  timeZoneId: 'Australia/Sydney'
+  timeZoneId: 'Australia/Sydney',
+  state: 'NSW'
 };
 
 interface Harness {
@@ -75,7 +76,8 @@ describe('BusinessSettingsComponent (issue #549)', () => {
       contactEmail: 'owner@example.com',
       abn: '51824753556',
       gstRegistered: true,
-      timeZoneId: 'Australia/Sydney'
+      timeZoneId: 'Australia/Sydney',
+      state: 'NSW'
     });
   });
 

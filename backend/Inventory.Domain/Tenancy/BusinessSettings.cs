@@ -2,16 +2,16 @@ namespace Inventory.Domain.Tenancy;
 
 /// <summary>
 /// The settings a business keeps about itself (issue #548): what it is called, how it is contacted,
-/// its ABN, whether it is registered for GST, and the IANA time zone its business days are derived
-/// in.
+/// its ABN, whether it is registered for GST, the IANA time zone its business days are derived in,
+/// and the Australian state or territory it trades in (issue #933).
 ///
-/// <para>It is the stored shape, which is why three of the five are nullable: the application's
+/// <para>It is the stored shape, which is why four of the six are nullable: the application's
 /// existing business predates the application form, so "not recorded" is a real state for its
-/// contact address, its ABN and its GST registration, and a read has to be able to report that
-/// rather than invent a value (issue #540). A <em>save</em> is narrower - a contact address and a
-/// GST registration are required on the way in, and
-/// <see cref="BusinessSettingsPolicy.Validate"/> is where that is decided - so a record this type
-/// describes becomes steadily more complete and never less.</para>
+/// contact address, its ABN, its GST registration and its state, and a read has to be able to
+/// report that rather than invent a value (issue #540, and issue #933 for the state). A
+/// <em>save</em> is narrower - a contact address, a GST registration and a state are required on
+/// the way in, and <see cref="BusinessSettingsPolicy.Validate"/> is where that is decided - so a
+/// record this type describes becomes steadily more complete and never less.</para>
 ///
 /// <para>It deliberately carries no business identifier. Which business these settings belong to is
 /// resolved from the authenticated actor's membership, and a tenant key in a contract is a key a
@@ -35,12 +35,19 @@ namespace Inventory.Domain.Tenancy;
 /// <c>Australia/Sydney</c>. Required, because a business with no zone has no derivable business
 /// dates at all.
 /// </param>
+/// <param name="State">
+/// The Australian state or territory the business trades in, as one of
+/// <see cref="AustralianStates.All"/>, or <see langword="null"/> when none has been recorded
+/// (issue #933). It is never derived from <paramref name="TimeZoneId"/>, which cannot tell New
+/// South Wales from the Australian Capital Territory, and never from an address.
+/// </param>
 public sealed record BusinessSettings(
     string Name,
     string? ContactEmail,
     string? Abn,
     bool? GstRegistered,
-    string TimeZoneId);
+    string TimeZoneId,
+    string? State);
 
 /// <summary>
 /// One setting, as an audit event names it (issue #548).
@@ -70,4 +77,7 @@ public enum BusinessSettingsField
 
     /// <summary>The IANA time zone business days are derived in.</summary>
     TimeZoneId = 5,
+
+    /// <summary>The Australian state or territory the business trades in (issue #933).</summary>
+    State = 6,
 }

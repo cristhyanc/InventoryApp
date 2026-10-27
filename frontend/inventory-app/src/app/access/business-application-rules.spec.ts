@@ -1,9 +1,11 @@
 import {
   ABN_INVALID_MESSAGE,
+  AUSTRALIAN_STATES,
   BusinessApplicationDraft,
   CONTACT_EMAIL_INVALID_MESSAGE,
   GST_REGISTRATION_REQUIRED_MESSAGE,
   NAME_REQUIRED_MESSAGE,
+  STATE_REQUIRED_MESSAGE,
   TIME_ZONE_REQUIRED_MESSAGE,
   TIME_ZONE_UNKNOWN_MESSAGE,
   availableTimeZones,
@@ -21,6 +23,7 @@ function draft(overrides: Partial<BusinessApplicationDraft> = {}): BusinessAppli
     abn: '',
     gstRegistered: true,
     timeZoneId: 'Australia/Sydney',
+    state: 'NSW',
     ...overrides
   };
 }
@@ -90,7 +93,8 @@ describe('business application rules (issue #543)', () => {
         contactEmail: 'not-an-address',
         abn: '12345678901',
         gstRegistered: null,
-        timeZoneId: ''
+        timeZoneId: '',
+        state: ''
       });
 
       expect(errors).toEqual({
@@ -98,8 +102,21 @@ describe('business application rules (issue #543)', () => {
         contactEmail: CONTACT_EMAIL_INVALID_MESSAGE,
         abn: ABN_INVALID_MESSAGE,
         gstRegistered: GST_REGISTRATION_REQUIRED_MESSAGE,
-        timeZoneId: TIME_ZONE_REQUIRED_MESSAGE
+        timeZoneId: TIME_ZONE_REQUIRED_MESSAGE,
+        state: STATE_REQUIRED_MESSAGE
       });
+    });
+
+    it.each(AUSTRALIAN_STATES)('accepts %p as a state or territory', (state) => {
+      expect(validateBusinessApplication(draft({ state })).state).toBeUndefined();
+    });
+
+    it.each(['', '   ', 'New South Wales', 'NSWW', 'NZ'])('refuses %p as a state or territory', (state) => {
+      expect(validateBusinessApplication(draft({ state })).state).toBe(STATE_REQUIRED_MESSAGE);
+    });
+
+    it('accepts a state typed in lower case or with spaces, as the API normalizes it', () => {
+      expect(validateBusinessApplication(draft({ state: ' qld ' })).state).toBeUndefined();
     });
 
     it('refuses a name longer than 200 characters once trimmed', () => {
@@ -122,14 +139,21 @@ describe('business application rules (issue #543)', () => {
     it('trims the text, sends the ABN as its digits and a blank ABN as null', () => {
       expect(
         toBusinessApplicationRequest(
-          draft({ name: ' Corner Store ', contactEmail: ' owner@example.com ', abn: '51 824 753 556', gstRegistered: false })
+          draft({
+            name: ' Corner Store ',
+            contactEmail: ' owner@example.com ',
+            abn: '51 824 753 556',
+            gstRegistered: false,
+            state: ' nsw '
+          })
         )
       ).toEqual({
         name: 'Corner Store',
         contactEmail: 'owner@example.com',
         abn: '51824753556',
         gstRegistered: false,
-        timeZoneId: 'Australia/Sydney'
+        timeZoneId: 'Australia/Sydney',
+        state: 'NSW'
       });
 
       expect(toBusinessApplicationRequest(draft({ abn: '   ' })).abn).toBeNull();

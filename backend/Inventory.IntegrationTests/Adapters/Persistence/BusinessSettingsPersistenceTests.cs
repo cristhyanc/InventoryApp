@@ -110,14 +110,16 @@ public class BusinessSettingsPersistenceTests : IDisposable
     {
         var result = await SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Renamed Sydney", "owner@example.com", ValidAbn, true, NewYork));
+            new BusinessSettings("Renamed Sydney", "owner@example.com", ValidAbn, true, NewYork, "NSW"));
 
         Assert.NotNull(result);
         var saved = await ReadAsync(SydneyBusiness);
-        Assert.Equal(new BusinessSettings("Renamed Sydney", "owner@example.com", ValidAbn, true, NewYork), saved);
+        Assert.Equal(
+            new BusinessSettings("Renamed Sydney", "owner@example.com", ValidAbn, true, NewYork, "NSW"),
+            saved);
 
         var other = await ReadAsync(NewYorkBusiness);
-        Assert.Equal(new BusinessSettings("Vending New York", null, null, null, NewYork), other);
+        Assert.Equal(new BusinessSettings("Vending New York", null, null, null, NewYork, null), other);
     }
 
     [Fact]
@@ -125,7 +127,7 @@ public class BusinessSettingsPersistenceTests : IDisposable
     {
         var result = await SaveAsync(
             99,
-            new BusinessSettings("Nowhere", "owner@example.com", null, true, Sydney));
+            new BusinessSettings("Nowhere", "owner@example.com", null, true, Sydney, "NSW"));
 
         Assert.Null(result);
         Assert.Equal("Vending Sydney", (await ReadAsync(SydneyBusiness))!.Name);
@@ -137,26 +139,36 @@ public class BusinessSettingsPersistenceTests : IDisposable
     {
         var recorded = await SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Vending Sydney", "owner@example.com", ValidAbn, false, Sydney));
+            new BusinessSettings("Vending Sydney", "owner@example.com", ValidAbn, false, Sydney, "NSW"));
 
+        // The seeded business records none of the profile details, so the first save records four
+        // of them - the state included (issue #933).
         Assert.Equal(
             [
                 BusinessSettingsField.ContactEmail,
                 BusinessSettingsField.Abn,
                 BusinessSettingsField.GstRegistered,
+                BusinessSettingsField.State,
             ],
             recorded!.ChangedFields);
 
         var cleared = await SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Vending Sydney", "owner@example.com", null, false, Sydney));
+            new BusinessSettings("Vending Sydney", "owner@example.com", null, false, Sydney, "NSW"));
 
         Assert.Equal([BusinessSettingsField.Abn], cleared!.ChangedFields);
         Assert.Null((await ReadAsync(SydneyBusiness))!.Abn);
 
+        var movedState = await SaveAsync(
+            SydneyBusiness,
+            new BusinessSettings("Vending Sydney", "owner@example.com", null, false, Sydney, "ACT"));
+
+        Assert.Equal([BusinessSettingsField.State], movedState!.ChangedFields);
+        Assert.Equal("ACT", (await ReadAsync(SydneyBusiness))!.State);
+
         var unchanged = await SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Vending Sydney", "owner@example.com", null, false, Sydney));
+            new BusinessSettings("Vending Sydney", "owner@example.com", null, false, Sydney, "ACT"));
 
         Assert.Empty(unchanged!.ChangedFields);
     }
@@ -174,10 +186,10 @@ public class BusinessSettingsPersistenceTests : IDisposable
     {
         await Assert.ThrowsAsync<DomainValidationException>(() => SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Renamed Sydney", "owner@example.com", ValidAbn, true, timeZoneId)));
+            new BusinessSettings("Renamed Sydney", "owner@example.com", ValidAbn, true, timeZoneId, "NSW")));
 
         Assert.Equal(
-            new BusinessSettings("Vending Sydney", null, null, null, Sydney),
+            new BusinessSettings("Vending Sydney", null, null, null, Sydney, null),
             await ReadAsync(SydneyBusiness));
     }
 
@@ -191,11 +203,58 @@ public class BusinessSettingsPersistenceTests : IDisposable
     {
         await Assert.ThrowsAsync<DomainValidationException>(() => SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Renamed Sydney", "owner@example.com", "51824753557", true, Sydney)));
+            new BusinessSettings("Renamed Sydney", "owner@example.com", "51824753557", true, Sydney, "NSW")));
 
         Assert.Equal(
-            new BusinessSettings("Vending Sydney", null, null, null, Sydney),
+            new BusinessSettings("Vending Sydney", null, null, null, Sydney, null),
             await ReadAsync(SydneyBusiness));
+    }
+
+    /// <summary>
+    /// The same for the state enforcer (issue #933): the Domain policy refuses anything outside the
+    /// eight before this store is reached, so this is the second line - a value that arrived any
+    /// other way is still refused on the way into the database, and the whole save is lost rather
+    /// than the valid settings being written beside a wrong state.
+    /// </summary>
+    [Theory]
+    [InlineData("New South Wales")]
+    [InlineData("nsw")]
+    [InlineData(" NSW ")]
+    [InlineData("NZ")]
+    [InlineData("")]
+    public async Task A_state_that_is_not_one_of_the_eight_is_refused_and_stores_nothing(string state)
+    {
+        await Assert.ThrowsAsync<DomainValidationException>(() => SaveAsync(
+            SydneyBusiness,
+            new BusinessSettings("Renamed Sydney", "owner@example.com", ValidAbn, true, Sydney, state)));
+
+        Assert.Equal(
+            new BusinessSettings("Vending Sydney", null, null, null, Sydney, null),
+            await ReadAsync(SydneyBusiness));
+    }
+
+    /// <summary>
+    /// A business with no recorded state reads as exactly that, and recording one changes nothing
+    /// else about the business or about the other one in the same database (issue #933).
+    /// </summary>
+    [Fact]
+    public async Task A_recorded_state_changes_nothing_else()
+    {
+        var before = await ReadAsync(SydneyBusiness);
+        Assert.Null(before!.State);
+
+        await SaveAsync(
+            SydneyBusiness,
+            new BusinessSettings(before.Name, "owner@example.com", null, true, Sydney, "QLD"));
+
+        var after = await ReadAsync(SydneyBusiness);
+        Assert.Equal("QLD", after!.State);
+        Assert.Equal(before.Name, after.Name);
+        Assert.Equal(before.TimeZoneId, after.TimeZoneId);
+
+        Assert.Equal(
+            new BusinessSettings("Vending New York", null, null, null, NewYork, null),
+            await ReadAsync(NewYorkBusiness));
     }
 
     /// <summary>
@@ -222,7 +281,7 @@ public class BusinessSettingsPersistenceTests : IDisposable
 
         await SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Vending Sydney", "owner@example.com", null, true, NewYork));
+            new BusinessSettings("Vending Sydney", "owner@example.com", null, true, NewYork, "NSW"));
 
         var after = await CalendarForAsync(SydneyBusiness, storedInstant);
         Assert.Equal(new DateTime(2026, 7, 14), after.ToBusinessDate(storedInstant));
@@ -250,7 +309,7 @@ public class BusinessSettingsPersistenceTests : IDisposable
 
         await SaveAsync(
             SydneyBusiness,
-            new BusinessSettings("Vending Sydney", "owner@example.com", null, true, NewYork));
+            new BusinessSettings("Vending Sydney", "owner@example.com", null, true, NewYork, "NSW"));
 
         var after = await CalendarForAsync(SydneyBusiness, now);
         Assert.Equal(23, HoursIn(after, transitionDay));

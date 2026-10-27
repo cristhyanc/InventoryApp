@@ -7,7 +7,8 @@ namespace Inventory.Application.Businesses;
 
 /// <summary>
 /// Saves the settings of the signed-in Owner's own business (issue #548): its name, contact
-/// address, ABN, GST registration and the IANA time zone its business days are derived in.
+/// address, ABN, GST registration, the IANA time zone its business days are derived in, and the
+/// Australian state or territory it trades in (issue #933).
 ///
 /// <para><strong>Which business is never asked.</strong> The use case takes the submitted settings
 /// and nothing else: the business comes from the authenticated actor's membership through
@@ -105,7 +106,8 @@ public sealed class UpdateBusinessSettings
             submission.ContactEmail,
             submission.Abn,
             submission.GstRegistered,
-            submission.TimeZoneId);
+            submission.TimeZoneId,
+            submission.State);
 
         // Inside the shared BEGIN IMMEDIATE transaction (issue #680), which re-reads the business's
         // lifecycle status in the lock before the save: the business id was resolved when the
@@ -148,4 +150,5 @@ public sealed record BusinessSettingsSubmission(
     string? ContactEmail,
     string? Abn,
     bool? GstRegistered,
-    string? TimeZoneId);
+    string? TimeZoneId,
+    string? State);

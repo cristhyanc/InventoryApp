@@ -282,7 +282,7 @@ public class BusinessApplicationConcurrencyTests : IAsyncDisposable
     }
 
     private static BusinessApplicationSubmission Submission() =>
-        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane");
+        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "QLD");
 
     /// <summary>
     /// Runs one real application on its own connection, as a request would: a denied business scope,

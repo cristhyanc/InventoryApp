@@ -19,6 +19,7 @@ function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusine
     decidedAtUtc: null,
     contactEmail: 'owner@example.com',
     abn: '12345678901',
+    state: 'QLD',
     activeMemberCount: 1,
     nayaxConfigured: false,
     ...overrides
@@ -70,6 +71,22 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).toContain('owner@example.com');
     expect(host.textContent).toContain('12345678901');
     expect(host.textContent).toContain('No');
+  });
+
+  /**
+   * Issue #933: the state a business recorded is shown when its application is reviewed, and a
+   * business that recorded none shows that rather than a guess.
+   */
+  it('shows the state of each business, and an em dash for one with none', async () => {
+    const { host } = await render({
+      list: () => of([business(), business({ businessId: 10, name: 'Legacy Co', state: null })])
+    });
+
+    const states = Array.from(host.querySelectorAll('[data-testid="business-state"]')).map(
+      (cell) => cell.textContent?.trim()
+    );
+
+    expect(states).toEqual(['QLD', '—']);
   });
 
   it('shows an error state when the list fails to load', async () => {
