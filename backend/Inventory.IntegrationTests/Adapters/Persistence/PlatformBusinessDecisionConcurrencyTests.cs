@@ -1,6 +1,7 @@
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.PlatformAdmin;
@@ -85,9 +86,10 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
             Assert.Null(business.RejectionReason);
             Assert.Equal(MembershipWriteRaceHarness.SeededAt, applicant.StatusChangedAtUtc);
 
-            // And it provisioned the business it approved, once (issue #849).
+            // And it provisioned the business it approved, once (issue #849), with the records that
+            // serve it (issue #935).
             Assert.Equal(Now, business.SupplierPresetsCopiedAtUtc);
-            Assert.Equal(EnabledPresetCount(), _harness.Suppliers().Count);
+            Assert.Equal(ServingPresetCount(), _harness.Suppliers().Count);
         }
         else
         {
@@ -130,7 +132,7 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
         // attempt even if the status rule somehow let one through.
         Assert.Equal(Now, business.SupplierPresetsCopiedAtUtc);
         var copies = _harness.Suppliers();
-        Assert.Equal(EnabledPresetCount(), copies.Count);
+        Assert.Equal(ServingPresetCount(), copies.Count);
         Assert.All(copies, supplier => Assert.Equal(PendingBusinessId, supplier.BusinessId));
         Assert.Equal(copies.Select(supplier => supplier.Name).Distinct().Count(), copies.Count);
     }
@@ -167,11 +169,24 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
     }
 
     /// <summary>
-    /// How many suppliers one approval is expected to create: one per enabled preset, read from the
-    /// rows the migration shipped rather than from a number written here, so changing the shipped
-    /// list changes this expectation with it.
+    /// How many suppliers one approval is expected to create: one per enabled preset that
+    /// <em>serves this business</em> (issue #935), read from the rows the migration shipped and from
+    /// the business's own recorded state rather than from a number written here - so changing the
+    /// shipped list, or the state rule, changes this expectation with it.
+    ///
+    /// <para>The harness seeds a business with no recorded state, which is the legacy case: the
+    /// nationwide records serve it and the state-specific ones do not.</para>
     /// </summary>
-    private int EnabledPresetCount() => _harness.SupplierPresets().Count(preset => preset.IsEnabled);
+    private int ServingPresetCount()
+    {
+        var state = _harness.Businesses().Single(business => business.Id == PendingBusinessId).State;
+
+        return _harness.SupplierPresets().Count(preset => SupplierPresetMarketPolicy.IsOfferedTo(
+            preset.IsEnabled,
+            preset.ServesNationwide,
+            preset.ServedStates,
+            state));
+    }
 
     /// <summary>
     /// The sequential half, and the one an operator meets in practice: deciding an application that

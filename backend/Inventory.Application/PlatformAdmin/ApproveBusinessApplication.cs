@@ -11,7 +11,7 @@ namespace Inventory.Application.PlatformAdmin;
 ///
 /// <para>It is the first platform-admin operation that writes. What it may change is one business's
 /// lifecycle status and decision instant, and - since issue #849 - that same business's own copies of
-/// the enabled platform supplier presets, written through
+/// the enabled platform supplier presets that serve its recorded state (issue #935), written through
 /// <see cref="IBusinessSupplierProvisioningStore"/> in the same transaction. No membership is
 /// created, no role is granted, no other business is reachable, and nothing is stamped with the
 /// business id the <em>request</em> carried: the provisioning write is stamped with the key of the

@@ -40,7 +40,8 @@ namespace Inventory.Application.PlatformAdmin;
 /// <para><strong>An approval also provisions the business it approves (issue #849).</strong> Inside
 /// the same transaction, immediately after the status write,
 /// <see cref="IBusinessSupplierProvisioningStore"/> copies the enabled platform supplier presets
-/// into the business as its own suppliers and stamps the copy instant on it. It is one operation
+/// that serve that business's own recorded state (issue #935) into it as its own suppliers and
+/// stamps the copy instant on it. It is one operation
 /// with the approval on purpose: an approved business that did not get them would be a half-finished
 /// tenant, and a copy that committed without the approval would hand suppliers to a business that is
 /// still waiting. A failure there therefore rolls the status change back with it and no audit event

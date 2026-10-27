@@ -69,6 +69,97 @@ public class EfBusinessSupplierProvisioningStoreTests
     }
 
     /// <summary>
+    /// Only the records that serve the business's own state are copied (issue #935): a nationwide
+    /// record and a record naming that state, and not a record naming another state, a record with
+    /// no recorded market at all, or a disabled record however well its market matches.
+    ///
+    /// <para>The two businesses hold different states, which is the only way to state the property:
+    /// the same platform list produces a different supplier list in Canberra and in Perth.</para>
+    /// </summary>
+    [Fact]
+    public async Task Copying_takes_only_the_records_that_serve_the_business_s_state()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.SetBusinessStateAsync(fixture.ApprovedBusinessId, "ACT");
+        await fixture.SetBusinessStateAsync(fixture.OtherBusinessId, "WA");
+
+        await fixture.ReplacePresetsAsync(
+            ("Coles", null, true),
+            ("JB Metro South Coast & ACT", null, true),
+            ("JB Metro NSW", null, true),
+            ("Perth Wholesale", null, true),
+            ("Disabled nationwide", null, false),
+            ("No market recorded", null, true));
+        await fixture.SetMarketAsync("Coles", servesNationwide: true, servedStates: string.Empty);
+        await fixture.SetMarketAsync(
+            "JB Metro South Coast & ACT", servesNationwide: false, servedStates: "NSW,ACT");
+        await fixture.SetMarketAsync("JB Metro NSW", servesNationwide: false, servedStates: "NSW");
+        await fixture.SetMarketAsync("Perth Wholesale", servesNationwide: false, servedStates: "WA");
+        await fixture.SetMarketAsync("Disabled nationwide", servesNationwide: true, servedStates: string.Empty);
+        await fixture.SetMarketAsync("No market recorded", servesNationwide: false, servedStates: string.Empty);
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+        await fixture.CopyAsync(fixture.OtherBusinessId);
+
+        Assert.Equal(
+            ["Coles", "JB Metro South Coast & ACT"],
+            (await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId))
+                .Select(supplier => supplier.Name)
+                .Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["Coles", "Perth Wholesale"],
+            (await fixture.SuppliersOfAsync(fixture.OtherBusinessId))
+                .Select(supplier => supplier.Name)
+                .Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A business with no recorded state - a legacy one, since both write paths require a state now -
+    /// receives the nationwide records and nothing else. Its state is never guessed from its time
+    /// zone, and the marker is still set, because the copy was made.
+    /// </summary>
+    [Fact]
+    public async Task A_business_without_a_state_receives_only_the_nationwide_records()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.ReplacePresetsAsync(("Coles", null, true), ("JB Metro NSW", null, true));
+        await fixture.SetMarketAsync("Coles", servesNationwide: true, servedStates: string.Empty);
+        await fixture.SetMarketAsync("JB Metro NSW", servesNationwide: false, servedStates: "NSW");
+
+        Assert.Null((await fixture.BusinessAsync(fixture.ApprovedBusinessId)).State);
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+
+        Assert.Equal(
+            ["Coles"],
+            (await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId)).Select(supplier => supplier.Name));
+        Assert.Equal(
+            CopiedAt,
+            (await fixture.BusinessAsync(fixture.ApprovedBusinessId)).SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
+    /// A business no enabled record serves is approved normally with no supplier at all, and still
+    /// gets the marker - the same rule as an empty platform list, for the same reason: the copy was
+    /// made, and what served this business was nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_business_no_record_serves_gets_no_supplier_and_still_gets_the_marker()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.SetBusinessStateAsync(fixture.ApprovedBusinessId, "NT");
+        await fixture.ReplacePresetsAsync(("JB Metro NSW", null, true));
+        await fixture.SetMarketAsync("JB Metro NSW", servesNationwide: false, servedStates: "NSW");
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId));
+        Assert.Equal(
+            CopiedAt,
+            (await fixture.BusinessAsync(fixture.ApprovedBusinessId)).SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
     /// The supplier-master fields of issue #931 are <strong>not</strong> copied, and could not be: a
     /// <c>Supplier</c> has no served states, no price basis and no connector. What a preset claims
     /// about a market and how the platform collects its prices is platform configuration, and a
@@ -83,6 +174,10 @@ public class EfBusinessSupplierProvisioningStoreTests
     public async Task The_supplier_master_fields_are_not_copied_into_the_business_s_supplier()
     {
         await using var fixture = await ProvisioningFixture.CreateAsync();
+
+        // Trading in New South Wales, so the JB Metro NSW record below is one this business
+        // receives (issue #935): what this test is about is which of its fields travel with it.
+        await fixture.SetBusinessStateAsync(fixture.ApprovedBusinessId, "NSW");
         await fixture.ReplacePresetsAsync(
             ("JB Metro NSW", "https://www.jbmetro.com.au", true),
             ("Coles", null, true));
@@ -286,8 +381,9 @@ public class EfBusinessSupplierProvisioningStoreTests
         Assert.Equal("Colesworth", preset.Name);
         Assert.False(preset.IsEnabled);
 
-        // Both copies still point at that one preset row, which is what the price comparison of
-        // #935 follows back - a rename of the master does not break the link.
+        // Both copies still point at that one preset row, which is what a later price comparison
+        // follows back and what issue #935 counts as "this business already has it" - a rename of
+        // the master does not break the link.
         Assert.Equal([preset.Id, preset.Id], new[] { edited.SupplierPresetId, untouched.SupplierPresetId });
     }
 
@@ -470,7 +566,13 @@ public class EfBusinessSupplierProvisioningStoreTests
 
         /// <summary>
         /// Replaces the platform's preset list with exactly the rows given, so each test states the
-        /// suggestions it is about rather than inheriting the four the migration shipped.
+        /// suggestions it is about rather than inheriting the nine the migrations shipped.
+        ///
+        /// <para>Every row is seeded <strong>nationwide</strong>, because a market is now part of
+        /// what decides whether a record is copied at all (issue #935) and a record with none serves
+        /// nobody. Nationwide is the market that keeps a test about something else - what is copied,
+        /// the marker, the boundary - saying what it says; a test about the state rule states its own
+        /// markets with <see cref="SetMarketAsync"/>.</para>
         /// </summary>
         public async Task ReplacePresetsAsync(params (string Name, string? Url, bool IsEnabled)[] presets)
         {
@@ -486,11 +588,41 @@ public class EfBusinessSupplierProvisioningStoreTests
                     NormalisedName = SupplierPresetPolicy.NormalisedName(preset.Name),
                     Url = preset.Url,
                     IsEnabled = preset.IsEnabled,
+                    ServesNationwide = true,
+                    ServedStates = string.Empty,
                     CreatedAtUtc = CreatedAt,
                     UpdatedAtUtc = CreatedAt,
                 });
             }
 
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Records what market one preset claims, in the canonical stored form
+        /// <c>SupplierPresetMasterPolicy.NormaliseServedStates</c> writes: the empty string for a
+        /// nationwide record, and the declared codes in that policy's order otherwise.
+        /// </summary>
+        public async Task SetMarketAsync(string name, bool servesNationwide, string servedStates)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+
+            preset.ServesNationwide = servesNationwide;
+            preset.ServedStates = servedStates;
+
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Records the state a business trades in (issue #933), which is the other half of the
+        /// state-matching rule. Written directly rather than through the settings endpoint, because
+        /// what these tests are about is the copy the approval makes.
+        /// </summary>
+        public async Task SetBusinessStateAsync(int businessId, string state)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            (await db.Businesses.SingleAsync(business => business.Id == businessId)).State = state;
             await db.SaveChangesAsync();
         }
 
@@ -526,6 +658,8 @@ public class EfBusinessSupplierProvisioningStoreTests
                 NormalisedName = SupplierPresetPolicy.NormalisedName(name),
                 Url = url,
                 IsEnabled = isEnabled,
+                ServesNationwide = true,
+                ServedStates = string.Empty,
                 CreatedAtUtc = CreatedAt,
                 UpdatedAtUtc = CreatedAt,
             });
