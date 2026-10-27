@@ -3,7 +3,9 @@ using Inventory.Domain.Gst;
 using Inventory.Domain.Suppliers;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Suppliers;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
@@ -11,16 +13,28 @@ namespace InventoryApi.Tests.Controllers;
 
 public class SuppliersControllerTests
 {
-    private static SuppliersController CreateController(FakeSupplierStore store) =>
-        new(
+    /// <summary>The business every controller test here runs as, resolved from a membership.</summary>
+    private const int BusinessId = 11;
+
+    private static SuppliersController CreateController(
+        FakeSupplierStore store,
+        FakeAvailableSupplierPresetStore? presets = null)
+    {
+        var available = presets ?? new FakeAvailableSupplierPresetStore();
+        var currentBusiness = new FakeCurrentBusinessProvider(BusinessId);
+
+        return new(
             new ListSuppliers(store),
             new GetSupplier(store),
             new CreateSupplier(store),
             new UpdateSupplier(store),
             new DeleteSupplier(store),
             new SetSupplierNotUsed(store),
+            new ListAvailableSupplierPresets(currentBusiness, available),
+            new AddSupplierFromPreset(currentBusiness, available),
             new GetSupplierGstDefaults(store),
             new SetSupplierGstDefaults(store));
+    }
 
     [Fact]
     public async Task Create_returns_created_at_action_with_response_body()
@@ -459,6 +473,132 @@ public class SuppliersControllerTests
 
         Assert.IsType<NotFoundResult>(
             await controller.SetNotUsed(999, new SupplierNotUsedDto(true), CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The "Available to add" list (issue #935) publishes the records that serve this business's
+    /// state and that it holds no copy of, with the id, the name and the website - and nothing
+    /// else, which is what bounds this one member-facing read of a platform table.
+    /// </summary>
+    [Fact]
+    public async Task Available_presets_publishes_the_id_name_and_website_of_the_records_that_serve_this_business()
+    {
+        var presets = new FakeAvailableSupplierPresetStore()
+            .WithPreset(1, "Coles", "https://www.coles.com.au", servesNationwide: true)
+            .WithPreset(2, "JB Metro South Coast & ACT", "https://jbmetro.test", servesNationwide: false, servedStates: "NSW,ACT")
+            .WithPreset(3, "Perth Wholesale", null, servesNationwide: false, servedStates: "WA")
+            .WithPreset(4, "Costco", null, isEnabled: false, servesNationwide: true)
+            .WithCopyOf(1);
+        presets.BusinessState = "ACT";
+        var controller = CreateController(new FakeSupplierStore(), presets);
+
+        var available = Assert.IsAssignableFrom<IEnumerable<AvailableSupplierPresetResponse>>(
+            Assert.IsType<OkObjectResult>(
+                (await controller.GetAvailablePresets(CancellationToken.None)).Result).Value)
+            .ToList();
+
+        var offered = Assert.Single(available);
+        Assert.Equal(new AvailableSupplierPresetResponse(2, "JB Metro South Coast & ACT", "https://jbmetro.test"), offered);
+
+        // The business the list was asked for is the resolved one, never a value a request carried.
+        Assert.Equal([BusinessId], presets.BusinessIds.Distinct());
+    }
+
+    /// <summary>
+    /// Adding one creates the linked copy and answers <c>201</c> with it, pointing at the supplier
+    /// resource the new row has: the name and the website are the record's, and the copy arrives
+    /// with no contact detail, not hidden, and locked by issue #934's rules.
+    /// </summary>
+    [Fact]
+    public async Task Adding_a_record_creates_the_linked_copy_and_reports_it()
+    {
+        var presets = new FakeAvailableSupplierPresetStore()
+            .WithPreset(2, "JB Metro South Coast & ACT", "https://jbmetro.test", servesNationwide: false, servedStates: "NSW,ACT");
+        presets.BusinessState = "ACT";
+        var controller = CreateController(new FakeSupplierStore(), presets);
+
+        var result = await controller.AddFromPreset(2, CancellationToken.None);
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        Assert.Equal(nameof(SuppliersController.Get), created.ActionName);
+        var response = Assert.IsType<SupplierDetailResponse>(created.Value);
+        Assert.Equal("JB Metro South Coast & ACT", response.Name);
+        Assert.Equal("https://jbmetro.test", response.Url);
+        Assert.Equal(response.Id, created.RouteValues!["id"]);
+        Assert.True(response.IsLinked);
+        Assert.False(response.IsHidden);
+        Assert.False(response.CanRename);
+        Assert.False(response.CanDelete);
+        Assert.Null(response.Phone);
+        Assert.Equal([2], presets.Copies);
+    }
+
+    /// <summary>
+    /// A record that does not serve this business, one that is no longer suggested, and one that
+    /// does not exist are one answer - <c>404</c>, with nothing written - so a member learns nothing
+    /// about the platform's list beyond what the list told them.
+    /// </summary>
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(999)]
+    public async Task Adding_a_record_this_business_is_not_offered_is_not_found(int presetId)
+    {
+        var presets = new FakeAvailableSupplierPresetStore()
+            .WithPreset(3, "Perth Wholesale", null, servesNationwide: false, servedStates: "WA")
+            .WithPreset(4, "Costco", null, isEnabled: false, servesNationwide: true);
+        presets.BusinessState = "ACT";
+        var controller = CreateController(new FakeSupplierStore(), presets);
+
+        Assert.IsType<NotFoundResult>((await controller.AddFromPreset(presetId, CancellationToken.None)).Result);
+        Assert.Empty(presets.Copies);
+    }
+
+    /// <summary>
+    /// Adding the same record twice - a double-click, a second tab - is a <c>409</c> carrying the
+    /// rule's own sentence, and leaves exactly one copy. Never a second row, and never a <c>500</c>.
+    /// </summary>
+    [Fact]
+    public async Task Adding_the_same_record_twice_is_a_conflict_and_leaves_one_copy()
+    {
+        var presets = new FakeAvailableSupplierPresetStore().WithPreset(1, "Coles");
+        presets.BusinessState = "ACT";
+        var controller = CreateController(new FakeSupplierStore(), presets);
+
+        Assert.IsType<CreatedAtActionResult>((await controller.AddFromPreset(1, CancellationToken.None)).Result);
+
+        var second = Assert.IsType<ConflictObjectResult>(
+            (await controller.AddFromPreset(1, CancellationToken.None)).Result);
+        var problem = Assert.IsType<ProblemDetails>(second.Value);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.Status);
+        Assert.Equal(SupplierPresetMarketPolicy.AlreadyAddedMessage, problem.Detail);
+        Assert.Equal(
+            SupplierPresetMarketPolicy.AlreadyAddedMessage,
+            Assert.Contains("message", problem.Extensions));
+
+        Assert.Equal([1], presets.Copies);
+    }
+
+    /// <summary>
+    /// The race the pre-check cannot win: the copy is created between the availability answer and
+    /// the insert, and the unique index of issue #934 refuses it. The caller gets the same
+    /// <c>409</c> the pre-check would have given, and there is one copy.
+    /// </summary>
+    [Fact]
+    public async Task An_add_whose_pre_check_missed_the_copy_is_still_a_conflict()
+    {
+        var presets = new FakeAvailableSupplierPresetStore().WithPreset(1, "Coles");
+        presets.BusinessState = "ACT";
+        presets.RefuseNextCopy = true;
+        var controller = CreateController(new FakeSupplierStore(), presets);
+
+        var result = Assert.IsType<ConflictObjectResult>(
+            (await controller.AddFromPreset(1, CancellationToken.None)).Result);
+
+        Assert.Equal(
+            SupplierPresetMarketPolicy.AlreadyAddedMessage,
+            Assert.IsType<ProblemDetails>(result.Value).Detail);
+        Assert.Equal([1], presets.Copies);
     }
 
     private static SupplierDetailResponse Fetch(ActionResult<SupplierDetailResponse> result) =>
