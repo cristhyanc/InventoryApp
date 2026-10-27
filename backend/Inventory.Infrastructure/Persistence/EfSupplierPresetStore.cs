@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Domain.Suppliers;
 using Inventory.Infrastructure.Data;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -41,13 +42,23 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
     /// The one projection every read uses, so a column added to the entity cannot reach one read and
     /// not another. It deliberately omits <c>NormalisedName</c>: it is an index key, not a field of
     /// the resource, and no caller compares names itself.
+    ///
+    /// <para>It projects the served states as the <em>stored</em> string, which
+    /// <see cref="ToRecord"/> then reads with the Domain's own rule. The split exists because this
+    /// expression is translated to SQL: a method call inside it could not be, and running the parse
+    /// on the database would mean a second answer to what a stored market means.</para>
     /// </summary>
-    private static readonly Expression<Func<Models.SupplierPreset, SupplierPresetRecord>> Projection =
-        preset => new SupplierPresetRecord(
+    private static readonly Expression<Func<Models.SupplierPreset, StoredSupplierPreset>> Projection =
+        preset => new StoredSupplierPreset(
             preset.Id,
             preset.Name,
             preset.Url,
             preset.IsEnabled,
+            preset.ServesNationwide,
+            preset.ServedStates,
+            preset.PricesIncludeGst,
+            preset.PriceConnector,
+            preset.PriceConnectorKey,
             preset.CreatedAtUtc,
             preset.UpdatedAtUtc);
 
@@ -60,8 +71,9 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<SupplierPresetRecord>> ListOrderedByNameAsync(
-        CancellationToken cancellationToken) =>
-        await _db.SupplierPresets
+        CancellationToken cancellationToken)
+    {
+        var stored = await _db.SupplierPresets
             .AsNoTracking()
             // By the comparison key and then the row key, so the order does not depend on the
             // database's collation for the display name and two presets that differ only in case
@@ -71,6 +83,9 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             .Select(Projection)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        return stored.ConvertAll(ToRecord);
+    }
 
     /// <inheritdoc />
     public Task<bool> ExistsWithNormalisedNameAsync(
@@ -112,6 +127,11 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             // A new preset is suggested: a preset created already disabled would be a row nobody
             // asked for, and disabling is an edit away.
             IsEnabled = true,
+            ServesNationwide = preset.ServesNationwide,
+            ServedStates = preset.ServedStates,
+            PricesIncludeGst = preset.PricesIncludeGst,
+            PriceConnector = preset.PriceConnector,
+            PriceConnectorKey = preset.PriceConnectorKey,
             CreatedAtUtc = preset.CreatedAtUtc,
             UpdatedAtUtc = preset.CreatedAtUtc,
         };
@@ -119,13 +139,7 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
         _db.SupplierPresets.Add(row);
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        return new SupplierPresetRecord(
-            row.Id,
-            row.Name,
-            row.Url,
-            row.IsEnabled,
-            row.CreatedAtUtc,
-            row.UpdatedAtUtc);
+        return ToRecord(Stored(row));
     }
 
     /// <inheritdoc />
@@ -149,17 +163,16 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
         row.NormalisedName = edit.NormalisedName;
         row.Url = edit.Url;
         row.IsEnabled = edit.IsEnabled;
+        row.ServesNationwide = edit.ServesNationwide;
+        row.ServedStates = edit.ServedStates;
+        row.PricesIncludeGst = edit.PricesIncludeGst;
+        row.PriceConnector = edit.PriceConnector;
+        row.PriceConnectorKey = edit.PriceConnectorKey;
         row.UpdatedAtUtc = edit.UpdatedAtUtc;
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        return new SupplierPresetRecord(
-            row.Id,
-            row.Name,
-            row.Url,
-            row.IsEnabled,
-            row.CreatedAtUtc,
-            row.UpdatedAtUtc);
+        return ToRecord(Stored(row));
     }
 
     /// <inheritdoc />
@@ -177,4 +190,63 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
 
         return false;
     }
+
+    /// <summary>
+    /// The one place a stored row becomes the Application's record - every read and both writes go
+    /// through it - so a read and a write cannot report the same row differently.
+    ///
+    /// <para>The served states are read with <c>SupplierPresetMasterPolicy.ReadServedStates</c> - the
+    /// Domain's own inverse of the value a use case stored - rather than split here. The column and
+    /// the published list are then one fact with one owner, and this adapter decides nothing about
+    /// what a market means, exactly as it decides nothing about what two names being equal means.</para>
+    /// </summary>
+    private static SupplierPresetRecord ToRecord(StoredSupplierPreset row) =>
+        new(
+            row.Id,
+            row.Name,
+            row.Url,
+            row.IsEnabled,
+            row.ServesNationwide,
+            SupplierPresetMasterPolicy.ReadServedStates(row.ServedStates),
+            row.PricesIncludeGst,
+            row.PriceConnector,
+            row.PriceConnectorKey,
+            row.CreatedAtUtc,
+            row.UpdatedAtUtc);
+
+    /// <summary>
+    /// The tracked entity a write just saved, as the same columns a read projects, so the two paths
+    /// meet at <see cref="ToRecord"/> instead of each assembling a record of their own.
+    /// </summary>
+    private static StoredSupplierPreset Stored(Models.SupplierPreset row) =>
+        new(
+            row.Id,
+            row.Name,
+            row.Url,
+            row.IsEnabled,
+            row.ServesNationwide,
+            row.ServedStates,
+            row.PricesIncludeGst,
+            row.PriceConnector,
+            row.PriceConnectorKey,
+            row.CreatedAtUtc,
+            row.UpdatedAtUtc);
+
+    /// <summary>
+    /// One preset exactly as its columns hold it, which is what a SQL projection can produce: the
+    /// served states are still the stored string here, and become a list only in
+    /// <see cref="ToRecord"/>.
+    /// </summary>
+    private sealed record StoredSupplierPreset(
+        int Id,
+        string Name,
+        string? Url,
+        bool IsEnabled,
+        bool ServesNationwide,
+        string ServedStates,
+        bool PricesIncludeGst,
+        SupplierPriceConnector? PriceConnector,
+        string? PriceConnectorKey,
+        DateTime CreatedAtUtc,
+        DateTime UpdatedAtUtc);
 }

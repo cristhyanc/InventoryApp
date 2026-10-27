@@ -2200,6 +2200,24 @@ namespace Inventory.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("PriceConnector")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PriceConnectorKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("PricesIncludeGst")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ServedStates")
+                        .IsRequired()
+                        .HasMaxLength(28)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ServesNationwide")
+                        .HasColumnType("INTEGER");
+
                     b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("TEXT");
 

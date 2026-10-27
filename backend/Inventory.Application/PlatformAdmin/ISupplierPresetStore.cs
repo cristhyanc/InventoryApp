@@ -1,12 +1,30 @@
+using Inventory.Domain.Suppliers;
+
 namespace Inventory.Application.PlatformAdmin;
 
 /// <summary>
-/// One platform supplier preset as the Application layer sees it (issue #848).
+/// One platform supplier preset as the Application layer sees it (issue #848, with the
+/// supplier-master fields of issue #931).
 /// </summary>
 /// <param name="Id">The row's own key.</param>
 /// <param name="Name">The name as a Super Admin typed it, trimmed.</param>
 /// <param name="Url">Its website, or <see langword="null"/> when none is recorded.</param>
 /// <param name="IsEnabled">Whether it is still suggested.</param>
+/// <param name="ServesNationwide">Whether it serves the whole country.</param>
+/// <param name="ServedStates">
+/// The states and territories it serves, in <c>SupplierPresetMasterPolicy.ServedStateCodes</c>'s own
+/// order, and empty when <paramref name="ServesNationwide"/> is <see langword="true"/>. A list rather
+/// than the stored string because that is what the resource publishes and what a caller submits; the
+/// one canonical stored spelling is the policy's business.
+/// </param>
+/// <param name="PricesIncludeGst">Whether the prices it publishes include GST.</param>
+/// <param name="PriceConnector">
+/// How its prices are collected, or <see langword="null"/> when nothing collects them.
+/// </param>
+/// <param name="PriceConnectorKey">
+/// What the connector needs in order to know which retailer it is for, or <see langword="null"/>
+/// where the route takes none.
+/// </param>
 /// <param name="CreatedAtUtc">When it was created.</param>
 /// <param name="UpdatedAtUtc">When it was last changed; equal to creation until the first edit.</param>
 public sealed record SupplierPresetRecord(
@@ -14,36 +32,69 @@ public sealed record SupplierPresetRecord(
     string Name,
     string? Url,
     bool IsEnabled,
+    bool ServesNationwide,
+    IReadOnlyList<string> ServedStates,
+    bool PricesIncludeGst,
+    SupplierPriceConnector? PriceConnector,
+    string? PriceConnectorKey,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc);
 
 /// <summary>
-/// A new preset, with every value already through <c>SupplierPresetPolicy</c>.
+/// A new preset, with every value already through <c>SupplierPresetPolicy</c> and
+/// <c>SupplierPresetMasterPolicy</c>.
 /// </summary>
 /// <param name="Name">The validated, trimmed display name.</param>
 /// <param name="NormalisedName">Its comparison key, which the unique index is over.</param>
 /// <param name="Url">The validated website, or <see langword="null"/>.</param>
+/// <param name="ServesNationwide">Whether it serves the whole country.</param>
+/// <param name="ServedStates">
+/// The canonical stored served-state value <c>SupplierPresetMasterPolicy.NormaliseServedStates</c>
+/// produced - the declared codes in that policy's order, comma-separated, and the empty string for a
+/// nationwide preset. The use case hands over the stored form, exactly as it hands over
+/// <paramref name="NormalisedName"/>, so the adapter decides none of it.
+/// </param>
+/// <param name="PricesIncludeGst">Whether the prices it publishes include GST.</param>
+/// <param name="PriceConnector">The validated collection route, or <see langword="null"/> for none.</param>
+/// <param name="PriceConnectorKey">The validated connector key, or <see langword="null"/>.</param>
 /// <param name="CreatedAtUtc">The instant to record as both created and updated.</param>
 public sealed record NewSupplierPreset(
     string Name,
     string NormalisedName,
     string? Url,
+    bool ServesNationwide,
+    string ServedStates,
+    bool PricesIncludeGst,
+    SupplierPriceConnector? PriceConnector,
+    string? PriceConnectorKey,
     DateTime CreatedAtUtc);
 
 /// <summary>
-/// An edit to one preset: all three mutable fields, always sent together, because the endpoint is a
-/// <c>PUT</c> of the whole resource rather than three separate toggles.
+/// An edit to one preset: every mutable field, always sent together, because the endpoint is a
+/// <c>PUT</c> of the whole resource rather than one toggle per field.
 /// </summary>
 /// <param name="Name">The validated, trimmed display name.</param>
 /// <param name="NormalisedName">Its comparison key.</param>
 /// <param name="Url">The validated website, or <see langword="null"/> to clear it.</param>
 /// <param name="IsEnabled">Whether it stays suggested.</param>
+/// <param name="ServesNationwide">Whether it serves the whole country.</param>
+/// <param name="ServedStates">
+/// The canonical stored served-state value, on the terms <see cref="NewSupplierPreset"/> states.
+/// </param>
+/// <param name="PricesIncludeGst">Whether the prices it publishes include GST.</param>
+/// <param name="PriceConnector">The validated collection route, or <see langword="null"/> for none.</param>
+/// <param name="PriceConnectorKey">The validated connector key, or <see langword="null"/>.</param>
 /// <param name="UpdatedAtUtc">The instant to record as last changed.</param>
 public sealed record SupplierPresetEdit(
     string Name,
     string NormalisedName,
     string? Url,
     bool IsEnabled,
+    bool ServesNationwide,
+    string ServedStates,
+    bool PricesIncludeGst,
+    SupplierPriceConnector? PriceConnector,
+    string? PriceConnectorKey,
     DateTime UpdatedAtUtc);
 
 /// <summary>

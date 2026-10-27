@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Inventory.Domain.Suppliers;
 
 namespace Inventory.Infrastructure.Models;
 
@@ -72,6 +73,65 @@ public class SupplierPreset
     /// a list that hid them would make re-enabling one impossible.
     /// </summary>
     public bool IsEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Whether this supplier serves the whole country. Mutually exclusive with
+    /// <see cref="ServedStates"/>, and one of the two is required of anything this application
+    /// stores - <c>SupplierPresetMasterPolicy</c> is that rule (issue #931).
+    ///
+    /// <para>"Nationwide" is kept as its own flag rather than as all eight state codes in
+    /// <see cref="ServedStates"/>, because "serves everywhere" is a different claim from "serves these
+    /// eight" and the next territory to be declared would turn the second into a lie.</para>
+    /// </summary>
+    public bool ServesNationwide { get; set; }
+
+    /// <summary>
+    /// The states and territories this supplier serves, as <c>SupplierPresetMasterPolicy</c> stores
+    /// them: the declared codes in that policy's own order, comma-separated, and the empty string for
+    /// a nationwide preset (issue #931).
+    ///
+    /// <para>It is one column rather than a child table because the vocabulary is closed at eight
+    /// values, a preset's market is read and written whole, and nothing joins to a state. The
+    /// canonical order is what makes it comparable: one market has exactly one stored spelling.</para>
+    ///
+    /// <para>An existing row the <c>AddSupplierPresetMasterFields</c> migration could not recognise
+    /// keeps the column default - no states, and not nationwide - which is an unconfigured market a
+    /// Super Admin must set rather than an invented claim about where the supplier sells.</para>
+    /// </summary>
+    public string ServedStates { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether the prices this supplier publishes include GST (issue #931). A stored fact about the
+    /// published price list, never inferred from a name, a connector or an amount: the supermarkets,
+    /// Kmart and BIG W publish GST-inclusive prices, and JB Metro publishes ex-GST ones.
+    ///
+    /// <para>No GST is calculated anywhere near this column. It says what a collected price
+    /// <em>means</em>, which is what a later price comparison needs in order not to compare an
+    /// inclusive price with an exclusive one.</para>
+    /// </summary>
+    public bool PricesIncludeGst { get; set; }
+
+    /// <summary>
+    /// How this supplier's prices are collected, or <see langword="null"/> when nothing collects them
+    /// - the state Costco is in, and a real one (issue #931).
+    ///
+    /// <para>A nullable enum, so the column is a nullable <c>INTEGER</c> with no default:
+    /// <c>SupplierPriceConnector</c> is numbered from 1, so no stored number this application writes
+    /// can be read as the first declared route by accident.</para>
+    /// </summary>
+    public SupplierPriceConnector? PriceConnector { get; set; }
+
+    /// <summary>
+    /// What the connector needs in order to know which retailer it is for, or
+    /// <see langword="null"/> where the route takes none (issue #931).
+    ///
+    /// <para>Required for <see cref="SupplierPriceConnector.Varnmill"/>, which serves several
+    /// retailers through one service, and empty for every other route and for no route at all -
+    /// <c>SupplierPresetMasterPolicy</c> is that rule. Stored trimmed with its capitalisation kept,
+    /// because it is an identifier a collector hands to a remote service rather than a name anything
+    /// compares.</para>
+    /// </summary>
+    public string? PriceConnectorKey { get; set; }
 
     /// <summary>When the preset was created, from the application clock.</summary>
     public DateTime CreatedAtUtc { get; set; }
