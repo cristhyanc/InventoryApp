@@ -24,21 +24,23 @@ public class BusinessSettingsUseCaseTests
     private const string Sydney = "Australia/Sydney";
     private const string NewYork = "America/New_York";
     private const string ValidAbn = "51824753556";
+    private const string Nsw = "NSW";
     private const string DirectoryTenantId = "3F2504E0-4F89-11D3-9A0C-0305E82C3301";
     private const string ObjectId = "9A0C0305-4F89-11D3-9A0C-0305E82C3301";
 
     private static readonly DateTime SavedAt = new(2026, 10, 11, 2, 30, 0, DateTimeKind.Utc);
 
     private static readonly BusinessSettings Stored =
-        new("Vending Co", "owner@example.com", ValidAbn, true, Sydney);
+        new("Vending Co", "owner@example.com", ValidAbn, true, Sydney, Nsw);
 
     private static BusinessSettingsSubmission Submission(
         string? name = "Vending Co",
         string? contactEmail = "owner@example.com",
         string? abn = ValidAbn,
         bool? gstRegistered = true,
-        string? timeZoneId = Sydney) =>
-        new(name, contactEmail, abn, gstRegistered, timeZoneId);
+        string? timeZoneId = Sydney,
+        string? state = Nsw) =>
+        new(name, contactEmail, abn, gstRegistered, timeZoneId, state);
 
     private static ActorIdentity Actor()
     {

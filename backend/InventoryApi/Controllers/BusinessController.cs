@@ -29,8 +29,8 @@ namespace InventoryApi.Controllers;
 ///   page needs them.</item>
 ///   <item><c>GET</c> and <c>PUT settings</c> require <c>Business.Manage</c>, which only an Owner
 ///   holds (issue #526). The read is restricted with the write because it reports the business's
-///   contact address, ABN and GST registration - the business's own tax and contact detail, not
-///   something every member needs to render a page.</item>
+///   contact address, ABN, GST registration and state - the business's own tax and contact detail,
+///   not something every member needs to render a page.</item>
 /// </list>
 /// </summary>
 [ApiController]
@@ -88,12 +88,19 @@ public sealed class BusinessController : ControllerBase
                 request.ContactEmail,
                 request.Abn,
                 request.GstRegistered,
-                request.TimeZoneId),
+                request.TimeZoneId,
+                request.State),
             cancellationToken);
 
         return Ok(ToResponse(saved));
     }
 
     private static BusinessSettingsResponse ToResponse(BusinessSettings settings) =>
-        new(settings.Name, settings.ContactEmail, settings.Abn, settings.GstRegistered, settings.TimeZoneId);
+        new(
+            settings.Name,
+            settings.ContactEmail,
+            settings.Abn,
+            settings.GstRegistered,
+            settings.TimeZoneId,
+            settings.State);
 }

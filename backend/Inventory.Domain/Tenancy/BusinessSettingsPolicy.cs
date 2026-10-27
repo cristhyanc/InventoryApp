@@ -8,12 +8,18 @@ namespace Inventory.Domain.Tenancy;
 /// deterministic: no clock, no host, no database and no configuration.
 ///
 /// <para><strong>A save is the whole set.</strong> The endpoint replaces every setting rather than
-/// patching individual ones, so <see cref="Validate"/> takes all five and refuses the submission as
-/// a whole. That is why a missing contact address or GST registration is a refusal rather than "no
-/// change": a business that has recorded neither is the state issue #540's migration left, and a
-/// save is exactly the moment to stop it from being permanent. The ABN stays optional, because an
-/// entity may legitimately have none, and <see langword="null"/> is its single representation of
-/// "not recorded".</para>
+/// patching individual ones, so <see cref="Validate"/> takes all six and refuses the submission as
+/// a whole. That is why a missing contact address, GST registration or state is a refusal rather
+/// than "no change": a business that has recorded none of them is the state issue #540's migration
+/// left - and issue #933's, for the state - and a save is exactly the moment to stop it from being
+/// permanent. The ABN stays optional, because an entity may legitimately have none, and
+/// <see langword="null"/> is its single representation of "not recorded".</para>
+///
+/// <para><strong>The state is a closed vocabulary, checked here and never inferred.</strong>
+/// <see cref="AustralianStates"/> holds the eight values and the normalisation; this policy refuses
+/// anything else with that type's own sentence (issue #933). Nothing derives a state from the time
+/// zone - the two answer different questions, and a zone cannot tell NSW from the ACT - or from an
+/// address.</para>
 ///
 /// <para><strong>The time zone is checked here only for presence.</strong> Whether an id is a zone
 /// the host can actually keep a calendar in is not a deterministic rule - it is a question for the
@@ -52,19 +58,23 @@ public static class BusinessSettingsPolicy
 
     /// <summary>
     /// Reads a submitted set of settings and yields the values to store, with the name and the
-    /// contact address trimmed and the ABN reduced to its canonical digits.
+    /// contact address trimmed, the ABN reduced to its canonical digits and the state reduced to
+    /// its canonical abbreviation.
     /// </summary>
     /// <exception cref="DomainValidationException">
     /// The name is missing or too long, the contact address is missing or cannot be an address, the
-    /// GST registration is not stated, the ABN is present but is not a well-formed one, or the time
-    /// zone is missing. Nothing is normalised in that case and the caller stores nothing.
+    /// GST registration is not stated, the ABN is present but is not a well-formed one, the time
+    /// zone is missing, or the state is missing or is not one of
+    /// <see cref="AustralianStates.All"/>. Nothing is normalised in that case and the caller stores
+    /// nothing.
     /// </exception>
     public static BusinessSettings Validate(
         string? name,
         string? contactEmail,
         string? abn,
         bool? gstRegistered,
-        string? timeZoneId)
+        string? timeZoneId,
+        string? state)
     {
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > MaxNameLength)
         {
@@ -95,12 +105,21 @@ public static class BusinessSettingsPolicy
             throw new DomainValidationException(TimeZoneRequiredMessage);
         }
 
+        // Unlike the ABN, the state has no "absent" submission: a business trades somewhere, and
+        // the form that collects this is where it is recorded. A value outside the eight is refused
+        // with the same sentence as a missing one, because both have the same remedy.
+        if (!AustralianStates.TryNormalize(state, out var normalizedState))
+        {
+            throw new DomainValidationException(AustralianStates.InvalidMessage);
+        }
+
         return new BusinessSettings(
             name.Trim(),
             normalizedEmail,
             normalizedAbn,
             registered,
-            timeZoneId.Trim());
+            timeZoneId.Trim(),
+            normalizedState);
     }
 
     /// <summary>
@@ -125,7 +144,7 @@ public static class BusinessSettingsPolicy
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(submitted);
 
-        var changed = new List<BusinessSettingsField>(5);
+        var changed = new List<BusinessSettingsField>(6);
 
         if (!string.Equals(current.Name, submitted.Name, StringComparison.Ordinal))
         {
@@ -150,6 +169,11 @@ public static class BusinessSettingsPolicy
         if (!string.Equals(current.TimeZoneId, submitted.TimeZoneId, StringComparison.Ordinal))
         {
             changed.Add(BusinessSettingsField.TimeZoneId);
+        }
+
+        if (!string.Equals(current.State, submitted.State, StringComparison.Ordinal))
+        {
+            changed.Add(BusinessSettingsField.State);
         }
 
         return changed;

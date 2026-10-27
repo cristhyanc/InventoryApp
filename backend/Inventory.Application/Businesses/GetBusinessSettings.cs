@@ -6,7 +6,7 @@ namespace Inventory.Application.Businesses;
 
 /// <summary>
 /// Reads the settings of the signed-in Owner's own business (issue #548): its name, contact
-/// address, ABN, GST registration and time zone.
+/// address, ABN, GST registration, time zone and the state or territory it trades in (issue #933).
 ///
 /// Like <see cref="GetCurrentBusiness"/> it takes no identifier at all - the business comes from
 /// the authenticated actor's membership through <see cref="ICurrentBusinessProvider"/> - so no

@@ -102,6 +102,27 @@ public class Business
     public string? Abn { get; set; }
 
     /// <summary>
+    /// The Australian state or territory the business trades in, as one of
+    /// <see cref="AustralianStates.All"/> ("NSW", "VIC", "QLD", "SA", "WA", "TAS", "ACT", "NT"), or
+    /// <c>null</c> when none has been recorded (issue #933, one slice of #817).
+    ///
+    /// It exists because the time zone cannot answer this question: <c>Australia/Sydney</c> is both
+    /// New South Wales and the Australian Capital Territory, and a supplier that serves only some
+    /// states has to be offered to the right businesses. So it is recorded rather than derived -
+    /// never from <see cref="TimeZoneId"/>, an address, an <see cref="Abn"/> or anything else.
+    ///
+    /// Nullable because every business that existed before this column did has no state, and
+    /// nothing backfills them: the Owner records it in Business settings, where the existing
+    /// legacy-profile prompt asks for it, and nothing else is blocked while it is unset. A
+    /// <em>submitted</em> value is required and validated wherever it is set:
+    /// <see cref="Data.BusinessStateEnforcer"/> refuses anything but one of the eight on
+    /// <c>SaveChanges</c>, by the vocabulary in <see cref="AustralianStates"/>. "Not recorded" has
+    /// exactly one representation - <c>null</c> - so a blank string is refused rather than stored as
+    /// a second kind of absence.
+    /// </summary>
+    public string? State { get; set; }
+
+    /// <summary>
     /// When the business applied, and <c>null</c> for a business that never went through an
     /// application - the existing one, and any created by <c>bootstrap-business</c> (issue #540).
     /// A missing instant is not backfilled from <see cref="CreatedAtUtc"/>: the record was created

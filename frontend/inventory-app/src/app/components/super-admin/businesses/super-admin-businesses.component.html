@@ -33,6 +33,7 @@
               <th scope="col" class="table-cell">Status</th>
               <th scope="col" class="table-cell">Applied</th>
               <th scope="col" class="table-cell">Contact email</th>
+              <th scope="col" class="table-cell">State</th>
               <th scope="col" class="table-cell">ABN</th>
               <th scope="col" class="table-cell">Members</th>
               <th scope="col" class="table-cell">Nayax</th>
@@ -56,6 +57,7 @@
                 </td>
                 <td class="table-cell">{{ business.appliedAtUtc ? (business.appliedAtUtc | date: 'dd/MM/yyyy' : 'UTC') : '—' }}</td>
                 <td class="table-cell">{{ business.contactEmail ?? '—' }}</td>
+                <td class="table-cell" data-testid="business-state">{{ business.state ?? '—' }}</td>
                 <td class="table-cell">{{ business.abn ?? '—' }}</td>
                 <td class="table-cell table-num">{{ business.activeMemberCount }}</td>
                 <td class="table-cell">{{ business.nayaxConfigured ? 'Yes' : 'No' }}</td>

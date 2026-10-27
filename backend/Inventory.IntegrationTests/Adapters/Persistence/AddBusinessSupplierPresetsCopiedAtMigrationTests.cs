@@ -68,9 +68,23 @@ public class AddBusinessSupplierPresetsCopiedAtMigrationTests
                 await MigrationSchemaProbe.ColumnNamesAsync(connection, "Businesses"));
 
             // Nothing is backfilled: both businesses record no copy, the trading one included.
+            //
+            // The read projects the columns this test is about rather than whole entities, because
+            // the schema here is deliberately the one this migration produced: a column a *later*
+            // migration adds (issue #933's State, for example) exists in the model but not in this
+            // database, and selecting it would fail on a schema that is correct for this test.
             var businesses = await after.Businesses
                 .AsNoTracking()
                 .OrderBy(business => business.Id)
+                .Select(business => new
+                {
+                    business.Name,
+                    business.SupplierPresetsCopiedAtUtc,
+                    business.Status,
+                    business.ContactEmail,
+                    business.Abn,
+                    business.AppliedAtUtc,
+                })
                 .ToListAsync();
 
             Assert.Equal(["Vending Co", "Coastal Vending"], businesses.Select(business => business.Name));

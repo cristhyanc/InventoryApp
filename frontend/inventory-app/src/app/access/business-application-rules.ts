@@ -30,6 +30,17 @@ export const TIME_ZONE_REQUIRED_MESSAGE =
   "A business time zone is required, as an IANA identifier such as 'Australia/Sydney'.";
 export const TIME_ZONE_UNKNOWN_MESSAGE = 'Choose a time zone from the list, such as Australia/Sydney.';
 
+/** `AustralianStates.InvalidMessage`, for a state that is missing or is not one of the eight. */
+export const STATE_REQUIRED_MESSAGE =
+  'A business state or territory is required, and must be one of NSW, VIC, QLD, SA, WA, TAS, ACT or NT.';
+
+/**
+ * `Inventory.Domain.Tenancy.AustralianStates.All`, in the same order: the list the state field
+ * offers, and the only values the API accepts (issue #933). The state is never derived from the
+ * time zone - `Australia/Sydney` is both NSW and the ACT, which is why it is asked for.
+ */
+export const AUSTRALIAN_STATES: readonly string[] = ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT'];
+
 /** What the form holds while a person fills it in. */
 export interface BusinessApplicationDraft {
   name: string;
@@ -37,6 +48,8 @@ export interface BusinessApplicationDraft {
   abn: string;
   gstRegistered: boolean | null;
   timeZoneId: string;
+  /** One of {@link AUSTRALIAN_STATES}, or `''` while nothing has been chosen. */
+  state: string;
 }
 
 /** The body `POST /api/onboarding/business-applications` accepts (`BusinessApplicationRequest`). */
@@ -46,6 +59,7 @@ export interface BusinessApplicationRequest {
   readonly abn: string | null;
   readonly gstRegistered: boolean;
   readonly timeZoneId: string;
+  readonly state: string;
 }
 
 export type BusinessApplicationField = keyof BusinessApplicationDraft;
@@ -183,13 +197,28 @@ export function validateBusinessApplication(draft: BusinessApplicationDraft): Bu
     errors.timeZoneId = TIME_ZONE_UNKNOWN_MESSAGE;
   }
 
+  // One message for "not chosen" and "not one of the eight", as the API has: both have the same
+  // remedy, and a state is never guessed at from the time zone or the address.
+  if (!AUSTRALIAN_STATES.includes(normalizeState(draft.state))) {
+    errors.state = STATE_REQUIRED_MESSAGE;
+  }
+
   return errors;
 }
 
 /**
+ * The canonical abbreviation a submitted state is stored as, or `''` when it is not one of the
+ * eight: the same normalisation as `AustralianStates.TryNormalize`, trimmed and upper-cased.
+ */
+export function normalizeState(submitted: string): string {
+  return submitted.trim().toUpperCase();
+}
+
+/**
  * The request body for a draft {@link validateBusinessApplication} found nothing wrong with. The
- * name and address are trimmed and the ABN sent as its digits; a blank ABN is sent as `null`,
- * the API's one representation of "not recorded", never as an empty string it would refuse.
+ * name and address are trimmed, the ABN sent as its digits and the state as its canonical
+ * abbreviation; a blank ABN is sent as `null`, the API's one representation of "not recorded",
+ * never as an empty string it would refuse.
  */
 export function toBusinessApplicationRequest(draft: BusinessApplicationDraft): BusinessApplicationRequest {
   if (draft.gstRegistered === null) {
@@ -201,6 +230,7 @@ export function toBusinessApplicationRequest(draft: BusinessApplicationDraft): B
     contactEmail: draft.contactEmail.trim(),
     abn: draft.abn.trim().length === 0 ? null : normalizeAbn(draft.abn),
     gstRegistered: draft.gstRegistered,
-    timeZoneId: draft.timeZoneId.trim()
+    timeZoneId: draft.timeZoneId.trim(),
+    state: normalizeState(draft.state)
   };
 }

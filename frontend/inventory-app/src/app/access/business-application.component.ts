@@ -7,6 +7,7 @@ import { Subject, filter, switchMap, take, takeUntil } from 'rxjs';
 import { AccountStateService } from './account-state.service';
 import { REDEEMABLE_ACCOUNT_STATES, nonRedeemableAccountStateDestination } from './account-state.guard';
 import {
+  AUSTRALIAN_STATES,
   BusinessApplicationDraft,
   BusinessApplicationErrors,
   BusinessApplicationField,
@@ -68,7 +69,9 @@ function submitErrorMessage(error: unknown): string {
  * `business-application-rules.ts`, which mirrors `BusinessSettingsPolicy`; a field's message shows
  * once the field has been left or a submit was attempted. The contact address starts as the
  * signed-in account's own, read from the sign-in token's claims, and stays editable; the time zone
- * starts as the browser's and is chosen from the browser's IANA list.
+ * starts as the browser's and is chosen from the browser's IANA list. The state or territory
+ * (issue #933) starts unchosen and is one of the eight the API accepts - it is never derived from
+ * the time zone, which cannot tell NSW from the ACT.
  *
  * **Submitting lands on the pending page only once the account state says so.** A recorded
  * application re-reads `AccountStateService` before navigating to `/application-pending`, so the
@@ -177,6 +180,19 @@ function submitErrorMessage(error: unknown): string {
               </fieldset>
 
               <div class="field">
+                <label class="field-label" for="businessState">State or territory</label>
+                <select id="businessState" name="state" [(ngModel)]="draft.state" (change)="touch('state')">
+                  <option value="">Choose a state or territory</option>
+                  @for (state of states; track state) {
+                    <option [value]="state">{{ state }}</option>
+                  }
+                </select>
+                @if (shownError('state'); as message) {
+                  <p class="mt-1 text-sm text-red-600" data-testid="error-state">{{ message }}</p>
+                }
+              </div>
+
+              <div class="field">
                 <label class="field-label" for="businessTimeZone">Time zone</label>
                 <input
                   id="businessTimeZone"
@@ -212,6 +228,7 @@ function submitErrorMessage(error: unknown): string {
 export class BusinessApplicationComponent implements OnInit, OnDestroy {
   readonly maxNameLength = MAX_BUSINESS_NAME_LENGTH;
   readonly timeZones: readonly string[] = availableTimeZones();
+  readonly states = AUSTRALIAN_STATES;
 
   phase: 'checking' | 'form' = 'checking';
   submitting = false;
@@ -222,7 +239,10 @@ export class BusinessApplicationComponent implements OnInit, OnDestroy {
     contactEmail: '',
     abn: '',
     gstRegistered: null,
-    timeZoneId: browserTimeZone() ?? ''
+    timeZoneId: browserTimeZone() ?? '',
+    // Empty, never a default: the state decides which suppliers a business is offered, so it is
+    // chosen rather than guessed at from the browser's time zone.
+    state: ''
   };
 
   private readonly touched = new Set<BusinessApplicationField>();

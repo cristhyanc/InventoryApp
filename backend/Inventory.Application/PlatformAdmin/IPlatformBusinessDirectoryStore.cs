@@ -5,8 +5,8 @@ namespace Inventory.Application.PlatformAdmin;
 /// <summary>
 /// One business as the Super Admin's directory reports it (issue #544): what it is called, where it
 /// is in its lifecycle, the dates of its application and its decision, the contact detail its
-/// application recorded, how many people can currently reach it, and whether it has stored Nayax
-/// credentials.
+/// application recorded, the state or territory it trades in (issue #933), how many people can
+/// currently reach it, and whether it has stored Nayax credentials.
 ///
 /// <para><strong>What it deliberately does not carry.</strong> No sale, stock, cost, purchase,
 /// product, machine, site or report value - nothing tenant-owned at all - and no member's name,
@@ -40,6 +40,13 @@ namespace Inventory.Application.PlatformAdmin;
 /// of contact information the directory reports.
 /// </param>
 /// <param name="Abn">The stored 11-digit ABN, or <see langword="null"/> when none was recorded.</param>
+/// <param name="State">
+/// The Australian state or territory the business recorded, as one of
+/// <see cref="AustralianStates.All"/>, or <see langword="null"/> for a business that has not
+/// recorded one (issue #933). It is reported because reviewing an application is exactly when an
+/// operator needs to see where the applicant trades; like the name and the ABN it is the business's
+/// own published detail and nothing tenant-owned.
+/// </param>
 /// <param name="ActiveMemberCount">
 /// How many of its memberships are currently active - that is, how many people can reach the
 /// business at all. Revoked rows are deliberately not counted: the question the directory answers
@@ -61,6 +68,7 @@ public sealed record PlatformBusinessSummary(
     DateTime? DecidedAtUtc,
     string? ContactEmail,
     string? Abn,
+    string? State,
     int ActiveMemberCount,
     bool NayaxConfigured);
 

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Observable, Subject, Subscription, catchError, forkJoin, map, of, switchMap, takeUntil } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import {
+  AUSTRALIAN_STATES,
   BusinessApplicationDraft,
   BusinessApplicationErrors,
   BusinessApplicationField,
@@ -54,7 +55,8 @@ function saveErrorMessage(error: unknown): string {
 /**
  * The Business Settings edit workflow (issue #549, one slice of #511 under #328): the fields
  * `GET`/`PUT /api/business/settings` carry (issue #548) - name, contact email, ABN, GST
- * registration and time zone - for an Owner to change. It is the dedicated feature component the
+ * registration, time zone, and the state or territory the business trades in (issue #933) - for an
+ * Owner to change. It is the dedicated feature component the
  * page composition boundary requires (docs/architecture.md § Page composition boundary, issue
  * #191): the form, its draft/touched/validation state, the time zone confirmation, the save and
  * the shell refresh all live here, and `BusinessSettingsComponent` only reads the settings and
@@ -65,7 +67,7 @@ function saveErrorMessage(error: unknown): string {
  * change is detected against is always the one the API last confirmed.
  *
  * **Inline validation is the API's**, reused rather than restated: `business-application-rules.ts`
- * mirrors `BusinessSettingsPolicy`, and the application form validates the exact same five
+ * mirrors `BusinessSettingsPolicy`, and the application form validates the exact same six
  * settings for the exact same reason, so this component validates and submits through the same
  * functions instead of a second copy that could disagree with the first.
  *
@@ -188,6 +190,19 @@ function saveErrorMessage(error: unknown): string {
           </fieldset>
 
           <div class="field">
+            <label class="field-label" for="businessState">State or territory</label>
+            <select id="businessState" name="state" [(ngModel)]="draft.state" (change)="touch('state')">
+              <option value="">Choose a state or territory</option>
+              @for (state of states; track state) {
+                <option [value]="state">{{ state }}</option>
+              }
+            </select>
+            @if (shownError('state'); as message) {
+              <p class="mt-1 text-sm text-red-600" data-testid="error-state">{{ message }}</p>
+            }
+          </div>
+
+          <div class="field">
             <label class="field-label" for="businessTimeZone">Time zone</label>
             <input
               id="businessTimeZone"
@@ -232,6 +247,7 @@ function saveErrorMessage(error: unknown): string {
 export class BusinessSettingsFormComponent implements OnDestroy {
   readonly maxNameLength = MAX_BUSINESS_NAME_LENGTH;
   readonly timeZones: readonly string[] = availableTimeZones();
+  readonly states = AUSTRALIAN_STATES;
   readonly timeZoneChangeConfirmationTitle = TIME_ZONE_CHANGE_CONFIRMATION_TITLE;
   readonly timeZoneChangeConfirmationMessage = TIME_ZONE_CHANGE_CONFIRMATION_MESSAGE;
 
@@ -250,7 +266,14 @@ export class BusinessSettingsFormComponent implements OnDestroy {
    */
   sessionActive = false;
 
-  draft: BusinessApplicationDraft = { name: '', contactEmail: '', abn: '', gstRegistered: null, timeZoneId: '' };
+  draft: BusinessApplicationDraft = {
+    name: '',
+    contactEmail: '',
+    abn: '',
+    gstRegistered: null,
+    timeZoneId: '',
+    state: ''
+  };
 
   /** The settings the page read - the baseline a time zone change is detected against. */
   @Input({ required: true })
@@ -384,7 +407,10 @@ export class BusinessSettingsFormComponent implements OnDestroy {
       contactEmail: settings.contactEmail ?? '',
       abn: settings.abn ?? '',
       gstRegistered: settings.gstRegistered,
-      timeZoneId: settings.timeZoneId
+      timeZoneId: settings.timeZoneId,
+      // A business that has never recorded one starts unchosen, so the field asks rather than
+      // offering a state nobody picked (issue #933).
+      state: settings.state ?? ''
     };
   }
 }

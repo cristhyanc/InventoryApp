@@ -25,13 +25,15 @@ public class BusinessApplicationPolicyTests
             "  owner@coastal.example.com ",
             "51 824 753 556",
             gstRegistered: true,
-            "  Australia/Brisbane ");
+            "  Australia/Brisbane ",
+            " qld ");
 
         Assert.Equal("Coastal Vending", validated.Name);
         Assert.Equal("owner@coastal.example.com", validated.ContactEmail);
         Assert.Equal(ValidAbn, validated.Abn);
         Assert.True(validated.GstRegistered);
         Assert.Equal("Australia/Brisbane", validated.TimeZoneId);
+        Assert.Equal("QLD", validated.State);
     }
 
     /// <summary>
@@ -46,7 +48,8 @@ public class BusinessApplicationPolicyTests
             "owner@coastal.example.com",
             abn: null,
             gstRegistered: false,
-            "Australia/Sydney");
+            "Australia/Sydney",
+            "NSW");
 
         Assert.Null(validated.Abn);
         Assert.False(validated.GstRegistered);
@@ -58,25 +61,29 @@ public class BusinessApplicationPolicyTests
     /// second kind of "not recorded".
     /// </summary>
     [Theory]
-    [InlineData(null, "owner@coastal.example.com", null, true, "Australia/Sydney")]
-    [InlineData("   ", "owner@coastal.example.com", null, true, "Australia/Sydney")]
-    [InlineData("Coastal Vending", null, null, true, "Australia/Sydney")]
-    [InlineData("Coastal Vending", "owner@", null, true, "Australia/Sydney")]
-    [InlineData("Coastal Vending", "owner@example.com>", null, true, "Australia/Sydney")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", null, null, "Australia/Sydney")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", "", true, "Australia/Sydney")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", "51824753557", true, "Australia/Sydney")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, null)]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, "  ")]
+    [InlineData(null, "owner@coastal.example.com", null, true, "Australia/Sydney", "NSW")]
+    [InlineData("   ", "owner@coastal.example.com", null, true, "Australia/Sydney", "NSW")]
+    [InlineData("Coastal Vending", null, null, true, "Australia/Sydney", "NSW")]
+    [InlineData("Coastal Vending", "owner@", null, true, "Australia/Sydney", "NSW")]
+    [InlineData("Coastal Vending", "owner@example.com>", null, true, "Australia/Sydney", "NSW")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", null, null, "Australia/Sydney", "NSW")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", "", true, "Australia/Sydney", "NSW")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", "51824753557", true, "Australia/Sydney", "NSW")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, null, "NSW")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, "  ", "NSW")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, "Australia/Sydney", null)]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, "Australia/Sydney", "  ")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, "Australia/Sydney", "New South Wales")]
     public void An_incomplete_or_malformed_application_is_refused(
         string? name,
         string? contactEmail,
         string? abn,
         bool? gstRegistered,
-        string? timeZoneId)
+        string? timeZoneId,
+        string? state)
     {
         Assert.Throws<DomainValidationException>(() =>
-            BusinessApplicationPolicy.Validate(name, contactEmail, abn, gstRegistered, timeZoneId));
+            BusinessApplicationPolicy.Validate(name, contactEmail, abn, gstRegistered, timeZoneId, state));
     }
 
     /// <summary>
@@ -91,7 +98,7 @@ public class BusinessApplicationPolicyTests
         Assert.Equal(
             atTheLimit,
             BusinessApplicationPolicy
-                .Validate(atTheLimit, "owner@coastal.example.com", null, true, "Australia/Sydney")
+                .Validate(atTheLimit, "owner@coastal.example.com", null, true, "Australia/Sydney", "NSW")
                 .Name);
 
         Assert.Throws<DomainValidationException>(() => BusinessApplicationPolicy.Validate(
@@ -99,7 +106,8 @@ public class BusinessApplicationPolicyTests
             "owner@coastal.example.com",
             null,
             true,
-            "Australia/Sydney"));
+            "Australia/Sydney",
+            "NSW"));
     }
 
     #region Resubmission
@@ -117,7 +125,8 @@ public class BusinessApplicationPolicyTests
             " owner@coastal.example.com",
             "51 824 753 556",
             gstRegistered: true,
-            "Australia/Brisbane ");
+            "Australia/Brisbane ",
+            " qld");
 
         Assert.True(BusinessApplicationPolicy.IsResubmission(pending, resubmitted));
     }
@@ -128,21 +137,23 @@ public class BusinessApplicationPolicyTests
     /// changes what the business would publish about itself.
     /// </summary>
     [Theory]
-    [InlineData("Coastal vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane")]
-    [InlineData("Inland Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane")]
-    [InlineData("Coastal Vending", "owner@inland.example.com", ValidAbn, true, "Australia/Brisbane")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, "Australia/Brisbane")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", "53004085616", true, "Australia/Brisbane")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", ValidAbn, false, "Australia/Brisbane")]
-    [InlineData("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Sydney")]
+    [InlineData("Coastal vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "QLD")]
+    [InlineData("Inland Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "QLD")]
+    [InlineData("Coastal Vending", "owner@inland.example.com", ValidAbn, true, "Australia/Brisbane", "QLD")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", null, true, "Australia/Brisbane", "QLD")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", "53004085616", true, "Australia/Brisbane", "QLD")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", ValidAbn, false, "Australia/Brisbane", "QLD")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Sydney", "QLD")]
+    [InlineData("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "NSW")]
     public void A_changed_setting_makes_it_a_different_application(
         string name,
         string contactEmail,
         string? abn,
         bool gstRegistered,
-        string timeZoneId)
+        string timeZoneId,
+        string state)
     {
-        var submitted = new BusinessSettings(name, contactEmail, abn, gstRegistered, timeZoneId);
+        var submitted = new BusinessSettings(name, contactEmail, abn, gstRegistered, timeZoneId, state);
 
         Assert.False(BusinessApplicationPolicy.IsResubmission(Settings(), submitted));
     }
@@ -212,5 +223,11 @@ public class BusinessApplicationPolicyTests
     #endregion
 
     private static BusinessSettings Settings() =>
-        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, GstRegistered: true, "Australia/Brisbane");
+        new(
+            "Coastal Vending",
+            "owner@coastal.example.com",
+            ValidAbn,
+            GstRegistered: true,
+            "Australia/Brisbane",
+            "QLD");
 }

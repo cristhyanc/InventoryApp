@@ -336,12 +336,17 @@ public class AppDbContext : DbContext
     /// business's sales provider is the issuer of every external id its products and categories
     /// hold, so a change to it - which would reinterpret those ids as another system's - is refused
     /// centrally rather than trusted not to be written.
+    ///
+    /// <see cref="BusinessStateEnforcer"/> joins them on the same terms as the ABN (issue #933): the
+    /// business's state or territory decides which supplier records it is offered, so a value
+    /// outside the eight is refused centrally rather than per write path.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStateEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
         BusinessSalesProviderEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
@@ -354,6 +359,7 @@ public class AppDbContext : DbContext
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStateEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
         BusinessSalesProviderEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
@@ -1664,6 +1670,14 @@ public class AppDbContext : DbContext
         // SaveChanges, which a constraint cannot express, and the rest are facts an application
         // form records rather than values anything derives from.
         modelBuilder.Entity<Business>().Property(b => b.Status).IsRequired();
+
+        // The state or territory the business trades in (issue #933). Nullable, because no existing
+        // business has one and nothing backfills them, and bounded at the length of the longest
+        // abbreviation. The vocabulary itself is not a schema constraint, for the reason the status
+        // and the member's role carry none: SQLite cannot add a CHECK constraint to an existing
+        // table without rebuilding it, so an undeclared value is refused where it has to be anyway -
+        // BusinessStateEnforcer on SaveChanges, over every write path to a business alike.
+        modelBuilder.Entity<Business>().Property(b => b.State).HasMaxLength(AustralianStates.MaxLength);
 
         // The backfill audit is keyed only by its own id: it records what happened to a table,
         // including runs that assigned rows to the wrong business, so it must stay queryable

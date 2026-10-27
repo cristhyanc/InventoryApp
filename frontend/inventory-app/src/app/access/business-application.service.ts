@@ -15,7 +15,7 @@ export interface SubmittedBusinessApplication {
  * Submits the signed-in person's own business application to
  * `POST /api/onboarding/business-applications` (issue #541), for the application form (issue #543).
  *
- * The body is the five settings and nothing else: which business the application becomes, its
+ * The body is the six settings and nothing else: which business the application becomes, its
  * status, the applicant and their role are all the server's to decide. Every refusal - a rule the
  * form missed (`400`), onboarding switched off (`404`), an account that already belongs to a
  * business or has a different application waiting (`409`) and the rate limit (`429`) - reaches

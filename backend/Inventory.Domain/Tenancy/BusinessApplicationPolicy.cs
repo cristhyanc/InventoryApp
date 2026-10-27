@@ -23,12 +23,13 @@ namespace Inventory.Domain.Tenancy;
 /// decided on.</para>
 ///
 /// <para><strong>Validation is <see cref="BusinessSettingsPolicy"/>, unchanged.</strong> An
-/// application collects exactly the five settings an Owner can later edit, under exactly the same
+/// application collects exactly the six settings an Owner can later edit, under exactly the same
 /// rules - a required name, a required well-formed contact address, an optional checksum-validated
-/// ABN, a GST registration that must be stated rather than defaulted, and a required IANA time zone
-/// whose resolvability is decided centrally on the way into the database. Writing a second
-/// validation here would be two answers to one question, and the two would eventually disagree
-/// about what a business may record about itself.</para>
+/// ABN, a GST registration that must be stated rather than defaulted, a required IANA time zone
+/// whose resolvability is decided centrally on the way into the database, and a required Australian
+/// state or territory from <see cref="AustralianStates"/>'s closed vocabulary (issue #933). Writing
+/// a second validation here would be two answers to one question, and the two would eventually
+/// disagree about what a business may record about itself.</para>
 /// </summary>
 public static class BusinessApplicationPolicy
 {
@@ -63,8 +64,9 @@ public static class BusinessApplicationPolicy
         string? contactEmail,
         string? abn,
         bool? gstRegistered,
-        string? timeZoneId) =>
-        BusinessSettingsPolicy.Validate(name, contactEmail, abn, gstRegistered, timeZoneId);
+        string? timeZoneId,
+        string? state) =>
+        BusinessSettingsPolicy.Validate(name, contactEmail, abn, gstRegistered, timeZoneId, state);
 
     /// <summary>
     /// Whether <paramref name="submitted"/> is the application <paramref name="pending"/> already

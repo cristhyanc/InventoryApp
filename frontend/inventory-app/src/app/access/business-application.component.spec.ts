@@ -11,7 +11,11 @@ import {
   ONBOARDING_DISABLED_MESSAGE,
   RATE_LIMITED_MESSAGE
 } from './business-application.component';
-import { GST_REGISTRATION_REQUIRED_MESSAGE, NAME_REQUIRED_MESSAGE } from './business-application-rules';
+import {
+  GST_REGISTRATION_REQUIRED_MESSAGE,
+  NAME_REQUIRED_MESSAGE,
+  STATE_REQUIRED_MESSAGE
+} from './business-application-rules';
 import { BusinessApplicationService } from './business-application.service';
 
 @Component({ standalone: true, template: 'apply' })
@@ -98,6 +102,7 @@ function fillValid(fixture: ComponentFixture<BusinessApplicationComponent>): voi
   draft.abn = '51 824 753 556';
   draft.gstRegistered = true;
   draft.timeZoneId = 'Australia/Sydney';
+  draft.state = 'NSW';
 }
 
 async function submitForm(harness: Harness): Promise<void> {
@@ -212,10 +217,38 @@ describe('BusinessApplicationComponent (issue #543)', () => {
       contactEmail: 'owner@example.com',
       abn: '51824753556',
       gstRegistered: true,
-      timeZoneId: 'Australia/Sydney'
+      timeZoneId: 'Australia/Sydney',
+      state: 'NSW'
     });
     expect(harness.refresh).toHaveBeenCalledTimes(1);
     expect(harness.router.url).toBe('/application-pending');
+  });
+
+  /**
+   * Issue #933: the application form asks for the state, offers exactly the eight the API accepts,
+   * starts with none chosen - it is never derived from the browser's time zone - and sends nothing
+   * until one is.
+   */
+  it('asks for the state or territory and sends nothing until one is chosen', async () => {
+    const harness = await render({});
+    fillValid(harness.fixture);
+    harness.fixture.componentInstance.draft.state = '';
+
+    await submitForm(harness);
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(byTestId(harness.host, 'error-state')?.textContent).toContain(STATE_REQUIRED_MESSAGE);
+
+    const options = Array.from(
+      harness.host.querySelectorAll<HTMLOptionElement>('#businessState option')
+    ).map((option) => option.value);
+    expect(options).toEqual(['', 'NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT']);
+  });
+
+  it('starts with no state chosen', async () => {
+    const { fixture } = await render({});
+
+    expect(fixture.componentInstance.draft.state).toBe('');
   });
 
   it('lets a revoked member submit an application', async () => {

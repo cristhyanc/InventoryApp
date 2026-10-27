@@ -51,6 +51,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int?>("SalesProvider")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("State")
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 

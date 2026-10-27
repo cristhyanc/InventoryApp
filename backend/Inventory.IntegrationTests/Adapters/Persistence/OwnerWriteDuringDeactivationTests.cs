@@ -57,7 +57,7 @@ public class OwnerWriteDuringDeactivationTests : IAsyncDisposable
     private static readonly DateTime Now = MembershipWriteRaceHarness.SeededAt.AddHours(1);
 
     private static readonly BusinessSettingsSubmission Renamed =
-        new("Renamed Co", "owner@example.com", null, true, Sydney);
+        new("Renamed Co", "owner@example.com", null, true, Sydney, "NSW");
 
     private readonly MembershipWriteRaceHarness _harness =
         MembershipWriteRaceHarness.Create(BusinessIdValue, OtherBusinessId);

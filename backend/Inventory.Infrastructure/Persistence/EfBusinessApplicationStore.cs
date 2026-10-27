@@ -59,6 +59,7 @@ public sealed class EfBusinessApplicationStore : IBusinessApplicationStore
                 business.Abn,
                 business.GstRegistered,
                 business.TimeZoneId,
+                business.State,
                 // The stored status exactly as it is, including a value this code does not declare:
                 // the caller has to see it to refuse it rather than treat it as a pending
                 // application.
@@ -72,7 +73,13 @@ public sealed class EfBusinessApplicationStore : IBusinessApplicationStore
             ? null
             : new BusinessApplication(
                 BusinessId.From(row.Id),
-                new BusinessSettings(row.Name, row.ContactEmail, row.Abn, row.GstRegistered, row.TimeZoneId),
+                new BusinessSettings(
+                    row.Name,
+                    row.ContactEmail,
+                    row.Abn,
+                    row.GstRegistered,
+                    row.TimeZoneId,
+                    row.State),
                 row.Status,
                 row.AppliedAtUtc);
     }
@@ -96,6 +103,9 @@ public sealed class EfBusinessApplicationStore : IBusinessApplicationStore
             Abn = settings.Abn,
             GstRegistered = settings.GstRegistered,
             TimeZoneId = settings.TimeZoneId,
+            // The state the application recorded (issue #933). Required on a submission, so a
+            // business created this way always has one; nothing derives it from the time zone.
+            State = settings.State,
             // Stated, never defaulted (issue #584): an application is waiting for a decision, so it
             // is Pending and no endpoint serves its data.
             Status = BusinessStatus.Pending,

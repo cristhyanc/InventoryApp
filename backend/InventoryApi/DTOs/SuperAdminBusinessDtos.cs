@@ -6,7 +6,7 @@ namespace InventoryApi.DTOs;
 /// <summary>
 /// One business as <c>GET /api/super-admin/businesses</c> reports it (issue #544).
 ///
-/// <para>These ten fields are the whole contract, and what is missing from it is the point. There is
+/// <para>These eleven fields are the whole contract, and what is missing from it is the point. There is
 /// no sale, stock, cost, purchase, product, machine, site or report value - nothing tenant-owned at
 /// all - and no member's display name, email address or Entra identifier. The Super Admin decides
 /// whether a business may trade; this response is the whole of what that decision needs.</para>
@@ -32,6 +32,11 @@ namespace InventoryApi.DTOs;
 /// business's published detail, not a member's personal address.
 /// </param>
 /// <param name="Abn">Its stored 11-digit ABN, or <c>null</c>.</param>
+/// <param name="State">
+/// The Australian state or territory it recorded - one of <c>NSW</c>, <c>VIC</c>, <c>QLD</c>,
+/// <c>SA</c>, <c>WA</c>, <c>TAS</c>, <c>ACT</c>, <c>NT</c> - or <c>null</c> for a business that has
+/// not recorded one (issue #933). Shown when an application is reviewed.
+/// </param>
 /// <param name="ActiveMemberCount">
 /// How many of its memberships are currently active - how many people can reach it at all. A
 /// rejected application reads <c>0</c>, because the rejection released its applicant.
@@ -49,6 +54,7 @@ public sealed record SuperAdminBusinessResponse(
     DateTime? DecidedAtUtc,
     string? ContactEmail,
     string? Abn,
+    string? State,
     int ActiveMemberCount,
     bool NayaxConfigured)
 {
@@ -65,6 +71,7 @@ public sealed record SuperAdminBusinessResponse(
             business.DecidedAtUtc,
             business.ContactEmail,
             business.Abn,
+            business.State,
             business.ActiveMemberCount,
             business.NayaxConfigured);
     }

@@ -10,11 +10,15 @@ const COMPLETE: BusinessSettings = {
   contactEmail: 'owner@example.com',
   abn: '51824753556',
   gstRegistered: true,
-  timeZoneId: 'Australia/Sydney'
+  timeZoneId: 'Australia/Sydney',
+  state: 'NSW'
 };
 
 const LEGACY_NO_CONTACT: BusinessSettings = { ...COMPLETE, contactEmail: null };
 const LEGACY_NO_GST: BusinessSettings = { ...COMPLETE, gstRegistered: null };
+
+/** A business that predates the state column (issue #933) and has recorded everything else. */
+const LEGACY_NO_STATE: BusinessSettings = { ...COMPLETE, state: null };
 
 interface SettingsStub {
   get: jest.Mock<Observable<BusinessSettings>, []>;
@@ -45,8 +49,8 @@ const prompt = (host: HTMLElement) => host.querySelector('[data-testid="legacy-b
 /**
  * The dismissible "complete your business profile" prompt (issue #549), composed into the
  * Dashboard and the Business Settings page: shown to an Owner alone, and only while the business
- * is missing its contact email or its GST registration - the migrated business that predates the
- * application form.
+ * is missing its contact email, its GST registration or its state or territory - the migrated
+ * business that predates the application form.
  */
 describe('LegacyBusinessSettingsPromptComponent (issue #549)', () => {
   it('shows the prompt for an Owner whose business is missing its contact email', async () => {
@@ -61,7 +65,20 @@ describe('LegacyBusinessSettingsPromptComponent (issue #549)', () => {
     expect(prompt(host)).not.toBeNull();
   });
 
-  it('hides the prompt once both the contact email and the GST registration are recorded', async () => {
+  /**
+   * Issue #933: an existing business has no state, and this is the prompt that asks the Owner for
+   * it. The prompt is the only thing that changes while it is unset - no page, read or action is
+   * blocked - which is why its own text names the state beside the other two fields.
+   */
+  it('shows the prompt for an Owner whose business is missing its state or territory', async () => {
+    const { host } = await render(true, of(LEGACY_NO_STATE));
+
+    const shown = prompt(host);
+    expect(shown).not.toBeNull();
+    expect(shown?.textContent).toContain('state or territory');
+  });
+
+  it('hides the prompt once the contact email, the GST registration and the state are recorded', async () => {
     const { host } = await render(true, of(COMPLETE));
 
     expect(prompt(host)).toBeNull();

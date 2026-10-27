@@ -32,7 +32,7 @@ namespace InventoryApi.Controllers;
 /// (docs/architecture.md § Self-service business application).</para>
 ///
 /// <para><strong>Nothing in the request chooses anything but the new business's own details.</strong>
-/// The body carries the five settings the application records and nothing else: the applicant, their
+/// The body carries the six settings the application records and nothing else: the applicant, their
 /// role, the business's lifecycle status and its identifier are all decided by the server, the first
 /// from the validated token the request authenticated with.</para>
 ///
@@ -79,8 +79,8 @@ public sealed class OnboardingController : ControllerBase
     /// </response>
     /// <response code="400">
     /// The submitted details break one of the application rules - a missing or over-long name, a
-    /// contact address that cannot be an address, an unstated GST registration, a malformed ABN, or
-    /// a missing or unresolvable time zone. Nothing was written.
+    /// contact address that cannot be an address, an unstated GST registration, a malformed ABN, a
+    /// missing or unresolvable time zone, or a missing or unrecognised state. Nothing was written.
     /// </response>
     /// <response code="404">Self-service onboarding is not switched on for this deployment.</response>
     /// <response code="409">
@@ -111,7 +111,8 @@ public sealed class OnboardingController : ControllerBase
                 request.ContactEmail,
                 request.Abn,
                 request.GstRegistered,
-                request.TimeZoneId),
+                request.TimeZoneId,
+                request.State),
             cancellationToken);
 
         if (!outcome.Enabled)
