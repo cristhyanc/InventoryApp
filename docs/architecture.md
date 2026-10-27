@@ -12524,7 +12524,8 @@ rather than merely invisible.
 per-product explanation, so it is shown once, on that product's own page, rather than as a paragraph
 on every ineligible row of the list: `ProductFormComponent` reads the same `canDelete`/
 `deletionRefusal` from `GET api/products/{id}` and renders `deletionRefusal` **verbatim** in an
-`alert alert-danger` notice directly under the "Edit Product" header whenever `canDelete` is not a
+amber `alert alert-warning` notice (a warning, not the red error style: it explains the product,
+it does not report a failure) directly under the "Edit Product" header whenever `canDelete` is not a
 plain `true`, falling back to "This product cannot be deleted." when the response carries no
 wording. That notice is informational only - it gates no field, no Save and no other control, and is
 rendered for an active product, a deactivated one and a support-session reader alike - and New
