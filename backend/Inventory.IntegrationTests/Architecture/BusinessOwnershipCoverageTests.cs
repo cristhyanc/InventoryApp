@@ -86,6 +86,20 @@ public class BusinessOwnershipCoverageTests
     /// key the row could carry and no filter a business could match it by. One row, one boolean, and
     /// nothing about anybody's data.</para>
     ///
+    /// <para><see cref="MasterProduct"/>, <see cref="SupplierListing"/> and
+    /// <see cref="ProductMatchSuggestion"/> are the third, fourth and fifth, and the reviewed
+    /// ownership decision on issue #923 (parent #817). The structural reason is the same for all
+    /// three and is the whole point of the parent issue: a product is looked up at a supplier
+    /// <em>once</em> for every business, so a brand, a name, a size, a supplier's shelf and a
+    /// matcher's opinion about them are facts about products and about no business at all. None of
+    /// them has a <c>BusinessId</c> to carry, and a <see cref="ProductMatchSuggestion"/> in
+    /// particular names a folded product description rather than the business whose product produced
+    /// it - which is what keeps one business from being able to learn that another is tracking
+    /// anything. What a business has instead is its own tenant-owned
+    /// <see cref="ProductPriceTracking"/> row, which is asserted to be owned in
+    /// <see cref="The_named_entity_is_business_owned"/> below. See docs/architecture.md § Supplier
+    /// price catalogue.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
     /// by the ownership mechanism, because there is no ownership here to enforce. Reading is the same
@@ -100,6 +114,9 @@ public class BusinessOwnershipCoverageTests
     [
         typeof(SupplierPreset),
         typeof(PlatformOptionVisibility),
+        typeof(MasterProduct),
+        typeof(SupplierListing),
+        typeof(ProductMatchSuggestion),
     ];
 
     /// <summary>
@@ -124,14 +141,22 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are two, each
-    /// added by its own reviewed issue - the supplier presets (#848) and the option-visibility
-    /// setting (#873) - and a third one arriving is the change this assertion exists to make visible.
+    /// about no business is a tenancy decision, not an implementation detail. There are five, each
+    /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
+    /// (#873), and the shared price catalogue's master products, supplier listings and match
+    /// suggestions (#923) - and a sixth one arriving is the change this assertion exists to make
+    /// visible.
     /// </summary>
     [Fact]
-    public void Exactly_two_entities_are_declared_platform_tables() =>
+    public void Exactly_five_entities_are_declared_platform_tables() =>
         Assert.Equal(
-            ["PlatformOptionVisibility", "SupplierPreset"],
+            [
+                "MasterProduct",
+                "PlatformOptionVisibility",
+                "ProductMatchSuggestion",
+                "SupplierListing",
+                "SupplierPreset",
+            ],
             PlatformEntities
                 .Select(type => type.Name)
                 .Order(StringComparer.Ordinal)
@@ -442,6 +467,10 @@ public class BusinessOwnershipCoverageTests
     [InlineData(typeof(ImportedDevicePayment))]
     [InlineData(typeof(ImportedFee))]
     [InlineData(typeof(ImportedPaymentMethod))]
+    // The one tenant-owned table of the shared price catalogue (issue #923): the three tables beside
+    // it are about products and are declared in PlatformEntities above, and this one is a business
+    // saying it wants one of its own products priced - which is exactly what tenant ownership is for.
+    [InlineData(typeof(ProductPriceTracking))]
     public void The_named_entity_is_business_owned(Type entityType)
     {
         Assert.True(

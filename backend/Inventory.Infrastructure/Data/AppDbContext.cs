@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Stock;
 using Inventory.Domain.Suppliers;
@@ -315,6 +316,35 @@ public class AppDbContext : DbContext
         Set<Models.PlatformOptionVisibility>();
 
     /// <summary>
+    /// The shared catalogue's products (issue #923, parent #817): one row per product that is looked
+    /// up at a supplier, however many businesses want its price. The third <em>platform</em> table,
+    /// on the terms <see cref="SupplierPresets"/> states - about no business, so no business key, no
+    /// index on one and no query filter. See <see cref="MasterProduct"/>.
+    /// </summary>
+    public DbSet<MasterProduct> MasterProducts => Set<MasterProduct>();
+
+    /// <summary>
+    /// One product as one supplier publishes it (issue #923). The fourth platform table; see
+    /// <see cref="SupplierListing"/>.
+    /// </summary>
+    public DbSet<SupplierListing> SupplierListings => Set<SupplierListing>();
+
+    /// <summary>
+    /// The suggested matches, per waiting key, that the automatic matcher of #941 produces and the
+    /// review of #928 decides (issue #923). The fifth platform table, and the one nothing ever
+    /// deletes from; see <see cref="ProductMatchSuggestion"/>.
+    /// </summary>
+    public DbSet<ProductMatchSuggestion> ProductMatchSuggestions => Set<ProductMatchSuggestion>();
+
+    /// <summary>
+    /// Each business's own statement that it wants one of its products priced, and which master
+    /// product that product is (issue #923). Ordinary tenant-owned data - stamped, filtered and
+    /// enforced centrally like every other owned table - and the only place a business appears in the
+    /// shared catalogue at all; see <see cref="ProductPriceTracking"/>.
+    /// </summary>
+    public DbSet<ProductPriceTracking> ProductPriceTrackings => Set<ProductPriceTracking>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -372,6 +402,7 @@ public class AppDbContext : DbContext
         ConfigureSupportSessions(modelBuilder);
         ConfigureSupplierPresets(modelBuilder);
         ConfigurePlatformOptionVisibility(modelBuilder);
+        ConfigurePriceCatalogue(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
@@ -1283,6 +1314,269 @@ public class AppDbContext : DbContext
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
+
+    /// <summary>
+    /// Maps the shared supplier price catalogue of issue #923 (parent #817): three platform tables
+    /// about products, and one tenant-owned table about a business's decision.
+    ///
+    /// <para><strong>The classification is the design.</strong> <see cref="MasterProduct"/>,
+    /// <see cref="SupplierListing"/> and <see cref="ProductMatchSuggestion"/> are about no business -
+    /// a brand, a size, a supplier's shelf and a matcher's opinion are facts about products - so each
+    /// carries no business key, no index on one and no query filter, exactly as
+    /// <see cref="ConfigureSupplierPresets"/> states for the presets. <see cref="ProductPriceTracking"/>
+    /// is the opposite: it is a business saying it wants one of its own products priced, which is
+    /// ordinary tenant-owned data and gets the ordinary central treatment from
+    /// <see cref="ConfigureBusinessOwnership"/> with nothing added here.</para>
+    ///
+    /// <para><strong>Every key in this catalogue is a stored normalised value under a unique
+    /// index</strong>, for the reason <see cref="SupplierPreset.NormalisedName"/> is one: "one
+    /// description is one master product" has to be the database's rule rather than a <c>WHERE</c>
+    /// clause two concurrent inserts can both pass, and two master products for one product is what
+    /// the parent issue exists to prevent.</para>
+    ///
+    /// <para><strong>Every reference restricts, except the mapping's product.</strong> A supplier
+    /// master record, a master product and a proposed master product are all things other rows depend
+    /// on, so none of them can be deleted from under those rows. The one cascade is a mapping's own
+    /// product: a mapping is a statement <em>about</em> a product and has no meaning without it, and
+    /// restricting there would change what deleting a product does - which issue #923's last criterion
+    /// forbids.</para>
+    /// </summary>
+    private static void ConfigurePriceCatalogue(ModelBuilder modelBuilder)
+    {
+        ConfigureMasterProducts(modelBuilder);
+        ConfigureSupplierListings(modelBuilder);
+        ConfigureProductMatchSuggestions(modelBuilder);
+        ConfigureProductPriceTracking(modelBuilder);
+    }
+
+    private static void ConfigureMasterProducts(ModelBuilder modelBuilder)
+    {
+        var master = modelBuilder.Entity<MasterProduct>();
+
+        master.Property(x => x.Brand).IsRequired().HasMaxLength(MasterProductPolicy.MaxBrandLength);
+        master.Property(x => x.Name).IsRequired().HasMaxLength(MasterProductPolicy.MaxNameLength);
+
+        // The size at the scale the Domain accepts and no finer, which is why MasterProductPolicy
+        // refuses a finer value rather than rounding one: a per-unit price divides by this number.
+        master.Property(x => x.SizeValue).HasColumnType("decimal(18,3)");
+        master.Property(x => x.SizeUnit).IsRequired();
+
+        // A size of zero is not a smaller product: it is a denominator that makes a per-unit price
+        // infinite and compares as cheaper than every real product. The database refuses it as well
+        // as MasterProductPolicy, because a stored row is not something an application-level check
+        // can be trusted to have prevented.
+        master.ToTable(table => table.HasCheckConstraint(
+            "CK_MasterProducts_SizeValuePositive",
+            @"""SizeValue"" > 0"));
+
+        // The comparison key, bounded at the longest value the policy's own vocabulary can produce -
+        // computed from it rather than guessed, so widening a part cannot leave this column too
+        // narrow for the keys it must hold.
+        master.Property(x => x.NormalisedKey)
+            .IsRequired()
+            .HasMaxLength(MasterProductPolicy.MaxNormalisedKeyLength);
+        master.HasIndex(x => x.NormalisedKey).IsUnique();
+
+        MarkUtc(master.Property(x => x.CreatedAtUtc));
+        MarkUtc(master.Property(x => x.UpdatedAtUtc));
+    }
+
+    private static void ConfigureSupplierListings(ModelBuilder modelBuilder)
+    {
+        var listing = modelBuilder.Entity<SupplierListing>();
+
+        listing.Property(x => x.SupplierProductId)
+            .IsRequired()
+            .HasMaxLength(SupplierListingPolicy.MaxSupplierProductIdLength);
+        listing.Property(x => x.Url).HasMaxLength(SupplierListingPolicy.MaxUrlLength);
+        listing.Property(x => x.Title).HasMaxLength(SupplierListingPolicy.MaxTitleLength);
+
+        // Text, and never a number: 0012345678905 and 12345678905 are different barcodes, and the
+        // leading zeros are not recoverable once a column has parsed them away.
+        listing.Property(x => x.Barcode).HasMaxLength(SupplierListingPolicy.MaxBarcodeLength);
+
+        listing.Property(x => x.WaitingKey).HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        listing.Property(x => x.OriginWaitingKey).HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        listing.Property(x => x.MatchStatus).IsRequired();
+
+        // One supplier lists one product once, which is what the collector work list of #924
+        // deduplicates by. It is not scoped by business because there is no business here: the
+        // supplier master record is platform configuration and so is its shelf.
+        listing.HasIndex(x => new { x.SupplierPresetId, x.SupplierProductId }).IsUnique();
+
+        // The two lookups the catalogue reads make: a master product's listings, and the listings a
+        // search is still holding under its waiting key.
+        listing.HasIndex(x => x.MasterProductId);
+        listing.HasIndex(x => x.WaitingKey);
+
+        // The exclusive-ownership rule of issue #923, in the database and not only in
+        // SupplierListingPolicy: a listing references exactly one of a master product and an active
+        // waiting key. Both at once is a listing claiming to be two things; neither is a listing
+        // nothing can ever find again. OriginWaitingKey is deliberately outside this constraint -
+        // that is the whole reason it is a second column - so a matched listing can still say which
+        // search discovered it.
+        //
+        // The pack and barcode rules are here for the same reason, and each is one of issue #923's
+        // criteria: a pack size of zero divides, and a carton barcode with no scope prices one can
+        // at the price of thirty. The mapping's own status/master/source consistency is deliberately
+        // left to ProductPriceTrackingPolicy instead, because expressing it in SQL would hard-code
+        // the status enum's numbers into migration history.
+        listing.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_SupplierListings_OneOwner",
+                @"(""MasterProductId"" IS NOT NULL AND ""WaitingKey"" IS NULL) "
+                    + @"OR (""MasterProductId"" IS NULL AND ""WaitingKey"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_SupplierListings_UnitsPerPackPositive",
+                @"""UnitsPerPack"" IS NULL OR ""UnitsPerPack"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListings_BarcodeAndScopeTogether",
+                @"(""Barcode"" IS NULL AND ""BarcodeScope"" IS NULL) "
+                    + @"OR (""Barcode"" IS NOT NULL AND ""BarcodeScope"" IS NOT NULL)");
+        });
+
+        listing
+            .HasOne(x => x.SupplierPreset)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierPresetId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        listing
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(listing.Property(x => x.CreatedAtUtc));
+        MarkUtc(listing.Property(x => x.UpdatedAtUtc));
+    }
+
+    private static void ConfigureProductMatchSuggestions(ModelBuilder modelBuilder)
+    {
+        var suggestion = modelBuilder.Entity<ProductMatchSuggestion>();
+
+        suggestion.Property(x => x.WaitingKey)
+            .IsRequired()
+            .HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        suggestion.Property(x => x.SuggestedBrand).HasMaxLength(MasterProductPolicy.MaxBrandLength);
+        suggestion.Property(x => x.SuggestedName).HasMaxLength(MasterProductPolicy.MaxNameLength);
+        suggestion.Property(x => x.SuggestedSizeValue).HasColumnType("decimal(18,3)");
+
+        // A proportion, at the scale ProductMatchSuggestionPolicy accepts. It is money-shaped and is
+        // not money: nothing in this catalogue holds an amount.
+        suggestion.Property(x => x.Confidence).HasColumnType("decimal(5,4)");
+
+        suggestion.Property(x => x.Reason)
+            .IsRequired()
+            .HasMaxLength(ProductMatchSuggestionPolicy.MaxReasonLength);
+        suggestion.Property(x => x.CollectorRun)
+            .IsRequired()
+            .HasMaxLength(ProductMatchSuggestionPolicy.MaxCollectorRunLength);
+        suggestion.Property(x => x.Status).IsRequired();
+
+        // The two reads this table exists for: what has been suggested for a waiting key, and whether
+        // a (waiting key, master product) pair was already refused. Neither is unique - a pair that
+        // was rejected and later proposed again is two rows, and keeping both is the point.
+        suggestion.HasIndex(x => new { x.WaitingKey, x.Status });
+        suggestion.HasIndex(x => new { x.MasterProductId, x.WaitingKey });
+
+        // One proposal per row: an existing master product, or a complete description of a new one,
+        // never both and never neither. Those are two different things to do about one waiting key,
+        // and a row holding both would leave the reviewer of #928 unable to tell which was meant. The
+        // suggested size and the confidence are checked on the same terms as a master product's own
+        // size: a stored value nothing could act on is worse than a refused write.
+        suggestion.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_ProductMatchSuggestions_OneProposal",
+                @"(""MasterProductId"" IS NOT NULL "
+                    + @"AND ""SuggestedBrand"" IS NULL AND ""SuggestedName"" IS NULL "
+                    + @"AND ""SuggestedSizeValue"" IS NULL AND ""SuggestedSizeUnit"" IS NULL) "
+                    + @"OR (""MasterProductId"" IS NULL "
+                    + @"AND ""SuggestedBrand"" IS NOT NULL AND ""SuggestedName"" IS NOT NULL "
+                    + @"AND ""SuggestedSizeValue"" IS NOT NULL AND ""SuggestedSizeUnit"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_ProductMatchSuggestions_SuggestedSizePositive",
+                @"""SuggestedSizeValue"" IS NULL OR ""SuggestedSizeValue"" > 0");
+            table.HasCheckConstraint(
+                "CK_ProductMatchSuggestions_ConfidenceIsAProportion",
+                @"""Confidence"" >= 0 AND ""Confidence"" <= 1");
+        });
+
+        suggestion
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(suggestion.Property(x => x.CreatedAtUtc));
+        MarkUtc(suggestion.Property(x => x.UpdatedAtUtc));
+    }
+
+    private static void ConfigureProductPriceTracking(ModelBuilder modelBuilder)
+    {
+        var tracking = modelBuilder.Entity<ProductPriceTracking>();
+
+        tracking.Property(x => x.WaitingKey)
+            .IsRequired()
+            .HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        tracking.Property(x => x.SearchName)
+            .IsRequired()
+            .HasMaxLength(ProductPriceTrackingPolicy.MaxSearchNameLength);
+
+        // Required and possibly empty, which is deliberate: Product.Unit is nullable, and "no unit
+        // label" has to have exactly one stored spelling or one product becomes two searches.
+        tracking.Property(x => x.UnitLabel)
+            .IsRequired()
+            .HasMaxLength(ProductPriceTrackingPolicy.MaxUnitLabelLength);
+        tracking.Property(x => x.Status).IsRequired();
+
+        // One mapping per product, scoped by business for the reason every uniqueness rule over
+        // tenant-owned data is: two businesses may legitimately track the same product, and a global
+        // constraint would let whichever tracked it first deny the other.
+        tracking.HasIndex(x => new { x.BusinessId, x.ProductId }).IsUnique();
+
+        // The master products a business is tracking through, and the waiting keys a work list groups
+        // by. The index on BusinessId alone is ConfigureBusinessOwnership's, added centrally.
+        tracking.HasIndex(x => new { x.BusinessId, x.MasterProductId });
+        tracking.HasIndex(x => x.WaitingKey);
+
+        // On the products' (BusinessId, Id) business key, so a mapping cannot name another business's
+        // product even in principle - the shape every tenant-owned reference to a product and a
+        // machine takes in this schema. Cascade because a mapping is a statement about a product and
+        // has no meaning without it, and because restricting would change what deleting a product
+        // does, which issue #923's last criterion forbids.
+        tracking
+            .HasOne(x => x.Product)
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.ProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Restrict, unlike the product above: a master product businesses are tracking through is not
+        // something to remove from under them, and nulling a mapping would turn a settled match back
+        // into a search without anybody deciding to.
+        tracking
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(tracking.Property(x => x.CreatedAtUtc));
+        MarkUtc(tracking.Property(x => x.UpdatedAtUtc));
+    }
+
+    /// <summary>
+    /// Marks a persisted UTC instant as UTC on the way out. The SQLite provider returns an
+    /// unspecified kind otherwise; see the <c>StockAdjustment.CreatedAt</c> comment below for the
+    /// longer version of why that matters.
+    /// </summary>
+    private static void MarkUtc(
+        Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime> instant) =>
+        instant.HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
 
     /// <summary>
     /// Maps the provider identity of a business, a product and a category (issue #759, parent #329
