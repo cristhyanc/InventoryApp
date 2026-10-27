@@ -1,8 +1,10 @@
 using Inventory.Application.Businesses;
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Suppliers;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
@@ -274,16 +276,113 @@ public class BusinessSettingsUseCaseTests
         Assert.Equal(Inventory.Domain.Tenancy.BusinessId.From(BusinessId), store.LastSavedBusinessId);
     }
 
+    /// <summary>
+    /// A change of the business's state adds the supplier records that state newly entitles it to
+    /// (issue #935), inside the same committed transaction as the save and after it - so what the
+    /// top-up matches against is the state that was just stored.
+    /// </summary>
+    [Fact]
+    public async Task A_state_change_adds_the_supplier_records_that_state_serves()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var presets = new FakeAvailableSupplierPresetStore()
+            .WithPreset(1, "Coles", servesNationwide: true)
+            .WithPreset(2, "JB Metro South Coast & ACT", servesNationwide: false, servedStates: "NSW,ACT")
+            .WithPreset(3, "Perth Wholesale", servesNationwide: false, servedStates: "WA")
+            .WithCopyOf(1);
+        var writeStore = new FakeBusinessMembershipWriteStore();
+
+        // The store answers about the state as it now stands, which is what the save just wrote.
+        presets.BusinessState = "ACT";
+
+        await Create(store, new RecordingAudit(), presets: presets, writeStore: writeStore)
+            .Handle(Submission(state: "ACT"), CancellationToken.None);
+
+        Assert.Equal(1, presets.ListCalls);
+        Assert.Equal([1, 2], presets.Copies);
+        Assert.Equal([BusinessId], presets.BusinessIds.Distinct());
+        Assert.Contains(FakeBusinessMembershipWriteStore.Commit, writeStore.Operations);
+    }
+
+    /// <summary>
+    /// A save that leaves the state exactly as it was adds nothing at all, even when the platform
+    /// has records this business does not hold. A record added or enabled later is deliberately
+    /// never pushed into an existing business - it is offered under "Available to add" instead - so
+    /// an Owner correcting their ABN must not acquire suppliers as a side effect.
+    /// </summary>
+    [Fact]
+    public async Task A_save_that_does_not_change_the_state_adds_no_supplier()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var presets = new FakeAvailableSupplierPresetStore()
+            .WithPreset(1, "Coles", servesNationwide: true);
+        presets.BusinessState = Nsw;
+
+        await Create(store, new RecordingAudit(), presets: presets)
+            .Handle(Submission(name: "Renamed Co"), CancellationToken.None);
+
+        Assert.Equal(0, presets.ListCalls);
+        Assert.Empty(presets.Copies);
+    }
+
+    /// <summary>
+    /// A record another request copied between the top-up's list and its insert is skipped, not
+    /// reported: the unique index refuses the second copy, one copy exists - which is the rule - and
+    /// the Owner's state change still saves. The other matching record is still added, so one
+    /// refusal does not abandon the rest of the top-up.
+    /// </summary>
+    [Fact]
+    public async Task A_record_copied_while_the_state_change_runs_is_skipped_and_the_save_still_commits()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var presets = new FakeAvailableSupplierPresetStore()
+            .WithPreset(1, "Coles", servesNationwide: true)
+            .WithPreset(2, "JB Metro South Coast & ACT", servesNationwide: false, servedStates: "NSW,ACT");
+        presets.BusinessState = "ACT";
+        presets.RefuseNextCopy = true;
+        var writeStore = new FakeBusinessMembershipWriteStore();
+
+        var saved = await Create(store, new RecordingAudit(), presets: presets, writeStore: writeStore)
+            .Handle(Submission(state: "ACT"), CancellationToken.None);
+
+        Assert.Equal("ACT", saved.State);
+        Assert.Equal([1, 2], presets.Copies.Order());
+        Assert.Contains(FakeBusinessMembershipWriteStore.Commit, writeStore.Operations);
+    }
+
+    /// <summary>
+    /// A refused save adds nothing either: the business was deactivated, so neither the settings nor
+    /// a supplier is written. The top-up is inside the transaction the guard rolls back, and it is
+    /// never reached at all when the status check refuses first.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_save_adds_no_supplier()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var presets = new FakeAvailableSupplierPresetStore().WithPreset(1, "Coles");
+        presets.BusinessState = "ACT";
+        var writeStore = new FakeBusinessMembershipWriteStore { Status = BusinessStatus.Deactivated };
+
+        await Assert.ThrowsAsync<DomainConflictException>(
+            () => Create(store, new RecordingAudit(), presets: presets, writeStore: writeStore)
+                .Handle(Submission(state: "ACT"), CancellationToken.None));
+
+        Assert.Equal(0, presets.ListCalls);
+        Assert.Empty(presets.Copies);
+    }
+
     private static UpdateBusinessSettings Create(
         FakeBusinessSettingsStore store,
         RecordingAudit audit,
         ICurrentBusinessProvider? currentBusiness = null,
         IAuthenticatedActorAccessor? actors = null,
+        FakeAvailableSupplierPresetStore? presets = null,
         FakeBusinessMembershipWriteStore? writeStore = null) =>
         new(
             currentBusiness ?? new FakeCurrentBusinessProvider(BusinessId),
             actors ?? FakeAuthenticatedActorAccessor.Identified(Actor()),
             store,
+            new AddMatchingSupplierPresets(presets ?? new FakeAvailableSupplierPresetStore()),
             new MembershipWriteGuard(writeStore ?? new FakeBusinessMembershipWriteStore()),
             audit,
             new FakeClock(SavedAt));
