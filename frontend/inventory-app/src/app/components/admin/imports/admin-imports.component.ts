@@ -1,31 +1,28 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ImportService } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
-import { CatalogueReviewComponent } from './catalogue-review/catalogue-review.component';
 
 /**
  * Dedicated page for the supported import workflows, split out of `AdminComponent`
- * (issue #389, Admin split 2/3): the Nayax sales file upload and its CSV template, the product
- * catalogue import and the pending reimbursement XML import. `ImportService` remains the sole
- * authority for the sales and reimbursement import calls, so no import, deduplication,
- * transaction-parsing or reimbursement rule is reimplemented or reinterpreted here.
+ * (issue #389, Admin split 2/3): the Nayax sales file upload and its CSV template, and the pending
+ * reimbursement XML import. `ImportService` remains the sole authority for both calls, so no
+ * import, deduplication, transaction-parsing or reimbursement rule is reimplemented or
+ * reinterpreted here.
  *
- * <p><strong>Importing the product catalogue is the catalogue review</strong> (issue #739, parent
- * #329 decision C2). There is no direct catalogue import any more: the button opens
- * `CatalogueReviewComponent`, which previews Nayax's catalogue against the business's own rows and
- * applies the operator's decisions per entry. That is what lets a business that maintains its own
- * products import at all - the direct import had to be refused for one (issue #736), because it
- * recognised a product only by Nayax's id and would have duplicated every manual row. The page
- * composes the review and owns nothing of its workflow (AGENTS.md § Frontend rules).</p>
+ * <p><strong>Importing the product catalogue happens on its own page</strong> (issue #888):
+ * `/products/import` (`ProductImportPageComponent`) hosts the catalogue review of issue #739, so
+ * this page's Import products card is a link to it and renders no review of its own. It stopped
+ * reading `?review=catalogue` (issue #875) with it, which that issue's own entry point - All
+ * Products' Import products button - now points straight at the new page instead.</p>
  */
 @Component({
   selector: 'app-admin-imports',
   standalone: true,
-  imports: [CommonModule, RouterLink, CatalogueReviewComponent],
+  imports: [CommonModule, RouterLink],
   template: `
     <div class="page">
       <header class="page-header">
@@ -56,7 +53,12 @@ import { CatalogueReviewComponent } from './catalogue-review/catalogue-review.co
               Review the Nayax catalogue against your own products and categories, then link, create
               or update them per entry. Nothing is written until you apply the review.
             </p>
-            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive || reviewing" (click)="importProducts()">Import products</button>
+            <!--
+              A link to the review's own page (issue #888) rather than a button that opened it here.
+              It is not withheld or disabled during a support session: the destination renders the
+              support notice instead of the review, so the import cannot be started either way.
+            -->
+            <a routerLink="/products/import" class="btn btn-primary mt-4">Import products</a>
           </div>
         </section>
 
@@ -68,24 +70,19 @@ import { CatalogueReviewComponent } from './catalogue-review/catalogue-review.co
           </div>
         </section>
       </div>
-
-      @if (reviewing) {
-        <app-catalogue-review (closed)="closeReview()" />
-      }
     </div>
   `
 })
-export class AdminImportsComponent implements OnInit, OnDestroy {
+export class AdminImportsComponent implements OnDestroy {
   loading = false;
 
-  /** Whether the catalogue review is on screen (issue #739). It owns its own loading lifecycle. */
-  reviewing = false;
-
   /**
-   * Whether a support session is active (issue #661): every import on this page is disabled while
-   * it is, because a session grants `ImportsRun` - the capability this page and its endpoints are
-   * gated on - and the backend refuses the write itself only by its read-only method rule, never
-   * by withholding the capability. See `SupportSessionService.active$`.
+   * Whether a support session is active (issue #661): both imports this page runs are disabled
+   * while it is, because a session grants `ImportsRun` - the capability this page and its endpoints
+   * are gated on - and the backend refuses the write itself only by its read-only method rule,
+   * never by withholding the capability. See `SupportSessionService.active$`. The Import products
+   * link is not one of them: it starts nothing, and `/products/import` applies the same rule itself
+   * (issue #888).
    */
   sessionActive = false;
 
@@ -94,22 +91,9 @@ export class AdminImportsComponent implements OnInit, OnDestroy {
   constructor(
     private readonly importService: ImportService,
     private readonly toast: ToastService,
-    private readonly route: ActivatedRoute,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
-  }
-
-  /**
-   * Opens the catalogue review when Products' own Import products button (issue #875) sent the
-   * operator here with `?review=catalogue`: read once, on load, through the exact same
-   * `importProducts()` path and support-session guard its own button uses, so the two cannot mean
-   * different things. Without the parameter this page behaves exactly as it did before.
-   */
-  ngOnInit(): void {
-    if (this.route.snapshot.queryParamMap.get('review') === 'catalogue') {
-      this.importProducts();
-    }
   }
 
   ngOnDestroy(): void {
@@ -140,21 +124,6 @@ export class AdminImportsComponent implements OnInit, OnDestroy {
     const sample = ['1001', '12', '42', '987654', 'Machine A', '12.50', 'Card', 'Coke Zero', '1.100000', '2026-09-02 14:30:00'];
     const url = URL.createObjectURL(new Blob([[headers.join(','), sample.join(',')].join('\n')], { type: 'text/csv;charset=utf-8;' }));
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'nayax-sales-import-template.csv'; anchor.click(); URL.revokeObjectURL(url);
-  }
-
-  /**
-   * Opens the catalogue review (issue #739). It is the product catalogue import: the review reads
-   * Nayax's catalogue and writes nothing until the operator applies their decisions, so this page
-   * starts no import of its own and reports no result. Guarded here as well as disabled in the
-   * template, so the action is actually unavailable in a support session rather than merely inert.
-   */
-  importProducts(): void {
-    if (this.sessionActive) return;
-    this.reviewing = true;
-  }
-
-  closeReview(): void {
-    this.reviewing = false;
   }
 
   importXml(): void {

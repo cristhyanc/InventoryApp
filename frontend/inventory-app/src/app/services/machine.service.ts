@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import {
   Machine,
   MachineLatestSales,
+  MachineRestockSyncReminderResponse,
   NayaxDuplicateResolutionChoice,
   NayaxMachineStockApplyResponse,
   NayaxMachineStockSyncPreview,
@@ -24,6 +25,21 @@ export class MachineService {
 
   getAll(): Observable<Machine[]> {
     return this.http.get<Machine[]>(this.baseUrl);
+  }
+
+  /**
+   * The Dashboard's restock-sync reminder (issue #891): which provider-named machines have not had
+   * a fully successful Sync Restock in the last three business days, and which still hold
+   * unresolved restock events.
+   *
+   * A pure read of local state - it makes no Nayax request, imports nothing and acknowledges
+   * nothing - which is why the Dashboard may call it on every load. Its own route rather than the
+   * machine fleet's, because it is about the whole business rather than one machine.
+   */
+  getRestockSyncReminder(): Observable<MachineRestockSyncReminderResponse> {
+    return this.http.get<MachineRestockSyncReminderResponse>(
+      `${this.config.apiBaseUrl.replace(/\/$/, '')}/machine-restock-sync/reminder`
+    );
   }
 
   get(id: number): Observable<Machine> {

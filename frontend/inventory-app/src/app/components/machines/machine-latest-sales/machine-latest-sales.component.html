@@ -67,7 +67,7 @@
             </tr>
           </thead>
           <tbody>
-            @for (sale of latest.sales; track sale.transactionId) {
+            @for (sale of pagedSales(); track sale.transactionId) {
               <tr class="table-row">
                 <!-- Rendered in the current business's own time zone from the true instant the API
                      sent; "Not reported" rather than a defaulted date when Nayax carried none. -->
@@ -83,6 +83,43 @@
             }
           </tbody>
         </table>
+      </div>
+
+      <!-- Client-side paging over the window already loaded (issue #886): changing page or page
+           size never re-reads the API or Nayax, it only changes which loaded rows are shown. -->
+      <div class="page-actions mt-3" data-testid="latest-sales-pagination">
+        <output class="text-sm value-muted" data-testid="latest-sales-range">
+          Showing {{ firstShown() }}&ndash;{{ lastShown() }} of {{ latest.sales.length }} sales
+        </output>
+        <div class="field">
+          <label class="field-label" for="latest-sales-page-size">Rows per page</label>
+          <select
+            id="latest-sales-page-size"
+            data-testid="latest-sales-page-size"
+            [value]="pageSize"
+            (change)="onPageSizeChange($event)">
+            @for (size of pageSizeOptions; track size) {
+              <option [value]="size">{{ size }}</option>
+            }
+          </select>
+        </div>
+        @if (pageCount() > 1) {
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            data-testid="latest-sales-previous-page"
+            [disabled]="pageIndex === 0"
+            (click)="previousPage()">Previous</button>
+          <span class="text-sm value-muted" data-testid="latest-sales-page-indicator">
+            Page {{ pageIndex + 1 }} of {{ pageCount() }}
+          </span>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            data-testid="latest-sales-next-page"
+            [disabled]="pageIndex >= pageCount() - 1"
+            (click)="nextPage()">Next</button>
+        }
       </div>
     }
   </div>

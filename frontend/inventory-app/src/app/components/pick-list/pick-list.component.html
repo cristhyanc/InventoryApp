@@ -154,6 +154,7 @@
             <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
               <button type="button" class="hover:underline" (click)="sortBy('mdbCode')">{{ sortLabel('MDB Code', 'mdbCode') }}</button>
             </th>
+            <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Storage Qty</th>
             <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
             @for (machineId of appliedMachineIds; track machineId) {
               <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
@@ -172,6 +173,7 @@
                 }
               </td>
               <td data-testid="pick-list-mdb-code" class="table-cell text-md-gray-800">{{ product.mdbCode ?? '—' }}</td>
+              <td data-testid="pick-list-storage-qty" class="table-cell table-num text-md-gray-800">{{ product.storageQuantityInStock }}</td>
               <td class="table-cell font-semibold text-md-gray-800">{{ product.totalQuantityToPick }}</td>
               @for (machineId of appliedMachineIds; track machineId) {
                 @if (cellFor(product, machineId); as cell) {

@@ -365,6 +365,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { component, create, submit, navigate } = await render({ routeParams: {} });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.categoryId = 2;
     component.form.quantityInStock = 10;
     component.form.initialUnitCost = 1.1;
@@ -378,7 +379,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
       description: null,
       lowStockThreshold: 2,
       restockTo: 8,
-      unit: 'unit',
+      unit: 'bag',
       categoryId: 2,
       isActive: true,
       quantityInStock: 10,
@@ -401,6 +402,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { component, create } = await render({ routeParams: {} });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.initialUnitCost = -1;
     component.save();
 
@@ -413,6 +415,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { component, navigate } = await render({ routeParams: {}, create });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.save();
 
     expect(component.error).toBe('Product name is required.');
@@ -454,6 +457,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     typeCategory('sn');
     clickCategoryOption(categoryOption('Snacks')!);
     submit();
@@ -465,6 +469,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     const { component, create, submit } = await render({ routeParams: {} });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     submit();
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ categoryId: null }));
@@ -476,6 +481,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     typeCategory('dri');
     clickCategoryOption(categoryOption('Drinks')!);
     typeCategory('');
@@ -494,6 +500,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
       await render({ routeParams: {}, create: jest.fn(() => of(product({ id: 55 }))) });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.sku = 'SNK-900';
     component.form.quantityInStock = 12;
     component.form.initialUnitCost = 1.25;
@@ -520,7 +527,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
       description: null,
       lowStockThreshold: 3,
       restockTo: 9,
-      unit: 'unit',
+      unit: 'bag',
       categoryId: 9,
       isActive: true,
       quantityInStock: 12,
@@ -535,6 +542,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
       await render({ routeParams: {}, create: jest.fn(() => of(product({ id: 55 }))) });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     typeCategory('Chocolate');
     clickCategoryOption(createCategoryOption()!);
     chooseGstRule('GST-free');
@@ -556,6 +564,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.sku = 'SNK-900';
     typeCategory('Chocolate');
     clickCategoryOption(createCategoryOption()!);
@@ -593,6 +602,7 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
   /** Fills in the one field the create validation requires. */
   function named(component: ProductFormComponent): ProductFormComponent {
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     return component;
   }
 
@@ -835,6 +845,206 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
 });
 
 /**
+ * How New Product is laid out (issue #892).
+ *
+ * The fields used to flow through one `md:grid-cols-2 xl:grid-cols-3` grid, which put Opening Stock
+ * and Initial Unit Cost on different rows, isolated Unit Label, bottom-aligned the Active checkbox
+ * against the Category helper text, and left Create Product *above* the GST choice. These tests pin
+ * the grouping, the field order inside each group, and that the one action row comes after the GST
+ * rule - in the DOM, which is also the keyboard order.
+ *
+ * None of the create behaviour moves: the GST panel stays the same single
+ * `ProductCreateGstRuleComponent` with the same inputs and outputs (issue #829), and the footer
+ * submits the form it names through the native `form` attribute rather than a second handler, so
+ * there is still exactly one `save()`.
+ */
+describe('ProductFormComponent New Product layout (issue #892)', () => {
+  /** The section headings a person reads down the card, including the composed GST panel's own. */
+  const headings = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('.card-body h2')).map((heading) => heading.textContent?.trim());
+
+  const section = (host: HTMLElement, name: string) =>
+    host.querySelector<HTMLElement>(`[data-testid="product-section-${name}"]`)!;
+
+  /** The field grid of one section, which is the only grid a section has. */
+  const grid = (host: HTMLElement, name: string) => section(host, name).querySelector<HTMLElement>('.grid')!;
+
+  /**
+   * The grid's own cells, in the order they are reached by reading and by Tab. Each cell is a
+   * direct child of the grid - a field label, or the composed category picker, whose own inner
+   * combobox belongs to that component rather than to this layout.
+   */
+  const controlNames = (container: HTMLElement) =>
+    Array.from(container.children).map((cell) => {
+      if (cell.tagName === 'APP-PRODUCT-CATEGORY-PICKER') {
+        return 'app-product-category-picker';
+      }
+      const control = cell.querySelector('input, select, textarea');
+      return control?.getAttribute('name') ?? cell.tagName.toLowerCase();
+    });
+
+  it('groups the fields into titled sections, with the GST rule before the single action row', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    expect(headings(host)).toEqual(['Product details', 'Opening inventory', 'Reordering', 'GST rule']);
+
+    // One GST choice, mounted once, and one action row - after it.
+    expect(host.querySelectorAll('app-product-create-gst-rule')).toHaveLength(1);
+    expect(host.querySelectorAll('app-product-gst-rule')).toHaveLength(1);
+
+    const actions = host.querySelectorAll('[data-testid="product-form-actions"]');
+    expect(actions).toHaveLength(1);
+    const gstPanel = host.querySelector('app-product-create-gst-rule')!;
+    expect(gstPanel.compareDocumentPosition(actions[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(Array.from(actions[0].querySelectorAll('button, a')).map((control) => control.textContent?.trim())).toEqual([
+      'Create Product',
+      'Cancel'
+    ]);
+  });
+
+  it('pairs Name with SKU and Category with Unit Label, with Description spanning the row below them', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    const details = grid(host, 'product-details');
+    expect(controlNames(details)).toEqual(['name', 'sku', 'app-product-category-picker', 'unit', 'description']);
+
+    const classes = Array.from(details.classList);
+    expect(classes).toContain('md:grid-cols-2');
+    expect(classes).toContain('items-start');
+    // The three-column auto-flow is what split the pairs up; it must not come back here.
+    expect(classes).not.toContain('xl:grid-cols-3');
+
+    const description = host.querySelector('[name="description"]')!.closest('label')!;
+    expect(Array.from(description.classList)).toContain('md:col-span-2');
+  });
+
+  it('puts the Active product checkbox outside the field grid, compact and left aligned', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    const active = host.querySelector('[name="isActive"]')!.closest('label')!;
+    const details = grid(host, 'product-details');
+
+    expect(details.contains(active)).toBe(false);
+    expect(section(host, 'product-details').contains(active)).toBe(true);
+    // Neither stretched across a grid cell nor bottom-aligned against the Category helper text.
+    expect(Array.from(active.classList)).toContain('inline-flex');
+    expect(Array.from(active.classList)).not.toContain('self-end');
+  });
+
+  it('puts Opening Stock beside Initial Unit Cost, in their own section', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    const opening = grid(host, 'opening-inventory');
+    expect(controlNames(opening)).toEqual(['quantityInStock', 'initialUnitCost']);
+    expect(Array.from(opening.classList)).toEqual(expect.arrayContaining(['md:grid-cols-2', 'items-start']));
+  });
+
+  it('puts Low Stock Threshold beside Restock To, keeping their hints and their validation message', async () => {
+    const { fixture, component, host } = await render({ routeParams: {} });
+
+    const reordering = grid(host, 'reordering');
+    expect(controlNames(reordering)).toEqual(['lowStockThreshold', 'restockTo']);
+    expect(Array.from(reordering.classList)).toEqual(expect.arrayContaining(['md:grid-cols-2', 'items-start']));
+    expect(Array.from(reordering.querySelectorAll('.field-hint')).map((hint) => hint.textContent?.trim())).toEqual([
+      'Minimum home stock before a new order is needed.',
+      'Target home stock after machines are replenished and the order is received.'
+    ]);
+
+    component.form.lowStockThreshold = 10;
+    component.form.restockTo = 4;
+    fixture.detectChanges();
+
+    const message = section(host, 'reordering').querySelector('.field-error');
+    expect(message?.textContent).toContain('Restock To must be greater than or equal to the Low Stock Threshold');
+  });
+
+  /**
+   * The footer is outside the form because the GST panel above it owns form controls of its own, and
+   * nesting one form in another is not markup a browser keeps. It submits the product form by naming
+   * it, so there is still exactly one submit path and one `save()`.
+   */
+  it('creates the product from the footer below the GST rule, through the form that footer names', async () => {
+    const { fixture, component, host, create, setGstRule, navigate } = await render({
+      routeParams: {},
+      create: jest.fn(() => of(product({ id: 55 })))
+    });
+
+    const form = host.querySelector('form')!;
+    const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(form.id).toBeTruthy();
+    expect(submit.getAttribute('form')).toBe(form.id);
+    expect(form.contains(submit)).toBe(false);
+    // The GST choice owns controls, so it stays out of the product form rather than nesting one.
+    expect(form.querySelector('app-product-create-gst-rule')).toBeNull();
+    expect(host.querySelectorAll('form')).toHaveLength(1);
+
+    component.form.name = 'New Snack';
+    component.form.unit = 'bag';
+    fixture.detectChanges();
+    submit.click();
+    fixture.detectChanges();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Snack' }));
+    expect(setGstRule).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('leaves the category picker’s own buttons unable to submit the product', async () => {
+    const { host, typeCategory, categoryOption, clickCategoryOption, create } = await render({ routeParams: {} });
+
+    typeCategory('sn');
+    expect(
+      Array.from(host.querySelectorAll('app-product-category-picker button')).every(
+        (button) => button.getAttribute('type') === 'button'
+      )
+    ).toBe(true);
+
+    clickCategoryOption(categoryOption('Snacks')!);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(host.querySelector('h1')?.textContent).toContain('New Product');
+  });
+
+  it('keeps the footer’s Cancel on the product list and withdraws Create once the product exists', async () => {
+    const { host, component, chooseGstRule, submit, gstRuleRetry } = await render({
+      routeParams: {},
+      create: jest.fn(() => of(product({ id: 55 }))),
+      setGstRule: jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })))
+    });
+
+    const actions = host.querySelector('[data-testid="product-form-actions"]')!;
+    expect(actions.querySelector<HTMLAnchorElement>('a.btn-secondary')?.getAttribute('href')).toBe('/products');
+
+    chooseGstRule('Taxable');
+    component.form.name = 'New Snack';
+    component.form.unit = 'bag';
+    submit();
+
+    // The one outstanding write is the rule, and its retry is the only control left offered.
+    expect(actions.querySelector('button[type="submit"]')).toBeNull();
+    expect(host.querySelector('button[type="submit"]')).toBeNull();
+    expect(gstRuleRetry()?.textContent).toContain('Save GST rule');
+    expect(actions.querySelector<HTMLAnchorElement>('a.btn-secondary')?.getAttribute('href')).toBe('/products');
+  });
+
+  it('leaves Edit Product on its existing layout, with its own action row inside the form', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="product-section-product-details"]')).toBeNull();
+    expect(host.querySelector('[data-testid="product-section-opening-inventory"]')).toBeNull();
+    expect(headings(host)).toEqual(['GST rule', 'Supplier price comparison']);
+
+    const form = host.querySelector('form')!;
+    expect(Array.from(form.querySelector('.grid')!.classList)).toEqual(
+      expect.arrayContaining(['md:grid-cols-2', 'xl:grid-cols-3'])
+    );
+    expect(form.contains(host.querySelector('button[type="submit"]'))).toBe(true);
+    expect(host.querySelector('button[type="submit"]')?.getAttribute('form')).toBeNull();
+  });
+});
+
+/**
  * Save while a support session is active (issue #554). A session grants `InventoryOperate`, so
  * this control would otherwise still render enabled.
  */
@@ -936,5 +1146,115 @@ describe('ProductFormComponent deletion notice (issue #825)', () => {
 
     expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ name: 'E2E Chips' }));
     expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+});
+
+describe('ProductFormComponent requiring a Unit Label (issue #895)', () => {
+  /** Every `.field-error` paragraph on the page - the page's own error and the inline field messages. */
+  const errors = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('.field-error')).map((paragraph) => paragraph.textContent?.trim());
+
+  const unitInput = (host: HTMLElement) => host.querySelector('[name="unit"]') as HTMLInputElement;
+
+  const unitLabelText = (host: HTMLElement) =>
+    unitInput(host).closest('label')?.querySelector('.field-label')?.textContent?.trim();
+
+  it('marks Unit Label required on Edit Product, with the field accessibly labelled', async () => {
+    const { host } = await render();
+
+    expect(unitInput(host).required).toBe(true);
+    expect(unitLabelText(host)).toBe('Unit Label *');
+    expect(errors(host)).not.toContain('Unit label is required.');
+  });
+
+  it('refuses to save an edited product whose Unit Label was cleared, and says why', async () => {
+    const { fixture, component, host, update, navigate } = await render();
+
+    component.form.unit = '   ';
+    fixture.detectChanges();
+
+    expect(errors(host)).toContain('Unit label is required.');
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
+  });
+
+  /**
+   * The prefill issue #895 removed: a legacy product whose stored label is missing used to open with
+   * "unit" substituted, so an operator saved a label they never chose. The field opens empty and
+   * required instead, and nothing is written until they choose one.
+   */
+  it.each([[null], ['']])('opens a product whose stored label is %p empty and required', async (unit) => {
+    const { component, host, update } = await render({ product: product({ unit }) });
+
+    expect(component.form.unit).toBe('');
+    expect(unitInput(host).value).toBe('');
+    expect(unitInput(host).required).toBe(true);
+    expect(errors(host)).toContain('Unit label is required.');
+
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
+  });
+
+  it('gives a legacy product the label the operator chose, trimmed', async () => {
+    const { component, update, navigate } = await render({ product: product({ unit: null }) });
+
+    component.form.unit = '  bottle  ';
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ unit: 'bottle' }));
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  /**
+   * New Product opens with Unit Label empty rather than prefilled with "unit", so a product is never
+   * created with a label the operator did not choose: an untouched field is refused, not saved.
+   */
+  it('opens Unit Label empty on New Product, marks it required and refuses it untouched', async () => {
+    const { component, host, create } = await render({ routeParams: {} });
+
+    expect(component.form.unit).toBe('');
+    expect(unitInput(host).value).toBe('');
+    expect(unitInput(host).placeholder).toBe('e.g. bag, can, bottle');
+    expect(unitInput(host).required).toBe(true);
+    expect(unitLabelText(host)).toBe('Unit Label *');
+
+    component.form.name = 'New Snack';
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
+  });
+
+  it('refuses to create a product with no Unit Label', async () => {
+    const { fixture, component, host, create } = await render({ routeParams: {} });
+
+    component.form.name = 'New Snack';
+    component.form.unit = '';
+    fixture.detectChanges();
+
+    expect(errors(host)).toContain('Unit label is required.');
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
+  });
+
+  it('creates the product with the entered label, trimmed', async () => {
+    const { component, create } = await render({ routeParams: {} });
+
+    component.form.name = 'New Snack';
+    component.form.unit = '  bag  ';
+    component.save();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ unit: 'bag' }));
   });
 });

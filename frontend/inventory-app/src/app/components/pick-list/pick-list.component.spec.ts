@@ -8,7 +8,14 @@ import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
-import { LocalMachine, Machine, PickListProduct, PickListRefillRequest, PickListResult, Product } from '../../models/models';
+import {
+  LocalMachine,
+  Machine,
+  MultiMachinePickListRefillRequest,
+  PickListProduct,
+  PickListResult,
+  Product
+} from '../../models/models';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
@@ -640,7 +647,7 @@ describe('PickListComponent rendered structure', () => {
     products: Product[] = [product({ id: 1, name: 'Coke' }), product({ id: 2, name: 'Chips' })],
     pickList: jest.Mock = jest.fn(() => of(pickListResult())),
     nayaxStatus: NayaxConnectionStatusName = 'Ready',
-    options: { localMachines?: LocalMachine[]; recordRefill?: jest.Mock } = {}
+    options: { localMachines?: LocalMachine[]; recordRefill?: jest.Mock; recordMultiMachineRefill?: jest.Mock } = {}
   ) {
     await TestBed.configureTestingModule({
       imports: [PickListComponent],
@@ -648,7 +655,14 @@ describe('PickListComponent rendered structure', () => {
         provideRouter([]),
         { provide: MachineService, useValue: { getAll: jest.fn(() => of(machines)) } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of(products)) } },
-        { provide: PickListService, useValue: { get: pickList, recordRefill: options.recordRefill ?? jest.fn() } },
+        {
+          provide: PickListService,
+          useValue: {
+            get: pickList,
+            recordRefill: options.recordRefill ?? jest.fn(),
+            recordMultiMachineRefill: options.recordMultiMachineRefill ?? jest.fn()
+          }
+        },
         { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of(options.localMachines ?? [])) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
@@ -775,7 +789,8 @@ describe('PickListComponent rendered structure', () => {
     const headers = Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.trim());
     expect(headers[0]).toBe('Product');
     expect(headers[1]).toBe('MDB Code');
-    expect(headers[2]).toBe('Total to Pick');
+    expect(headers[2]).toBe('Storage Qty');
+    expect(headers[3]).toBe('Total to Pick');
     expect(headers).toContain('Machine A');
     expect(headers).toContain('Machine B');
     expect(host.textContent).toContain('Selected Machines (2)');
@@ -785,6 +800,40 @@ describe('PickListComponent rendered structure', () => {
     expect(rows[0].textContent).toContain('Coke');
     expect(rows[0].textContent).toContain('Pick: 4');
     expect(rows[0].textContent).toContain('Current: 6 of 10');
+  });
+
+  it('shows the Storage Qty column between MDB Code and Total to Pick, with each row matching storageQuantityInStock', async () => {
+    const pickList = jest.fn(() => of(pickListResult()));
+    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    // Fixture: Coke has storageQuantityInStock 50, Chips has storageQuantityInStock 2.
+    const storageQtyCells = Array.from(host.querySelectorAll('[data-testid="pick-list-storage-qty"]')).map((td) => td.textContent?.trim());
+    expect(storageQtyCells).toEqual(['50', '2']);
+
+    const storageQtyCell = host.querySelector('[data-testid="pick-list-storage-qty"]');
+    expect(Array.from(storageQtyCell?.classList ?? [])).toEqual(expect.arrayContaining(['table-num']));
+  });
+
+  it('shows a zero or negative storage quantity exactly as returned, without clamping or a dash', async () => {
+    const pickList = jest.fn(() => of(pickListResult({
+      products: [{
+        productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 0, totalQuantityToPick: 4, storageShortageQuantity: 4,
+        machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 0, targetQuantity: 10, quantityToPick: 4 }]
+      }, {
+        productId: 2, productName: 'Chips', mdbCode: 10, storageQuantityInStock: -3, totalQuantityToPick: 5, storageShortageQuantity: 8,
+        machineQuantities: [{ machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
+      }]
+    })));
+    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const storageQtyCells = Array.from(host.querySelectorAll('[data-testid="pick-list-storage-qty"]')).map((td) => td.textContent?.trim());
+    expect(storageQtyCells).toEqual(['0', '-3']);
   });
 
   it('shows the MDB code column, default-sorted so the lower code renders first, and per-machine codes inside each cell', async () => {
@@ -835,7 +884,7 @@ describe('PickListComponent rendered structure', () => {
     expect(Array.from(scrollArea.classList)).toEqual(expect.arrayContaining(['max-h-[70vh]', 'overflow-auto']));
 
     const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
-    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'MDB Code', 'Total to Pick', 'Machine A', 'Machine B']);
+    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'MDB Code', 'Storage Qty', 'Total to Pick', 'Machine A', 'Machine B']);
     for (const th of headers) {
       // Every header cell, not just the first two, is pinned and opaque so rows cannot show through.
       expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-md-gray-100']));
@@ -979,6 +1028,18 @@ describe('PickListComponent rendered structure', () => {
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
   });
 
+  it('does not make the Storage Qty header sortable', async () => {
+    const { host, openDropdown, checkOption, applyFilters } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const headers = Array.from(host.querySelectorAll('thead th'));
+    const storageQtyHeader = headers.find((th) => th.textContent?.trim() === 'Storage Qty');
+    expect(storageQtyHeader?.querySelector('button')).toBeNull();
+    expect(storageQtyHeader?.hasAttribute('aria-sort')).toBe(false);
+  });
+
   it('reports aria-sort none on both sortable headers until one is clicked', async () => {
     const { host, openDropdown, checkOption, applyFilters } = await render();
     openDropdown('Machines');
@@ -1072,15 +1133,14 @@ describe('PickListComponent rendered structure', () => {
     expect(rows[1].textContent).toContain('Chips');
   });
 
-  it('keeps a manual refill\'s local machine selection out of the calculated list\'s provider machine ids, with a provider in place (issue #794)', async () => {
-    const recordRefill: jest.Mock = jest.fn((request: PickListRefillRequest) =>
+  it('keeps a manual refill\'s local machine columns out of the calculated list\'s provider machine ids, with a provider in place (issues #794, #904)', async () => {
+    const recordMultiMachineRefill: jest.Mock = jest.fn((request: MultiMachinePickListRefillRequest) =>
       of({
         idempotencyKey: request.idempotencyKey,
         replayed: false,
-        machineId: request.machineId ?? null,
         notes: null,
         recordedAtUtc: '2026-01-01T00:00:00Z',
-        rows: request.rows.map((row) => ({ ...row, stockAdjustmentId: row.productId * 100 }))
+        allocations: request.allocations.map((allocation) => ({ ...allocation, stockAdjustmentId: allocation.productId * 100 }))
       })
     );
     const pickList = jest.fn(() => of(pickListResult()));
@@ -1089,7 +1149,7 @@ describe('PickListComponent rendered structure', () => {
       undefined,
       pickList,
       undefined,
-      { localMachines: [localMachine({ id: 5, name: 'Front Lobby' })], recordRefill }
+      { localMachines: [localMachine({ id: 5, name: 'Front Lobby' })], recordMultiMachineRefill }
     );
 
     openDropdown('Machines');
@@ -1098,19 +1158,19 @@ describe('PickListComponent rendered structure', () => {
     expect(pickList).toHaveBeenCalledWith([10]);
 
     click(requireButton('Enter quantities taken'));
-    const machineSelect = requireElement<HTMLSelectElement>('select#manual-pick-list-machine');
-    machineSelect.value = machineSelect.options[1].value;
-    machineSelect.dispatchEvent(new Event('change'));
-    fixture.detectChanges();
-    const takenInput = requireElement<HTMLInputElement>('input[aria-label="Taken: Coke"]');
+    // Manual entry's own Machines dropdown is the business's local machines; the calculated view's
+    // is the provider fleet, and neither read ever receives the other's ids.
+    openDropdown('Machines');
+    checkOption('Front Lobby');
+    const takenInput = requireElement<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]');
     takenInput.value = '2';
     takenInput.dispatchEvent(new Event('input'));
     fixture.detectChanges();
     click(requireButton('Save'));
 
-    expect(recordRefill).toHaveBeenCalledTimes(1);
-    const submitted: PickListRefillRequest = recordRefill.mock.calls[0][0];
-    expect(submitted.machineId).toBe(5);
+    expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
+    const submitted: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(submitted.allocations).toEqual([{ machineId: 5, productId: 1, quantityTaken: 2 }]);
     expect(pickList).toHaveBeenCalledTimes(1);
     expect(pickList).toHaveBeenCalledWith([10]);
   });

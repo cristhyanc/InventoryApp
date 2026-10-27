@@ -23,30 +23,31 @@
         </div>
       }
 
-      <form class="space-y-4" (ngSubmit)="save()">
-        <!--
-          The card fills the content area (issue #478), so the fields are laid out in columns
-          rather than stretched: one column on a narrow screen, two from `md` and three from `xl`.
-          The description spans the row at `md`, where a two-row textarea beside a single short
-          input reads poorly, and takes its own column at `xl`, where a third column exists for it.
-        -->
-        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <label class="field">
-            <span class="field-label">Name *</span>
-            <input [(ngModel)]="form.name" name="name" [readOnly]="nameLocked" />
-          </label>
+      @if (productId) {
+        <form class="space-y-4" (ngSubmit)="save()">
+          <!--
+            The edit page keeps the layout issue #478 gave it: the card fills the content area, so
+            the fields are laid out in columns rather than stretched - one column on a narrow
+            screen, two from `md` and three from `xl`. Issue #892 reorganized New Product only,
+            because a provider-managed name and category are locked here and preserving those
+            restrictions exactly is worth more than one shared layout.
+          -->
+          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <label class="field">
+              <span class="field-label">Name *</span>
+              <input [(ngModel)]="form.name" name="name" [readOnly]="nameLocked" />
+            </label>
 
-          <label class="field">
-            <span class="field-label">SKU</span>
-            <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
-          </label>
+            <label class="field">
+              <span class="field-label">SKU</span>
+              <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
+            </label>
 
-          <label class="field md:col-span-2 xl:col-span-1">
-            <span class="field-label">Description</span>
-            <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
-          </label>
+            <label class="field md:col-span-2 xl:col-span-1">
+              <span class="field-label">Description</span>
+              <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
+            </label>
 
-          @if (productId) {
             <!-- The edit page keeps its dropdown unchanged (issue #830): a provider-managed category
                  is locked here, and that restriction is exactly what this enhancement must not
                  touch. -->
@@ -59,84 +60,177 @@
                 }
               </select>
             </label>
-          } @else {
-            <!-- New Product (issue #830): searching the existing categories and creating a missing
-                 one is a workflow of its own - its own option read, its own `POST api/categories`
-                 and that write's pending, refusal and retry states - so a dedicated feature
-                 component owns it (the page composition boundary). The page keeps only the id to
-                 submit, which is why neither a pending nor a refused category create can touch a
-                 field on this form. -->
-            <app-product-category-picker
-              [categoryId]="selectedCategoryId"
-              (categoryIdChange)="onCategorySelected($event)"
-            ></app-product-category-picker>
-          }
 
-          <!-- `self-end` keeps this label-less control's box on the same baseline as the inputs beside it. -->
-          <label class="flex items-center gap-2 self-end rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
-            <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
-            <span class="field-label">Active product</span>
-          </label>
-
-          @if (!productId) {
-            <label class="field">
-              <span class="field-label">Opening Stock</span>
-              <input [(ngModel)]="form.quantityInStock" name="quantityInStock" type="number" min="0" step="1" />
+            <!-- `self-end` keeps this label-less control's box on the same baseline as the inputs beside it. -->
+            <label class="flex items-center gap-2 self-end rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
+              <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
+              <span class="field-label">Active product</span>
             </label>
 
             <label class="field">
-              <span class="field-label">Initial Unit Cost ($)</span>
-              <input [(ngModel)]="form.initialUnitCost" name="initialUnitCost" type="number" min="0" step="0.01" placeholder="Optional" />
+              <span class="field-label">Low Stock Threshold *</span>
+              <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
+              <span class="field-hint">Minimum home stock before a new order is needed.</span>
             </label>
-          }
 
-          <label class="field">
-            <span class="field-label">Low Stock Threshold *</span>
-            <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
-            <span class="field-hint">Minimum home stock before a new order is needed.</span>
-          </label>
+            <label class="field">
+              <span class="field-label">Restock To *</span>
+              <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
+              <span class="field-hint">Target home stock after machines are replenished and the order is received.</span>
+            </label>
 
-          <label class="field">
-            <span class="field-label">Restock To *</span>
-            <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
-            <span class="field-hint">Target home stock after machines are replenished and the order is received.</span>
-          </label>
+            @if (form.restockTo < form.lowStockThreshold) {
+              <p class="field-error md:col-span-2 xl:col-span-3">Restock To must be greater than or equal to the Low Stock Threshold.</p>
+            }
 
-          @if (form.restockTo < form.lowStockThreshold) {
-            <p class="field-error md:col-span-2 xl:col-span-3">Restock To must be greater than or equal to the Low Stock Threshold.</p>
-          }
+            <!-- Required since issue #895. A product whose stored label was missing opens this
+                 field empty, so the message below is what asks the operator to choose one. -->
+            <label class="field">
+              <span class="field-label">Unit Label *</span>
+              <input [(ngModel)]="form.unit" name="unit" required placeholder="e.g. bag, can, bottle" />
+              @if (unitMissing) {
+                <span class="field-error">Unit label is required.</span>
+              }
+            </label>
+          </div>
 
-          <label class="field">
-            <span class="field-label">Unit Label</span>
-            <input [(ngModel)]="form.unit" name="unit" placeholder="e.g. bag, can, bottle" />
-          </label>
-        </div>
+          <div class="flex flex-wrap gap-3 pt-2">
+            <!-- The guard issue #829 added is kept here unchanged; on the edit page it never
+                 triggers, because only the create path ever sets `createdProductId`. -->
+            @if (createdProductId === null) {
+              <button type="submit" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
+            }
+            <a routerLink="/products" class="btn btn-secondary">Cancel</a>
+          </div>
+        </form>
 
-        <div class="flex flex-wrap gap-3 pt-2">
-          <!-- Gone once this page has created its product (issue #829): the product exists, these
-               fields are no longer being sent, and the only outstanding write is the GST rule,
-               which the panel below owns and retries. No create control, no second product. -->
-          @if (createdProductId === null) {
-            <button type="submit" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
-          }
-          <a routerLink="/products" class="btn btn-secondary">Cancel</a>
-        </div>
-      </form>
-
-      @if (productId) {
         <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
         <app-product-price-history [productId]="productId"></app-product-price-history>
       } @else {
+        <!--
+          New Product is read down titled sections rather than across one auto-flowing grid
+          (issue #892): related fields sit on the same row, each section is one column on a narrow
+          screen and two from `md`, and `items-start` keeps a control on its row's top edge instead
+          of letting a neighbouring field's help text push it down. The one action row is below the
+          GST choice, which is the last decision the page asks for.
+
+          The form carries an id so that row can sit outside it: the GST panel between them owns
+          form controls of its own, and a form inside a form is not markup a browser keeps. The
+          submit button names this form instead, so there is still exactly one submit path and one
+          `save()`.
+        -->
+        <form id="new-product-form" (ngSubmit)="save()">
+          <section data-testid="product-section-product-details">
+            <h2 class="mb-3 text-lg font-semibold text-md-gray-800">Product details</h2>
+
+            <div class="grid items-start gap-4 md:grid-cols-2">
+              <label class="field">
+                <span class="field-label">Name *</span>
+                <input [(ngModel)]="form.name" name="name" [readOnly]="nameLocked" />
+              </label>
+
+              <label class="field">
+                <span class="field-label">SKU</span>
+                <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
+              </label>
+
+              <!-- New Product (issue #830): searching the existing categories and creating a missing
+                   one is a workflow of its own - its own option read, its own `POST api/categories`
+                   and that write's pending, refusal and retry states - so a dedicated feature
+                   component owns it (the page composition boundary). The page keeps only the id to
+                   submit, which is why neither a pending nor a refused category create can touch a
+                   field on this form, and why its own buttons stay `type="button"` and submit
+                   nothing. -->
+              <app-product-category-picker
+                [categoryId]="selectedCategoryId"
+                (categoryIdChange)="onCategorySelected($event)"
+              ></app-product-category-picker>
+
+              <!-- Required since issue #895, and empty on a new product: the operator chooses the label. -->
+              <label class="field">
+                <span class="field-label">Unit Label *</span>
+                <input [(ngModel)]="form.unit" name="unit" required placeholder="e.g. bag, can, bottle" />
+                @if (unitMissing) {
+                  <span class="field-error">Unit label is required.</span>
+                }
+              </label>
+
+              <label class="field md:col-span-2">
+                <span class="field-label">Description</span>
+                <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
+              </label>
+            </div>
+
+            <!-- Outside the field grid on purpose: a label-less checkbox stretched across a grid
+                 cell, or bottom-aligned against the Category helper text, is what issue #892
+                 removed. It stays as wide as it reads. -->
+            <label class="mt-4 inline-flex items-center gap-2 rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
+              <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
+              <span class="field-label">Active product</span>
+            </label>
+          </section>
+
+          <section data-testid="product-section-opening-inventory" class="mt-6 border-t border-md-gray-200 pt-6">
+            <h2 class="mb-3 text-lg font-semibold text-md-gray-800">Opening inventory</h2>
+
+            <div class="grid items-start gap-4 md:grid-cols-2">
+              <label class="field">
+                <span class="field-label">Opening Stock</span>
+                <input [(ngModel)]="form.quantityInStock" name="quantityInStock" type="number" min="0" step="1" />
+              </label>
+
+              <label class="field">
+                <span class="field-label">Initial Unit Cost ($)</span>
+                <input [(ngModel)]="form.initialUnitCost" name="initialUnitCost" type="number" min="0" step="0.01" placeholder="Optional" />
+              </label>
+            </div>
+          </section>
+
+          <section data-testid="product-section-reordering" class="mt-6 border-t border-md-gray-200 pt-6">
+            <h2 class="mb-3 text-lg font-semibold text-md-gray-800">Reordering</h2>
+
+            <div class="grid items-start gap-4 md:grid-cols-2">
+              <label class="field">
+                <span class="field-label">Low Stock Threshold *</span>
+                <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
+                <span class="field-hint">Minimum home stock before a new order is needed.</span>
+              </label>
+
+              <label class="field">
+                <span class="field-label">Restock To *</span>
+                <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
+                <span class="field-hint">Target home stock after machines are replenished and the order is received.</span>
+              </label>
+            </div>
+
+            @if (form.restockTo < form.lowStockThreshold) {
+              <p class="field-error mt-2">Restock To must be greater than or equal to the Low Stock Threshold.</p>
+            }
+          </section>
+        </form>
+
         <!-- New Product (issue #829): a dedicated feature component owns the rule of the product
              being created - the choice, the write to the product's own GST resource once the create
              has answered an id, its failure and its retry (the page composition boundary). This page
              only says which product now exists and finishes on what that component reports. There
-             is no price history to show for a product that does not exist yet. -->
+             is no price history to show for a product that does not exist yet. It is mounted once,
+             above the action row, so the GST choice is made before Create Product is reached by
+             reading and by Tab (issue #892). -->
         <app-product-create-gst-rule
           [createdProductId]="createdProductId"
           (persisted)="onGstRulePersisted()"
           (failed)="onGstRuleFailed()"
         ></app-product-create-gst-rule>
+
+        <div data-testid="product-form-actions" class="mt-6 flex flex-wrap gap-3 border-t border-md-gray-200 pt-6">
+          <!-- Gone once this page has created its product (issue #829): the product exists, these
+               fields are no longer being sent, and the only outstanding write is the GST rule,
+               which the panel above owns and retries. No create control, no second product. -->
+          @if (createdProductId === null) {
+            <button type="submit" form="new-product-form" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
+          }
+          <a routerLink="/products" class="btn btn-secondary">Cancel</a>
+        </div>
       }
     </div>
   </div>

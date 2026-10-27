@@ -152,7 +152,14 @@ public class BusinessScopeMiddlewareSupportSessionTests
             BusinessMembershipResolution.Denied(BusinessAccessDenialReason.MembershipMissing),
             context: context);
 
-        var body = await BodyAsync(context);
+        // The traceId is a random per-request identifier, so it is left out of the scan: it can
+        // contain "42" by chance and says nothing about the session or the business.
+        using var json = JsonDocument.Parse(await BodyAsync(context));
+        var body = string.Join(
+            "\n",
+            json.RootElement.EnumerateObject()
+                .Where(property => property.Name != "traceId")
+                .Select(property => $"{property.Name}:{property.Value.GetRawText()}"));
         foreach (var leak in new[] { "expired", "deactivated", "Vending Co", "42", "business id" })
         {
             Assert.DoesNotContain(leak, body, StringComparison.OrdinalIgnoreCase);

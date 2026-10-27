@@ -59,14 +59,17 @@
     <Compile Include="..\Inventory.UnitTests\Application\Categories\FakeCategoryStore.cs" Link="Application\Categories\FakeCategoryStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Gst\FakeCurrentBusinessProvider.cs" Link="Application\Gst\FakeCurrentBusinessProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Machines\FakeLocalMachineStore.cs" Link="Application\Machines\FakeLocalMachineStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\MachineStockSync\FakeMachineRestockSyncCoverageStore.cs" Link="Application\MachineStockSync\FakeMachineRestockSyncCoverageStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberInviteAudit.cs" Link="Application\Members\FakeMemberInviteAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberManagementAudit.cs" Link="Application\Members\FakeMemberManagementAudit.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxConnectionStore.cs" Link="Application\Nayax\FakeNayaxConnectionStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxMachineLinkStore.cs" Link="Application\Nayax\FakeNayaxMachineLinkStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxOperationCredentials.cs" Link="Application\Nayax\FakeNayaxOperationCredentials.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxProductLinkStore.cs" Link="Application\Nayax\FakeNayaxProductLinkStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" Link="Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeBusinessApplicationAudit.cs" Link="Application\Onboarding\FakeBusinessApplicationAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" Link="Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\PickList\FakeMultiMachinePickListRefillStore.cs" Link="Application\PickList\FakeMultiMachinePickListRefillStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PickList\FakePickListRefillStore.cs" Link="Application\PickList\FakePickListRefillStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakeBusinessSupplierProvisioningStore.cs" Link="Application\PlatformAdmin\FakeBusinessSupplierProvisioningStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" />

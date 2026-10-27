@@ -6,10 +6,16 @@ namespace Inventory.Application.Products;
 /// The product creation use case: validates the deterministic invariants, then persists.
 ///
 /// <para>Issue #736 gave it an HTTP route for the first time (<c>POST /api/products</c>) and the
-/// catalogue invariants a manually created product needs (<see cref="ProductCataloguePolicy"/>),
-/// which since issue #792 is one: a name. The selling price it also bounded is gone with the field.
-/// The initial-cost and restock rules, their messages and the order they are checked in are
+/// catalogue invariants a manually created product needs (<see cref="ProductCataloguePolicy"/>):
+/// a name, and since issue #895 a unit label. The selling price it also bounded is gone with the
+/// field. The initial-cost and restock rules, their messages and the order they are checked in are
 /// unchanged from issue #240.</para>
+///
+/// <para>The unit label is checked here because a create's answer depends on nothing but the
+/// request: a new product has no stored label to preserve. The <em>update</em>'s unit rule is the
+/// other half of issue #895 and is deliberately not here - it compares the stored label, so it is
+/// decided inside the write's own transaction (<see cref="IProductStore.UpdateAsync"/>), the same
+/// place the provider-managed and category refusals are.</para>
 /// </summary>
 public sealed class CreateProduct
 {
@@ -30,7 +36,8 @@ public sealed class CreateProduct
         var restockError = ProductRestockPolicy.Validate(fields.LowStockThreshold, fields.RestockTo);
         if (restockError is not null) return CreateProductResult.Invalid(restockError);
 
-        var catalogueError = ProductCataloguePolicy.Validate(fields.Name);
+        var catalogueError = ProductCataloguePolicy.Validate(fields.Name)
+            ?? ProductCataloguePolicy.ValidateUnit(fields.Unit);
         if (catalogueError is not null) return CreateProductResult.Invalid(catalogueError);
 
         var attempt = await _store.CreateAsync(fields, cancellationToken);

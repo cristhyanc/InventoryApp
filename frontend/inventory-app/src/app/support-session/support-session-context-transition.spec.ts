@@ -36,6 +36,13 @@ const MACHINES = '/api/machines';
 const SITES = '/api/sites';
 const LOW_STOCK = '/api/products/alerts/low-stock';
 const SUMMARY = '/api/dashboard/summary';
+/**
+ * The Dashboard's machine restock-sync reminder (issue #891). It is answered here as withheld,
+ * because this suite is about which business's figures are on screen and the reminder carries
+ * none; what matters is that the request exists and belongs to the context that made it.
+ */
+const REMINDER = '/api/machine-restock-sync/reminder';
+const HIDDEN_REMINDER = { applicable: false as const, reason: 'NoProviderMachines' };
 
 /** One business's Dashboard, as the figures a test can recognise on screen. */
 interface Figures {
@@ -256,7 +263,10 @@ function pending(rendered: Rendered): TestRequest[] {
 /** Everything the routed Dashboard asked for, answered as one business's figures. */
 function answerDashboard(rendered: Rendered, figures: Figures, expectedSessionId?: string | null): TestRequest[] {
   const answered: TestRequest[] = [];
-  const answer = (url: string, body: Machine[] | Site[] | DashboardSummary | null): void => {
+  const answer = (
+    url: string,
+    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | null
+  ): void => {
     for (const request of rendered.httpMock.match((candidate) => candidate.url === url)) {
       answered.push(request);
       request.flush(body);
@@ -268,6 +278,9 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedSessionId
   // The summary first: since issue #727 the Dashboard asks it whether the business has a usable
   // provider and only then synchronizes sales and loads Sites and Machines, so those three
   // requests do not exist until this one is answered.
+  // Issue #891's reminder is requested by its own child component as soon as the page renders, and
+  // not at all inside a support session, so `match` tolerates its absence here too.
+  answer(REMINDER, HIDDEN_REMINDER);
   answer(LOW_STOCK, []);
   answer(SUMMARY, summary(figures));
   answer(SYNC, null);
@@ -287,6 +300,14 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedSessionId
 function flushStale(requests: readonly TestRequest[], figures: Figures): void {
   for (const request of requests) {
     expect(request.request.headers.get(SUPPORT_SESSION_HEADER)).toBeNull();
+
+    // A read the previous context cancelled on its way out has nothing left to answer: the restock
+    // -sync reminder (issue #891) drops its own request when a support session starts, which is the
+    // same outcome this helper exists to prove for the ones that do arrive late.
+    if (request.cancelled) {
+      continue;
+    }
+
     request.flush(
       request.request.url === MACHINES
         ? [machine(figures)]
@@ -294,7 +315,9 @@ function flushStale(requests: readonly TestRequest[], figures: Figures): void {
           ? [site(figures)]
           : request.request.url === SUMMARY
             ? summary(figures)
-            : []
+            : request.request.url === REMINDER
+              ? HIDDEN_REMINDER
+              : []
     );
   }
 }

@@ -394,6 +394,24 @@ export interface LocalMachine {
   name: string;
   isActive: boolean;
   isProviderNamed: boolean;
+  /**
+   * Whether `DELETE /api/local-machines/{id}` would allow this machine to be deleted (issue #896),
+   * from the machine list and the single-machine read. `false` means the server would refuse it and
+   * {@link deletionRefusal} says why; **absent** means the read never resolved the question and is
+   * not permission - a screen that offers Delete only on `true` never offers one that must fail.
+   *
+   * It is advisory: the delete counts the machine's references again inside its own transaction, so
+   * a refusal can still come back for a machine this said was deletable, and that refusal must
+   * still be shown.
+   */
+  canDelete?: boolean;
+  /**
+   * Why this machine may not be deleted, in the server's own words - the message the delete would
+   * answer `400` with, naming what refers to the machine or which provider manages it. Absent when
+   * the machine may be deleted, and when the read did not resolve the question. It never carries the
+   * provider's identifier for the machine, only the provider's name.
+   */
+  deletionRefusal?: string | null;
 }
 
 /**
@@ -688,6 +706,73 @@ export interface NayaxMachineStockSyncPreview {
   message: string | null;
 }
 
+/**
+ * One machine on the Dashboard's restock-sync reminder (issue #891), exactly as
+ * `GET /api/machine-restock-sync/reminder` published it. Nothing here is derived in the browser:
+ * the three-day rule, the business dates and the pending definition are all the backend's.
+ *
+ * `lastSuccessfulSyncAtUtc` is `null` for "No recorded sync", which includes coverage recorded
+ * under Nayax credentials that have since been replaced. It is never read as "never synced":
+ * machines restocked before this metadata existed have no record of syncs that really happened.
+ *
+ * `knownPendingEventCount` counts **persisted** imported events that are still unresolved. A zero
+ * says nothing about alerts Nayax holds that nobody has fetched - that is what `isFetchOverdue`
+ * is for - and the two conditions are deliberately reported separately.
+ */
+export interface MachineRestockSyncReminderMachine {
+  localMachineId: number;
+  machineName: string;
+  lastSuccessfulSyncAtUtc: string | null;
+  lastSuccessfulSyncBusinessDate: string | null;
+  daysSinceLastSuccessfulSync: number | null;
+  isFetchOverdue: boolean;
+  knownPendingEventCount: number;
+  oldestKnownPendingEventAtUtc: string | null;
+  /** Some of that pending work predates the Sync Restock dialog's default From date. */
+  hasPendingWorkBeforeDefaultFrom: boolean;
+}
+
+/**
+ * Whether a completed Nayax connection check confirmed the machine alerts read behind Sync
+ * Restock (`MachineRestockSyncAvailability`, issue #891). A stable code, never a sentence: with
+ * `NotConfirmed` the reminder says the sync may be unavailable instead of presenting it as a
+ * working action.
+ */
+export type MachineRestockSyncAvailability = 'Confirmed' | 'NotConfirmed';
+
+/** The reminder itself: the provider-named machines whose Sync Restock needs attention. */
+export interface MachineRestockSyncReminder {
+  applicable: true;
+  asOfUtc: string;
+  businessDate: string;
+  overdueAfterDays: number;
+  /** The From date the Sync Restock dialog will default to, in the business's own timezone. */
+  defaultFromBusinessDate: string;
+  syncAvailability: MachineRestockSyncAvailability;
+  machines: MachineRestockSyncReminderMachine[];
+}
+
+/**
+ * The reminder as it is withheld (issue #891), for a support session, a business with no usable
+ * Nayax connection, or one whose provider names none of its machines. `reason` is a stable code
+ * for branching, never a sentence to display.
+ */
+export interface HiddenMachineRestockSyncReminder {
+  applicable: false;
+  reason: string;
+}
+
+export type MachineRestockSyncReminderResponse =
+  | MachineRestockSyncReminder
+  | HiddenMachineRestockSyncReminder;
+
+/** Whether the response is the reminder rather than the withheld shape. */
+export function isMachineRestockSyncReminderApplicable(
+  response: MachineRestockSyncReminderResponse
+): response is MachineRestockSyncReminder {
+  return response.applicable === true;
+}
+
 export enum NayaxStockEventApplyOutcome {
   Applied = 0,
   InsufficientStock = 1,
@@ -915,8 +1000,10 @@ export interface PickListRefillRowRequest {
 
 /**
  * A batch refill request (issue #743): one request recording everything a worker took out of
- * storage. `machineId` is omitted here while #746 (the local machine selector) has not shipped, so
- * every submission from this frontend records a refill with no machine.
+ * storage. Since issue #904 this frontend sends it only for the manual pick list's **No machine**
+ * mode, so `machineId` is never set: a pick that names any machine is sent as a
+ * {@link MultiMachinePickListRefillRequest} instead, which attributes each line to its own machine.
+ * The field stays on the contract because the endpoint still accepts it.
  */
 export interface PickListRefillRequest {
   idempotencyKey: string;
@@ -940,6 +1027,52 @@ export interface PickListRefillResponse {
   notes: string | null;
   recordedAtUtc: string;
   rows: PickListRefillRecordedRow[];
+}
+
+/**
+ * One allocation of a `POST /api/pick-list/multi-machine-refills` request (issue #897, frontend
+ * #904): a **local** machine of the caller's own business (`LocalMachine.id`, never a provider
+ * machine number), a product of its own catalogue, and the whole number of units taken out of
+ * storage for that pair. Every allocation names a machine; a refill for no machine at all is still
+ * a {@link PickListRefillRequest}.
+ */
+export interface MultiMachineRefillAllocationRequest {
+  machineId: number;
+  productId: number;
+  quantityTaken: number;
+}
+
+/**
+ * A multi-machine refill batch (issue #897): one request recording a whole pick run, machine by
+ * machine, all or nothing. `idempotencyKey` is the client's own string for one submission - the same
+ * key with the same allocations, in any order, is answered with what the server already recorded,
+ * and the key namespace is shared with {@link PickListRefillRequest}.
+ */
+export interface MultiMachinePickListRefillRequest {
+  idempotencyKey: string;
+  notes?: string | null;
+  allocations: MultiMachineRefillAllocationRequest[];
+}
+
+/** One recorded allocation of a batch: the machine, the product, the units taken, and the movement it created. */
+export interface MultiMachinePickListRefillRecordedAllocation {
+  machineId: number;
+  productId: number;
+  quantityTaken: number;
+  stockAdjustmentId: number;
+}
+
+/**
+ * What `POST /api/pick-list/multi-machine-refills` answers, for a newly recorded batch and a
+ * replayed retry alike; `replayed` is `true` when the key had already recorded it and nothing new
+ * was written.
+ */
+export interface MultiMachinePickListRefillResponse {
+  idempotencyKey: string;
+  replayed: boolean;
+  notes: string | null;
+  recordedAtUtc: string;
+  allocations: MultiMachinePickListRefillRecordedAllocation[];
 }
 
 /** Whether a Take Inventory Apply request created a stock movement (issue #245). */

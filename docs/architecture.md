@@ -1628,14 +1628,17 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | --- | --- | --- | --- | --- | --- |
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
+| Home Dashboard → machine restock-sync reminder (issue #891) | `GET api/machine-restock-sync/reminder` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Pick List → record a refill (issue #743) | `POST api/pick-list/refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Pick List → record a multi-machine run (issue #897) | `POST api/pick-list/multi-machine-refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/local-machines` (the business's own machine records, issue #740: list, read, create, rename, deactivate, reactivate), `api/sites`, `GET api/sites/list` (the light site list the site pickers fill from, issue #841) | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
-| Admin → Imports | `api/imports/nayax-sales`, `api/imports/pending-xml`, and the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Imports | `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
@@ -1768,6 +1771,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, `200` with the last-synced instant (issue #843), or `429` with `Retry-After` | Already safe |
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/refills` (issue #743) | none — the submitted quantities, the recorded movement ids and the per-row refusal sentences | Already safe |
+| `PickList.View` + `Inventory.Operate` | `POST api/pick-list/multi-machine-refills` (issue #897) | none — the submitted quantities, the machines and products they name, the recorded movement ids and the per-allocation refusal sentences (whose only figure is a storage quantity `GET api/pick-list` already serves) | Already safe |
 | `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
 | `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
 | `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
@@ -4340,9 +4344,13 @@ its route exist — not a template change in the shell.
   `mx-auto` either, so the page is as wide as the content area the shell leaves it. The short
   controls inside it are laid out in a responsive column grid (one column, two from `md`, three
   from `xl`, with a textarea spanning the row at `md`) rather than stretched across the whole page;
-  `product-form.component.html`, `purchase-upload.component.html`,
+  `product-form.component.html`'s edit layout, `purchase-upload.component.html`,
   `purchase-edit/purchase-edit-page.component.html` and
-  `stock-adjustment-form.component.html` are the worked examples. A narrower `max-w-*` remains
+  `stock-adjustment-form.component.html` are the worked examples. A form long enough to need
+  grouping stops at **two** columns and puts them in titled sections instead, so related fields
+  share a row rather than being dealt across three columns in field order — what
+  `product-form.component.html` does on New Product since issue #892
+  ([the action row's placement](#choosing-a-products-gst-rule-while-creating-it-issue-829)). A narrower `max-w-*` remains
   correct, and stays, on the things it genuinely serves: dialogs and modals, the sidebar, menus and
   dropdowns, toasts, a single filter control or table cell, a readable explanatory paragraph, and a
   report's label/value summary panel (`card-body max-w-xl`), where a full-width line would put the
@@ -4504,8 +4512,8 @@ withholds entirely, happens to hide itself this way already. `SupportSessionServ
 `distinctUntilChanged` projection of the banner's own `state$` - is the one flag every other write
 control reads instead: presentation only, exactly as a capability-gated control already is, and the
 backend's read-only enforcement is still what would refuse the write if this page failed to hide or
-disable it. `ProductListComponent` (Delete and, since issue #825, Deactivate and New Product, hidden; the
-Active/Inactive toggle, disabled) and
+disable it. `ProductListComponent` (Delete and, since issue #825, Deactivate and New Product, hidden, and since
+issue #900, Reactivate the same way; the Active/Inactive toggle, disabled) and
 `ProductFormComponent` (Save, disabled) are this slice's representative pages; rolling the same
 `active$` subscription out to every remaining write control across the application is tracked as
 follow-up under #513 - issues #659, #658, #660 and #657 extend this to expenses and site
@@ -4782,10 +4790,13 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
 
 **What changed, page by page.**
 
-- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, Import
-  products and Import XML files, and `onSalesSelected`, `importProducts` and `importXml` each
-  return before calling `ImportService`. Download template stays enabled: it builds a CSV in the
-  browser and calls no API.
+- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file and Import
+  XML files, and `onSalesSelected` and `importXml` each return before calling `ImportService`.
+  Download template stays enabled: it builds a CSV in the browser and calls no API. Its Import
+  products card is a link to `/products/import` since issue #888 and is left in place, because it
+  starts nothing; `ProductImportPageComponent` applies this same rule at the destination, rendering
+  a short "imports are unavailable during a support session" notice instead of the catalogue review
+  — withheld rather than disabled, because the review reads the catalogue as soon as it renders.
 - `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
   `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
   `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
@@ -6448,7 +6459,8 @@ out of the `Reports` group (issue #729) and moving it back into it (issue #868) 
 
 Locking rather than hiding is the point for the first: a page an operator could have used, and could
 use again by connecting Nayax, has to stay visible and explain itself. Hiding is right for the
-second — Admin → `Imports` (the Nayax sales and settlement imports) and Admin → `Nayax Sale
+second — Admin → `Imports` (the Nayax sales and settlement imports), Inventory → `Import products`
+(the catalogue review's own page, issue #888) and Admin → `Nayax Sale
 Timestamp Repair` — because with no provider there is nothing of the provider's to import or repair,
 so a locked entry would offer a tool for data that does not exist. `Integrations` carries neither: it
 is where a connection is made, so it can never depend on one. Costing Repair, Historical GST
@@ -6819,9 +6831,9 @@ unchanged fee-rate editor — see
 [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 **Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
-authenticated UI entry point for the three supported import workflows, moved out of
-`AdminComponent`: the Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template
-download, the product catalogue import, and the pending reimbursement XML import. The page is an
+authenticated UI entry point for the Nayax import workflows, moved out of `AdminComponent`: the
+Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template download, and the pending
+reimbursement XML import. The page is an
 entry point only — it calls the same `ImportService` methods (`POST api/imports/nayax-sales`,
 `POST api/imports/pending-xml`) with the same request shapes, keeps
 the same client-side extension validation, template columns/sample row, success and failure
@@ -6833,11 +6845,20 @@ exactly where they were (see [Uploaded transaction export import (issue
 reconciliation](#reimbursement-import-and-reconciliation)). `Imports` is one entry in the sidebar's
 `Admin` group (issue #391).
 
-**Import products opens the catalogue review** (issue #739, parent #329 decision C2), and no longer
-calls a catalogue import of its own: `POST api/imports/products` does not exist any more. The button
-renders `CatalogueReviewComponent`, a dedicated feature component the page composes rather than
-grows inside itself (see [Page composition boundary](#page-composition-boundary-issue-191)) — see
-[The catalogue review screen](#the-catalogue-review-screen-issue-739).
+**Import products is a link to its own page** (issue #888). The product catalogue import is the
+catalogue review (issue #739, parent #329 decision C2) and no catalogue import of its own exists:
+`POST api/imports/products` does not exist any more. The review used to be a panel this page
+rendered below its cards when a local `reviewing` flag was set — by its own button or, since issue
+#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own, so this
+page keeps the Import products card with its title and description and the card's control is a
+`routerLink` to `/products/import`. The page reads no `review` query parameter any more and renders
+no review; see [The dedicated Import products page](#the-dedicated-import-products-page-issue-888)
+and [The catalogue review screen](#the-catalogue-review-screen-issue-739). The link is deliberately
+neither hidden nor disabled during a support session: it starts nothing, and the destination
+withholds the review and shows its own notice (see
+[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551) for
+the rule both pages apply). The Admin hub's `Imports` card description names where the catalogue
+import went rather than implying it still runs here.
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -7118,28 +7139,18 @@ sortable-header pattern the Products list established in issue #497
 (`product-list.component.ts`/`.html`), applied to this page's own Edit/Stock/Delete actions and
 its own column set.
 
-- **Row navigates to the same product editor Edit opened.** Clicking or tapping anywhere in a row
-  outside a nested control, or pressing Enter while one is focused, navigates to
-  `/products/:id/edit` — the destination the removed Edit button used. The product Name cell holds
-  the real `<a class="table-row-anchor">`, which gives keyboard focus, Enter activation,
-  ctrl/cmd/middle-click and "copy link address" natively; since issue #790 that anchor is a Google
-  search for the product rather than a `routerLink` to the editor (see [Provider-optional dashboard
-  and Needs Ordering
-  screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)), so the editor's own
-  focusable link is the row's `Edit` anchor beside Stock, which #790 restored for exactly that
-  reason, and the row click is a convenience over it. `onRowActivate` only extends a plain click on
-  the row itself (`table-row-link` on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and
-  ignores anything that originated from a nested `a`, `button`, `input`, `select`, `textarea` or
-  `label` — the Name search link, the selection checkbox, the Stock link and the Edit link — or a
-  modified/non-primary click the browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left
-  mouse button). The row carries no `tabindex` or `role` of its own; the shared
-  `.table-row-link`/`.table-row-anchor` styling
-  (`styles.css`) already supplies the hover cursor, hover underline and `:focus-within` affordance,
-  exactly as it does for the Products list and the Sites list.
-- **Stock is unchanged and isolated from row navigation.** The Stock `<a routerLink>` to
-  `/products/:id/stock` keeps its existing destination and keyboard accessibility; because it is
-  itself an `a`, `onRowActivate`'s nested-control check excludes it, so clicking or activating Stock
-  never navigates to the edit page.
+- **Rows no longer navigate, and the page has no route to the product editor.** #498 made a plain
+  click or Enter on a row open `/products/:id/edit`, and #790 restored an `Edit` anchor beside
+  Stock as the keyboard route to the same editor. The owner has since removed both: the `<tr>` is a
+  plain `table-row` with no `table-row-link` class and no `(click)`/`(keydown.enter)` binding,
+  `onRowActivate` and the component's `Router` dependency are gone, and the Actions cell holds only
+  Stock. Clicking a row therefore leaves the user on Needs Ordering, which keeps ticking products
+  and reading the list from ever opening the editor by accident; products are edited from All
+  products. The Name cell's `<a class="table-row-anchor">` is a Google search for the product
+  (issue #790), and the checkbox, sortable headers and Mark as ordered are unchanged. The shared
+  `.table-row-link` styling still serves the Products list, the Sites list and the dashboard.
+- **Stock is unchanged.** The Stock `<a routerLink>` to `/products/:id/stock` keeps its existing
+  destination and keyboard accessibility, and is now the row's only action.
 - **Delete is removed from this page only.** The Delete button and its `app-confirmation-dialog`
   markup were removed from `ProductNeedsOrderingComponent`'s template and the now-unused
   `confirmDelete`/`cancelDelete`/`deleteConfirmed`/`confirmingProduct` members were removed from the
@@ -7471,6 +7482,13 @@ A person had to create a product and then edit it to say how it is treated for G
 - **"No rule" needs no second write at all.** `Product.GstRule` starts at `GstRules.None`, so a created product already carries the choice, and sending it again would state nothing. It is equally never sent as `GstFree` - the two stay distinct here as everywhere.
 - **Nothing about the rule's reach changes.** Choosing it at creation classifies no purchase, pre-fills none, and is not retroactive: a rule still reaches recorded purchase data only through the [historical Preview/Apply workflow](#historical-gst-classification-preview-and-apply-issue-433), which classifies only still-unclassified components and reads the rules as they are configured when Apply runs. The create's own validation, opening stock and initial unit cost are untouched, and the read-only support-session refusal is unchanged: the page's submit control stays disabled, the rule component's retry is disabled, and both writes are refused in code as well.
 - **What proves it.** `product-create-gst-rule.component.spec.ts` covers that component on its own - the shared choices and help, no read and no write before a product exists, each rule stored, "No rule" storing nothing, the partial failure with its message and retry, a retry that re-sends the choice on screen without re-reading the stored rule, no second write while one is in flight, and the support-session refusal. `product-form.component.spec.ts` covers the composed page: both writes in order, no rule write when the create is refused, a create that is never reported as finished while the rule is unsaved, no create control once the product exists, and the edit page still saving its rule in its own panel.
+
+**Where the action row sits, and why it is outside the form (issue #892).** New Product is laid out as titled sections - *Product details*, *Opening inventory*, *Reordering* - followed by the GST choice and then **one** *Create Product* / *Cancel* row, so the last decision the page asks for is made before the control that acts on it is reached, by reading and by Tab alike. That is a layout change only: no API, DTO, schema, Domain rule, capability, field, default or validation moved with it, and the edit page keeps the layout issue #478 gave it, because a provider-managed name and category are locked there (`providerManagedFields`) and preserving those restrictions exactly is worth more than one shared layout.
+
+- **The row is outside the `<form>`, and it submits that form by naming it.** `ProductCreateGstRuleComponent` sits between the fields and the row and composes the deferred `ProductGstRuleComponent`, which owns a form control of its own; a form nested in another form is not markup a browser keeps, and a second save handler would be a second write path to reason about. So the product form carries `id="new-product-form"` and the button carries `type="submit" form="new-product-form"` - the native form-owner attribute. There is still exactly one submit path, one `(ngSubmit)` and one `save()`.
+- **Everything the two-write flow guarantees is unchanged, and none of it depends on where the row is.** The create is still `POST api/products` followed by `PUT api/products/{id}/gst-rule` on the id it answered, made by `ProductCreateGstRuleComponent`; the page still keeps that id in `createdProductId` and navigates only on `(persisted)`; the same `@if (createdProductId === null)` guard that used to withdraw the control inside the form now withdraws it from the row, and `save()` still refuses a second create in code, so **a duplicate product stays impossible**; a failed rule write still leaves the message and the *Save GST rule* retry with the choice, and still exposes no second create. The panel is mounted **once**, with the same `[createdProductId]` input and `(persisted)`/`(failed)` outputs and the same lifecycle.
+- **The category picker's own controls still submit nothing.** Its rows and its *Retry* are `type="button"` (issue #830), which is what keeps a category selection or an inline category create from submitting the product now that the submit control is reached through a form attribute rather than by containment.
+- **What proves it.** `product-form.component.spec.ts` adds the layout contract: the four section headings in order, the field pairing and the full-width description, the Active checkbox outside the field grid, the two-column grids with `items-start` and without the three-column auto-flow, one GST panel before the one action row, a footer whose button names the form and does create the product through it, picker buttons that create nothing, *Create Product* withdrawn once the product exists with the retry still offered, and the edit page still on its own grid with its own action row inside the form. Rendered geometry at 375px and 1440px is not something jsdom can answer at all, so the browser half of the proof is `e2e/tests/new-product-form-layout.e2e.ts` in the opt-in Playwright suite: at both widths it measures the paired rows' input tops, the compact *Active product* box, the full-width description, the action row laid out below the GST select with Tab reaching *Create Product* from it, and no sideways scroll on the page, the card or any section. That suite is **not** part of `scripts/validate.sh` and does not run in CI (see [Browser-level end-to-end suite](#browser-level-end-to-end-suite-issue-46)), so it protects this layout only when somebody runs it; each pull request records what was actually executed.
 
 ### Purchase input GST in the GST accounting aid (issue #432)
 
@@ -7974,6 +7992,15 @@ credentials and those two cards are the only part of this summary the live fleet
 read is not attempted at all in that state, and every other section is the real local figure. See
 [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
+**The machine restock-sync reminder is deliberately not part of this contract** (issue #891). The
+Dashboard's reminder banner reads `GET /api/machine-restock-sync/reminder`, its own endpoint with
+its own capability, because it answers a different question from a different source: it is a purely
+local aggregate over the business's machines and their imported restock events, it needs
+`Inventory.Operate` rather than `Dashboard.View`, and its failure must leave every card below it
+usable. Adding it to this summary would have coupled a local read to the live fleet read, and
+widened who sees restock work to every role that may open the Dashboard. See
+[Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891).
+
 Since issue #726, `needsRefill` is additionally withheld - and `needsOrdering` is counted over
 storage alone and says so - for a business whose Nayax connection is unusable or whose Nayax account
 has not granted the fleet reads. The summary is answered rather than refused in that state. See
@@ -8302,21 +8329,18 @@ and is unchanged.
 
 **What that page shows now (issue #790, D of #786).** Its columns are the checkbox, Name, Category,
 Stock, "Machine need" (in machine-aware mode only), the thresholds, "On order", "Need to order",
-"Last purchase", "Cheapest purchase" and the Stock and Edit links - and nothing else:
+"Last purchase", "Cheapest purchase" and the Stock link - and nothing else:
 
 - **The name looks the product up on Google**, as `https://www.google.com/search?q=<URL-encoded
   name>` in a new tab (`target="_blank"`, `rel="noopener noreferrer"`), labelled "Search Google for
-  &lt;name&gt;". The row's own click handler already defers to a nested anchor, so that click does
-  not also open the editor in the current tab; clicking anywhere else on the row still opens it, and
-  the checkbox and the Stock button are unchanged.
-- **The product editor keeps a focusable control of its own**, the row's `Edit`
-  `<a routerLink="/products/:id/edit">` beside Stock, labelled "Edit product &lt;name&gt;". It is
-  there because the Name anchor is no longer the editor's link: a row click is not a keyboard
-  action - the `<tr>` carries no `tabindex` and `onRowActivate` defers to every focusable child - so
-  without it the editor would have been reachable by pointer only, which AGENTS.md § Frontend rules
-  does not allow. Issue #498 had removed that button precisely because the Name anchor was then the
-  editor's own link; with that premise gone the link comes back, while #498's other outcomes - no
-  Delete, no confirmation dialog, and a row click that opens the editor - stand unchanged.
+  &lt;name&gt;". Clicking it does nothing else in the app; the checkbox and the Stock button are
+  unchanged.
+- **No route to the product editor.** #790 had restored an `Edit` link beside Stock, because the
+  Name anchor stopped being the editor's link and a row click is not a keyboard action. The owner
+  later removed both the row click and that Edit link (see [Needs Ordering: row navigation, sortable
+  columns, and Delete removal](#needs-ordering-row-navigation-sortable-columns-and-delete-removal-issue-498)),
+  so the page deliberately offers no way into the editor, by pointer or keyboard; products are
+  edited from All products.
 - **No Price and no Status column.** The price left with issue #792 (a product carries no selling
   price); the Status column, its sort and this page's product-status write left with #790, because
   the list holds **only active products**. `GET /api/products/alerts/low-stock` already excludes
@@ -8372,9 +8396,8 @@ renders, and the cleared and discarded answers when the displayed product set ch
 unrecognised code and a reason published beside a machine-aware mode, and
 `provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
 `product-needs-ordering.component.purchase-costs.spec.ts` covers issue #790: the Google URL and its
-encoding (`&`, spaces, accents, `+`, `?`), the name click that does not open the editor and the row
-click that still does, the Edit link that reaches the editor from the keyboard - focused, Enter
-pressed on it, navigating once - while the Name link still only searches Google, the absent Price
+encoding (`&`, spaces, accents, `+`, `?`), the name click and the row click that do not open the
+editor, the absent Edit link, the Name link that only searches Google, the absent Price
 and Status columns, the retired product the page refuses to list, the one request for the listed
 ids, loading versus `—` versus "Unavailable", a recorded `$0.00`, an unknown supplier, Retry, the
 superseded response and the superseded failure, the cost sorting in both directions with no-history
@@ -9373,7 +9396,8 @@ clamped-to-zero `MissingStockByMDB` value, so a machine already at or above its 
 contributes zero). Executing the query performs no EF/database mutation and creates no
 `MachineRefill`, costing, or inventory movement; recording what was actually taken is the separate
 write action of [Batch refill from the pick list](#batch-refill-from-the-pick-list-issue-743) below
-(before issue #743 it was the per-product stock action alone), and Nayax remains the read-only source
+(before issue #743 it was the per-product stock action alone), or, for a run across several machines,
+[Multi-machine refill batch](#multi-machine-refill-batch-issue-897), and Nayax remains the read-only source
 for the machine-stock facts this projection reuses. The Pick List Angular page, its machine
 chips/filter controls, and any persisted picked/unpicked completion state are out of scope for this
 projection and remain frontend-phase work.
@@ -9488,7 +9512,10 @@ mapping).
 
 **What it persists, and what it does not.** Two additive tables. `PickListRefills` holds the key, the
 fingerprint, the machine, the note and the recorded instant; `PickListRefillLines` holds each row's
-product, its submitted quantity and the `StockAdjustment` it created. Neither is a second stock ledger
+product, its submitted quantity and the `StockAdjustment` it created (and, since
+[the multi-machine batch](#multi-machine-refill-batch-issue-897) below, a nullable per-line machine
+that this endpoint never writes: a single-machine refill's machine is on the batch row and its lines
+carry none). Neither is a second stock ledger
 — nothing reads them to decide a quantity, a cost or a machine-stock level. They are the *request's*
 identity, which is the one fact `StockAdjustments` cannot carry: which submission recorded which
 movements. The row's submitted quantity is stored rather than derived because the row is the recorded
@@ -9529,6 +9556,173 @@ over the real pipeline, where a body is JSON rather than objects a compiler buil
 beside a valid row answered `400` on `rows[1]` with nothing written, and a body with every row present
 recorded as one `MachineRefill` movement — the control that makes "nothing written" a fact about the
 refusal).
+
+#### Multi-machine refill batch (issue #897)
+
+`POST /api/pick-list/multi-machine-refills` records **a whole pick run across several machines in one
+request**, as one `MachineRefill` stock movement per allocation, in one transaction: every allocation
+or none. It is additive: the single-machine endpoint above, its request, its response and the refills
+it has already recorded are unchanged. Its one caller is the manual pick list's machine matrix (issue
+#904, see [Manual pick-list entry and mode selection](#manual-pick-list-entry-and-mode-selection-issue-744)),
+which sends one of these requests per Save and never one per machine.
+
+**The problem it replaces.** The refill above carries one machine for the whole batch, so a run that
+visited three machines had to be sent as three requests, each with its own idempotency key. Three
+requests are three chances to half-save a run, and — the part a client cannot fix for itself — **each
+request's storage check passes on its own**. A shelf of 10 satisfies "6 for machine A" and then "6 for
+machine B" only because the two were never weighed together; the second request is refused, but by then
+the first has already been recorded, so the operator is left with a run that is partly saved and a shelf
+that no longer matches the paper.
+
+**The contract.** The request carries a client-chosen `idempotencyKey`, an optional `notes`, and
+`allocations` of `(machineId, productId, quantityTaken)`. `machineId` is a local machine of the caller's
+business (`Machines.Id`, see [Stock machine references](#stock-machine-references-issue-741) — never a
+provider machine number) and is **required** on every allocation: a refill for no machine at all is
+still the endpoint above, which is why that one is not deprecated. There is no request-level machine, no
+business id and no instant in either direction. The response is the recorded batch — the key, the note,
+the server's instant and, per allocation, the machine, the product, the quantity and the id of the
+`StockAdjustment` that recorded it — plus `replayed`, which is `true` when the key had already recorded
+it and nothing new was written.
+
+**It records exactly the movement the single-product action records**, through the same
+`IRecordInventoryMovement`/`IRebuildProductCost` pair (issue #296), with reason `MachineRefill`, source
+`Manual` and **that allocation's own machine** on the movement. So a multi-machine run is
+indistinguishable in the audit trail from the same run entered one machine at a time, which is what lets
+the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56), the costing
+replay and Sync Restock work without learning about this endpoint at all. Costing is unchanged and
+unchangeable here: a refill is an internal transfer from storage to a machine, so it reduces
+`QuantityInStock` and leaves `CostingQuantity`, `InventoryValue`, `AverageUnitCost` and COGS exactly as
+they were, and no second machine-stock movement is written (AGENTS.md § Inventory and historical costing
+invariants).
+
+**The storage check is over each product's total, inside the write lock.** That is the whole reason this
+is one request rather than several. `Inventory.Domain.Stock.MultiMachinePickListRefillPolicy` sums a
+product's allocations and compares the **sum** with its storage quantity, so storage 10 with allocations
+of 6 and 6 is refused and saves nothing even though each allocation fits on its own, and the refusal is
+reported on *every* allocation that contributed to the sum — the combination is what has to change, and
+an operator cannot see which lines combined from a refusal on one of them. The message is
+`NotEnoughStockForTotalMessage`, which states the total, deliberately not the single-line
+not-enough-stock sentence: repeating "available stock: 10" on an allocation of 6 would read as wrong. A
+product the business does not have, or has retired, is refused as that and no stock statement is made
+about it.
+
+**That sum is 64-bit, and the comparison happens before anything is narrowed.** Every quantity is a
+positive `int` the shape rules accept on its own, and a sum of them need not be one: two allocations of
+`int.MaxValue` add up to `-2` in 32 bits, which compares as comfortably under any shelf, so the one rule
+this endpoint exists for would be skipped and the batch written. The accumulator is therefore a `long` —
+`MaximumAllocations` (500) × `int.MaxValue` leaves it more than seven orders of magnitude of headroom, so
+it cannot overflow either — and `NotEnoughStockForTotalMessage` takes and reports that real total. The
+answer stays the promised one: `400` on every contributing allocation with nothing written, never a
+refusal that passes and leaves the arithmetic to the movement-recording path further in.
+
+**The machines, the quantities and the key claim are all read inside one write-locked transaction.**
+`Inventory.Application.PickList.RecordMultiMachinePickListRefill` runs the whole request inside the
+transaction `Inventory.Infrastructure.Persistence.PickListRefillWriteLock` opens, which on SQLite is
+`BEGIN IMMEDIATE` — the write lock is held before anything is read. That lock is **shared with the
+single-machine endpoint**, because both write the same tables and take from the same shelves: a batch and
+a single-machine refill that together exceed storage leave exactly one of them recorded, exactly as two
+batches do. Under the lock a losing request waits (within `Default Timeout`), re-reads the committed
+quantities and is refused having written nothing; a machine deactivated in the meantime is refused too,
+because the machines are read in there as well — the deactivation either commits before this transaction
+opens and is seen, or after it and comes second. **The machine read under that lock is the narrowest one
+there is**: `ILocalMachineStore.GetActivationsAsync` is one statement over two columns of the machines the
+request named, and it answers only whether each is in service. It is deliberately not the fleet listing
+or the single-machine read, which also resolve a machine's name, its provider link and — since
+machine deletion (issue #896, § Deleting a machine added by mistake) — its deletion eligibility, whose
+reference counts are several correlated subqueries per machine and may read the business's sales provider.
+None of that decides a refill, and a read taken under a lock every other picker waits on has to be the
+read the rule needs and no more.
+
+**One key namespace, and no refill is ever reinterpreted.** The key is still unique per business on
+`PickListRefills`, shared by both endpoints, because a key identifies a *submission* and a submission is
+either a single-machine refill or a multi-machine batch.
+`Inventory.Domain.Stock.MultiMachinePickListRefillFingerprint` renders the note and the allocations in
+machine-then-product order — so the same run entered machine by machine or product by product is one
+submission and a retry in any order replays it — behind its own version tag, `mm1`, where the
+single-machine rendering's is `v1`. The two therefore cannot produce the same fingerprint, so a key
+already spent on one kind of refill is **refused as reused** by the other rather than answered with a
+refill it did not record. The adapter states the same thing structurally: a stored refill that is not of
+this shape (a machine on the batch row, or a line without one) is reported as one this contract cannot
+answer with, and the use case fails closed on it whatever the fingerprint says. Everything else is the
+behaviour of the endpoint above: same key and same allocations replays, same key and a different batch is
+`409 Conflict` with `PickListRefillPolicy.IdempotencyKeyReusedMessage`, two copies of one submission
+record it once, and the unique index's violation is translated into the same `409`.
+
+**The refusals.** `ValidateRequestShape` judges the request alone — the key is present and bounded, the
+note is bounded, there is at least one allocation and at most `MaximumAllocations` (500), every
+allocation is **present** and **names a machine**, every quantity is a whole number greater than zero,
+and no machine/product pair appears twice — and runs **before** the transaction is opened, so a malformed
+request does not make every other picker wait on it. A pair submitted twice is refused rather than
+summed: two allocations for one machine and one product are two statements about one slot, and adding
+them up would invent a quantity nobody typed; the same product on *another* machine is a different
+allocation and is the point of the endpoint. An allocation that is not present (`"allocations": [null]`)
+and one that omits `machineId` are both refusals on their own line rather than a `500` or a silent bind
+to machine `0`, which is why `machineId` is nullable all the way from the DTO to the policy.
+`ValidateAgainstState` then judges the machines, the catalogue and the totals. Every refusal refuses the
+whole batch and every refusal is reported, so `400` carries a `ValidationProblemDetails` whose keys are
+`idempotencyKey`, `notes`, `allocations` and `allocations[i]` — the index the caller sent.
+
+**What it persists.** One additive column: `PickListRefillLines.MachineId`, nullable, with the same
+composite `(BusinessId, MachineId)` foreign key on the machines' `(BusinessId, Id)` key, restricted on
+delete, that every other column naming a local machine carries. **It is therefore a fifth place a machine
+is referred to, and machine deletion (issue #896) counts it.** The restricted key is the database's own
+answer — a machine a recorded allocation names cannot be deleted, proved on that reference alone in
+`EfMultiMachinePickListRefillStoreTests`, with the allocation's movement deliberately naming no machine
+so the refusal cannot be coming from the `StockAdjustments` reference an ordinary batch also leaves. The
+operator-facing answer counts it too: a batch leaves `PickListRefills.MachineId` `NULL`, so
+`Inventory.Domain.Machines.LocalMachineDeletionReferences` has its own `PickListRefillAllocations`
+count of `PickListRefillLines.MachineId`, which both the delete (inside its write lock) and the machine
+reads' advisory `canDelete`/`deletionRefusal` project, and `MachineDeletionPolicy` names it as
+"pick list refill allocation". `EfLocalMachineStoreDeletionTests` proves, for a machine named by an
+allocation alone, that the reads publish the refusal and the delete gives the same counted refusal
+rather than the foreign key's. See [Deleting a machine added by
+mistake](#deleting-a-machine-added-by-mistake-issue-896). A batch stores no machine on `PickListRefills` and one
+machine on each of its lines; a single-machine refill is the other way round, and nothing copies one into
+the other. The migration `AddPickListRefillLineMachine` rebuilds `PickListRefillLines` — SQLite cannot
+add a foreign key to an existing table — and backfills nothing: a line recorded before it keeps `NULL`,
+because its refill's machine belongs to the refill and filling it down would rewrite what that submission
+recorded. Production applies migrations at startup, and the code already running there writes that table
+without naming the new column, which a nullable column accepts.
+
+**Authorization.** The action declares `Inventory.Operate` beside `PickListController`'s own
+`PickList.View`, exactly as the single-machine refill does, and being a write it is refused in a
+read-only support session by the central `GET`/`HEAD` rule of issue #551, with no rule of its own. The
+business comes from the caller's membership; nothing in the request names one.
+
+**Not in this slice.** The multi-machine entry screen (a separate issue), automatic allocation, the
+calculated pick list, any Nayax sync or event, and any update or delete of a recorded batch: a correction
+is its own movement.
+
+**What proves it.** `MultiMachinePickListRefillPolicyTests` and
+`MultiMachinePickListRefillFingerprintTests` (the rules and the canonical rendering, including the
+reordered-allocation retry, the aggregate total, totals beyond `int.MaxValue` — two of `int.MaxValue`,
+ordinary in-range quantities that together pass it, and the widest batch the contract accepts — and that
+a comparable single-machine request renders differently),
+`RecordMultiMachinePickListRefillTests` (the orchestration over a fake store: the claim,
+the machines and the stock read inside the transaction, the machines read by id rather than through the
+fleet listing, nothing committed on any refusal, a key that
+recorded a single-machine refill refused, the index violation becoming the same conflict, and another
+database failure not becoming one), `EfMultiMachinePickListRefillStoreTests` (the whole use case over
+SQLite: one product across two machines, costing untouched, the aggregate refusal leaving the first
+allocation unwritten, a total beyond `int.MaxValue` leaving the quantities, movements, refill rows and
+the idempotency key itself untouched, a machine a recorded allocation names refused deletion on that
+allocation's reference alone, the per-line machine, a reordered retry, both directions of the
+cross-endpoint key conflict, the single-machine endpoint still recording its own shape, and two
+businesses sharing one key),
+`MultiMachinePickListRefillConcurrencyTests` (a real SQLite file, independent connections and a barrier:
+one key submitted twice recording once, two batches that together exceed stock leaving exactly one, a
+batch racing a single-machine refill leaving exactly one, and a competing machine deactivation never
+leaving a half-recorded batch), `AddPickListRefillLineMachineMigrationTests` (the rebuilt table, the
+restricting foreign key, the existing refills, lines and keys preserved with no machine, and the
+inventory tables byte-identical before and after), `PickListControllerTests` (the `200`, the replayed
+`200`, the aggregate refusal on every contributing line, a missing allocation and a machine-less
+allocation refused rather than read, and the key conflict propagating) and
+`MultiMachinePickListRefillApiTests` (the endpoint over the real pipeline, where a body is JSON rather
+than objects a compiler built: `[null]`, an omitted `machineId`, the aggregate refusal and a total beyond
+`int.MaxValue` all answered
+`400` with nothing written, beside the recorded run that makes "nothing written" a fact about the
+refusal — and the backward-compatibility checks that `POST /api/pick-list/refills` still answers its own
+contract, with and without a machine).
 
 #### Pick List frontend page (issue #222)
 
@@ -9605,9 +9799,9 @@ with the matrix data, `pickedCells`, and the snapshot timestamp.
 
 **Matrix table layout.** The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
 so a long product list scrolls vertically inside the card while many machine columns still scroll
-horizontally in the same area. Every header cell - Product, MDB Code, Total to Pick and each applied
-machine column (issue #496 added MDB Code) - is individually `sticky top-0` with an opaque background
-and a z-index above the body cells,
+horizontally in the same area. Every header cell - Product, MDB Code, Storage Qty, Total to Pick and
+each applied machine column (issue #496 added MDB Code; issue #885 added Storage Qty) - is
+individually `sticky top-0` with an opaque background and a z-index above the body cells,
 so the whole header row stays visible while rows scroll under it without showing through. The
 `<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
 sticky. Sticky positioning does not participate in table column sizing, so header and body keep
@@ -9635,8 +9829,8 @@ Products filter, and leaves `pickedCells`, totals and progress figures unchanged
 `sortDirection` live only on the component instance - the same as every other piece of page state
 here - so the chosen sort survives Apply (including a machine-selection refetch) and chip removal,
 but Reset clears it back to no active column, and the next loaded pick list appears in backend order.
-No other column (Total to Pick, the per-machine columns) is sortable, and sorting never calls an
-endpoint or introduces a query parameter.
+No other column (Storage Qty, Total to Pick, the per-machine columns) is sortable, and sorting never
+calls an endpoint or introduces a query parameter.
 
 #### Manual pick-list entry and mode selection (issue #744)
 
@@ -9724,23 +9918,74 @@ business's own machines](#machine-fields-from-the-businesss-own-machines-issue-7
 entry attribute a pick to one of the business's own machines, with or without a provider.**
 `ManualPickListComponent` reads `LocalMachineService.getAll()` (`/api/local-machines`, the same local
 records issue #740/#741 gave the stock and expense screens, never a provider id) and offers the
-result as `selectedMachineId` - a plain `<select>` of **active** local machines by
-`LocalMachine.name`, plus a "No machine" default - shown at all only once that read succeeds with at
-least one active machine (`machineSelectorShown`); a business with none, or whose read is still
-outstanding, behaves exactly as the machine-free slice above describes. A failed read
+result as **active** local machines by `LocalMachine.name` - shown at all only once that read
+succeeds with at least one active machine (`machineSelectorShown`); a business with none, or whose
+read is still outstanding, behaves exactly as the machine-free slice above describes. A failed read
 (`machinesLoadFailed`) is reported in the selector's place rather than hidden silently, but a save
-without a machine still works, exactly as a business with none recorded would. The chosen machine is
-sent as the manual save's optional local `machineId` and is part of what `lastSubmission` compares
-for idempotency (see **Idempotency** below): changing it, like changing a row, mints a new key, while
-an unchanged resubmission reuses the key and the machine together. It is never sent to
+without a machine still works, exactly as a business with none recorded would. It is never sent to
 `PickListService.get`, the calculated view's own machine read, which keeps using provider machine ids
-untouched by this selector.
+untouched by this selection. **Issue #794's single `selectedMachineId` `<select>` is what issue #904
+replaced with the machine matrix below**, which is also where the chosen machines now reach the
+server: a pick that names any machine is a multi-machine batch, so the single-machine endpoint's
+request-level `machineId` is no longer sent by this frontend at all.
 
 **The machine-page consolidation the 18 October 2026 owner decision describes - replacing the
 machine-detail page's per-product quantity inputs with a link into this screen, with that machine
-preselected through this same selector's `selectedMachineId` - is issue #744's own later phase**; see
+preselected as its one machine column - is issue #744's own later phase**; see
 [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
 below.
+
+**The machine matrix: one column per selected machine, one request per Save (issue #904).** The
+machine selection is `selectedMachineIds` - the shared `MultiSelectDropdownComponent` over
+`machineOptions()`, in the operator's own selection order, which is also the column order - and it is
+what chooses between the screen's **two modes, one per endpoint**:
+
+- **No machine selected** is issue #744's machine-free entry, unchanged: one "Taken" column, saved
+  through `PickListService.recordRefill` (`POST /api/pick-list/refills`) with no `machineId` at all.
+- **One or more machines selected** renders Product, Category, Storage Qty, **Total Taken** - the
+  row's own sum across the selected machines - and then one quantity column per machine, and one Save
+  sends the whole run through `PickListService.recordMultiMachineRefill`
+  (`POST /api/pick-list/multi-machine-refills`, see [Multi-machine refill batch](#multi-machine-refill-batch-issue-897))
+  as a single batch of `(machineId, productId, quantityTaken)` allocations in catalogue-then-column
+  order. **Never one request per machine**: each product's allocations come off one shelf, and only
+  one request can weigh their total against it inside the write lock - which is the reason that
+  endpoint exists. A single selected machine is a one-column matrix and takes the same path, so the
+  retry and attribution rules below do not change shape with the size of the selection.
+
+**Drafts are per mode, and nothing is silently reassigned, copied or dropped.** The "No machine"
+entries (`takenById`, by product) and the matrix cells (`cellValues`, by product **and** machine) are
+separate drafts; a generic quantity is never written into every selected column, because that would
+invent a pick several times the size of the one that was typed. A selection change that would drop a
+typed quantity therefore asks first - `DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION` on the way into
+machine columns, `DISCARD_MACHINE_COLUMNS_CONFIRMATION` on the way back out, and
+`discardMachineColumnConfirmation(...)`, which names the columns, when some of them are removed - and
+**Cancel changes nothing at all**, neither the selection nor one entry (`window.confirm`, the same
+confirmation `MachineDetailComponent` and the Admin workflows use). A confirmed removal drops exactly
+the removed columns' cells, so re-adding a machine brings back an empty column rather than a
+discarded quantity. The search and category filters never touch a draft at all: they hide rows, and a
+hidden row's entries are still validated, still sent, and still counted in `totalUnitsRequired()` -
+which is why `hiddenUnitsRequired()`/`hiddenProductsWithEntries()` are shown beside it rather than
+leaving an operator to discover a hidden row from a refusal. The one place an entry changes column is
+the preselected machine's own window, below.
+
+**Per-cell validation, and what blocks Save.** `parseTakenEntry` is the one rule for every box in
+both modes: blank or `0` is nothing taken, a positive whole number up to `MAXIMUM_TAKEN_QUANTITY`
+(the server's `int`) is a quantity, and anything else - negative, fractional, nonnumeric, or larger
+than the server can record (`TAKEN_QUANTITY_TOO_LARGE_MESSAGE`) - is refused inline on its own cell
+and blocks Save, wherever it is. Because a cell is one product on one machine, the blocked Save also
+states which: `invalidEntryMessages` names each one as "<product> at <machine>: <message>", including
+cells on rows the current filter hides. A `400` from the batch endpoint is parsed by
+`parseMultiMachineRefillRejection`, which maps each `allocations[i]` key back to the
+**(product, machine)** pair the submitted allocation at that index named - not to a position in the
+currently filtered or reordered matrix - so a per-allocation refusal, including the aggregate
+"these allocations take N units, but only M are in stock" reported on *every* contributing
+allocation, lands on the cells it is about; `idempotencyKey`, `notes` and the bare `allocations` key
+surface as request-level messages. A definitive refusal leaves every draft editable.
+
+**Nothing moves while a save is in flight.** `saving` disables every entry box, disables the machine
+dropdown (a `<fieldset disabled>` around it, so its trigger and checkboxes go with it) and makes
+`onSelectedMachineIdsChange`, `removeMachineColumn`, `onCellChange` and `onTakenChange` return
+without doing anything, so the request being answered is the request that was built.
 
 **Entry, validation and the save contract.** Manual entry lists every product in `products` (already
 active-only, since `ProductService.getAll()` with no filters answers the working catalogue), with a
@@ -9751,10 +9996,12 @@ and contributes no row, and anything else that is not a positive whole number is
 "Enter a whole number greater than 0." (mirroring `PickListRefillPolicy.QuantityMustBePositiveMessage`
 without importing it - a second, Angular-side copy of the same rule, the same way
 `business-application-rules.ts` mirrors `BusinessSettingsPolicy`) and blocks Save until it is fixed or
-cleared, regardless of whether that row is currently visible under the search/category filter. Save
-builds its row set from every product in `products` order (not the visible/filtered subset) whose
-"Taken" box parses to a positive quantity, and sends exactly `{ idempotencyKey, rows }` - no
-`machineId`, no `notes` - to `PickListService.recordRefill` (`POST /api/pick-list/refills`). A `400`'s
+cleared, regardless of whether that row is currently visible under the search/category filter. In the
+"No machine" mode Save builds its row set from every product in `products` order (not the
+visible/filtered subset) whose "Taken" box parses to a positive quantity, and sends exactly
+`{ idempotencyKey, rows }` - no `machineId`, no `notes` - to `PickListService.recordRefill`
+(`POST /api/pick-list/refills`); with machine columns it builds allocations instead and sends the
+batch described above. A `400`'s
 `ValidationProblemDetails` is parsed by `pick-list-refill-errors.ts`'s `parsePickListRefillRejection`:
 each `rows[i]` key is mapped back to the **product id** the submitted row at that index named (not
 the row's position in the currently-visible, filtered list), so a refusal lands on the right line
@@ -9765,17 +10012,21 @@ recorded."; nothing is saved to `localStorage`, a query parameter, or any state 
 instance, matching the calculated view's own no-persistence rule.
 
 **Idempotency and the three outcomes a save can have (issue #743's contract, read correctly from the
-client side).** `ManualPickListComponent` keeps the exact row set and key of its last attempted save
-(`lastSubmission`) and compares it with what Save would send now:
+client side).** `ManualPickListComponent` keeps the exact payload and key of its last attempted save
+(`lastSubmission`, which is either a row set for the "No machine" mode or an allocation set for the
+matrix) and compares it with what Save would send now:
 
-- **An unchanged resubmission reuses the key and resends the identical rows**, generated nowhere
+- **An unchanged resubmission reuses the key and resends the identical payload**, generated nowhere
   else - not even recomputed from the current product order - so a retry is bit-for-bit the same
   request the server last saw, whatever else on screen may have changed (a filter, a sort) in
-  between. This is what makes the three failure modes safe to retry at all: `PickListRefillPolicy.
-  ValidateRequestShape`/`ValidateAgainstState` both refuse *before* `RecordPickListRefill` ever claims
+  between. A batch compares as a **set** of allocations (`multiMachineAllocationsEqual`), so merely
+  reordering the machine columns is still the same pick under the same key - which matches the
+  server, whose `MultiMachinePickListRefillFingerprint` renders a batch in its own
+  machine-then-product order. This is what makes the three failure modes safe to retry at all: the
+  request-shape and against-state rules of both endpoints refuse *before* the use case ever claims
   the idempotency key (see [Batch refill from the pick list](#batch-refill-from-the-pick-list-issue-743)
-  above), so a `400` has recorded nothing and the same key is always safe to resend once the named
-  row is fixed.
+  and [Multi-machine refill batch](#multi-machine-refill-batch-issue-897) above), so a `400` has
+  recorded nothing and the same key is always safe to resend once the named row or cell is fixed.
 - **A `400` is a definite, per-row refusal.** Nothing was recorded; `rowErrors`/`requestErrors` are
   replaced from the response (never merged with a previous attempt's), and `lastSubmission` is left
   exactly as it is - an unedited retry resends the same refused request, which is deterministic and
@@ -9786,13 +10037,23 @@ client side).** `ManualPickListComponent` keeps the exact row set and key of its
   generic one when it carries none.
 - **Anything else (a network failure, an unrelated `5xx`) is uncertain - it is not known whether the
   server recorded the refill before the response was lost.** `lastSubmission` is left untouched and
-  the entered quantities are **not** cleared, so clicking Save again - with nothing edited - resends
-  precisely the same request under precisely the same key: if the first attempt had in fact been
-  recorded, the retry is answered as a replay and writes nothing a second time; if it had not, the
-  retry records it. Either way the operator never has to decide which happened. This is the one
-  outcome that sets `unresolvedSubmission`, so the attempt stays reported on screen until a later
-  Save resolves it, and it is why the component survives a mode switch at all; a `400`, a `403` and a
-  `409` are definite answers and leave it clear.
+  the entered quantities are **not** cleared, so the retry resends precisely the same request under
+  precisely the same key: if the first attempt had in fact been recorded, the retry is answered as a
+  replay and writes nothing a second time; if it had not, the retry records it. Either way the
+  operator never has to decide which happened. This is the one outcome that sets
+  `unresolvedSubmission`, so the attempt stays reported on screen until a later attempt resolves it,
+  and it is why the component survives a mode switch at all; a `400`, a `403` and a `409` are
+  definite answers and leave it clear.
+- **While an outcome is uncertain, no new key may be minted at all - the kept payload is the only
+  request that may be sent (issue #904's tightening of this rule).** The screen offers an explicit
+  **Retry save** (`retry()`, `canRetry`) that resends exactly `lastSubmission`, and `save()` *is*
+  that retry while `unresolvedSubmission` is set, so an edited cell, a removed machine column or a
+  reordered selection cannot turn one physical pick into a second deduction. Before #904, editing a
+  quantity after an uncertain outcome minted a new key, which is a second deduction whenever the
+  first attempt had in fact committed; a matrix makes that path far easier to walk into, because the
+  columns themselves move. A different pick is accepted again only once that attempt has a definite
+  answer - which one Retry always produces, since every outcome other than another uncertain one
+  resolves it.
 - **A `403` is a definite refusal too** - a read-only support session, or a capability the member
   lacks, refused the request before anything was recorded - so it is reported as a refusal ("This
   refill was refused, so nothing was recorded.", or the response's own `detail`), never as the
@@ -9802,9 +10063,10 @@ client side).** `ManualPickListComponent` keeps the exact row set and key of its
 **A support session is read-only here too (issue #658's rule).** A support session grants
 `Inventory.Operate`, so the backend refuses this write only by its read-only method rule. Like
 `MachineDetailComponent`'s Restock, `ManualPickListComponent` subscribes to `SupportSessionService.
-active$` (`sessionActive`) and, while it is set, **hides** the "Taken" column and Save and says why
-(`data-testid="manual-pick-list-support-session"`); the product list and storage quantities stay
-readable. `canSave` is false and `save()` returns before sending, so a session that starts after the
+active$` (`sessionActive`) and, while it is set, **hides** every entry column - the "Taken" column,
+and in the matrix the Total Taken and machine columns with it - along with Save, Retry save and the
+storage-requirement line, and says why (`data-testid="manual-pick-list-support-session"`); the
+product list and storage quantities stay readable. `canSave` is false and `save()` returns before sending, so a session that starts after the
 page opened cannot send a refill either. An already-raised uncertain-save notice stays visible.
 
 **The catalogue's own load state.** Manual entry is built entirely from `allProducts`, so an empty
@@ -9824,21 +10086,33 @@ the page opened); `manual-pick-list.component.spec.ts` covers the `save()` guard
 
 **What proves it.** `idempotency-key.spec.ts` (the generator's uniqueness and the 128-character
 contract bound), `pick-list-refill-errors.spec.ts` (`rows[i]` mapped back to the submitted row's
-product id, request-level keys kept separate, and `null` for a `409`/network failure/a body with no
-`errors`), `manual-pick-list.component.spec.ts` (filtering, the blank/zero/malformed "Taken" rules,
-the exact submitted row set and order, the three failure outcomes above including the idempotency-key
-reuse/mint rules, that a save in flight is never resent, and which outcomes leave `unresolvedSubmission`
-set), `pick-list.component.mode.spec.ts` (the default calculated mode, both forced-manual triggers -
+product id, `allocations[i]` mapped back to the submitted allocation's product **and** machine,
+request-level keys kept separate, `null` for a `409`/network failure/a body with no `errors`, and
+`multiMachineAllocationsEqual` treating a reordered batch as the same submission),
+`manual-pick-list.component.spec.ts` (filtering, the blank/zero/malformed/too-large entry rules in
+both modes, the exact submitted row and allocation sets and their order, the matrix's row and whole-
+pick totals including rows a filter hides, every discard confirmation and what Cancel leaves
+untouched, the in-flight locks on the selection, the column removals and the cells, the three failure
+outcomes above including the idempotency-key reuse/mint rules and that **no** key is minted while an
+outcome is uncertain however the matrix is edited, removed from or reordered, that a save in flight is
+never resent, and which outcomes leave `unresolvedSubmission` set), `pick-list.component.mode.spec.ts`
+(the default calculated mode, both forced-manual triggers -
 up front and live - the generic-failure exception, the manual-mode toggle, that switching back to
 calculated preserves the already-fetched matrix, that the manual view is created once and kept, and
 that manual mode cannot be left while a save is in flight) and
 `pick-list.component.manual-rendering.spec.ts` (the toggle and the manual table rendered through the
 real template, including the provider-unavailable case hiding the Calculated option entirely, both
 mode-specific inventory-impact wordings, an uncertain save retried with the identical key and body
-after switching to calculated and back, and the toggle refusing to move while a save is in flight).
-Not listed above because it predates this section: `manual-pick-list.component.spec.ts`'s "machine
-selector" describe block (issue #794) already covers `machineSelectorShown`, `activeMachines`
-excluding inactive machines, the failed-read fallback, and the selector's own idempotency rules; see
+after switching to calculated and back, the toggle refusing to move while a save is in flight, and -
+for the matrix - one labelled column per selected machine with the Total Taken column before them,
+the bounded scroll container the columns live in, the per-cell error and the product-and-machine
+sentence that blocks Save, the whole-pick storage requirement with the part a filter hides, the
+confirmed and cancelled column removal, the one batch request a Save sends, and the explicit
+**Retry save** resending the identical request after an edit). Also proved in
+`pick-list.component.spec.ts`: a manual pick's local machine columns never reach the calculated
+view's provider machine ids. Not listed above because it predates this section:
+`manual-pick-list.component.spec.ts`'s machine-selection describe block (issue #794) already covers
+`machineSelectorShown`, `activeMachines` excluding inactive machines and the failed-read fallback; see
 [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
 immediately below for what issue #744's own later phase added on top of it.
 
@@ -9899,15 +10173,17 @@ if the operator had chosen it from the dropdown, only when it names one of `acti
 also what the issue's "resolve to the current business's local machine" requirement reduces to, since
 the id arriving here was already a local id by construction (previous bullet) and the only remaining
 question is whether it is still one of *this* business's *active* machines by the time the pick list
-loads. When it is not - deactivated or removed between opening the machine page and clicking the
-link, or the machine read itself failed - `machineAttributionFailed` is raised instead of silently
-leaving `selectedMachineId` at its default `null`: the link promised this refill would be attributed
-to that machine, so a save that quietly went through as "No machine" would misrepresent what
-happened. The message (`data-testid="manual-pick-list-machine-attribution-failed"`) is shown beside
-the selector rather than blocking the screen, and the dropdown itself is never forced into a false
-state - a resolved preselection is a real, changeable selection, and a failed one leaves the
-selection exactly where it already honestly was, so the operator can still pick a machine from the
-list (if one is shown) or save explicitly against "No machine".
+loads. It becomes **exactly one** machine column (`selectedMachineIds = [id]`, issue #904) and more
+may be added beside it, because a run that starts at one machine is still a run. When it is not -
+deactivated or removed between opening the machine page and clicking the link, or the machine read
+itself failed - `machineAttributionFailed` is raised instead of silently leaving the selection empty:
+the link promised this refill would be attributed to that machine, so a save that quietly went
+through as "No machine" would misrepresent what happened. The message
+(`data-testid="manual-pick-list-machine-attribution-failed"`) is shown beside the selector rather
+than blocking the screen, and the dropdown itself is never forced into a false state - a resolved
+preselection is a real, changeable selection, and a failed one leaves the selection exactly where it
+already honestly was, so the operator can still pick a machine from the list (if one is shown) or
+save explicitly against "No machine".
 
 **Until that resolution settles, Save is refused.** `machineResolutionPending` is `true` exactly
 while a link named a machine and the machine read has not answered either way, and both `canSave`
@@ -9923,7 +10199,12 @@ Refusing the save until the attribution is known means no request can leave whil
 so there is no kept submission for a late answer to change underneath. The wait is announced in the
 selector's place (`data-testid="manual-pick-list-machine-resolution-pending"`, `role="status"`) and
 the "Taken" boxes stay open, so the operator can keep typing; **ordinary entry never waits**, because
-`preselectedMachineId` is `null` and the pending state is never raised at all.
+`preselectedMachineId` is `null` and the pending state is never raised at all. A quantity typed in
+that window belongs to the one machine the link named - that is what the link and the pending notice
+both promised - so when the read answers it **moves into that machine's column** rather than being
+dropped or sent unattributed (issue #904). That is the only place an entry changes column, it is
+always one machine, and it is never a copy into several; a link whose machine does not resolve leaves
+those entries exactly where they are, as the unattributed pick they honestly still are.
 
 **Sync Restock's fallback wording now points at the pick list.** `MachineRestockSyncComponent`'s
 description previously said "Manual restocking above remains available as a fallback"; "above" named
@@ -11236,8 +11517,10 @@ machines it refills.
 | `Id` | this application's own key, **assigned by the database** (#735's rule, decision A4). Nothing assigns it, and a local id equal to a Nayax machine id is a coincidence |
 | `BusinessId` | the owning business. Ordinary tenant-owned data: the central query filters and `BusinessOwnershipEnforcer` scope every read and stamp every write, and no adapter writes a `BusinessId` predicate of its own |
 | `Name` | required, and otherwise unconstrained. Deliberately **not** unique per business: two machines in one corridor may legitimately be called "Level 3", and nothing resolves a machine by its name |
-| `IsActive` | whether the machine is in service. There is no delete |
+| `IsActive` | whether the machine is in service. A machine with history is deactivated rather than deleted; a machine nothing refers to can be deleted (issue #896, below) |
 | `ExternalMachineId` | the business's sales provider's own id for the machine, as **opaque text** bounded by `ExternalId.MaxLength`, or `null` when the provider names none. For Nayax it is written only through `Inventory.Domain.Providers.NayaxExternalId` |
+| `LastSuccessfulRestockSyncStartedAtUtc` | when the last fully successful **Sync Restock** for this machine *started*, or `null` for "no recorded sync" (issue #891). Integration state like `ExternalMachineId`: off the machine wire contract, never a value a request chooses, and written only by the monotonic conditional update described in [Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891) |
+| `LastSuccessfulRestockSyncCredentialRevision` | the `BusinessNayaxConnection.CredentialRevision` that fetch authenticated under, or `null` (issue #891). Coverage stamped with a superseded revision is read as no recorded sync at all |
 
 `(BusinessId, ExternalMachineId)` carries a **filtered** unique index, `WHERE "ExternalMachineId" IS
 NOT NULL`, for the two reasons the product and category columns do: "this machine has no provider id"
@@ -11278,21 +11561,20 @@ half applied. Both refusals are raised the way #759's copy raises its own, throu
 and a SQLite trigger, and the scratch table is dropped again.
 
 **The API.** `/api/local-machines` — `GET` (the list, active and inactive, ordered by name), `GET
-{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate` — behind
-`Inventory.Operate`, the capability the fleet reads and the rest of day-to-day stock keeping already
-declare. It is a **separate resource from `/api/machines`**, which is the live Nayax fleet and needs
-working credentials for every one of its reads; nothing on this one touches the provider, so it works
-identically for a business that has never connected one.
+{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate`, `DELETE
+{id}` (issue #896, below) — behind `Inventory.Operate`, the capability the fleet reads and the rest of
+day-to-day stock keeping already declare. It is a **separate resource from `/api/machines`**, which is
+the live Nayax fleet and needs working credentials for every one of its reads; nothing on this one
+touches the provider, so it works identically for a business that has never connected one.
 
-Three things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
+Two things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
 corresponds to it, a created machine has none, a rename leaves it alone, and the [provider machine
 review](#provider-machine-linking-automatic-or-reviewed-issue-742) (issue #742) is the one thing that
-attaches one. It **publishes no
-provider identifier** either — the response carries `isProviderNamed`, the fact and not the id. And
-it offers **no delete**: stored sales, refills, counts and expenses refer to a machine, so a machine
-that stops trading is deactivated and stays listed. Because the capability is `Inventory.Operate`,
-which a support session grants, every write here is refused in a read-only support session by the one
-central rule that allows it only `GET` and `HEAD` (issue #551) — there is no per-action check for it.
+attaches one. And it **publishes no provider identifier** either — the response carries
+`isProviderNamed`, the fact and not the id, and the deletion refusal below names the *provider*, never
+its id for the machine. Because the capability is `Inventory.Operate`, which a support session grants,
+every write here is refused in a read-only support session by the one central rule that allows it only
+`GET` and `HEAD` (issue #551) — there is no per-action check for it.
 
 **A provider-named machine is not renamed or deactivated here.** #740 originally allowed both;
 the owner reversed that, because a machine the provider names is managed at the provider.
@@ -11307,6 +11589,57 @@ Rename and Deactivate on a row whose `isProviderNamed` is true, and refuses both
 Nothing synchronises a machine's name, so a provider machine keeps the name it was recorded or
 linked with even after a rename at the provider.
 
+#### Deleting a machine added by mistake (issue #896)
+
+`DELETE /api/local-machines/{id}` removes a machine **only while nothing refers to it and no provider
+names it**. A machine added by mistake is a mistake an operator has to be able to undo; a machine with
+history is not, and gets deactivation instead. `204` on success, `404` for a machine that is not this
+business's (the central tenant query filters, so another business's id is simply not a machine the
+caller named), `400` with the reason otherwise — the same shape every other refusal on this resource
+uses.
+
+**The five protected references.** Exactly five columns hold `Machines.Id`, each as a composite
+`(BusinessId, MachineId)` foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on
+delete: `MachineStockCount.MachineId` and `StockAdjustment.MachineId` (issue #741),
+`PickListRefill.MachineId` (issue #743), `OperatingExpense.MachineId` (issue #780) and
+`PickListRefillLine.MachineId`, a multi-machine refill's per-allocation machine (issue #897). Any row in any
+of them refuses the delete, with the kinds and counts named — "2 machine stock counts, 1 operating
+expense" — so an operator knows where to look. **Nothing is cascaded, nulled, reassigned or
+compensated for**: every stored count, movement, refill and expense stays exactly where it is, which
+is what refusing is for. The provider's own stored data (`NayaxSales.MachineID`,
+`NayaxMachineStockEvent`, `NayaxSaleTimestampRepair`, `InventoryCostTransitionMachineStock`, the
+report filters and the calculated pick list) names the *provider's* machine number and is not a
+reference to this row at all — which is why a machine carrying `ExternalMachineId` is refused outright
+rather than counted: it is managed at the provider, exactly as its rename and deactivation are, and
+its provider id is what every later lookup resolves that machine's sales through. No inventory,
+costing or report total changes either way, and the delete makes no provider request at all.
+
+**One rule, published and enforced from the same place.**
+`Inventory.Domain.Machines.MachineDeletionPolicy` decides the refusal, and
+`LocalMachineDeletionEligibility` is a projection of that same call — the shape a product's deletion
+established in [Manual catalogue: who owns a product's
+fields](#manual-catalogue-who-owns-a-products-fields-issue-736) (issues #737 and #825). Both machine
+reads publish it as `canDelete`/`deletionRefusal`, so the page offers **Delete** only where the API
+allows it and explains every other machine in the server's own words; `LocalMachineListComponent`
+offers it only on a plain `true` (an absent answer is not permission), hides it during a support
+session, opens the shared confirmation dialog naming the machine, sends one request, and reloads only
+on success so a refusal leaves the row it is about on screen. The eligibility is **advisory**: it
+describes rows as they were read.
+
+**The check and the delete are one operation, under the link's own write lock.** `EfLocalMachineStore.DeleteAsync`
+reads the machine, counts the five references and removes the row inside one `BEGIN IMMEDIATE`
+transaction (`SqliteWriteLockTransaction`, the shape issues #522, #537 and #743 each use), and
+`EfProviderMachineLinkStore` takes **that same** lock. That is the race the foreign keys cannot stop:
+linking is a write to the machine row itself, not a reference to it, so a deferred transaction would
+let a delete and an apply both read a machine with no provider id and SQLite could then only answer
+one of them with a lock error. With the write lock taken when the transaction opens, the loser waits
+and reads the winner's committed state, so the two coherent outcomes are the only ones — the machine
+is gone and nothing was linked, or the machine carries the provider id and the delete is refused as a
+provider machine. The restricted foreign keys remain the **database's own backstop** under the count:
+a reference that lands inside the delete's transaction makes SQLite refuse the statement, and that
+violation is translated into `MachineDeletionPolicy.ReferencedWhileDeletingRefusal` — the same kind of
+`400` an operator can act on, never an unhandled `500`.
+
 **The page, and why it stopped being provider-locked.** The Machines menu entry came off the
 provider signal - out of the "Needs Nayax" section issue #868 has since removed altogether - and
 `/machines` carries no `requireProvider` guard any more
@@ -11314,7 +11647,7 @@ provider signal - out of the "Needs Nayax" section issue #868 has since removed 
 something to show, so it is never locked. It is two lists. `LocalMachineListComponent` — the
 dedicated feature component the [page composition
 boundary](#page-composition-boundary-issue-191) requires, holding the list, its load state, the add
-and rename drafts, the refusal message and every write — is always shown. The live Nayax fleet below
+and rename drafts, the delete confirmation, the refusal message and every write — is always shown. The live Nayax fleet below
 it (revenue, profit, and the links into each machine's stock and Sync Restock workflow) is shown only
 while the shared availability signal says the fleet read can be served, through the one shared path
 `loadProviderList` (issue #728): an unavailable provider withholds that section entirely rather than
@@ -12005,6 +12338,53 @@ membership as everywhere else. `PUT api/products/{id}` now also binds `name` and
 `unitPrice` too until issue #792 removed the field (see [A product carries no selling
 price](#a-product-carries-no-selling-price-issue-792)).
 
+**Create and update validation, and the unit label's deliberate asymmetry** (issue #895).
+`Inventory.Domain.Products.ProductCataloguePolicy` is the one statement of the invariants on the
+fields an operator maintains by hand, and it holds two: a product has a **name**, and a product has
+a **unit label**. The name rule is symmetric and unchanged — `CreateProduct` and `UpdateProduct`
+both call `Validate`, so a product cannot be edited into a state it could not have been created in.
+The unit label is required **asymmetrically**, and that is the rule rather than a concession to it:
+
+- `POST api/products` refuses a null, empty or whitespace `unit` with `400` and
+  `ProductCataloguePolicy.UnitRequiredMessage`, and saves nothing — not the product, and not the
+  opening stock movement a quantity would have recorded. The check is `ValidateUnit`, applied by
+  `CreateProduct`, because a create's answer depends on nothing but the request: a new product has no
+  stored label to preserve. `EfProductStore.CreateAsync` applies it again at the write, exactly as it
+  does for the name, so the column cannot be written blank by a future caller that forgets.
+- `PUT api/products/{id}` refuses a null, empty or whitespace `unit` **only while the stored label is
+  nonblank**, with the same `400` and the same message. So **no request can erase a label**, and a
+  product whose stored label is already blank — a row from before this rule, which nothing ever gave
+  one — is still accepted with none and keeps the blank it has. That exception exists because
+  activation is written through the *whole* product: `ProductListComponent.writeActive` sends every
+  field back with `isActive` flipped (issue #825's Deactivate, and issue #900's Reactivate), so a
+  blanket required rule on `PUT` would have made every such legacy product impossible to deactivate
+  or reactivate from the list. The rule is `ProductCataloguePolicy.UnitChangeRefusal`, and it is
+  decided by `EfProductStore.UpdateAsync` — inside the write's own transaction, on the row that
+  transaction read — for the same reason the provider-managed and category refusals are: it compares
+  a *stored* value, so the read, the comparison and the write have to be one operation. `UpdateProduct`
+  deliberately does not check it; checking the request alone could only either blank a label or
+  strand a legacy row out of use.
+- An accepted label is stored **trimmed** on both routes (`NormalizeUnit`) — trailing space is not a
+  different unit — and the column's length and type limits are unchanged. The wire contract is
+  unchanged too: `unit` stays nullable on `ProductCreateDto`/`ProductUpdateDto`, because what changed
+  is which values are *accepted*, not which are bound.
+- **Nothing is backfilled, and the provider paths are untouched.** A legacy product with no label
+  stays readable with its history exactly as it is, and gets a label only when a person edits it.
+  The catalogue import and the catalogue review still create a product without setting `Unit`, so the
+  `Product.Unit` entity default `"unit"` applies, and a linked product keeps its own local label; no
+  provider field is read for the unit, because the authoritative Lynx product contract publishes no
+  unit or volume label at all (see [Provider catalogue
+  review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). Proposing one
+  from the provider is issue #902.
+
+`ProductFormComponent` matches the server rather than wording a second rule: **New Product** and
+**Edit Product** label the field `Unit Label *`, mark the input `required`, show
+"Unit label is required." beside it and disable Save while it is blank, and submit the trimmed value.
+**New Product opens the field empty** (no `"unit"` prefill, removed after #895 at the owner's
+request), so an untouched field is refused rather than saving a label nobody chose. Editing a product whose stored label is null or blank opens
+the field **empty** — the `p.unit ?? 'unit'` prefill is gone — so the operator chooses the label
+instead of having one substituted and silently saved.
+
 **Provider-managed fields.** `Inventory.Domain.Providers.ProviderManagedCatalogueFields` is the one
 statement of which fields a provider owns: a product carrying an `ExternalProductId` has its `name`
 and `categoryId` managed, a category carrying an `ExternalCategoryId` has its `name` managed, and a
@@ -12070,11 +12450,15 @@ naming the product and what deactivation keeps, and on confirmation writes the o
 activation update - `ProductService.update` with `isActive: false` and every other field as it was
 fetched. The Status badge routes a *deactivation* through that same confirmation, so the two
 controls cannot come to mean different things, while a *reactivation* stays the single immediate
-write it always was; an inactive product offers no Deactivate at all. `confirmDeactivate` refuses a
-support session and an already-inactive product in code as well as in the template, the same
-belt-and-suspenders shape `confirmDelete` uses, and a refused deactivation surfaces the API's own
-message through `apiErrorMessage` with the row left as it was fetched. The deletion rule itself is
-untouched: this is presentation, and `ProductDeletionPolicy` stays the one authority.
+write it always was. Since issue #900 an **inactive** product gets **Reactivate** in that same
+fixed-width slot instead of leaving it empty, calling the same `toggleActive` method the Status
+badge uses for its own one-click reactivation - no second endpoint or payload. `confirmDeactivate`
+refuses a support session and an already-inactive product in code as well as in the template, the
+same belt-and-suspenders shape `confirmDelete` uses; `toggleActive` itself refuses a support session
+the same way, hiding Reactivate alongside Deactivate and Delete. A refused deactivation or
+reactivation surfaces the API's own message through `apiErrorMessage` with the row left as it was
+fetched - both controls share that reporting because they share `toggleActive`. The deletion rule
+itself is untouched: this is presentation, and `ProductDeletionPolicy` stays the one authority.
 
 Three things keep that honest:
 
@@ -12484,7 +12868,8 @@ a review, decided per entry, and then applied as one transaction.** **Issue #739
 made it the catalogue import**: it built the screen, pointed Admin → Imports → Import products at
 it, and removed the direct import — the endpoint, the use case, its port, its EF adapter and #736's
 refusal — for every business. There is one catalogue writer now, and every row it writes is a row
-somebody decided about.
+somebody decided about. (Issue #888 moved where the screen is reached from: it is the dedicated
+`/products/import` page rather than a panel on Admin → Imports. The writer is unchanged.)
 
 **Three endpoints, two capabilities.** `InventoryApi.Controllers.CatalogueReviewController`:
 
@@ -12648,13 +13033,54 @@ table is tenant-owned in the ordinary way, so two businesses may review and link
 ids and neither can read, apply or resolve anything of the other's
 (`EfCatalogueReviewStoreTenancyTests`).
 
+### The dedicated Import products page (issue #888)
+
+`/products/import` (`frontend/inventory-app/src/app/components/products/ProductImportPageComponent`)
+is the one place the product catalogue import is reached from. Until issue #888 the review had no
+page of its own: it was a panel `AdminImportsComponent` rendered below its import cards when a local
+`reviewing` flag was set, either by that page's own button or by the `?review=catalogue` query
+parameter issue #875's All Products button sent — so closing the review left the operator on
+Admin → Imports rather than where they came from. That parameter never reached `main`, and nothing
+reads it now.
+
+- **A top-level route, declared above the `products` shell**, carrying `MsalGuard`,
+  `accountStateGuard` and `requireCapability('Imports.Run')` — exactly the three guards
+  `/admin/imports` carries, because it is the same import behind the same capability. Inside the
+  shell it would have inherited an `Inventory.Operate` requirement on top of that; being a
+  two-segment path, exact matching also keeps it clear of the three-segment `products/:id/…` routes
+  whatever the declaration order. It takes **no provider route guard**: a connection that cannot
+  serve the catalogue is answered by the review's own unavailable/error handling, which is where
+  that answer has always been given, and nothing here bypasses a backend check.
+- **It renders `<app-catalogue-review>` straight away**, so the review starts reading the Nayax
+  catalogue on load exactly as it did when the button opened it, and the review's `closed` output
+  navigates to `/products` rather than only taking a panel off screen. The page composes the review
+  from where it still lives (`components/admin/imports/catalogue-review/`) and owns nothing of its
+  workflow — see [Page composition boundary](#page-composition-boundary-issue-191).
+- **A support session withholds the review and the page says so.** The page keeps the rule Admin →
+  Imports applied (issue #661): a session grants `Imports.Run`, so the review would otherwise render
+  fully and be refused only by the backend's read-only method rule. It is withheld rather than
+  disabled because the review reads the catalogue the moment it renders.
+- **Three entry points, one destination.** The sidebar's `Inventory` group carries `Import products`
+  directly under `Products` as `providerToolLink('Import products', '/products/import',
+  'Imports.Run')`, so it is left out without a usable provider and for a member without
+  `Imports.Run`, like the Admin `Imports` entry (see
+  [Provider-locked navigation](#provider-locked-navigation-issue-729) for what that answer is).
+  All Products' own **Import products** button keeps issue #875's visibility rules and links
+  here with no query parameter, and Admin → Imports' card is a link here too. The breadcrumb reads
+  **Products > Import products** (`layout/breadcrumbs/breadcrumb-routes.ts`, parent `PRODUCTS`).
+
+Nothing about the review itself changed with the move: same API calls, same two steps, same
+decisions, same applied result.
+
 ### The catalogue review screen (issue #739)
 
 `frontend/inventory-app/src/app/components/admin/imports/catalogue-review/CatalogueReviewComponent`
-is what **Admin → Imports → Import products** opens, and it is the whole of the product catalogue
-import now: there is no direct import behind the button any more (decision C2). The page composes it
-and owns nothing of its workflow, because it is a distinct workflow with its own two-step state, its
-own actions and its own loading and error lifecycle — see
+is what **Products → Import products** (`/products/import`) opens, and it is the whole of the
+product catalogue import now: there is no direct import behind it any more (decision C2). Issue #888
+gave it that page of its own — it was a panel Admin → Imports opened until then (see
+[The dedicated Import products page](#the-dedicated-import-products-page-issue-888)). The page
+composes it and owns nothing of its workflow, because it is a distinct workflow with its own two-step
+state, its own actions and its own loading and error lifecycle — see
 [Page composition boundary](#page-composition-boundary-issue-191).
 
 **Two ordered steps, categories first, and the order is a data rule rather than a layout choice.** A
@@ -12956,12 +13382,14 @@ that meaning.
 8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
    page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
    [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
-   below); its **Record refill** link opens `ManualPickListComponent` with this machine preselected,
-   which calls the same batch `RecordPickListRefill` use case every manual pick-list save already
-   used (issue #743) and so is available for exactly the same Nayax outage or unresolved machine/MDB
+   below); its **Record refill** link opens `ManualPickListComponent` with this machine preselected
+   as its one machine column, which records the pick through the batch use cases every manual
+   pick-list save uses - `RecordPickListRefill` for a pick with no machine (issue #743) and
+   `RecordMultiMachinePickListRefill` once any machine has a column (issue #897, called by issue
+   #904's matrix) - and so is available for exactly the same Nayax outage or unresolved machine/MDB
    case the old action was. `StockAdjustment.Source` (`Manual` by default, `Nayax` only when set by
    the sync-apply path) is unchanged and is still what keeps a manual and a Nayax-sourced refill
-   distinguishable in the stock history/audit trail - `RecordPickListRefill`'s own movements are
+   distinguishable in the stock history/audit trail - both use cases' own movements are
    `Manual` exactly like the removed action's were - even though both share
    `StockAdjustmentReason.MachineRefill`, so this reconciliation step still cannot mistake one for
    the other and applying a Nayax stock-adjustment event the operator already recorded this way still
@@ -13101,7 +13529,172 @@ removed (issue #306).
 
 Scheduling this sync automatically, writing to Nayax, auto-creating purchases/receipts to cover an
 insufficient-storage shortfall, and auto-deciding the accounting/tax treatment of a negative
-discrepancy are all explicitly out of scope for this feature.
+discrepancy are all explicitly out of scope for this feature. Issue #891 adds a Dashboard
+**reminder** that this sync is overdue, which is not a schedule: it only tells an operator that the
+explicit action above is waiting for them.
+
+### Dashboard reminder for overdue machine restock sync (issue #891)
+
+Sync Restock above is explicit: nothing imports a machine's stock-adjustment alerts until an
+operator opens that machine and asks. Forgetting it is therefore silent, and the storage inventory
+drifts in exactly the way that looks like missing product rather than missing bookkeeping — an
+inventory count found restocks that had not been synced for a week. This feature is the reminder,
+and only the reminder: it never syncs, applies an event, resolves a duplicate or changes an
+inventory quantity, and opening the Dashboard, following one of its links or opening a preview
+acknowledges nothing.
+
+**What makes a machine overdue: three business calendar days, not 72 hours.**
+`Inventory.Domain.Nayax.MachineRestockSyncReminderPolicy` owns every rule here, and it compares
+business calendar *dates* in the current business's own IANA timezone (issue #499), derived through
+`IBusinessCalendar`. A daylight-saving transition that makes a day 23 or 25 hours long therefore
+cannot move the boundary, and an operator who syncs each morning is never warned because the clocks
+changed. `OverdueAfterDays` is `3`, which is also the Sync Restock dialog's own From-date default
+window, so the reminder and the dialog describe one window rather than two.
+
+**Successful coverage is recorded, never inferred.** `SyncMachineStockFromNayax` records that a run
+succeeded only after its alert read, its import and its preview construction have *all* completed.
+A run that threw, imported partially or never built a preview records nothing at all; a run that
+succeeded and found no alert records coverage exactly as one that found ten, because an empty
+answer from Nayax is an answer. Nothing else writes it: it is never derived from a
+`NayaxMachineStockEvent`'s `CreatedAt`/`ProcessedAt`, from the latest-sales or catalogue sync, or
+from a machine stock count, and no migration backfills it. **It is also never a claim of complete
+historical coverage** — the Lynx contract for `GET /v1/machines/{MachineID}/lastAlerts` is "the most
+recent alerts" and declares neither a range nor a completeness guarantee, so what is recorded is
+when this workflow last succeeded and nothing more. A machine with nothing recorded is published as
+**"No recorded sync"**, not as "never synced": machines restocked before this metadata existed have
+no record of syncs that really happened, and every machine starts there.
+
+**Where it is stored, and the monotonic, credential-fenced conditional write.** Two additive
+nullable columns on `Machines` (`AddMachineRestockSyncCoverage`):
+`LastSuccessfulRestockSyncStartedAtUtc`, the instant the operation *started* — a fetch can only have
+accounted for alerts that already existed when it began — and
+`LastSuccessfulRestockSyncCredentialRevision`, the `BusinessNayaxConnection.CredentialRevision` it
+authenticated under. They sit on the machine row rather than in a table of their own precisely so the
+write can be one statement:
+`Inventory.Infrastructure.Persistence.EfMachineRestockSyncCoverageStore.TryRecordSuccessfulSyncAsync`
+is a single conditional `UPDATE ... WHERE` whose predicate *is* both comparisons, the same shape
+`EfNayaxConnectionStore.TryApplyStatusResultAsync` already uses, with
+`SetBasedWriteEnforcer.RequireWritableScope` applied because an `ExecuteUpdate` never reaches
+`BusinessOwnershipEnforcer` (issue #681).
+
+The first condition is the **credential fence**: the business's stored connection must *still* hold
+exactly the revision being recorded. `CredentialRevision` only ever increases — the save increments
+it in the database, nothing lowers it and nothing deletes the row — so that equality is what
+*proves* no credential save landed between the use case's revision read and this write, and
+therefore that every Nayax request of the operation resolved its credentials from that same
+revision.
+
+The second orders coverage by `(revision, started instant)`, and only a strictly greater pair wins:
+
+- a higher revision always wins — the credentials were replaced and this is the first success under
+  the new ones;
+- at the same revision, only a later start instant wins, so two concurrent syncs cannot let the one
+  that started earlier move the timestamp backwards;
+- a *lower* revision never wins, which refuses an old-revision completion in the one case the fence
+  cannot speak about — stored coverage already newer than what the operation can claim.
+
+**Why the fence and not the read.** `SyncMachineStockFromNayax` reads the revision before its first
+Nayax call, from `INayaxConnectionStore.FindAsync` (the status and revision, never the token) — but
+that read is *not* the credential snapshot the operation authenticates with. The credentials of each
+ordinary Nayax call are resolved per call by `INayaxRequestCredentialProvider`
+([Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)), inside the call, so a
+save landing after the use case's read and before the request captured its credentials would have the
+request running under revision R+1 while the use case still held R. The use case cannot see that, and
+the pre-read on its own is therefore a *candidate* revision rather than provenance evidence. The
+fence is what turns it into evidence: a save anywhere in that window — before or after the request
+authenticated — moves the stored revision past the candidate, matches no row, and leaves the coverage
+unrecorded rather than misattributed. The reminder keeps warning, which is the safe direction.
+Reading side, the same rule applies through `MachineRestockSyncReminderPolicy.IsCoverageCurrent`:
+coverage stamped with any revision other than the connection's current one is read as no recorded
+sync at all.
+
+Both interleavings are pinned relationally in
+`backend/Inventory.IntegrationTests/Application/MachineStockSync/MachineRestockSyncCoverageTests.cs`,
+with the credentials replaced by the real connection store and the request's own revision resolved by
+the real credential provider at the moment the request happens, and with no coverage pre-seeded — so
+the refusal can only be the fence. The earlier/later completion cases are exercised there as
+genuinely overlapping operations held at barriers inside their own Nayax request, across two
+businesses whose machines share one provider number.
+
+**Recording the claim can fail without costing the operator their reconciliation.** The coverage
+write is the last thing `SyncMachineStockFromNayax` does, and a failure of it is swallowed: the
+alerts are already imported and the preview is the operator's working list. The unrecorded coverage
+leaves the Dashboard warning that the machine is overdue, which is a reminder too many rather than a
+machine quietly presented as fresh.
+
+**What counts as pending work.** Exactly what the Sync Restock working list already treats as
+outstanding: an imported event that is still `Unprocessed` and not explicitly reconciled as already
+recorded manually. A needs-review event, an insufficient-storage event and an unresolved
+possible-duplicate event therefore all count — each is work an operator still has to do — while an
+applied event and one reconciled as already recorded manually do not. **There is no date bound**: an
+event that ages out of the three-day window is still unresolved work, and letting the window clear it
+is the silent disappearance this reminder exists to prevent. Because that is also wider than the
+dialog's default From date, a machine with pending work older than that date is flagged
+`hasPendingWorkBeforeDefaultFrom`, and the banner tells the operator to clear the From date or move
+it back to the oldest pending date — otherwise the work would stay hidden inside the dialog they
+were just sent to. The counts describe **persisted** facts only: a zero says nothing about alerts
+Nayax holds that nobody has fetched, which is why an overdue fetch and pending events are reported as
+two separate conditions and either one alone puts a machine on the banner.
+
+**The Dashboard read is local, and it is read-only.**
+`Inventory.Application.MachineStockSync.GetMachineRestockSyncReminder` makes exactly two local
+reads — the business's own connection record without its token, and one aggregate query over the
+machines and their imported events (`IMachineRestockSyncCoverageStore.GetProviderMachineCoverageAsync`)
+— and no Nayax request at all. It decrypts no credential, calls no per-machine endpoint, never
+invokes the mutation-capable preview endpoint, and writes nothing. The aggregate is two statements
+rather than a join, because the two sides are keyed differently: a machine by `Machines.Id`, an
+event by the provider's machine number, with `Inventory.Domain.Providers.NayaxExternalId` as the one
+translation (see [Local machines and external machine ids](#local-machines-and-external-machine-ids-issue-740)).
+Both halves are scoped by the central tenant query filters, so two businesses whose machines
+legitimately share provider number 900 never see one another's coverage or counts.
+
+**Three businesses are shown nothing at all, each with its own stable reason.** The response is a
+union — `MachineRestockSyncReminderDto`, or `HiddenMachineRestockSyncReminderDto` with
+`applicable: false` and a `reason` code — rather than a reminder with an empty machine list, for the
+same reason `UnavailableDashboardSectionDto` is a union: an empty list reads as "every machine is up
+to date", and that is a claim about machines.
+
+- `SupportView` — a support session resolves no Nayax credentials and may take no action
+  (issue #551), so a reminder to go and sync would name work its reader cannot do. The decision is
+  taken from `IBusinessScope.State`, the very state `NayaxRequestCredentialProvider` refuses in, and
+  it is made before anything is read.
+- `NayaxNotConnected` — the business has no credentials `NayaxConnectionStatusGate` allows. Nayax is
+  an optional add-on, so this is an ordinary property of a working business, not an error.
+- `NoProviderMachines` — the business's sales provider names none of its machines. A machine an
+  operator created themselves carries no `ExternalMachineId` and so has no provider restock sync to
+  be overdue for; such machines are absent from the aggregate entirely.
+
+**Whether Sync Restock will actually work is reported honestly, from local state alone.** Whether
+the Lynx machine-alerts permission is granted can only be settled by a Nayax call, and this reminder
+makes none; what is stored is the connection status and whether the last completed check left the
+machine-scoped checks unverified (issue #537). So `syncAvailability` has exactly two values:
+`Confirmed` for a `Ready` connection whose machine checks were verified, and `NotConfirmed` for
+everything else the gate allows — `PendingPermissions`, or `Ready` with the machine checks still
+pending. With `NotConfirmed` the banner says Sync Restock may be unavailable and points at the Nayax
+connection (as a link for a member with `Integration.Manage`, as "ask a business Owner" otherwise)
+instead of presenting a working action.
+
+**Authorization.** `InventoryApi.Controllers.MachineRestockSyncRemindersController` is a thin
+binding over the use case and declares `Inventory.Operate` (class 1 of issue #525) — the capability
+Sync Restock itself requires, because a role that may not reconcile restocks has nothing to do with
+a reminder to go and reconcile them. It takes no business, machine or site identifier from the
+caller. It is its own controller rather than an action on `DashboardController` for exactly the
+reason `ProductPurchaseCostsController` is: a controller declares one capability for all its
+actions, and putting this on the Dashboard's controller would have widened it to `Dashboard.View`.
+
+**Frontend.** `components/dashboard/machine-restock-sync-reminder/MachineRestockSyncReminderComponent`
+is a focused child component the Dashboard composes with
+`<app-machine-restock-sync-reminder></app-machine-restock-sync-reminder>`; it owns its capability
+decision, its one request, its loading/hidden/failed lifecycle and its own wording, and the page
+only places it. Like `LegacyBusinessSettingsPromptComponent` — and unlike `NayaxStatusBannerComponent`'s
+fail-open default — it fetches nothing while `Inventory.Operate` is not affirmatively granted, and it
+asks for nothing at all while a support session is active. **A failed read is visible**: it renders
+"Machine restock sync status is unavailable … unknown rather than up to date", because rendering
+nothing would read as "no machine needs attention", which is the one thing a failed read cannot say.
+Each row links to `/machines/{localMachineId}` and names the **Sync Restock** action there; the
+banner itself offers no action, and the component derives no date, threshold or count of its own -
+the three-day rule, the business dates, the day counts and the pending definition are all the
+server's.
 
 ### Machine latest sales (issue #768)
 
@@ -13204,6 +13797,18 @@ boundary](#page-composition-boundary-issue-191). Changing the machine switches t
 request stream, so an in-flight read for the machine the operator navigated away from is
 unsubscribed and its late answer ignored, and the rows clear at the same moment — the shape issue
 #669 established for a superseded business context.
+
+**The Sales tab pages the one loaded window client-side** (issue #886). The endpoint and the use
+case above are unchanged: `MachineLatestSalesComponent` still makes exactly one `getLatestSales`
+call per load and per Refresh, and the whole answer - every sale Nayax's rolling window reported -
+is already in `latest.sales` before any page is shown. Previous/Next and a page-size choice of 20,
+50 or 100 (default 20) then narrow which of those already-loaded rows are rendered; neither ever
+calls the API or Nayax again, because there is nothing left to fetch. The page resets to 1 whenever
+a fresh answer replaces the current one - on load, on Refresh and on a machine change - and whenever
+the page size changes, while the page size itself survives a Refresh. Previous is disabled on page 1
+and Next on the last page, and both controls are hidden (with the "Showing" range line still shown)
+once every loaded row already fits on one page. This is presentation only: no field, order or
+withheld-amount rule above changes between pages.
 
 The page itself owns only the tabs. **Sales** is first and is the tab every machine opens on
 (the owner's 18 October 2026 decision), **Products** is second, and they are an ARIA tab list with
@@ -14040,7 +14645,14 @@ The other consequence is that nothing in validation notices when the application
 
 **What it covers.** The reorder alert → supplier order → receive-as-purchase chain (including the resulting AVCO position); the stock-correction workflow, where a positive magnitude in the form must persist a negative movement; purchase create/edit/delete inventory and costing effects at smoke level; a report state where COGS and profit are unavailable and must not render as zero; and tenant isolation across two synthetic businesses, by page, by id, and for an authenticated actor with no membership. It deliberately does not cover every page, the interactive Entra sign-in, or anything that would need a live Nayax or production service.
 
-It also holds one **layout** check, which is here for a reason the other tests are not: the rendered geometry of the Needs Ordering search/filter toolbar at 1440px and 390px (issue #832, `needs-ordering-toolbar-layout.e2e.ts`). Jest runs in jsdom, which computes no flex geometry and no scroll width, so "aligned right on desktop" and "wraps instead of overflowing on a narrow screen" cannot be asserted there at all — only the classes and the DOM order can. That check reads the one seeded alerting product and **writes nothing**, so it has to run before the reorder workflow test turns that alert into a supplier order and leaves the page with no rows; the suite runs its files in alphabetical order with one worker, which keeps it ahead. A layout check belongs here only when the question is genuinely about laid-out boxes; placement, DOM order and conditional rendering stay in the Jest specs beside the component.
+It also holds several **layout** checks, which are here for a reason the other tests are not: Jest runs in jsdom, which computes no geometry at all, so the Jest specs beside a component can assert its classes, its DOM order and what it renders conditionally, and nothing about laid-out boxes. A layout check belongs here only when the question is genuinely about those boxes; placement, DOM order and conditional rendering stay in the Jest specs. The two Needs Ordering checks are:
+
+- **The search/filter toolbar at 1440px and 390px** (issue #832, `needs-ordering-toolbar-layout.e2e.ts`): "aligned right on desktop" and "wraps instead of overflowing on a narrow screen" need real flex geometry and a real scroll width.
+- **The "Mark products as ordered" dialog on a short viewport** (issue #906, `needs-ordering-dialog-scroll.e2e.ts`): that the panel bounds itself to the viewport instead of being clipped by the fixed backdrop, that the body between the heading and the buttons genuinely overflows (`scrollHeight` above `clientHeight`, asserted so the test cannot pass without exercising the scroll path), and that the heading, the product row and Create order are each reachable — the heading and the buttons because they sit outside the scrolling body, the row because that body scrolls. It reaches overflow with a **390x320** viewport rather than by selecting more products: the fixture seeds exactly one alerting product per business, and issue #906 excluded any backend or fixture change, so a viewport short enough that even one product row does not fit is how this suite can ask that question at all.
+
+Both of them read the one seeded alerting product and **write nothing** — the dialog check opens the dialog and cancels it, never submitting an order — so both have to run before the reorder workflow test turns that alert into a supplier order and leaves the page with no rows. The suite runs its files in alphabetical order with one worker, which keeps `needs-ordering-dialog-scroll.e2e.ts` ahead of `needs-ordering-toolbar-layout.e2e.ts` and both ahead of `reorder-to-supplier-order-to-purchase.e2e.ts`. The checkbox and radio geometry of issues #872 and #874 (`avco-transition-checkbox-layout.e2e.ts`, `checkbox-radio-global-sizing.e2e.ts`) is measured here for the same jsdom reason. Being in this suite, none of these checks runs in repository validation, so they protect a change only when somebody runs the suite.
+
+New Product's titled sections at 1440px and 375px are the same kind of check (issue #892, `new-product-form-layout.e2e.ts`): aligned input tops in each paired row, a compact *Active product* checkbox, the action row below the GST choice with Tab reaching *Create Product* from it, and no horizontal overflow. It only opens `/products/new` and measures, so it writes nothing, needs no seeded row and is independent of the file order.
 
 ## Build and delivery
 

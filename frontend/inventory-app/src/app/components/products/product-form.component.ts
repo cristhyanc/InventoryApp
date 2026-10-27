@@ -84,7 +84,9 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     initialUnitCost: null as number | null,
     lowStockThreshold: 5,
     restockTo: 5,
-    unit: 'unit',
+    // Empty on New Product: the label is required (issue #895), so the operator types the one the
+    // product is counted in rather than saving a "unit" nobody chose.
+    unit: '',
     categoryId: '' as number | '',
     isActive: true
   };
@@ -131,7 +133,10 @@ export class ProductFormComponent implements OnInit, OnDestroy {
           initialUnitCost: null,
           lowStockThreshold: p.lowStockThreshold,
           restockTo: p.restockTo,
-          unit: p.unit ?? 'unit',
+          // A stored label that is missing or blank opens the field **empty** (issue #895), not
+          // prefilled with "unit": the label is required, so the operator chooses one for a legacy
+          // product rather than having one substituted - and saved - without being asked.
+          unit: p.unit ?? '',
           categoryId: p.categoryId ?? '',
           isActive: p.isActive
         };
@@ -181,6 +186,18 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     return null;
   }
 
+  /**
+   * Whether the Unit Label field is empty, so the form shows its required message and Save is
+   * unavailable (issue #895). Whitespace is no label: the API refuses it too, with this same
+   * sentence (`Inventory.Domain.Products.ProductCataloguePolicy.UnitRequiredMessage`).
+   *
+   * It is `true` on an existing product whose stored label was missing, which is exactly the case
+   * the operator is being asked to resolve.
+   */
+  get unitMissing(): boolean {
+    return !this.form.unit.trim();
+  }
+
   /** The label of the page's one submit control, which names the write it would actually make. */
   get submitLabel(): string {
     return this.productId ? 'Update Product' : 'Create Product';
@@ -192,7 +209,7 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       return true;
     }
 
-    return this.form.restockTo < this.form.lowStockThreshold;
+    return this.unitMissing || this.form.restockTo < this.form.lowStockThreshold;
   }
 
   save(): void {
@@ -209,6 +226,13 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     }
     if (!this.form.name.trim()) {
       this.error = 'Product name is required.';
+      return;
+    }
+    // Checked here as well as shown beside the field and disabled on the button, so a blank label is
+    // never sent (issue #895). The API refuses it too - outright on a create, and on an update
+    // whenever the stored label is nonblank - and words it the same way.
+    if (this.unitMissing) {
+      this.error = 'Unit label is required.';
       return;
     }
     if (!this.productId && this.form.initialUnitCost !== null && this.form.initialUnitCost < 0) {
@@ -236,7 +260,7 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       description: this.form.description || null,
       lowStockThreshold: this.form.lowStockThreshold,
       restockTo: this.form.restockTo,
-      unit: this.form.unit || null,
+      unit: this.form.unit.trim(),
       categoryId: this.form.categoryId === '' ? null : this.form.categoryId,
       isActive: this.form.isActive
     };

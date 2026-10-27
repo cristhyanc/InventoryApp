@@ -1,0 +1,70 @@
+<!--
+  The Dashboard's machine restock-sync reminder (issue #891).
+
+  Three things can be on screen and never two of them: the banner, the sentence that says the read
+  failed, and nothing at all. "Nothing at all" is only ever reached from a loaded answer - a
+  business this reminder does not apply to, or one whose machines are all synced and clear - which
+  is why the failed case says so out loud instead of quietly rendering nothing.
+
+  `<output>` rather than `alert`: this is a standing condition an operator acts on when they get to
+  it, not an interruption, and the Dashboard renders it on every load while the work is outstanding.
+  `<output>`'s implicit role is already `status`, which is why it is used in place of a `div` with
+  an explicit `role="status"` attribute.
+-->
+@if (state === 'failed') {
+  <output class="alert alert-warning mb-4" data-testid="restock-sync-reminder-unavailable">
+    <p class="alert-title">Machine restock sync status is unavailable.</p>
+    <p class="mt-1">{{ unavailableMessage }}</p>
+  </output>
+} @else if (isShown && reminder) {
+  <output class="alert alert-warning mb-4" data-testid="restock-sync-reminder">
+    <p class="alert-title">Machine restock sync needs attention.</p>
+    <p class="mt-1">
+      Review restocks to keep storage inventory accurate. A machine is listed here when its last
+      successful restock sync is {{ reminder.overdueAfterDays }} or more days old, or when restock
+      events are still waiting for you.
+    </p>
+
+    @if (isSyncAvailabilityUnconfirmed) {
+      <p class="mt-1" data-testid="restock-sync-reminder-availability">
+        This business's Nayax connection has not been confirmed for machine restock alerts, so Sync
+        Restock may be unavailable until it is.
+        @if (canManageIntegration) {
+          <a
+            routerLink="/admin/nayax-settings"
+            class="btn-link"
+            data-testid="restock-sync-reminder-availability-link"
+          >Check the Nayax connection</a>
+        } @else {
+          <span>Ask a business Owner to check the Nayax connection.</span>
+        }
+      </p>
+    }
+
+    <ul class="mt-2" data-testid="restock-sync-reminder-machines">
+      @for (machine of reminder.machines; track machine.localMachineId) {
+        <li class="mt-1" [attr.data-testid]="'restock-sync-reminder-machine-' + machine.localMachineId">
+          <a
+            [routerLink]="['/machines', machine.localMachineId]"
+            class="btn-link"
+            [attr.data-testid]="'restock-sync-reminder-link-' + machine.localMachineId"
+          >{{ machine.machineName }}</a>:
+          <span
+            [attr.title]="machine.lastSuccessfulSyncAtUtc ? (machine.lastSuccessfulSyncAtUtc | businessDateTime) : null"
+          >{{ lastSyncedLabel(machine) }}</span>,
+          <span
+            [attr.title]="machine.oldestKnownPendingEventAtUtc ? ('Oldest: ' + (machine.oldestKnownPendingEventAtUtc | businessDateTime)) : null"
+          >{{ pendingLabel(machine) }}</span>.
+          Open the machine and use <strong>Sync Restock</strong> to review them.
+          @if (machine.hasPendingWorkBeforeDefaultFrom) {
+            <span [attr.data-testid]="'restock-sync-reminder-older-than-default-' + machine.localMachineId">
+              Some of this work is older than the dialog's default From date
+              ({{ reminder.defaultFromBusinessDate | date: 'd MMM yyyy' }}), so clear that date or
+              move it back to the oldest pending date to see all of it.
+            </span>
+          }
+        </li>
+      }
+    </ul>
+  </output>
+}

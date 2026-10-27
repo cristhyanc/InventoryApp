@@ -29,6 +29,12 @@ namespace InventoryApi.DTOs;
 /// <para><strong>And no selling price since issue #792</strong> (A2 of #786), on the same terms: a
 /// submitted <c>unitPrice</c> is not bound and nothing is stored for it.
 /// <see cref="InitialUnitCost"/> is a cost, not a price, and is unaffected.</para>
+///
+/// <para><strong><see cref="Unit"/> is required since issue #895.</strong> The property stays
+/// nullable because the wire contract is unchanged - a client may still omit <c>unit</c> or send
+/// <c>null</c> - but a null, empty or whitespace value is refused with <c>400</c> and
+/// <c>Inventory.Domain.Products.ProductCataloguePolicy.UnitRequiredMessage</c>, and nothing is
+/// stored. An accepted label is stored trimmed. The length and type limits are unchanged.</para>
 /// </summary>
 public record ProductCreateDto(
     string Name,
@@ -55,6 +61,15 @@ public record ProductCreateDto(
 /// <para><c>supplierId</c> is gone since issue #787 (A1 of #786), and <c>unitPrice</c> since issue
 /// #792 (A2 of #786), for the same reason each left <see cref="ProductCreateDto"/>: a product has
 /// neither to change.</para>
+///
+/// <para><strong><see cref="Unit"/> may not be blanked since issue #895</strong>, and that is
+/// narrower than "required": a null, empty or whitespace value is refused with <c>400</c> and
+/// <c>Inventory.Domain.Products.ProductCataloguePolicy.UnitRequiredMessage</c> only while the
+/// <em>stored</em> label is nonblank, so no request erases a label. A product whose stored label is
+/// already blank - a legacy row nothing ever gave one - accepts a blank value and keeps the blank
+/// label, because the Products list deactivates and reactivates a product by sending the whole
+/// product back through this contract. An accepted nonblank label is trimmed and stored as
+/// before.</para>
 /// </summary>
 public record ProductUpdateDto(
     string Name,

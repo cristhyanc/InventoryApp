@@ -8,6 +8,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
+- A **home dashboard reminder when machine restock sync is behind** (see [Machine restock sync reminder](#machine-restock-sync-reminder)): Sync Restock is something an operator asks for, so the dashboard says which Nayax-linked machines have not had a successful restock sync in the last three business days, or still have restock events waiting to be reviewed.
 - Nayax product and transaction imports with explicit payment/status handling.
 - Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
@@ -1129,10 +1130,39 @@ maintains every product and category itself, and a business with one keeps the f
 does not manage.
 
 - **Create a product** with `POST /api/products`, and a **category** with `POST /api/categories`.
-  Both answer the created record with its new id. A product needs a name; a category needs a name,
+  Both answer the created record with its new id. A product needs a name and a **unit label**; a
+  category needs a name,
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **Unit Label is required** (issue #895). It is what a quantity of this product is counted in — a
+  bag, a can, a bottle — and every product you create or edit by hand has one. **Products → New
+  Product** and **Products → Edit Product** mark the field with `*`, refuse to save while it is
+  empty or only spaces, and say "Unit label is required." beside it; what is saved is the label
+  trimmed. New Product starts with the field **empty** (it used to say `unit`), so you type the
+  label the product is counted in; saving without one is refused. **A product from before this rule, with no label stored, opens Edit
+  Product with the field empty** rather than with `unit` filled in for you: you choose the label it
+  should have, and nothing was changed or filled in behind you. `POST /api/products` refuses a
+  missing label with `400` and that same sentence, and saves nothing. `PUT /api/products/{id}`
+  refuses one **only when the product's stored label is not blank** — no request can erase a label —
+  while a product whose stored label is already blank is still accepted with none, so the Products
+  list's **Deactivate** and **Reactivate** (which send the whole product back) keep working for
+  those older products. Imported products are unaffected: the catalogue import gives a product it
+  creates the `unit` default and leaves a linked product's own label alone, and no label is
+  backfilled anywhere.
+- **New Product is read down in titled sections** (issue #892). **Products → New Product** groups
+  its fields under **Product details** — Name beside SKU, Category beside Unit Label, Description
+  across the row below them, and then the compact **Active product** checkbox — **Opening
+  inventory** (Opening Stock beside Initial Unit Cost) and **Reordering** (Low Stock Threshold
+  beside Restock To, with the same hints and the same "Restock To must be greater than or equal to
+  the Low Stock Threshold" message). Each section is one column on a narrow screen and two columns
+  from a medium one, and the controls in a row start at the same height, so a field's help text no
+  longer pushes the control beside it to the bottom of the row. **GST rule** is the last choice the
+  page asks for and the single **Create Product** / **Cancel** row is below it, by reading and by
+  Tab alike — so the rule is chosen before the product is created. Nothing else changed: the same
+  fields, values, defaults, labels and validation, the same category picker, the same
+  support-session restriction, and the same two writes described next. **Editing** a product keeps
+  its existing layout, because a provider-managed name and category are locked there.
 - **Choose the new product's GST rule while creating it** (issue #829). **Products → New Product**
   offers the same **GST rule** picker the edit page does — **Taxable**, **GST-free** or **No rule**,
   with the same meanings and the same help. The rule is its own resource, so creating a product with
@@ -1141,7 +1171,8 @@ does not manage.
   If the rule write fails the page says exactly that — "The product was created, but its GST rule
   was not saved." — keeps the product that now exists along with the rule you chose, and offers
   **Save GST rule** beside the picker, which retries the rule alone with the choice on screen now.
-  **Create Product** is gone at that point, so there is no way to create a second product; a create
+  **Create Product** is gone from the row below at that point, so there is no way to create a
+  second product; a create
   whose rule was not stored is never reported as finished, and you can also leave the page and set
   the rule later by editing the product.
   Choosing the rule here classifies no purchase and is not retroactive — see
@@ -1170,7 +1201,8 @@ does not manage.
   manages is locked there.
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
   category** as well as the SKU, description, unit, low-stock threshold, restock target
-  and active flag. There is no supplier among them — see
+  and active flag. The unit label may not be blanked — see **Unit Label is required** above for the
+  one case a blank one is still accepted. There is no supplier among them — see
   [A product carries no supplier](#a-product-carries-no-supplier) — and no selling price either —
   see [A product carries no selling price](#a-product-carries-no-selling-price). **Edit a category**
   with `PUT /api/categories/{id}`.
@@ -1189,8 +1221,8 @@ does not manage.
   page's own search/filter toolbar to the right of search, Category and Reset (issue #832) — it used
   to sit in its own row below the toolbar. **Import products** sits beside New Product on that same
   toolbar (issue #875) for a member who holds `Imports.Run` while Nayax is usable and no support
-  session is active — it opens the same catalogue review Admin → Imports does, at
-  `/admin/imports?review=catalogue`, rather than being a second entry point with its own behaviour.
+  session is active — it opens the catalogue import's own page, **Products → Import products**
+  (`/products/import`, issue #888), rather than being a second entry point with its own behaviour.
   **A catalogue read Nayax has refused hides it even while the connection is usable.** A
   `PendingPermissions` connection is usable precisely because the Nayax account may have granted some
   reads and refused others, so the button asks about the catalogue read itself as well: once that
@@ -1218,7 +1250,11 @@ does not manage.
   and the reorder alerts, keeps its history, stock and costs, and can be reactivated at any time.") and
   then writes the ordinary product update with `isActive: false`. The **Status** badge deactivates
   through that same confirmation; reactivating a deactivated product stays one click, and a
-  deactivated product offers no Deactivate. That `canDelete` answer is **advisory**: it is as
+  deactivated product's row offers **Reactivate** in that same slot instead of Deactivate (issue
+  #900), reusing the Status badge's own one-click activation write rather than a new endpoint. A
+  failed reactivation leaves the product deactivated and shows the server's own refusal, the same
+  way a failed deactivation does - the two controls share the one write and its error reporting.
+  That `canDelete` answer is **advisory**: it is as
   fresh as the last fetch, the delete counts again inside its own transaction, and a refusal for a
   product the screen had offered is still shown as the server worded it. A **category** has no such
   answer published and no retirement flag at all, so **Categories** attempts every delete and shows
@@ -1259,13 +1295,17 @@ does not manage.
   "cola", "COLA" and "Cola" all find a product named "Coca Cola".
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
-- **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739). **Admin →
-  Imports → Import products** opens it, for every business, and so does **Products (All Products) →
+- **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739), **and it
+  has its own page: Products → Import products** (`/products/import`, issue #888). The sidebar's
+  **Inventory → Import products** entry goes there, for every business that may run imports with a
+  usable Nayax connection, and so does **Products (All Products) →
   Import products** (issue #875) when the signed-in member may run imports, Nayax is usable, no
   support session is active, and Nayax has not refused this application permission to read the
   catalogue — a refused catalogue read hides that button even though the connection itself is usable
   (`PendingPermissions` is a usable status), while a permission nothing has stated yet still offers
-  it. Both buttons open the identical review. It is no longer refused for a business
+  it. **Admin → Imports → Import products** is a link to the same page, so every entry point opens
+  the identical review; the review itself used to be a panel at the bottom of Admin → Imports, and
+  closing it now returns you to Products. It is no longer refused for a business
   that keeps its own products (it was, until this change, because the old import recognised a product
   only by Nayax's own id and would have created a duplicate of each of yours), and there is no
   longer a direct import that writes Nayax's catalogue straight through: nothing is written until you
@@ -1347,7 +1387,7 @@ its stored values are gone.
 - The **product form** has no Unit Price input. The **All Products** and **Needs Ordering** pages
   have no Price column or price sort, the home dashboard's **Reorder Alerts** table has no Unit
   Price column, and the **Stock History** page's product summary shows three tiles instead of four.
-- **Import products** (Admin → Imports) no longer asks you to keep or take a Nayax price. Linking a
+- **Import products** (Products → Import products) no longer asks you to keep or take a Nayax price. Linking a
   product still replaces its **name and category** with the provider's, and those changes are still
   listed as applied automatically; there is simply no price to decide about any more.
 - **A catalogue review you had already started before this release cannot be applied.** It was read
@@ -1391,6 +1431,46 @@ need** column is gone; it was only the stock figure minus the machine-need figur
 - **The two columns need the same permission as the dashboard's money figures.** An Operator does not
   see them at all, and nothing is requested on their behalf; a Manager or an Owner sees both.
 
+## Machine restock sync reminder
+
+**Sync Restock never runs by itself.** You open a machine and ask for it, which means forgetting it
+is silent: the storage figures drift, and what you see looks like missing product rather than
+missing bookkeeping. The home dashboard therefore shows a reminder when that work is waiting.
+
+- **A machine is listed for either of two reasons.** Its last fully successful restock sync is three
+  or more business days old — counted as calendar days in your own business time zone, so a
+  daylight-saving change never moves the line — or it still has imported restock events nobody has
+  resolved. Either one alone is enough, and both are shown: a recent sync clears only the first.
+- **"No recorded sync" means exactly that, not "never synced".** A successful sync has been recorded
+  since this feature was added; machines you were already syncing before then start with nothing
+  recorded, and nothing guesses a date for them from an event, a sales sync or a stock count. The
+  first time you run Sync Restock for a machine, it fills in.
+- **A fetch only counts when the whole thing worked.** A sync that failed, or that imported only part
+  of what it read, records nothing at all — and one that succeeded and found no new alert counts as
+  a success, because an empty answer is an answer. A successful sync is never a promise that all of
+  your history has been fetched: Nayax's last-alerts list is a rolling window of recent events.
+- **Pending counts are what has been imported.** They include events needing review, events you have
+  not got enough storage stock for, and possible duplicates you have not resolved; they exclude ones
+  you have applied or marked as already recorded manually. A count of zero means nothing imported is
+  outstanding — it cannot promise that Nayax is holding no alert nobody has fetched yet, which is why
+  the overdue-sync warning is reported separately.
+- **Old work never disappears quietly.** The Sync Restock dialog opens on the last three days by
+  default, so when a machine has pending events older than that, the reminder says so and tells you
+  to clear the From date or move it back to the oldest pending date.
+- **It reminds, and does nothing else.** Each row links to the machine and names the **Sync Restock**
+  action there. Opening the dashboard, following a link or opening a preview applies nothing,
+  resolves no duplicate, changes no inventory and does not mark anything as seen — after you apply or
+  reconcile, reloading the dashboard shows what is left. The dashboard read is entirely local: it
+  makes no Nayax request, so it costs nothing and cannot fail because Nayax is slow.
+- **When it is not shown.** A business with no usable Nayax connection, and machines you created
+  yourself rather than ones Nayax names, have no provider restock sync to be behind on. It is hidden
+  inside a [support session](#super-admin-support-sessions) too, which is read-only and cannot sync.
+  If the reminder itself cannot be loaded it says so — unknown, rather than up to date — and the rest
+  of the dashboard keeps working.
+- **Who sees it.** The same permission as Sync Restock itself, which every role holds (Operator,
+  Manager and Owner). If your Nayax connection has not been confirmed for machine alerts, the
+  reminder says the sync may be unavailable instead of sending you to an action that will refuse you.
+
 ## Product and supplier GST rules
 
 Purchase amounts are GST-inclusive, and GST is recorded per purchase line and per delivery/package
@@ -1402,7 +1482,8 @@ classified:
   bookkeeping configuration rather than a catalogue field.
 - **Products → New Product → GST rule** (issue #829). The same picker, for a product that does not
   exist yet: there is no stored rule to read, so it is ready to use immediately and has no Save of
-  its own — **Create Product** saves it with the product, as described under
+  its own — **Create Product**, in the action row below it (issue #892), saves it with the product,
+  as described under
   [Products and categories](#products-and-categories). A **Save GST rule** button appears there only
   if the product was created and its rule was not, to retry that one write.
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
@@ -1585,7 +1666,7 @@ the page asks you to wait a few minutes, and no call reaches Nayax.
 
 ### Connecting Nayax when you already have products
 
-Once the connection is saved, **Admin → Imports → Import products** brings Nayax's catalogue in.
+Once the connection is saved, **Products → Import products** brings Nayax's catalogue in.
 It opens a **review**: nothing is written until you press Apply, and every row it writes is a row
 you decided about. That is how a business that has been keeping its own products connects Nayax
 without ending up with two of everything — matching names are never linked for you, because two
@@ -1797,8 +1878,9 @@ that cannot be used.
   offered — there is nothing to switch to.
 - **Manual entry needs no machine, no fleet read and no product read.** It lists the business's
   active products with a search box, a category filter and a "Taken" quantity box per row, from the
-  same catalogue the calculated view's Products filter already reads. Saving sends every entered
-  quantity as one request to the batch refill endpoint (`POST /api/pick-list/refills`), recording one
+  same catalogue the calculated view's Products filter already reads. With no machine selected,
+  saving sends every entered quantity as one request to the batch refill endpoint
+  (`POST /api/pick-list/refills`), recording one
   `MachineRefill` stock movement per product in a single all-or-nothing operation — a guarantee the
   machine-detail page's old per-product Restock action, since removed in favour of this screen (see
   [Record refill from a machine's page](#record-refill-from-a-machines-page) below), never had. A
@@ -1810,10 +1892,14 @@ that cannot be used.
   nothing is saved until you click Save and that Save then records one machine refill per quantity
   entered and reduces that product's storage quantity.
 - **A retry never double-deducts.** Each save keeps an exact record of what it last sent. Clicking
-  Save again with nothing changed — after a failure that could not be confirmed, for instance — resends
-  the identical request under the identical idempotency key, which the server answers with the result
-  it already recorded rather than taking the stock twice; changing any quantity before retrying sends
-  a new key, because it is a different pick.
+  Save again with nothing changed resends the identical request under the identical idempotency key,
+  which the server answers with the result it already recorded rather than taking the stock twice;
+  changing any quantity before retrying sends a new key, because it is a different pick. **While a
+  save's outcome could not be confirmed at all** — a dropped connection, a server error — nothing you
+  do on screen can send a *different* request: the screen keeps the exact pick it sent and offers
+  **Retry save**, which resends precisely that one, so an edited quantity, a removed machine column
+  or a reordered selection cannot turn one physical pick into a second deduction. Only once that
+  attempt is answered does Save start a new pick again.
 - **An unconfirmed save is not lost by switching views.** A save whose outcome could not be confirmed
   stays reported on the screen until a later Save settles it, and switching to the calculated view and
   back keeps every quantity you typed — so the retry is still the same request under the same key, not
@@ -1828,18 +1914,98 @@ that cannot be used.
   and "No active products match your filters." appears only after a successful read. If refreshing
   storage quantities after a save fails, the screen keeps the last list, says the quantities may be
   out of date and offers **Refresh**.
-- **An optional machine selector** (issue #794) lets an operator attribute a manual pick to one of
-  the business's own machines, the same local records the stock and expense screens use (see
+- **A machine selection** (issues #794 and #904) lets an operator attribute a manual pick to the
+  business's own machines, the same local records the stock and expense screens use (see
   [Choosing a machine on the stock and expense screens](#choosing-a-machine-on-the-stock-and-expense-screens)
-  above) — with or without a provider. It offers only **active** machines, by the name you gave each
-  one, with "No machine" as the default choice, and is shown at all only once the business has at
-  least one active machine; a business with none sees exactly what it always has, with no selector
-  and no machine recorded. The machine you choose is part of the exact request a save sends and of
-  what a retry compares: changing it, like changing a quantity, sends a new idempotency key, while
-  resending unchanged reuses the same key and the same machine. It is sent only on the refill you
-  save — never to the calculated matrix's own machine selection, which keeps using Nayax's fleet
-  untouched by this selector. A machine list that **failed** to load says so in the selector's place
-  and still lets you save without a machine, exactly as a business with none recorded would.
+  above) — with or without a provider. The **Machines** dropdown offers only **active** machines, by
+  the name you gave each one, and is shown at all only once the business has at least one active
+  machine; a business with none, or whose machine list **failed** to load (which says so in the
+  dropdown's place), sees exactly what it always has: the single "No machine" column, saved with no
+  machine recorded. The machines you select never reach the calculated matrix's own machine
+  selection, which keeps using Nayax's fleet untouched by this one.
+
+#### Entering one pick run across several machines (issue #904)
+
+An operator preparing one run usually visits several machines. Select them all in the Manual Pick
+List's **Machines** dropdown and each one gets its own quantity column, so the whole run is typed
+once and saved once.
+
+- **The row reads Product, Category, Storage Qty, Total Taken, then one column per machine.** Total
+  Taken is that product's own sum across the selected machines — what the pick takes off one shelf —
+  and under the table **Total storage required** is the whole pick's, counting the rows your search
+  or category filter is currently hiding, and saying how many units and products those are. A filter
+  hides rows; it never changes what Save sends.
+- **One Save sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
+  see [Recording one pick across several machines (the API)](#recording-one-pick-across-several-machines-the-api-issue-897)
+  below) — never one request per machine. That is the point of it: only one request can weigh each
+  product's **total** across the machines you allocated it to against the storage it comes off, so
+  six to one machine and six to another is refused as twelve against a shelf of ten rather than
+  half-saved. A refusal keeps everything you typed editable and puts the server's own message on each
+  cell it was about. Success reports the whole run — how many entries across how many machines — and
+  refreshes the storage quantities once.
+- **With no machine selected, nothing changes.** The screen is exactly the single "Taken" column
+  described above, saved through the existing endpoint as a refill attributed to no machine.
+- **Quantities are never silently moved, copied or dropped.** A quantity typed against "No machine"
+  is never copied into every machine column — that would invent a pick several times the size of the
+  one you typed — so selecting machines asks you to confirm discarding it first, and **Cancel keeps
+  everything**, including the selection you had. The same applies in reverse (clearing the machine
+  selection) and to **removing one machine column** that holds quantities: you are asked, by name,
+  and Cancel changes nothing at all.
+- **Nothing moves while a save is being sent.** The machine selection, the column removals and every
+  quantity box are locked until the request lands, so what is being answered is what was sent.
+- **A wide run stays inside the table.** The matrix scrolls inside its own bounded area, with the
+  machine headers staying readable, so many machine columns never widen the page — including on a
+  phone. Every quantity box is labelled with both its product and its machine for screen readers.
+- **Opening the screen from a machine's page** (the **Record refill** link) preselects exactly that
+  machine as the only column, and you can add more beside it.
+- **Read-only during a support session**, exactly as before: the quantity boxes and Save are hidden
+  and the screen says why.
+
+#### Recording one pick across several machines (the API, issue #897)
+
+A pick run usually visits several machines, and until now each machine had to be saved as its own
+request. Issue #897 adds one endpoint that records the whole run at once; the Manual Pick List's
+machine matrix (above) is what calls it, and `POST /api/pick-list/refills` is unchanged and still
+records a refill for no machine at all.
+
+```text
+POST /api/pick-list/multi-machine-refills
+{
+  "idempotencyKey": "<your own string for this submission>",
+  "notes": "optional",
+  "allocations": [
+    { "machineId": 11, "productId": 300, "quantityTaken": 6 },
+    { "machineId": 12, "productId": 300, "quantityTaken": 4 }
+  ]
+}
+-> 200 the recorded run: the key, the note, the server's instant, and per allocation the machine,
+      the product, the quantity and the id of the stock movement that recorded it, plus
+      "replayed": true when this key had already recorded it and nothing new was written
+-> 400 a problem document addressed per line (keys "allocations[i]", "idempotencyKey", "notes")
+-> 409 the key already recorded a different refill
+```
+
+- **All or nothing.** Every allocation is recorded as one `MachineRefill` stock movement attributed
+  to its own machine, in one transaction. Any refusal — one bad line, an inactive machine, a product
+  that is not yours, not enough stock, a failure part-way — records nothing at all, so a run is never
+  partly saved.
+- **Storage is checked against each product's total across the run.** Six to one machine and six to
+  another is twelve off one shelf: with ten in storage that is refused, and both lines say so, even
+  though each would fit on its own. This is the thing several separate requests could not get right.
+  The total is added up at full width, so quantities that are each a valid whole number but together
+  come to more than two billion are refused by this same rule and the refusal states the real total.
+- **Every allocation names a machine**, one of your own active machines (the same local machine
+  records the stock and expense screens use). A refill for **no** machine is still
+  `POST /api/pick-list/refills`, which is why that endpoint stays.
+- **Nothing is deducted twice.** The `idempotencyKey` is your own string for one submission: resend
+  the same run under the same key — in any order of allocations — and the server answers with what it
+  already recorded. Change anything about the run and it is a different submission, so send a new
+  key; reusing a spent key is refused. A key already used by `POST /api/pick-list/refills` is refused
+  here too, and vice versa: a recorded refill is never re-read as the other kind.
+- **It is an internal transfer, like every refill.** Storage quantity falls by what was taken;
+  historical cost, inventory value and profit are untouched, and no cost of goods sold is created.
+- **It needs the same permission as any stock write** (`Inventory.Operate`, with Pick List access),
+  and it is refused in a read-only support session like every other write.
 
 #### The menu without a usable provider
 
@@ -1902,7 +2068,8 @@ out.
   The Nayax permission *key* behind a read is not named, because no published contract states it (see
   [docs/architecture.md § Provider-locked navigation](docs/architecture.md#provider-locked-navigation-issue-729)).
 - **The provider's repair and admin tools are hidden, not locked**: Admin → Imports (the Nayax sales
-  and settlement imports) and Admin → Nayax Sale Timestamp Repair are left out of the menu until the
+  and settlement imports), Inventory → Import products (the catalogue review's own page, issue #888)
+  and Admin → Nayax Sale Timestamp Repair are left out of the menu until the
   connection is usable, because without a provider there is nothing of the provider's to import or
   repair. The costing and GST repairs are the business's own data and stay. **Admin → Nayax Settings
   is now Admin → Integrations** and is always reachable — it is where a connection is made — with the
@@ -1929,8 +2096,8 @@ connected (issue #740). Before it, a machine was never stored at all — every m
 of the live Nayax fleet — so a business with no provider had no machines.
 
 - **The Machines page is two lists.** *Your machines* is always there: it lists every machine this
-  business has recorded, active and inactive, and holds the Add, Rename, Deactivate and Reactivate
-  actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
+  business has recorded, active and inactive, and holds the Add, Rename, Deactivate, Reactivate and
+  Delete actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
   stock and Sync Restock workflow — appears below it only while the Nayax connection can serve the
   fleet read. With no usable provider the live section is not shown at all, and the page is the local
   machine list alone; if the fleet read fails for some other reason (an outage, a transport failure),
@@ -1941,16 +2108,26 @@ of the live Nayax fleet — so a business with no provider had no machines.
   resolves a machine by its name.
 - **Rename one** with `PUT /api/local-machines/{id}`.
 - **Deactivate and reactivate**, with `POST /api/local-machines/{id}/deactivate` and
-  `.../reactivate`. **There is no delete.** Recorded transactions, refills, machine counts and
-  expenses refer to a machine, so a machine that stops trading keeps all of its history and stays in
-  the list, marked *Inactive*, ready to be put back in service.
-- **A machine from Nayax is renamed and deactivated in Nayax, not here.** The list offers no
-  Rename or Deactivate on a row marked "From Nayax", and the API refuses both with `400` and the
-  sentence "This machine comes from Nayax and cannot be renamed here. Nothing was saved." (or
-  "deactivated here").
-  **Reactivate** is still offered, so a Nayax machine deactivated before this rule can be put back
-  in service. The machine keeps the name it was given when it was recorded or linked: nothing
-  copies a later Nayax rename across.
+  `.../reactivate`. **This is what a machine with history gets instead of a delete.** Recorded
+  transactions, refills, machine counts and expenses refer to a machine, so a machine that stops
+  trading keeps all of its history and stays in the list, marked *Inactive*, ready to be put back in
+  service.
+- **Delete a machine you added by mistake**, with `DELETE /api/local-machines/{id}` — and only one
+  that nothing refers to yet. **Delete** appears on a row only where the server says the machine may
+  be deleted, asks you to confirm and names the machine, and nothing is sent if you cancel. Every
+  other machine says, in the server's own words, what refers to it — "This machine cannot be deleted
+  because its history refers to it (2 machine stock counts, 1 operating expense)" — and is
+  deactivated instead. What counts as history is a machine stock count, a stock movement (a refill
+  included), a pick-list refill or an operating expense; **nothing is ever deleted along with the
+  machine**, which is exactly why a machine with any of them is refused. A machine from Nayax is
+  never offered Delete.
+- **A machine from Nayax is renamed, deactivated and deleted in Nayax, not here.** The list offers no
+  Rename, Deactivate or Delete on a row marked "From Nayax", and the API refuses all three with `400`
+  and the sentence "This machine comes from Nayax and cannot be renamed here. Nothing was saved." (or
+  "deactivated here", or "This machine comes from Nayax and cannot be deleted here. Nothing was
+  deleted."). **Reactivate** is still offered, so a Nayax machine deactivated before this rule can be
+  put back in service. The machine keeps the name it was given when it was recorded or linked:
+  nothing copies a later Nayax rename across.
 - **A machine the provider named is marked "From Nayax".** Every machine this database already
   referred to — through a sale, a refill, a machine count, an expense, a stock event, a sale
   timestamp repair or an inventory-cost transition — was given a local record when this change was
@@ -2064,21 +2241,23 @@ machine selector both exist.
 
 - **One link, not a control per product.** The link sits beside the product count in the Products
   tab and opens `/pick-list` in manual entry — [Recording a pick without a
-  provider](#recording-a-pick-without-a-provider) above — with this machine already chosen in its
-  machine selector, so you can search for whatever you took and save every quantity in the one
-  atomic, idempotent request that screen already makes. It is never shown while a [support
+  provider](#recording-a-pick-without-a-provider) above — with this machine already selected as its
+  one quantity column, so you can search for whatever you took and save every quantity in the one
+  atomic, idempotent request that screen already makes, and add the rest of the run's machines beside
+  it if the run continued. It is never shown while a [support
   session](#super-admin-support-sessions) is active, exactly as the Restock inputs it replaced never
   were, because the pick list itself refuses to save during one too.
 - **The machine chosen is always this business's own machine record**, never the sales provider's
   own machine number — the same local record the Machines page, Sync Restock and the machine's stock
   and expense figures already use. If that machine is no longer one of your active machines by the
   time the pick list opens — deactivated, for instance, in the moment between opening the two pages —
-  the pick list says so plainly next to its machine selector rather than quietly recording the refill
-  against no machine at all; you can still choose a machine yourself from the list, or save without
-  one. While the pick list is still confirming which machine the link named, it says so and Save
-  waits — you can type your quantities straight away, and saving becomes available the moment the
-  machine is settled, so a refill opened from a machine's page is never recorded against no machine
-  by accident. Entering a pick from the menu, with no machine linked, never waits for this.
+  the pick list says so plainly next to its machine selection rather than quietly recording the
+  refill against no machine at all; you can still choose a machine yourself from the list, or save
+  without one. While the pick list is still confirming which machine the link named, it says so and
+  Save waits — you can type your quantities straight away, they move into that machine's column the
+  moment it is confirmed, and saving becomes available then, so a refill opened from a machine's page
+  is never recorded against no machine by accident. Entering a pick from the menu, with no machine
+  linked, never waits for this.
 - **Sync Restock is unaffected.** It still imports Nayax's own stock-adjustment alerts and still
   recognises a refill you recorded manually — through this link or otherwise — as already accounted
   for, so applying the matching Nayax event afterward still cannot deduct the same storage twice.

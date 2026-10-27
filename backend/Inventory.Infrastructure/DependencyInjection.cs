@@ -254,6 +254,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
         services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
         services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+        // The Sync Restock workflow's own successful-fetch coverage and the unresolved-event counts
+        // the Dashboard reminder is built from (issue #891).
+        services.AddScoped<IMachineRestockSyncCoverageStore, EfMachineRestockSyncCoverageStore>();
         services.AddScoped<IMachineStockLedgerStore, EfMachineStockLedgerStore>();
         // What the machine itself reports it is holding (issue #56). Scoped because reading it spends
         // the current business's own Nayax credentials, which are resolved per request.
@@ -270,6 +273,9 @@ public static class InfrastructureServiceCollectionExtensions
         // BEGIN IMMEDIATE transaction it opens is on the request's own AppDbContext, which is what
         // puts the key claim, the storage check and the deductions inside one write lock.
         services.AddScoped<IPickListRefillStore, EfPickListRefillStore>();
+        // The multi-machine batch's write path (issue #897), over the same two tables and the same
+        // shared BEGIN IMMEDIATE write lock, so the two refill endpoints serialise against each other.
+        services.AddScoped<IMultiMachinePickListRefillStore, EfMultiMachinePickListRefillStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();

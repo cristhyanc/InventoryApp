@@ -45,4 +45,13 @@ export class LocalMachineService {
   reactivate(id: number): Observable<void> {
     return this.http.post<void>(`${this.baseUrl}/${id}/reactivate`, {});
   }
+
+  /**
+   * Deletes a machine added by mistake (issue #896). The server allows it only while nothing refers
+   * to the machine and no provider names it, and answers `400` with the reason otherwise - which is
+   * the same answer {@link LocalMachine.canDelete} published, decided again at the delete.
+   */
+  delete(id: number): Observable<void> {
+    return this.http.delete<void>(`${this.baseUrl}/${id}`);
+  }
 }

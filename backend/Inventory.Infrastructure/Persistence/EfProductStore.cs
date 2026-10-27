@@ -16,12 +16,14 @@ namespace Inventory.Infrastructure.Persistence;
 /// and the persistence models it depends on moved there in issue #307, and this adapter family
 /// followed them in issue #309 (Persistence 8/8 of #153).
 ///
-/// <para><strong>Three refusals are decided here, each beside the write it guards</strong>
-/// (issue #736). A field the business's sales provider manages, a category the business does not
-/// own, and a product history already refers to are all statements about <em>stored</em> rows, so
+/// <para><strong>Four refusals are decided here, each beside the write it guards</strong>
+/// (issue #736, and the unit label of issue #895). A field the business's sales provider manages, a
+/// category the business does not own, a product history already refers to, and an update that would
+/// blank a stored unit label are all statements about <em>stored</em> rows, so
 /// each is read, compared and acted on as one operation - inside a relational transaction, and with
 /// the rule itself taken from <see cref="ProviderManagedCatalogueFields"/>/
-/// <see cref="ProductDeletionPolicy"/> rather than written again here. A use-case-level read
+/// <see cref="ProductDeletionPolicy"/>/<see cref="ProductCataloguePolicy"/> rather than written
+/// again here. A use-case-level read
 /// followed by a separate write would be a window in which a product can gain a stock movement that
 /// the delete then cascades away.</para>
 ///
@@ -63,6 +65,13 @@ public sealed class EfProductStore : IProductStore
         if (NameOrRefusal(fields.Name) is not { } name)
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.NameRequiredMessage);
 
+        // A new product has a unit label (issue #895). Checked before the transaction opens, like
+        // the name above and for the same reason: the create use case has already applied this rule,
+        // and applying it again at the write keeps the column from being written blank by a future
+        // caller that forgets. Nothing is written when it refuses.
+        if (ProductCataloguePolicy.NormalizeUnit(fields.Unit) is not { } unit)
+            return ProductWriteAttempt.Refused(ProductCataloguePolicy.UnitRequiredMessage);
+
         await using var transaction = _db.Database.IsRelational()
             ? await _db.Database.BeginTransactionAsync(cancellationToken)
             : null;
@@ -80,7 +89,7 @@ public sealed class EfProductStore : IProductStore
             QuantityInStock = fields.QuantityInStock,
             LowStockThreshold = fields.LowStockThreshold,
             RestockTo = fields.RestockTo,
-            Unit = fields.Unit,
+            Unit = unit,
             CategoryId = fields.CategoryId,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -118,9 +127,15 @@ public sealed class EfProductStore : IProductStore
         _db.Products.AnyAsync(product => product.Id == id, cancellationToken);
 
     /// <summary>
-    /// Writes the editable fields, refusing a change the business's sales provider owns and a
-    /// category the business does not. Submitting the stored value is not a change, which is what
-    /// lets a client send the whole product back.
+    /// Writes the editable fields, refusing a change the business's sales provider owns, a category
+    /// the business does not, and a request that would blank a stored unit label. Submitting the
+    /// stored value is not a change, which is what lets a client send the whole product back.
+    ///
+    /// <para>The unit-label refusal is the fourth decided here (issue #895), because it is the same
+    /// shape as the other three: it compares the <em>stored</em> label, so the read, the comparison
+    /// and the write are one operation inside this transaction, and a product that gains a label
+    /// between a separate read and this write cannot have it blanked. The rule itself is
+    /// <see cref="ProductCataloguePolicy.UnitChangeRefusal"/> and is not restated here.</para>
     /// </summary>
     public async Task<ProductWriteAttempt> UpdateAsync(
         long id, ProductUpdateFields fields, CancellationToken cancellationToken)
@@ -137,6 +152,9 @@ public sealed class EfProductStore : IProductStore
 
         if (NameOrRefusal(fields.Name) is not { } name)
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.NameRequiredMessage);
+
+        if (ProductCataloguePolicy.UnitChangeRefusal(product.Unit, fields.Unit) is { } unitRefusal)
+            return ProductWriteAttempt.Refused(unitRefusal);
 
         if (product.ExternalProductId is not null)
         {
@@ -159,7 +177,10 @@ public sealed class EfProductStore : IProductStore
         product.IsActive = fields.IsActive;
         product.LowStockThreshold = fields.LowStockThreshold;
         product.RestockTo = fields.RestockTo;
-        product.Unit = fields.Unit;
+        // A nonblank submitted label is stored trimmed; a blank one is only reachable for a product
+        // whose stored label is already blank (the refusal above), and that row keeps the blank it
+        // has rather than being rewritten or backfilled (issue #895).
+        product.Unit = ProductCataloguePolicy.NormalizeUnit(fields.Unit) ?? product.Unit;
         product.CategoryId = fields.CategoryId;
         product.UpdatedAt = DateTime.UtcNow;
 

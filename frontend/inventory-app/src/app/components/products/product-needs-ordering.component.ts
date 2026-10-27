@@ -1,7 +1,7 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink } from '@angular/router';
+import { RouterLink } from '@angular/router';
 import { EMPTY, Observable, Subject } from 'rxjs';
 import { catchError, switchMap, take, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
@@ -57,7 +57,22 @@ type PurchaseCostState = 'idle' | 'loading' | 'loaded' | 'unavailable';
   selector: 'app-product-needs-ordering',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
-  templateUrl: './product-needs-ordering.component.html'
+  templateUrl: './product-needs-ordering.component.html',
+  styles: [
+    `
+      /*
+       * The "Mark products as ordered" panel's own max-height (issue #906), set here rather than
+       * with a Tailwind arbitrary-value max-height utility because the dvh-then-vh-fallback trick
+       * needs both declarations to land on the same property in this exact order, which only a
+       * literal CSS rule guarantees - a build tool is free to reorder utility classes. Matches
+       * \`machine-restock-sync\`'s \`.sync-modal\` (issue #183).
+       */
+      .needs-order-dialog-panel {
+        max-height: calc(100vh - 2rem);
+        max-height: calc(100dvh - 2rem);
+      }
+    `
+  ]
 })
 export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   products: Product[] = [];
@@ -79,6 +94,33 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     reference: '',
     notes: ''
   };
+
+  /**
+   * Products the Add product search put on the order being built that the Needs ordering list does
+   * not hold at all (issue #907) - that is the whole point of the search. A match the page *does*
+   * list joins the order through `selectedProductIds` instead, so the page's own checkbox for it is
+   * ticked; see {@link addProduct}. See {@link orderLines}, which is what the dialog actually shows.
+   */
+  addedProducts: Product[] = [];
+
+  /** The text currently in the dialog's Add product search box. */
+  addProductQuery = '';
+
+  /** The active search's own matches, before {@link addableProducts} removes what is already a line. */
+  addProductResults: Product[] = [];
+
+  /** Whether {@link addProductResults} is a real answer for the text currently in the box. */
+  addProductSearchState: 'idle' | 'loading' | 'loaded' | 'failed' = 'idle';
+
+  private readonly addProductQuery$ = new Subject<string>();
+
+  /**
+   * The immediate channel of the Add product search's {@link createFilterTrigger$} trigger: it
+   * fires when the box is cleared other than by typing - a freshly opened dialog, and an add that
+   * consumed the query - which is what makes the helper forget the term it last applied, so
+   * searching the same text again still asks. See {@link resetAddProductSearch}.
+   */
+  private readonly addProductSearchReset$ = new Subject<void>();
 
   /**
    * Whether a support session is active (issue #661): Mark as ordered is hidden and the status
@@ -131,7 +173,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     private supplierOrderService: SupplierOrderService,
     private purchaseCostService: ProductPurchaseCostService,
     private toastService: ToastService,
-    private router: Router,
     private access: AccessService,
     supportSession: SupportSessionService
   ) {
@@ -159,6 +200,21 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     createFilterTrigger$(this.search$, this.immediateFilter$)
       .pipe(
         switchMap(() => this.fetchProducts()),
+        takeUntil(this.destroy$)
+      )
+      .subscribe();
+
+    // The Add product search follows the same convention as the page's own search above: one
+    // request per *settled* term, through the shared `createFilterTrigger$`/`SEARCH_DEBOUNCE_MS`
+    // helper, rather than a second, differently-behaved search stream in the same component. So a
+    // term still being typed spends no request, an unchanged term is not asked twice in a row, and
+    // `switchMap` keeps a superseded answer unreachable the same way the purchase-cost request
+    // above does - only the latest settled text's answer can land in `addProductResults`. The
+    // trigger's emitted value is ignored for the same reason `fetchProducts` ignores it: the box's
+    // current text is on the component, and the reset channel emits no term at all.
+    createFilterTrigger$(this.addProductQuery$, this.addProductSearchReset$)
+      .pipe(
+        switchMap(() => this.searchAddableProducts(this.addProductQuery)),
         takeUntil(this.destroy$)
       )
       .subscribe();
@@ -327,11 +383,151 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     // one.
     this.orderForm.supplierId = null;
     this.orderQuantities = Object.fromEntries(selectedProducts.map((product) => [product.id, product.needToOrder]));
+    this.addedProducts = [];
+    this.resetAddProductSearch();
     this.showOrderForm = true;
   }
 
   selectedProducts(): Product[] {
     return this.products.filter((product) => this.selectedProductIds.has(product.id));
+  }
+
+  /**
+   * Every row the dialog shows (issue #907): the Needs ordering rows ticked when it was opened,
+   * plus any product the Add product search added since. {@link selectedProducts} alone no longer
+   * describes the dialog, because an added product is never required to be one of `this.products` -
+   * that is the point of searching the wider catalogue for it - so it is left exactly as it reads
+   * today and this is what the template and {@link saveOrder} use instead.
+   */
+  orderLines(): Product[] {
+    return [...this.selectedProducts(), ...this.addedProducts];
+  }
+
+  /**
+   * The Add product search's own matches, minus whatever is already a line in the order being
+   * built - a product already on it is never offered a second time.
+   */
+  get addableProducts(): Product[] {
+    const alreadyInOrder = new Set(this.orderLines().map((product) => product.id));
+    return this.addProductResults.filter((product) => !alreadyInOrder.has(product.id));
+  }
+
+  onAddProductQueryChange(event: Event): void {
+    const value = (event.target as HTMLInputElement).value;
+    this.addProductQuery = value;
+    this.addProductQuery$.next(value);
+  }
+
+  /**
+   * Searches the catalogue for a product to add to the order being built (issue #907). `getAll`
+   * without `includeRetired` already answers active products only; the same defence
+   * {@link fetchProducts} applies against the reorder-alert listing is repeated here, so a response
+   * that ever carried a retired product still cannot be offered.
+   */
+  private searchAddableProducts(term: string): Observable<unknown> {
+    const trimmed = term.trim();
+    if (!trimmed) {
+      this.addProductResults = [];
+      this.addProductSearchState = 'idle';
+      return EMPTY;
+    }
+
+    this.addProductSearchState = 'loading';
+    return this.productService.getAll({ search: trimmed }).pipe(
+      tap((results) => {
+        this.addProductResults = results.filter((product) => product.isActive !== false);
+        this.addProductSearchState = 'loaded';
+      }),
+      catchError(() => {
+        this.addProductResults = [];
+        this.addProductSearchState = 'failed';
+        return EMPTY;
+      })
+    );
+  }
+
+  /**
+   * Adds a product the Add product search found to the order being built (issue #907), without
+   * disturbing the supplier, dates, reference, notes or any quantity already entered for another
+   * row. Starts at the product's own need-to-order when that is positive, otherwise at 1.
+   *
+   * **Which collection it joins is decided by whether the page already lists it.** A product that
+   * is on the Needs ordering list - visible on the page behind the dialog, simply not ticked - is
+   * added through `selectedProductIds`, the very set the page's checkboxes are bound to, so it is
+   * ticked there as issue #907 requires and {@link removeProduct} unticks it again. Only a product
+   * the page never listed becomes one of {@link addedProducts}, because there is no checkbox of it
+   * to tick and the page's list must stay exactly as it was. The row is rendered from the listed
+   * product's own object in either case, so its stock, on-order and need-to-order figures are the
+   * ones the page calculated rather than a second copy from the catalogue search.
+   *
+   * A product already on the order is refused outright, here at the mutation boundary and not only
+   * by {@link addableProducts} not offering it: a duplicate line would be rejected by
+   * `CreateSupplierOrder` anyway, and resetting an already-entered quantity to a default is a
+   * silent loss of what the user typed.
+   *
+   * Guarded the same way {@link removeProduct} is, and for the same reasons: refused during a
+   * support session, and once {@link saveOrder} has sent its lines, so a line can never be added
+   * after the request that would have had to carry it.
+   */
+  addProduct(product: Product): void {
+    if (this.savingOrder || this.sessionActive) {
+      return;
+    }
+    if (this.orderLines().some((line) => line.id === product.id)) {
+      return;
+    }
+
+    const listed = this.products.find((candidate) => candidate.id === product.id);
+    if (listed) {
+      this.selectedProductIds.add(listed.id);
+    } else {
+      this.addedProducts = [...this.addedProducts, product];
+    }
+
+    const line = listed ?? product;
+    this.orderQuantities[line.id] = line.needToOrder > 0 ? line.needToOrder : 1;
+    this.resetAddProductSearch();
+  }
+
+  /**
+   * Empties the Add product box and its results, and tells the search trigger that no term is
+   * applied any more (issue #907). Used when the dialog opens and after an add consumed the query:
+   * both clear the box without a keystroke, and without this the debounced, change-only trigger
+   * would still remember the cleared term and ignore it if it were typed again.
+   */
+  private resetAddProductSearch(): void {
+    this.addProductQuery = '';
+    this.addProductResults = [];
+    this.addProductSearchState = 'idle';
+    this.addProductSearchReset$.next();
+  }
+
+  /**
+   * Drops a product from the order being built, without cancelling the dialog (issue #906). A row
+   * ticked on the Needs ordering list is dropped from `selectedProductIds` - the same set the
+   * page's checkboxes are bound to, so this is also what unticks it there, including for a listed
+   * product the Add product search ticked (issue #907) - and a row that search added from outside
+   * the page's list is dropped from {@link addedProducts} instead; the page's own list is never
+   * touched for one of those, since it was never on it. Either way every other row's
+   * entered quantity and the order's own fields are left untouched. Refused below the last
+   * remaining row, because an order needs at least one line.
+   *
+   * Refused as well while an order is in flight (`savingOrder`) or during a support session. Once
+   * {@link saveOrder} has sent its lines, the order being created is fixed: dropping a row then
+   * would leave the dialog and the page's ticks showing an order that disagrees with the one the
+   * backend is creating, and - if the request fails - would have silently changed the draft the
+   * user is about to retry. The session guard matches {@link openOrderForm} and {@link saveOrder}:
+   * a session grants `InventoryOperate`, so the page refuses its writes itself (issue #661).
+   */
+  removeProduct(productId: number): void {
+    if (this.savingOrder || this.sessionActive || this.orderLines().length <= 1) {
+      return;
+    }
+    if (this.selectedProductIds.has(productId)) {
+      this.selectedProductIds.delete(productId);
+    } else {
+      this.addedProducts = this.addedProducts.filter((product) => product.id !== productId);
+    }
   }
 
   saveOrder(): void {
@@ -343,7 +539,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const lines = this.selectedProducts().map((product) => ({
+    const lines = this.orderLines().map((product) => ({
       productId: product.id,
       quantityOrdered: this.orderQuantities[product.id]
     }));
@@ -373,34 +569,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         this.toastService.error('Failed to create supplier order.');
       }
     });
-  }
-
-  /**
-   * Row click/Enter navigates to the product editor, unless it originated from a nested control
-   * (the name's Google search link, the checkbox, Stock, Edit) or is a modified/non-primary click
-   * the browser should handle. Since issue #790 the name anchor is a Google search for the product,
-   * so deferring to it is what keeps one click from doing two things.
-   *
-   * This is a convenience over the row, never the only way to the editor: a keyboard cannot click a
-   * row - the `<tr>` takes no focus and every focusable child is deferred to - so the row's own
-   * `Edit` anchor is what reaches the editor from the keyboard.
-   */
-  onRowActivate(product: Product, rowEvent: Event): void {
-    // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
-    const event = rowEvent as MouseEvent | KeyboardEvent;
-    const ownControl = (event.target as Element | null)?.closest('a, button, input, select, textarea, label');
-    const browserHandlesIt =
-      event.defaultPrevented ||
-      (event instanceof MouseEvent && event.button !== 0) ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey;
-    if (ownControl || browserHandlesIt) {
-      return;
-    }
-
-    this.router.navigate(['/products', product.id, 'edit']);
   }
 
   get sortedProducts(): Product[] {
