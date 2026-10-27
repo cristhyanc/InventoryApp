@@ -310,6 +310,92 @@ public class BusinessOwnershipCoverageTests
                 + "sessions).");
     }
 
+    /// <summary>
+    /// Exactly two foreign keys point from a tenant-owned table at a platform table: issue #934's,
+    /// where a business's <see cref="Supplier"/> records which <see cref="SupplierPreset"/> it was
+    /// copied from, and issue #923's, where a business's <see cref="ProductPriceTracking"/> records
+    /// which shared <see cref="MasterProduct"/> its product is.
+    ///
+    /// <para>They are accepted here <strong>by name</strong> rather than by exception, because each is
+    /// a tenancy decision and not an implementation detail. What makes them safe is what they do
+    /// <em>not</em> do: the referencing row is still tenant-owned, filtered and stamped exactly as
+    /// before; the platform row is still about no business; nothing is read back out of the business;
+    /// and the key is <c>Restrict</c>, so the platform cannot delete a row a business depends on and
+    /// nothing is cascaded or nulled into a business's data. A <em>third</em> such key, or one in the
+    /// other direction - a platform table referencing a tenant-owned one, which would give a row about
+    /// no business a dependency on one business's data - is a decision somebody has to make here.</para>
+    /// </summary>
+    [Fact]
+    public void Exactly_two_foreign_keys_run_from_tenant_owned_data_to_a_platform_table()
+    {
+        var model = BuildModel();
+
+        var crossing = model
+            .GetEntityTypes()
+            .Where(entityType => typeof(IBusinessOwned).IsAssignableFrom(entityType.ClrType))
+            .SelectMany(entityType => entityType.GetForeignKeys())
+            .Where(key => PlatformEntities.Contains(key.PrincipalEntityType.ClrType))
+            .ToArray();
+
+        var described = crossing
+            .Select(key =>
+                $"{key.DeclaringEntityType.ClrType.Name}({string.Join(", ", key.Properties.Select(p => p.Name))})"
+                    + $" -> {key.PrincipalEntityType.ClrType.Name} {key.DeleteBehavior}")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            [
+                "ProductPriceTracking(MasterProductId) -> MasterProduct Restrict",
+                "Supplier(SupplierPresetId) -> SupplierPreset Restrict",
+            ],
+            described);
+
+        // Optional, so a supplier the business created itself carries no link at all - the normal
+        // case, and the one the lock rules read as "this row is the business's own" - and a mapping
+        // still waiting for a match names no master product.
+        Assert.All(crossing, key => Assert.All(key.Properties, property => Assert.True(property.IsNullable)));
+    }
+
+    /// <summary>
+    /// And nothing points the other way. A platform table is about no business, so a key from one
+    /// into tenant-owned data would make a shared row depend on a single business's data - and would
+    /// be unwritable under the denied scope the platform-admin surface carries.
+    /// </summary>
+    [Fact]
+    public void No_platform_table_references_tenant_owned_data()
+    {
+        var model = BuildModel();
+
+        var offenders = PlatformEntities
+            .Select(type => model.FindEntityType(type)!)
+            .SelectMany(entityType => entityType.GetForeignKeys())
+            .Where(key => typeof(IBusinessOwned).IsAssignableFrom(key.PrincipalEntityType.ClrType))
+            .Select(key => $"{key.DeclaringEntityType.ClrType.Name} -> {key.PrincipalEntityType.ClrType.Name}")
+            .ToArray();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The one copy per preset per business rule of issue #934, asserted in the model: a filtered
+    /// unique index led by <c>BusinessId</c>. Led by it because two businesses legitimately hold a
+    /// copy of the same preset, and filtered because every unlinked supplier would otherwise
+    /// collide with every other one.
+    /// </summary>
+    [Fact]
+    public void A_business_may_hold_only_one_copy_of_each_supplier_preset()
+    {
+        var supplier = BuildModel().FindEntityType(typeof(Supplier))!;
+
+        var unique = Assert.Single(supplier.GetIndexes().Where(index => index.IsUnique));
+
+        Assert.Equal(
+            [nameof(IBusinessOwned.BusinessId), nameof(Supplier.SupplierPresetId)],
+            unique.Properties.Select(property => property.Name).ToArray());
+        Assert.Equal(@"""SupplierPresetId"" IS NOT NULL", unique.GetFilter());
+    }
+
     private static IModel BuildModel()
     {
         using var connection = new SqliteConnection("Data Source=:memory:");

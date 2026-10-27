@@ -1,4 +1,5 @@
 using Inventory.Application.Suppliers;
+using Inventory.Domain.Suppliers;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Suppliers;
@@ -12,7 +13,7 @@ public class SupplierUseCaseTests
         await CreateAsync(store, "Zebra Co", null, null, null, null, null);
         await CreateAsync(store, "Apple Co", "Contact", "555", "a@b.com", "1 Street", null);
 
-        var result = await new ListSuppliers(store).Handle(CancellationToken.None);
+        var result = await new ListSuppliers(store).Handle(includeHidden: true, CancellationToken.None);
 
         Assert.Equal(new[] { "Apple Co", "Zebra Co" }, result.Select(x => x.Name));
     }
@@ -73,18 +74,18 @@ public class SupplierUseCaseTests
 
         var deleted = await new DeleteSupplier(store).Handle(created.Id, CancellationToken.None);
 
-        Assert.True(deleted);
+        Assert.Equal(SupplierWriteOutcome.Success, deleted.Outcome);
         Assert.Null(await new GetSupplier(store).Handle(created.Id, CancellationToken.None));
     }
 
     [Fact]
-    public async Task Delete_missing_supplier_returns_false()
+    public async Task Delete_missing_supplier_reports_not_found()
     {
         var store = new FakeSupplierStore();
 
         var deleted = await new DeleteSupplier(store).Handle(999, CancellationToken.None);
 
-        Assert.False(deleted);
+        Assert.Equal(SupplierWriteOutcome.NotFound, deleted.Outcome);
     }
 
     /// <summary>
@@ -100,7 +101,7 @@ public class SupplierUseCaseTests
 
         var second = await CreateAsync(store, "Same Name", null, null, null, null, null);
 
-        var all = await new ListSuppliers(store).Handle(CancellationToken.None);
+        var all = await new ListSuppliers(store).Handle(includeHidden: true, CancellationToken.None);
         Assert.Equal(2, all.Count);
         Assert.Equal("Same Name", second.Name);
     }
@@ -156,7 +157,7 @@ public class SupplierUseCaseTests
         Assert.Equal(SupplierWriteOutcome.Invalid, result.Outcome);
         Assert.Equal(SupplierUrlPolicy.InvalidMessage, result.ValidationError);
         Assert.Null(result.Supplier);
-        Assert.Empty(await new ListSuppliers(store).Handle(CancellationToken.None));
+        Assert.Empty(await new ListSuppliers(store).Handle(includeHidden: true, CancellationToken.None));
     }
 
     [Fact]
@@ -193,8 +194,141 @@ public class SupplierUseCaseTests
 
         Assert.Equal(SupplierWriteOutcome.Invalid, result.Outcome);
         Assert.Equal(SupplierUrlPolicy.TooLongMessage, result.ValidationError);
-        Assert.Empty(await new ListSuppliers(store).Handle(CancellationToken.None));
+        Assert.Empty(await new ListSuppliers(store).Handle(includeHidden: true, CancellationToken.None));
     }
+
+    /// <summary>
+    /// A supplier the business created itself behaves exactly as it did before issue #934: it is
+    /// unlinked, it is visible, and it is renamed and deleted freely.
+    /// </summary>
+    [Fact]
+    public async Task A_created_supplier_is_unlinked_and_visible()
+    {
+        var store = new FakeSupplierStore();
+
+        var created = await CreateAsync(store, "Acme", null, null, null, null, null);
+
+        Assert.Null(created.SupplierPresetId);
+        Assert.False(created.IsHidden);
+    }
+
+    /// <summary>
+    /// The copy a business received keeps the master's name and website: a rename and a website
+    /// change are both refused, and nothing is written.
+    /// </summary>
+    [Fact]
+    public async Task A_linked_supplier_refuses_a_rename_and_a_website_change()
+    {
+        var store = new FakeSupplierStore();
+        var linked = store.AddLinked("Coles", "https://coles.test", supplierPresetId: 3);
+
+        var renamed = await new UpdateSupplier(store).Handle(
+            linked.Id,
+            new SupplierFields("Coles Group", "Pat", null, null, null, "https://coles.test"),
+            CancellationToken.None);
+
+        Assert.Equal(SupplierWriteOutcome.Invalid, renamed.Outcome);
+        Assert.Equal(SupplierPresetLinkPolicy.RenameRefusedMessage, renamed.ValidationError);
+
+        var rewebbed = await new UpdateSupplier(store).Handle(
+            linked.Id,
+            new SupplierFields("Coles", "Pat", null, null, null, "   "),
+            CancellationToken.None);
+
+        Assert.Equal(SupplierWriteOutcome.Invalid, rewebbed.Outcome);
+        Assert.Equal(SupplierPresetLinkPolicy.WebsiteRefusedMessage, rewebbed.ValidationError);
+
+        var unchanged = await new GetSupplier(store).Handle(linked.Id, CancellationToken.None);
+        Assert.Equal(
+            ("Coles", "https://coles.test", (string?)null),
+            (unchanged!.Name, unchanged.Url, unchanged.ContactName));
+    }
+
+    /// <summary>
+    /// What the owner's 27 October 2026 decision keeps editable on a copy: the contact details,
+    /// submitted with the stored name and website exactly as the supplier form sends them.
+    /// </summary>
+    [Fact]
+    public async Task A_linked_suppliers_contact_details_still_save()
+    {
+        var store = new FakeSupplierStore();
+        var linked = store.AddLinked("Coles", "https://coles.test", supplierPresetId: 3);
+
+        var updated = await new UpdateSupplier(store).Handle(
+            linked.Id,
+            new SupplierFields("Coles", "Pat", "555", "pat@coles.test", "1 Road", "https://coles.test"),
+            CancellationToken.None);
+
+        Assert.Equal(SupplierWriteOutcome.Success, updated.Outcome);
+        Assert.Equal("Pat", updated.Supplier!.ContactName);
+        Assert.Equal(3, updated.Supplier.SupplierPresetId);
+    }
+
+    [Fact]
+    public async Task A_linked_supplier_cannot_be_deleted()
+    {
+        var store = new FakeSupplierStore();
+        var linked = store.AddLinked("Coles", null, supplierPresetId: 3);
+
+        var deleted = await new DeleteSupplier(store).Handle(linked.Id, CancellationToken.None);
+
+        Assert.Equal(SupplierWriteOutcome.Invalid, deleted.Outcome);
+        Assert.Equal(SupplierPresetLinkPolicy.DeleteRefusedMessage, deleted.ValidationError);
+        Assert.NotNull(await new GetSupplier(store).Handle(linked.Id, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// "Not used" takes a linked copy out of the pickers and brings it back, and the list the
+    /// Suppliers page reads keeps showing it throughout - otherwise it could never be switched back
+    /// on.
+    /// </summary>
+    [Fact]
+    public async Task Not_used_hides_a_linked_supplier_from_the_pickers_and_can_be_cleared()
+    {
+        var store = new FakeSupplierStore();
+        var linked = store.AddLinked("Coles", null, supplierPresetId: 3);
+        await CreateAsync(store, "Acme", null, null, null, null, null);
+
+        var hidden = await new SetSupplierNotUsed(store).Handle(linked.Id, true, CancellationToken.None);
+
+        Assert.Equal(SupplierWriteOutcome.Success, hidden.Outcome);
+        Assert.Equal(
+            ["Acme"],
+            (await new ListSuppliers(store).Handle(includeHidden: false, CancellationToken.None))
+                .Select(supplier => supplier.Name));
+        Assert.Equal(
+            ["Acme", "Coles"],
+            (await new ListSuppliers(store).Handle(includeHidden: true, CancellationToken.None))
+                .Select(supplier => supplier.Name));
+        Assert.True((await new GetSupplier(store).Handle(linked.Id, CancellationToken.None))!.IsHidden);
+
+        var shown = await new SetSupplierNotUsed(store).Handle(linked.Id, false, CancellationToken.None);
+
+        Assert.Equal(SupplierWriteOutcome.Success, shown.Outcome);
+        Assert.Equal(
+            ["Acme", "Coles"],
+            (await new ListSuppliers(store).Handle(includeHidden: false, CancellationToken.None))
+                .Select(supplier => supplier.Name));
+    }
+
+    [Fact]
+    public async Task Not_used_is_refused_for_a_supplier_the_business_created_itself()
+    {
+        var store = new FakeSupplierStore();
+        var created = await CreateAsync(store, "Acme", null, null, null, null, null);
+
+        var result = await new SetSupplierNotUsed(store).Handle(created.Id, true, CancellationToken.None);
+
+        Assert.Equal(SupplierWriteOutcome.Invalid, result.Outcome);
+        Assert.Equal(SupplierPresetLinkPolicy.HideRefusedMessage, result.ValidationError);
+        Assert.False((await new GetSupplier(store).Handle(created.Id, CancellationToken.None))!.IsHidden);
+    }
+
+    [Fact]
+    public async Task Not_used_reports_not_found_for_a_missing_supplier() =>
+        Assert.Equal(
+            SupplierWriteOutcome.NotFound,
+            (await new SetSupplierNotUsed(new FakeSupplierStore()).Handle(999, true, CancellationToken.None)).Outcome);
 
     private static async Task<SupplierRecord> CreateAsync(
         FakeSupplierStore store, string name, string? contactName, string? phone, string? email,

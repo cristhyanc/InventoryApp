@@ -19,7 +19,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// </summary>
 public class AddSupplierPriceCatalogueMigrationTests
 {
-    private const string PreviousMigration = "20261027083607_AddSupplierPresetMasterFields";
+    private const string PreviousMigration = "20261027110241_AddSupplierPresetLink";
     private const string TargetMigration = "AddSupplierPriceCatalogue";
 
     private static readonly string[] CreatedTables =
@@ -53,8 +53,8 @@ public class AddSupplierPriceCatalogueMigrationTests
                     VALUES (7, 1, 'Coca-Cola Classic', '375mL', 0.85, 24, 20.4, 24, 6, 48, 1, 0,
                             '2026-02-10 04:00:00', '2026-02-10 04:00:00');
                 INSERT INTO Suppliers (Id, BusinessId, Name, ProductLineGstDefault, DeliveryGstDefault,
-                                       PackageGstDefault)
-                    VALUES (3, 1, 'Alpha Grocer', 0, 0, 0);
+                                       PackageGstDefault, IsHidden)
+                    VALUES (3, 1, 'Alpha Grocer', 0, 0, 0, 0);
                 INSERT INTO Receipts (Id, BusinessId, SupplierId, Title, PurchaseDate, TotalAmount,
                                       DeliveryGstClassification, DeliveryGstClassificationSource,
                                       PackageGstClassification, PackageGstClassificationSource,

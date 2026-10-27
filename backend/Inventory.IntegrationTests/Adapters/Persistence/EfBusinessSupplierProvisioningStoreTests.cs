@@ -164,8 +164,12 @@ public class EfBusinessSupplierProvisioningStoreTests
     /// <summary>
     /// The marker is the whole of the idempotency rule: a second call copies nothing and does not
     /// rewrite the instant, however many presets are enabled by then. Names are deliberately not
-    /// consulted - the business has renamed its copy here, which a name-based rule would read as "no
-    /// copy exists" and duplicate.
+    /// consulted - the copy carries a name no preset has here, which a name-based rule would read as
+    /// "no copy exists" and duplicate.
+    ///
+    /// <para>The rename is made directly in the database rather than through a supplier endpoint,
+    /// which refuses to rename a linked copy since issue #934. It is still the case this test is
+    /// about: the provisioning rule must not depend on a name, whatever a name happens to be.</para>
     /// </summary>
     [Fact]
     public async Task A_second_copy_writes_nothing_even_after_the_business_renamed_its_own_copies()
@@ -175,7 +179,7 @@ public class EfBusinessSupplierProvisioningStoreTests
 
         await fixture.CopyAsync(fixture.ApprovedBusinessId);
         await fixture.RenameSupplierAsync(fixture.ApprovedBusinessId, "Coles", "The corner shop");
-        await fixture.ReplacePresetsAsync(("Coles", null, true), ("Woolworths", null, true));
+        await fixture.AddPresetAsync("Woolworths");
 
         await fixture.CopyAsync(fixture.ApprovedBusinessId, copiedAtUtc: CopiedAt.AddDays(1));
 
@@ -234,9 +238,11 @@ public class EfBusinessSupplierProvisioningStoreTests
     }
 
     /// <summary>
-    /// The copy is a copy, not a link. Editing or disabling a preset afterwards changes no existing
-    /// copy, and a business editing its own copy changes neither the preset nor the other business's
-    /// copy of the same preset - which is only expressible with two businesses.
+    /// The copy is a copy of the preset's <em>values</em>, even though issue #934 made it record
+    /// which preset it came from. Editing or disabling a preset afterwards changes no existing copy,
+    /// and a business editing the part of its copy it still owns - the contact details - changes
+    /// neither the preset nor the other business's copy of the same preset, which is only
+    /// expressible with two businesses.
     /// </summary>
     [Fact]
     public async Task Editing_a_preset_or_a_copy_afterwards_changes_nothing_on_the_other_side()
@@ -247,21 +253,26 @@ public class EfBusinessSupplierProvisioningStoreTests
         await fixture.CopyAsync(fixture.ApprovedBusinessId);
         await fixture.CopyAsync(fixture.OtherBusinessId);
 
-        // The platform edits and disables the preset.
-        await fixture.ReplacePresetsAsync(("Colesworth", "https://www.colesworth.example", false));
+        // The platform edits and disables the preset. It is edited in place rather than replaced:
+        // two businesses now hold a copy linked to this row, and the restricted key of issue #934
+        // refuses to delete a preset somebody has a copy of - which is the point, because a preset
+        // is disabled rather than removed.
+        await fixture.EditPresetAsync(
+            "Coles", newName: "Colesworth", newUrl: "https://www.colesworth.example", isEnabled: false);
 
-        // And one business edits its own copy, through an ordinary scoped write.
+        // And one business edits its own copy, through an ordinary scoped write. The name and the
+        // website are the master's since issue #934, so what it edits is a contact detail.
         await using (var scoped = fixture.ScopedContext(fixture.ApprovedBusinessId))
         {
             var supplier = await scoped.Suppliers.SingleAsync();
-            supplier.Name = "Coles (Marrickville)";
             supplier.Phone = "0400 000 000";
             await scoped.SaveChangesAsync();
         }
 
         var edited = Assert.Single(await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId));
-        Assert.Equal("Coles (Marrickville)", edited.Name);
+        Assert.Equal("Coles", edited.Name);
         Assert.Equal("https://www.coles.com.au", edited.Url);
+        Assert.Equal("0400 000 000", edited.Phone);
 
         // The other business's copy is exactly as it was copied - neither the preset's edit nor the
         // other business's edit reached it.
@@ -274,6 +285,49 @@ public class EfBusinessSupplierProvisioningStoreTests
         var preset = Assert.Single(await fixture.PresetsAsync());
         Assert.Equal("Colesworth", preset.Name);
         Assert.False(preset.IsEnabled);
+
+        // Both copies still point at that one preset row, which is what the price comparison of
+        // #935 follows back - a rename of the master does not break the link.
+        Assert.Equal([preset.Id, preset.Id], new[] { edited.SupplierPresetId, untouched.SupplierPresetId });
+    }
+
+    /// <summary>
+    /// The copies carry the preset they came from (issue #934), which is what the lock rules and a
+    /// later price comparison read. One copy per preset per business, and the other business's copy
+    /// of the same preset is its own row carrying the same link.
+    /// </summary>
+    [Fact]
+    public async Task Each_copy_records_the_preset_it_came_from()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.ReplacePresetsAsync(
+            ("Coles", "https://www.coles.com.au", true),
+            ("Woolworths", null, true),
+            ("Disabled Co", null, false));
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+        await fixture.CopyAsync(fixture.OtherBusinessId);
+
+        var presetIds = (await fixture.PresetsAsync())
+            .Where(preset => preset.IsEnabled)
+            .ToDictionary(preset => preset.Name, preset => preset.Id, StringComparer.Ordinal);
+
+        var copies = await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId);
+        Assert.Equal(
+            [(presetIds["Coles"], "Coles"), (presetIds["Woolworths"], "Woolworths")],
+            copies
+                .OrderBy(supplier => supplier.Name, StringComparer.Ordinal)
+                .Select(supplier => (supplier.SupplierPresetId, supplier.Name)));
+
+        // None of them arrives hidden: a business receives every enabled suggestion in use.
+        Assert.All(copies, supplier => Assert.False(supplier.IsHidden));
+
+        // The other business holds its own rows, linked to the very same presets.
+        Assert.Equal(
+            copies.Select(supplier => supplier.SupplierPresetId).Order(),
+            (await fixture.SuppliersOfAsync(fixture.OtherBusinessId))
+                .Select(supplier => supplier.SupplierPresetId)
+                .Order());
     }
 
     #endregion
@@ -437,6 +491,44 @@ public class EfBusinessSupplierProvisioningStoreTests
                 });
             }
 
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Edits one preset in place, as the Super Admin surface does. Separate from
+        /// <see cref="ReplacePresetsAsync"/> because a preset a business holds a copy of cannot be
+        /// deleted at all since issue #934 - and because keeping the row's id is what makes "the
+        /// link survived the edit" a thing a test can state.
+        /// </summary>
+        public async Task EditPresetAsync(string name, string newName, string? newUrl, bool isEnabled)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+
+            preset.Name = newName;
+            preset.NormalisedName = SupplierPresetPolicy.NormalisedName(newName);
+            preset.Url = newUrl;
+            preset.IsEnabled = isEnabled;
+
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Adds one more suggestion, leaving the existing ones - and so any copy linked to them -
+        /// exactly as they are.
+        /// </summary>
+        public async Task AddPresetAsync(string name, string? url = null, bool isEnabled = true)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            db.SupplierPresets.Add(new SupplierPreset
+            {
+                Name = name,
+                NormalisedName = SupplierPresetPolicy.NormalisedName(name),
+                Url = url,
+                IsEnabled = isEnabled,
+                CreatedAtUtc = CreatedAt,
+                UpdatedAtUtc = CreatedAt,
+            });
             await db.SaveChangesAsync();
         }
 

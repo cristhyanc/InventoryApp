@@ -2212,6 +2212,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("Email")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsHidden")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -2225,6 +2228,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("ProductLineGstDefault")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("SupplierPresetId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Url")
                         .HasMaxLength(2048)
                         .HasColumnType("TEXT");
@@ -2234,6 +2240,12 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId");
 
                     b.HasIndex("Name");
+
+                    b.HasIndex("SupplierPresetId");
+
+                    b.HasIndex("BusinessId", "SupplierPresetId")
+                        .IsUnique()
+                        .HasFilter("\"SupplierPresetId\" IS NOT NULL");
 
                     b.ToTable("Suppliers");
                 });
@@ -2864,6 +2876,14 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("Product");
 
                     b.Navigation("ReceiptItem");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.Supplier", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.SupplierPreset", null)
+                        .WithMany()
+                        .HasForeignKey("SupplierPresetId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierListing", b =>

@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A supplier that came from the platform's supplier list keeps that list's name and website, cannot be deleted, and can be marked **Not used** to keep it out of the pickers (see [Suppliers from the platform list](#suppliers-from-the-platform-list)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
@@ -595,12 +595,14 @@ one without the other.
   fixture.
 - **Disabled presets are not copied**, and a list with nothing enabled approves the business
   normally, with no suppliers.
-- **A copy is the business's own supplier from that moment on.** It is listed, edited and deleted
-  through the ordinary Suppliers page under the ordinary supplier permission, with no contact details
-  and no GST defaults set — a supplier's GST default is always something a business configures
-  deliberately, never something copied or inferred. Editing, renaming or disabling a preset
-  afterwards changes nothing any business already has, and a business editing or deleting its copy
-  changes neither the preset nor another business's copy.
+- **A copy is the business's own supplier from that moment on, and it stays linked to the list it
+  came from** (issue #934). It is listed on the ordinary Suppliers page under the ordinary supplier
+  permission, with no contact details and no GST defaults set — a supplier's GST default is always
+  something a business configures deliberately, never something copied or inferred. Editing,
+  renaming or disabling a preset afterwards changes nothing any business already has, and a business
+  editing its copy changes neither the preset nor another business's copy. What the business may
+  change about a linked copy is in [Suppliers from the platform list](#suppliers-from-the-platform-list)
+  below.
 
 ## Super Admin option visibility
 
@@ -1349,6 +1351,46 @@ no website is normal, and editing one you recorded earlier works without touchin
   none is recorded, and `POST`/`PUT /api/suppliers` accept it. It is also part of the nested
   `supplier` object on a purchase, a supplier order and an operating expense, as an additive
   nullable field; nothing else about those payloads changed.
+- **One supplier's website cannot be changed**: a supplier that came from the platform's supplier
+  list keeps that list's website, as it keeps that list's name. See
+  [Suppliers from the platform list](#suppliers-from-the-platform-list).
+
+## Suppliers from the platform list
+
+A business approved from now on starts with one supplier of its own per enabled platform preset (see
+[New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets)), and
+each of those copies **stays linked** to the list it came from. The Suppliers page marks a linked
+supplier with a **Platform list** label.
+
+- **Its name and website are the platform's.** Open a linked supplier for editing and the Name and
+  Website fields are read-only, with a note saying why. The API refuses a change to either with
+  `400` and a message you can read, whatever a client sends.
+- **It cannot be deleted.** There is no Delete button on a linked row, and the endpoint refuses the
+  delete.
+- **Its contact details and GST defaults are yours.** Contact name, phone, email and address save
+  normally, and so do the supplier's three
+  [GST defaults](#product-and-supplier-gst-rules) — those are your own accounting settings about a
+  supplier you buy from, and the link only fixes who the supplier *is*.
+- **Mark one you do not use as "Not used".** The Suppliers page has a **Not used** switch on each
+  linked row. Switched on, the supplier stops being offered when you record a purchase, place a
+  supplier order or order from the Needs Ordering page. Nothing is removed: the row stays on the
+  Suppliers page so you can switch it back on, and every purchase, supplier order and expense that
+  already names it still shows it. The switch needs the same permission as the rest of the Suppliers
+  page, and it is hidden — and refused — in a read-only support session.
+- **A supplier you added yourself is unchanged.** Rename it, re-point its website, delete it, exactly
+  as before. "Not used" is deliberately not offered for one: you can simply delete it.
+- **For the API.** `GET /api/suppliers` and `GET /api/suppliers/{id}` publish `isLinked`, `isHidden`,
+  `canRename` and `canDelete` beside the fields they already carried, so a client shows the right
+  controls; the server enforces the rules either way. `GET /api/suppliers` leaves the suppliers
+  marked "Not used" **out** unless you ask for them with `?includeHidden=true`, so every picker gets
+  the right list by default. `PUT /api/suppliers/{id}/not-used` takes `{ "isHidden": true|false }`.
+  The nested `supplier` object on a purchase, supplier order or expense is unchanged.
+- **Businesses approved before this** had their existing suppliers linked once, by name: a supplier
+  whose name matches a list entry exactly (ignoring case and surrounding spaces) was linked, and
+  nothing else about it was touched. Where one business held **two** suppliers matching the same
+  entry, **neither** was linked, because there is no way to tell which one you actually buy from —
+  those rows stay yours to rename and delete as before. No supplier was created, renamed, hidden or
+  deleted by that upgrade.
 
 ## A product carries no supplier
 

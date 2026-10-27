@@ -73,7 +73,7 @@ public sealed class EfBusinessSupplierProvisioningStore : IBusinessSupplierProvi
             // database's.
             .OrderBy(preset => preset.NormalisedName)
             .ThenBy(preset => preset.Id)
-            .Select(preset => new { preset.Name, preset.Url })
+            .Select(preset => new { preset.Id, preset.Name, preset.Url })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -89,6 +89,17 @@ public sealed class EfBusinessSupplierProvisioningStore : IBusinessSupplierProvi
                 // (AGENTS.md § Product GST rules and supplier defaults).
                 Name = preset.Name,
                 Url = preset.Url,
+
+                // And, since issue #934, which preset this copy is of. It is the one thing the
+                // copy records about the master, and it is what makes the name and the website
+                // above read-only on this row from the moment it exists: without it a copy was
+                // indistinguishable from a supplier the business typed in. It changes nothing
+                // about what is copied - no served states, no price basis, no connector - and
+                // nothing is written back to SupplierPresets.
+                SupplierPresetId = preset.Id,
+
+                // IsHidden is left at its default of false: a business receives every enabled
+                // suggestion in use, and "Not used" is its own later decision.
 
                 // BusinessId is deliberately left unset: the lease below is what stamps it, through
                 // the same central enforcer every ordinary insert goes through, so this adapter

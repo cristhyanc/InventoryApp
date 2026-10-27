@@ -430,9 +430,14 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     }
 
     /// <summary>
-    /// The copies are ordinary suppliers of that business from the moment it starts trading: its
-    /// Owner lists, edits and deletes them through the ordinary supplier endpoints, under the
-    /// ordinary supplier permission - and another business's Owner sees none of them.
+    /// The copies are that business's own suppliers from the moment it starts trading: its Owner
+    /// lists them through the ordinary supplier endpoints, under the ordinary supplier permission -
+    /// and another business's Owner sees none of them.
+    ///
+    /// <para>Since issue #934 they are also <em>linked</em> copies, so what the Owner may do to one
+    /// is narrower than it was: the contact details save, and the name, the website and the delete
+    /// are refused with <c>400</c>. The list says so on each row, which is what this test pins at
+    /// the HTTP boundary.</para>
     /// </summary>
     [Fact]
     public async Task The_copies_are_ordinary_suppliers_of_the_approved_business_and_nobody_elses()
@@ -452,15 +457,53 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
             SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
             names);
 
-        var ids = listed.RootElement.EnumerateArray()
-            .Select(supplier => supplier.GetProperty("id").GetInt32())
+        // Every copy reports itself as linked, locked against a rename and a delete, and in use.
+        Assert.All(
+            listed.RootElement.EnumerateArray(),
+            supplier => Assert.Equal(
+                (true, false, false, false),
+                (supplier.GetProperty("isLinked").GetBoolean(),
+                    supplier.GetProperty("isHidden").GetBoolean(),
+                    supplier.GetProperty("canRename").GetBoolean(),
+                    supplier.GetProperty("canDelete").GetBoolean())));
+
+        var rows = listed.RootElement.EnumerateArray()
+            .Select(supplier => (Id: supplier.GetProperty("id").GetInt32(), Name: supplier.GetProperty("name").GetString()!))
             .ToArray();
 
-        var renamed = await owner.PutAsJsonAsync($"/api/suppliers/{ids[0]}", new { name = "Renamed by the business" });
-        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync($"/api/suppliers/{ids[1]}")).StatusCode);
+        // The name and the website are the master's, and the copy cannot be removed.
+        var renamed = await owner.PutAsJsonAsync(
+            $"/api/suppliers/{rows[0].Id}", new { name = "Renamed by the business" });
+        Assert.Equal(HttpStatusCode.BadRequest, renamed.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await owner.DeleteAsync($"/api/suppliers/{rows[1].Id}")).StatusCode);
 
-        // The platform's own list is untouched by either: the copying goes one way.
+        // The contact details are the business's own and still save, submitted with the stored name
+        // as the Suppliers form sends them.
+        var contacted = await owner.PutAsJsonAsync(
+            $"/api/suppliers/{rows[0].Id}", new { name = rows[0].Name, phone = "0400 000 000" });
+        Assert.Equal(HttpStatusCode.NoContent, contacted.StatusCode);
+
+        // And "Not used" takes a copy out of the pickers without removing it.
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await owner.PutAsJsonAsync($"/api/suppliers/{rows[1].Id}/not-used", new { isHidden = true })).StatusCode);
+
+        var pickerList = await ReadJsonAsync(await owner.GetAsync("/api/suppliers"));
+        Assert.DoesNotContain(
+            rows[1].Id,
+            pickerList.RootElement.EnumerateArray().Select(supplier => supplier.GetProperty("id").GetInt32()));
+
+        var pageList = await ReadJsonAsync(await owner.GetAsync("/api/suppliers?includeHidden=true"));
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Length,
+            pageList.RootElement.EnumerateArray().Count());
+
+        // Every copy is still there: nothing above removed a row.
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId)).Select(supplier => supplier.Name).Order());
+
+        // The platform's own list is untouched by any of it: the copying goes one way.
         Assert.Equal(
             SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
             (await _factory.SupplierPresetsAsync()).Select(preset => preset.Name).Order());
@@ -470,6 +513,30 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         var otherOwner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
         var otherList = await ReadJsonAsync(await otherOwner.GetAsync("/api/suppliers"));
         Assert.Empty(otherList.RootElement.EnumerateArray());
+    }
+
+    /// <summary>
+    /// <c>IsHidden</c> is a <c>bool</c>, so a body that omits it would otherwise bind to
+    /// <c>false</c> indistinguishably from an explicit <c>isHidden: false</c> and silently leave a
+    /// linked copy in the pickers instead of refusing the request.
+    /// <c>JsonRequiredAttribute</c> refuses the under-posted body instead.
+    /// </summary>
+    [Fact]
+    public async Task Not_used_without_the_isHidden_field_is_refused_and_changes_nothing()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.ApplicantObjectId);
+        var listed = await ReadJsonAsync(await owner.GetAsync("/api/suppliers"));
+        var supplierId = listed.RootElement.EnumerateArray().First().GetProperty("id").GetInt32();
+
+        var response = await owner.PutAsJsonAsync($"/api/suppliers/{supplierId}/not-used", new { });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var reread = await ReadJsonAsync(await owner.GetAsync($"/api/suppliers/{supplierId}"));
+        Assert.False(reread.RootElement.GetProperty("isHidden").GetBoolean());
     }
 
     /// <summary>
