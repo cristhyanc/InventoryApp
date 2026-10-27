@@ -22,7 +22,7 @@ public class PriceCatalogueWaitingKeyTests
     [Fact]
     public void The_key_is_the_folded_name_and_unit_label() =>
         Assert.Equal(
-            "COCA-COLACLASSIC|375ML",
+            "16:COCA-COLACLASSIC|5:375ML",
             PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL"));
 
     /// <summary>
@@ -75,10 +75,9 @@ public class PriceCatalogueWaitingKeyTests
             PriceCatalogueWaitingKey.For("Coca-Cola Classic", "   "));
 
     /// <summary>
-    /// And "no unit label" is still distinguishable from a product whose name ran on into one. The
-    /// separator is escaped rather than assumed absent, so no two different pairs can produce one
-    /// key - otherwise a price collected for <c>Cola|375</c> would be recorded against <c>Cola</c> in
-    /// <c>375</c>.
+    /// And "no unit label" is still distinguishable from a product whose name ran on into one. No two
+    /// different pairs may produce one key - otherwise a price collected for <c>Cola|375</c> would be
+    /// recorded against <c>Cola</c> in <c>375</c>.
     /// </summary>
     [Fact]
     public void The_separator_inside_a_part_does_not_collide_with_the_separator_between_parts() =>
@@ -87,8 +86,62 @@ public class PriceCatalogueWaitingKeyTests
             PriceCatalogueWaitingKey.For("Cola", "375"));
 
     /// <summary>
-    /// The column bound is computed from the part limits rather than guessed, escaping included, so
-    /// the longest search text the tracking policy accepts still fits the column that stores its key.
+    /// The exact collision the owner reproduced on PR #945, and the reason the encoding is
+    /// length-prefixed rather than escaped: the previous rule doubled a part's own separator and then
+    /// joined parts with a single one, so <c>("AB|", "CD")</c> and <c>("AB", "|CD")</c> both folded to
+    /// <c>"AB|||CD"</c> - two unrelated products deduplicated into one search, and two unrelated
+    /// descriptions refused as one master product.
+    ///
+    /// <para>Asserted on the folding rule itself as well as through the waiting key, because this is
+    /// the property every key in this catalogue rests on rather than one caller's behaviour.</para>
+    /// </summary>
+    [Fact]
+    public void A_part_ending_in_the_separator_is_not_the_next_part_beginning_with_it()
+    {
+        Assert.NotEqual(PriceCatalogueKey.Of("AB|", "CD"), PriceCatalogueKey.Of("AB", "|CD"));
+        Assert.NotEqual(
+            PriceCatalogueWaitingKey.For("AB|", "CD"),
+            PriceCatalogueWaitingKey.For("AB", "|CD"));
+    }
+
+    /// <summary>
+    /// The same property over the separator-and-empty-part cases around that boundary. Every pair
+    /// here folds to a different set of parts, so every pair must fold to a different key: a part made
+    /// only of separators, a part that is empty beside one that is not, and the separator landing on
+    /// either side of the boundary.
+    /// </summary>
+    [Theory]
+    [InlineData("|", "", "", "|")]
+    [InlineData("||", "", "", "||")]
+    [InlineData("|", "|", "||", "")]
+    [InlineData("A|", "|B", "A", "||B")]
+    [InlineData("A", "B", "A|B", "")]
+    [InlineData("", "A", "A", "")]
+    public void Different_sets_of_parts_are_different_keys(
+        string firstName,
+        string firstUnit,
+        string secondName,
+        string secondUnit) =>
+        Assert.NotEqual(
+            PriceCatalogueWaitingKey.For(firstName, firstUnit),
+            PriceCatalogueWaitingKey.For(secondName, secondUnit));
+
+    /// <summary>
+    /// And the fold still deduplicates what it is for: two spellings whose normalised parts are equal
+    /// are one key even when a part contains the separator. Case and spacing, and nothing else -
+    /// unambiguous framing must not have turned into a second difference.
+    /// </summary>
+    [Fact]
+    public void Equivalent_spellings_of_a_part_containing_the_separator_are_one_key() =>
+        Assert.Equal(
+            PriceCatalogueWaitingKey.For("Cola|375", null),
+            PriceCatalogueWaitingKey.For("  cola | 375  ", "   "));
+
+    /// <summary>
+    /// The column bound is computed from the part limits rather than guessed, length prefixes
+    /// included, so the longest search text the tracking policy accepts still fits the column that
+    /// stores its key. The parts are made of separators because those are the characters the encoding
+    /// has to carry verbatim.
     /// </summary>
     [Fact]
     public void The_key_bound_covers_the_longest_search_text_the_policy_accepts()

@@ -56,7 +56,7 @@ namespace Inventory.Infrastructure.Migrations
                     Name = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
                     SizeValue = table.Column<decimal>(type: "decimal(18,3)", nullable: false),
                     SizeUnit = table.Column<int>(type: "INTEGER", nullable: false),
-                    NormalisedKey = table.Column<string>(type: "TEXT", maxLength: 683, nullable: false),
+                    NormalisedKey = table.Column<string>(type: "TEXT", maxLength: 356, nullable: false),
                     CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
                     UpdatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false)
                 },
@@ -72,7 +72,7 @@ namespace Inventory.Infrastructure.Migrations
                 {
                     Id = table.Column<long>(type: "INTEGER", nullable: false)
                         .Annotation("Sqlite:Autoincrement", true),
-                    WaitingKey = table.Column<string>(type: "TEXT", maxLength: 1001, nullable: false),
+                    WaitingKey = table.Column<string>(type: "TEXT", maxLength: 509, nullable: false),
                     MasterProductId = table.Column<long>(type: "INTEGER", nullable: true),
                     SuggestedBrand = table.Column<string>(type: "TEXT", maxLength: 100, nullable: true),
                     SuggestedName = table.Column<string>(type: "TEXT", maxLength: 200, nullable: true),
@@ -110,7 +110,7 @@ namespace Inventory.Infrastructure.Migrations
                     MasterProductId = table.Column<long>(type: "INTEGER", nullable: true),
                     Status = table.Column<int>(type: "INTEGER", nullable: false),
                     MatchSource = table.Column<int>(type: "INTEGER", nullable: true),
-                    WaitingKey = table.Column<string>(type: "TEXT", maxLength: 1001, nullable: false),
+                    WaitingKey = table.Column<string>(type: "TEXT", maxLength: 509, nullable: false),
                     SearchName = table.Column<string>(type: "TEXT", maxLength: 400, nullable: false),
                     UnitLabel = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
                     CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
@@ -141,8 +141,8 @@ namespace Inventory.Infrastructure.Migrations
                         .Annotation("Sqlite:Autoincrement", true),
                     SupplierPresetId = table.Column<int>(type: "INTEGER", nullable: false),
                     MasterProductId = table.Column<long>(type: "INTEGER", nullable: true),
-                    WaitingKey = table.Column<string>(type: "TEXT", maxLength: 1001, nullable: true),
-                    OriginWaitingKey = table.Column<string>(type: "TEXT", maxLength: 1001, nullable: true),
+                    WaitingKey = table.Column<string>(type: "TEXT", maxLength: 509, nullable: true),
+                    OriginWaitingKey = table.Column<string>(type: "TEXT", maxLength: 509, nullable: true),
                     SupplierProductId = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
                     Url = table.Column<string>(type: "TEXT", maxLength: 2048, nullable: true),
                     Title = table.Column<string>(type: "TEXT", maxLength: 400, nullable: true),

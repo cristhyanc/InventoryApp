@@ -920,7 +920,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<string>("NormalisedKey")
                         .IsRequired()
-                        .HasMaxLength(683)
+                        .HasMaxLength(356)
                         .HasColumnType("TEXT");
 
                     b.Property<int>("SizeUnit")
@@ -1730,7 +1730,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<string>("WaitingKey")
                         .IsRequired()
-                        .HasMaxLength(1001)
+                        .HasMaxLength(509)
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -1788,7 +1788,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<string>("WaitingKey")
                         .IsRequired()
-                        .HasMaxLength(1001)
+                        .HasMaxLength(509)
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -2264,7 +2264,7 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("OriginWaitingKey")
-                        .HasMaxLength(1001)
+                        .HasMaxLength(509)
                         .HasColumnType("TEXT");
 
                     b.Property<int>("SupplierPresetId")
@@ -2290,7 +2290,7 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("WaitingKey")
-                        .HasMaxLength(1001)
+                        .HasMaxLength(509)
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");

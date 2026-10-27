@@ -71,6 +71,33 @@ public class EfPriceCatalogueWorkListStoreTests
     }
 
     /// <summary>
+    /// The other direction of the same criterion: two products whose search text differs only in
+    /// which side of the part boundary a separator character falls on are two searches, not one.
+    ///
+    /// <para>A product name is free text, so <c>"Cola|"</c> in <c>"375mL"</c> and <c>"Cola"</c> in
+    /// <c>"|375mL"</c> are both text a business may legitimately hold. Under the escaping rule
+    /// replaced on PR #945 both folded to one waiting key, so this work list would have sent one
+    /// search and priced one of the two products as the other.</para>
+    /// </summary>
+    [Fact]
+    public async Task Search_texts_differing_only_at_a_part_boundary_are_two_searches()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Cola|", "375mL");
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessPepsiId, "Cola", "|375mL");
+
+        var waiting = await fixture.UnscopedWorkListStore()
+            .ListProductsAwaitingMatchAsync(CancellationToken.None);
+
+        Assert.Equal(
+            [
+                PriceCatalogueWaitingKey.For("Cola", "|375mL"),
+                PriceCatalogueWaitingKey.For("Cola|", "375mL"),
+            ],
+            waiting.Select(entry => entry.WaitingKey).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
     /// And the answer carries nothing else at all. Asserted on the record's own shape, because "no
     /// business identity" is a property of the contract rather than of one query: the only way a
     /// business id could reach the collector is if this type had somewhere to put one.

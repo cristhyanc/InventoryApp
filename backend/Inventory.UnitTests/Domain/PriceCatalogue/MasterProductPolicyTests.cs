@@ -154,12 +154,25 @@ public class MasterProductPolicyTests
     [Fact]
     public void The_key_is_the_folded_brand_name_size_and_unit_code() =>
         Assert.Equal(
-            "COCA-COLA|CLASSIC|375|ML",
+            "9:COCA-COLA|7:CLASSIC|3:375|2:ML",
             MasterProductPolicy.NormalisedKey(
                 "Coca-Cola",
                 "Classic",
                 375m,
                 MasterProductSizeUnit.Millilitre));
+
+    /// <summary>
+    /// Two different descriptions stay two master products when the only difference is which side of
+    /// a part boundary a separator falls on. Brand and name are free text, so a brand ending in the
+    /// separator character is input this key has to survive: under the escaping rule this replaced,
+    /// <c>("Cola|", "Classic")</c> and <c>("Cola", "|Classic")</c> folded to one key, and the unique
+    /// index on the stored key would have refused the second description as a duplicate of the first.
+    /// </summary>
+    [Fact]
+    public void A_brand_ending_in_the_separator_is_not_a_name_beginning_with_it() =>
+        Assert.NotEqual(
+            MasterProductPolicy.NormalisedKey("Cola|", "Classic", 375m, MasterProductSizeUnit.Millilitre),
+            MasterProductPolicy.NormalisedKey("Cola", "|Classic", 375m, MasterProductSizeUnit.Millilitre));
 
     /// <summary>
     /// Case and spacing do not make two master products of one. This is the deduplication the parent

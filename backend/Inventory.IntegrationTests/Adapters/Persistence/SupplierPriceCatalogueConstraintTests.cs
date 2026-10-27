@@ -335,6 +335,33 @@ public class SupplierPriceCatalogueConstraintTests
                 MasterProductSizeUnit.Millilitre));
     }
 
+    /// <summary>
+    /// And two <em>different</em> descriptions stay two master products, even when the only
+    /// difference is which side of a part boundary a separator character falls on. The other
+    /// direction of the same rule, over the real unique index: brand and name are free text, so
+    /// <c>("Cola|", "Classic")</c> and <c>("Cola", "|Classic")</c> are two descriptions somebody may
+    /// legitimately record, and the escaping rule replaced on PR #945 folded them to one key - under
+    /// which this index would have refused the second as a duplicate of the first.
+    /// </summary>
+    [Fact]
+    public async Task Two_descriptions_differing_only_at_a_part_boundary_are_two_master_products()
+    {
+        await using var fixture = await CatalogueFixture.CreateAsync();
+
+        var first = await fixture.AddMasterProductAsync(
+            "Cola|",
+            "Classic",
+            375m,
+            MasterProductSizeUnit.Millilitre);
+        var second = await fixture.AddMasterProductAsync(
+            "Cola",
+            "|Classic",
+            375m,
+            MasterProductSizeUnit.Millilitre);
+
+        Assert.NotEqual(first, second);
+    }
+
     /// <summary>One supplier lists one product once, which is what the collector work list deduplicates by.</summary>
     [Fact]
     public async Task Two_listings_of_one_supplier_product_id_at_one_supplier_are_refused()
