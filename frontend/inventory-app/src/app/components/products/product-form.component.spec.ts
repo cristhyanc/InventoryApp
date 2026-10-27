@@ -1086,15 +1086,15 @@ describe('ProductFormComponent deletion notice (issue #825)', () => {
     'alerts and can be reactivated. Nothing was deleted.';
 
   function notice(host: HTMLElement): HTMLElement | null {
-    return host.querySelector('.alert-danger');
+    return host.querySelector('.alert-warning');
   }
 
-  it('shows the server’s refusal verbatim, in a light-red alert directly under the Edit Product header', async () => {
+  it('shows the server’s refusal verbatim, in an amber warning alert directly under the Edit Product header', async () => {
     const { host } = await render({ product: product({ canDelete: false, deletionRefusal: historyRefusal }) });
 
     const shown = notice(host);
     expect(shown).not.toBeNull();
-    expect(Array.from(shown!.classList)).toEqual(expect.arrayContaining(['alert', 'alert-danger']));
+    expect(Array.from(shown!.classList)).toEqual(expect.arrayContaining(['alert', 'alert-warning']));
     expect(shown!.textContent?.trim()).toBe(historyRefusal);
     // Directly under the page header, before the form card.
     expect(host.querySelector('.page > header.page-header')?.nextElementSibling).toBe(shown);
