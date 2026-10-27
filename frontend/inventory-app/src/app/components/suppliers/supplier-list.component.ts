@@ -4,9 +4,10 @@ import { FormsModule } from '@angular/forms';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { SupplierService } from '../../services/supplier.service';
-import { Supplier } from '../../models/models';
+import { AvailableSupplierPreset, Supplier } from '../../models/models';
 import { SupplierGstDefaultsComponent } from './supplier-gst-defaults/supplier-gst-defaults.component';
 import { IconComponent } from '../shared/icon.component';
+import { RolePreviewService } from '../../role-preview/role-preview.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { SUPPLIER_URL_MAX_LENGTH, isSafeSupplierUrl, normalizeSupplierUrl } from './supplier-url';
 
@@ -18,6 +19,14 @@ import { SUPPLIER_URL_MAX_LENGTH, isSafeSupplierUrl, normalizeSupplierUrl } from
 })
 export class SupplierListComponent implements OnInit, OnDestroy {
   suppliers: Supplier[] = [];
+
+  /**
+   * The suppliers from the platform's list this business may add (issue #935): the ones that serve
+   * its state and that it has no copy of. The server decides both, and an empty list is the normal
+   * state - a business that has taken up every suggestion for its state is offered nothing.
+   */
+  availablePresets: AvailableSupplierPreset[] = [];
+
   editing: Supplier | null = null;
   form = { name: '', contactName: '', phone: '', email: '', address: '', url: '' };
 
@@ -49,13 +58,22 @@ export class SupplierListComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
-  private readonly sessionActiveSubscription: Subscription;
+  /**
+   * Whether this tab is previewing the application as another role (issue #721). It hides the
+   * **Add** action of issue #935 for the same reason `sessionActive` hides the writes above: a
+   * previewed request is read-only server-side, so the action would render and then be refused.
+   */
+  previewActive = false;
+
+  private readonly subscriptions = new Subscription();
 
   constructor(
     private readonly supplierService: SupplierService,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    rolePreview: RolePreviewService
   ) {
-    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.subscriptions.add(supportSession.active$.subscribe((active) => (this.sessionActive = active)));
+    this.subscriptions.add(rolePreview.active$.subscribe((active) => (this.previewActive = active)));
   }
 
   ngOnInit(): void {
@@ -63,18 +81,42 @@ export class SupplierListComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.sessionActiveSubscription.unsubscribe();
+    this.subscriptions.unsubscribe();
   }
 
   load(): void {
     // The one request in the application that asks for the suppliers marked "Not used" (issue
     // #934): this page is where one is switched back on, which is impossible if it is not shown.
     this.supplierService.getAllIncludingHidden().subscribe((s) => (this.suppliers = s));
+
+    // And what the business may still add from the platform's list (issue #935). It is read on
+    // every load, so adding one - or acquiring one through a state change in another tab - leaves
+    // this section showing what is actually left.
+    this.supplierService.getAvailablePresets().subscribe((presets) => (this.availablePresets = presets));
+  }
+
+  /**
+   * Whether the **Add** action is offered (issue #935). It is hidden in a read-only support session
+   * and in a role preview, both of which grant the capability this page is gated on and then refuse
+   * every write by their own method rule - so the server refuses the add in both cases whatever
+   * this renders.
+   */
+  get canAddFromPlatformList(): boolean {
+    return !this.sessionActive && !this.previewActive;
   }
 
   /** Whether this supplier's stored website may be rendered as a link (issue #847). */
   canLinkTo(supplier: Supplier): boolean {
     return isSafeSupplierUrl(supplier.url);
+  }
+
+  /**
+   * The same rule for a platform record's website (issue #935). It is the one website rule this
+   * page has, asked of the other shape rather than copied: a value that is not an http(s) address
+   * is shown as plain text and is never clickable, wherever it came from.
+   */
+  canLinkToPreset(preset: AvailableSupplierPreset): boolean {
+    return isSafeSupplierUrl(preset.url);
   }
 
   /**
@@ -195,6 +237,29 @@ export class SupplierListComponent implements OnInit, OnDestroy {
         this.error = this.refusal(response, 'Failed to change "Not used".');
         // The switch shows the stored state, so a refused change must not leave it showing the
         // state the server rejected.
+        this.load();
+      }
+    });
+  }
+
+  /**
+   * Adds one supplier from the platform's list as this business's own linked copy (issue #935).
+   *
+   * The request carries the record's id alone: its name and website are the platform's, and the
+   * business is the caller's own. A refusal is shown verbatim - the server's "already added"
+   * sentence for a record a second tab has just added - and the lists are reloaded either way, so
+   * what is offered afterwards is what the server says is offered.
+   */
+  addFromPreset(preset: AvailableSupplierPreset): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (!this.canAddFromPlatformList) return;
+
+    this.error = null;
+    this.supplierService.addFromPreset(preset.id).subscribe({
+      next: () => this.load(),
+      error: (response: HttpErrorResponse) => {
+        this.error = this.refusal(response, `Failed to add "${preset.name}".`);
         this.load();
       }
     });

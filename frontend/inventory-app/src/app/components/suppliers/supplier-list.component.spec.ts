@@ -4,7 +4,8 @@ import { BehaviorSubject, Observable, of, throwError } from 'rxjs';
 import { SupplierListComponent } from './supplier-list.component';
 import { SupplierService } from '../../services/supplier.service';
 import { AccessService } from '../../access/access.service';
-import { Supplier } from '../../models/models';
+import { AvailableSupplierPreset, Supplier } from '../../models/models';
+import { RolePreviewService } from '../../role-preview/role-preview.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import {
   SUPPLIER_URL_INVALID_MESSAGE,
@@ -44,13 +45,37 @@ function linkedSupplier(overrides: Partial<Supplier> = {}): Supplier {
   });
 }
 
-async function render(sessionActive: Observable<boolean> = of(false), listed: Supplier[] = [supplier()]) {
+/** One supplier from the platform's list this business may add (issue #935). */
+function availablePreset(overrides: Partial<AvailableSupplierPreset> = {}): AvailableSupplierPreset {
+  return { id: 12, name: 'JB Metro South Coast & ACT', url: 'https://jbmetro.test', ...overrides };
+}
+
+interface RenderOptions {
+  /** Whether a read-only support session is active (issue #657). */
+  sessionActive?: Observable<boolean>;
+
+  /** Whether this tab is previewing another role (issue #721). */
+  previewActive?: Observable<boolean>;
+
+  listed?: Supplier[];
+
+  /** What `GET /api/suppliers/available-presets` answers (issue #935). */
+  available?: AvailableSupplierPreset[];
+
+  /** What the add answers; an error exercises the refusal path. */
+  addFromPreset?: jest.Mock;
+}
+
+async function renderWith(options: RenderOptions = {}) {
+  const listed = options.listed ?? [supplier()];
   const create = jest.fn(() => of(supplier()));
   const update = jest.fn(() => of(supplier()));
   const deleteFn = jest.fn(() => of(undefined));
   const setNotUsed = jest.fn(() => of(undefined));
   const getAllIncludingHidden = jest.fn(() => of(listed));
   const getAll = jest.fn(() => of(listed));
+  const getAvailablePresets = jest.fn(() => of(options.available ?? []));
+  const addFromPreset = options.addFromPreset ?? jest.fn(() => of(supplier()));
 
   await TestBed.configureTestingModule({
     imports: [SupplierListComponent],
@@ -64,11 +89,14 @@ async function render(sessionActive: Observable<boolean> = of(false), listed: Su
           update,
           delete: deleteFn,
           setNotUsed,
+          getAvailablePresets,
+          addFromPreset,
           getGstDefaults: () => of(null)
         }
       },
       { provide: AccessService, useValue: { allows: () => of(true) } },
-      { provide: SupportSessionService, useValue: { active$: sessionActive } }
+      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
+      { provide: RolePreviewService, useValue: { active$: options.previewActive ?? of(false) } }
     ]
   }).compileComponents();
 
@@ -82,8 +110,14 @@ async function render(sessionActive: Observable<boolean> = of(false), listed: Su
     delete: deleteFn,
     setNotUsed,
     getAll,
-    getAllIncludingHidden
+    getAllIncludingHidden,
+    getAvailablePresets,
+    addFromPreset
   };
+}
+
+async function render(sessionActive: Observable<boolean> = of(false), listed: Supplier[] = [supplier()]) {
+  return renderWith({ sessionActive, listed });
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -430,5 +464,116 @@ describe('SupplierListComponent linked suppliers and "Not used" (issue #934)', (
     fixture.componentInstance.save();
 
     expect(fixture.componentInstance.error).toBe(refusal);
+  });
+});
+
+/**
+ * The "Available to add" section (issue #935): the suppliers from the platform's list that serve
+ * this business's state and that it has not added yet, and the one-click add beside each of them.
+ *
+ * The server decides what is on offer - this page renders that answer and holds no rule of its own
+ * about states, enabled records or existing copies - and the server refuses the add in a support
+ * session and in a role preview whatever this page shows.
+ */
+describe('SupplierListComponent "Available to add" (issue #935)', () => {
+  it('asks the server what this business may add, and lists it with its website as a safe link', async () => {
+    const { host, getAvailablePresets } = await renderWith({ available: [availablePreset()] });
+
+    expect(getAvailablePresets).toHaveBeenCalledTimes(1);
+
+    const section = host.querySelector('[data-testid="available-presets"]') as HTMLElement;
+    expect(section).not.toBeNull();
+    expect(section.textContent).toContain('JB Metro South Coast & ACT');
+
+    const link = section.querySelector('a') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('https://jbmetro.test');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('shows no section at all when there is nothing left to add', async () => {
+    const { host } = await renderWith({ available: [] });
+
+    expect(host.querySelector('[data-testid="available-presets"]')).toBeNull();
+  });
+
+  it('renders a website that is not an http(s) address as plain text', async () => {
+    const { host } = await renderWith({ available: [availablePreset({ url: 'javascript:alert(1)' })] });
+
+    const section = host.querySelector('[data-testid="available-presets"]') as HTMLElement;
+    expect(section.querySelector('a')).toBeNull();
+    expect(section.textContent).toContain('javascript:alert(1)');
+  });
+
+  it('adds the record its own button belongs to and reloads both lists', async () => {
+    const { fixture, host, addFromPreset, getAvailablePresets, getAllIncludingHidden } = await renderWith({
+      available: [availablePreset({ id: 12 }), availablePreset({ id: 13, name: 'Coles', url: null })]
+    });
+
+    (host.querySelector('[data-testid="add-preset-13"]') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(addFromPreset).toHaveBeenCalledWith(13);
+    expect(getAvailablePresets).toHaveBeenCalledTimes(2);
+    expect(getAllIncludingHidden).toHaveBeenCalledTimes(2);
+  });
+
+  it('hides the Add action while a support session is active and writes nothing if invoked', async () => {
+    const { fixture, host, addFromPreset } = await renderWith({
+      sessionActive: of(true),
+      available: [availablePreset()]
+    });
+
+    expect(host.querySelector('[data-testid="add-preset-12"]')).toBeNull();
+
+    fixture.componentInstance.addFromPreset(availablePreset());
+    expect(addFromPreset).not.toHaveBeenCalled();
+  });
+
+  it('hides the Add action while a role is being previewed and writes nothing if invoked', async () => {
+    const { fixture, host, addFromPreset } = await renderWith({
+      previewActive: of(true),
+      available: [availablePreset()]
+    });
+
+    expect(host.querySelector('[data-testid="add-preset-12"]')).toBeNull();
+
+    fixture.componentInstance.addFromPreset(availablePreset());
+    expect(addFromPreset).not.toHaveBeenCalled();
+  });
+
+  it('offers the action again once the support session ends', async () => {
+    const sessionActive = new BehaviorSubject(true);
+    const { fixture, host, addFromPreset } = await renderWith({
+      sessionActive,
+      available: [availablePreset()]
+    });
+
+    sessionActive.next(false);
+    fixture.detectChanges();
+
+    const button = host.querySelector('[data-testid="add-preset-12"]') as HTMLButtonElement;
+    expect(button).not.toBeNull();
+
+    button.click();
+    expect(addFromPreset).toHaveBeenCalledWith(12);
+  });
+
+  it('shows the server refusal sentence verbatim and refreshes what is on offer', async () => {
+    const refusal = 'This supplier from the platform\'s supplier list has already been added.';
+    const addFromPreset = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 409, error: { message: refusal } }))
+    );
+    const { fixture, host, getAvailablePresets } = await renderWith({
+      available: [availablePreset()],
+      addFromPreset
+    });
+
+    fixture.componentInstance.addFromPreset(availablePreset());
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.error).toBe(refusal);
+    expect(host.querySelector('[role="alert"]')?.textContent?.trim()).toBe(refusal);
+    expect(getAvailablePresets).toHaveBeenCalledTimes(2);
   });
 });

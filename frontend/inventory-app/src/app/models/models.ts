@@ -84,6 +84,20 @@ export interface Supplier {
   canDelete?: boolean;
 }
 
+/**
+ * One supplier from the platform's supplier list this business may add, as
+ * `GET /api/suppliers/available-presets` publishes it (issue #935).
+ *
+ * Three fields, which is the whole of what that endpoint sends: the id an add names, the name
+ * somebody reads and the website that tells two similarly named suppliers apart. It is not a
+ * {@link Supplier} and must not be rendered as one - nothing here belongs to this business yet.
+ */
+export interface AvailableSupplierPreset {
+  id: number;
+  name: string;
+  url: string | null;
+}
+
 export interface Product {
   id: number;
   name: string;
