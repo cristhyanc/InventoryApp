@@ -27,6 +27,9 @@
             <tr>
               <th scope="col" class="table-cell">Name</th>
               <th scope="col" class="table-cell">Website</th>
+              <th scope="col" class="table-cell">Serves</th>
+              <th scope="col" class="table-cell">Prices</th>
+              <th scope="col" class="table-cell">Price source</th>
               <th scope="col" class="table-cell">Suggested</th>
               <th scope="col" class="table-cell">Last changed</th>
               <th scope="col" class="table-cell">Actions</th>
@@ -47,6 +50,30 @@
                     {{ preset.url }}
                   } @else {
                     <span class="value-muted">—</span>
+                  }
+                </td>
+                <!-- Nationwide, the states it serves, or - for a row the issue #931 migration could
+                     not recognise - that no market is recorded at all. That last one is a gap to
+                     fill, so it says so rather than reading as the whole country. -->
+                <td class="table-cell">
+                  @if (servedMarket(preset)) {
+                    {{ servedMarket(preset) }}
+                  } @else {
+                    <span class="value-muted">Not set</span>
+                  }
+                </td>
+                <!-- What a collected price means. Spelled out both ways rather than shown as a tick,
+                     because "includes GST" and "excludes GST" are different figures and neither is
+                     the absence of the other. -->
+                <td class="table-cell">{{ preset.pricesIncludeGst ? 'Includes GST' : 'Excludes GST' }}</td>
+                <td class="table-cell">
+                  @if (connectorLabel(preset)) {
+                    {{ connectorLabel(preset) }}
+                    @if (preset.priceConnectorKey) {
+                      <span class="value-muted"> ({{ preset.priceConnectorKey }})</span>
+                    }
+                  } @else {
+                    <span class="value-muted">Not collected</span>
                   }
                 </td>
                 <td class="table-cell">
