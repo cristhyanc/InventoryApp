@@ -516,6 +516,30 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     }
 
     /// <summary>
+    /// <c>IsHidden</c> is a <c>bool</c>, so a body that omits it would otherwise bind to
+    /// <c>false</c> indistinguishably from an explicit <c>isHidden: false</c> and silently leave a
+    /// linked copy in the pickers instead of refusing the request.
+    /// <c>JsonRequiredAttribute</c> refuses the under-posted body instead.
+    /// </summary>
+    [Fact]
+    public async Task Not_used_without_the_isHidden_field_is_refused_and_changes_nothing()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.ApplicantObjectId);
+        var listed = await ReadJsonAsync(await owner.GetAsync("/api/suppliers"));
+        var supplierId = listed.RootElement.EnumerateArray().First().GetProperty("id").GetInt32();
+
+        var response = await owner.PutAsJsonAsync($"/api/suppliers/{supplierId}/not-used", new { });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var reread = await ReadJsonAsync(await owner.GetAsync($"/api/suppliers/{supplierId}"));
+        Assert.False(reread.RootElement.GetProperty("isHidden").GetBoolean());
+    }
+
+    /// <summary>
     /// A preset edited or disabled after the approval changes no copy: what the business holds is its
     /// own row, taken from the snapshot the approval read.
     /// </summary>

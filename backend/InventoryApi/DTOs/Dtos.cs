@@ -192,8 +192,12 @@ public record SupplierDetailResponse(
 /// The body of <c>PUT /api/suppliers/{id}/not-used</c> (issue #934): the state the "Not used"
 /// switch is being set to. It carries nothing else - no name, no supplier id, no business - because
 /// this request decides one boolean about one row the route already named.
+///
+/// <c>IsHidden</c> is <see cref="JsonRequiredAttribute"/> rather than a plain <c>bool</c>: a bool
+/// defaults to <c>false</c> on under-posting, which would otherwise make an empty body silently
+/// mean "bring it back" instead of being refused.
 /// </summary>
-public record SupplierNotUsedDto(bool IsHidden);
+public record SupplierNotUsedDto([property: JsonRequired] bool IsHidden);
 
 /// <summary>
 /// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).
