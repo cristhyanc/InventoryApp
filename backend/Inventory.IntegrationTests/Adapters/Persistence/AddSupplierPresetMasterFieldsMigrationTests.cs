@@ -30,6 +30,13 @@ public class AddSupplierPresetMasterFieldsMigrationTests
     private const string MasterFieldsMigration = "AddSupplierPresetMasterFields";
 
     /// <summary>
+    /// When the presets a Super Admin created themselves were created: the clock, to the tick, which
+    /// is what the create path records and what tells those rows apart from the ones the migration
+    /// inserts under the fixed literal <c>2026-10-27 00:00:00</c>.
+    /// </summary>
+    private const string PreExistingInstant = "2026-10-26 09:15:42.1234567";
+
+    /// <summary>
     /// The five new columns, and nothing else: the migration is additive, so the columns that were
     /// there before stay exactly as they were.
     /// </summary>
@@ -459,6 +466,223 @@ public class AddSupplierPresetMasterFieldsMigrationTests
 
     #endregion
 
+    #region A name a Super Admin already used
+
+    /// <summary>
+    /// Why skipping a taken name is load-bearing and not tidiness: the database refuses a second row
+    /// under a seeded normalised name, with exactly this message. An unconditional insert over a
+    /// database that already holds an <c>ALDI</c> therefore fails the <em>migration</em>, and
+    /// production applies migrations at startup and fails closed (AGENTS.md § Database and
+    /// migrations) - so the consequence is a deployment that does not start, not a row that does not
+    /// arrive.
+    /// </summary>
+    [Fact]
+    public async Task The_database_refuses_a_second_row_under_a_seeded_normalised_name()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await using var db = TestAppDbContext.Unrestricted(OptionsFor(connection));
+        await db.Database.MigrateAsync();
+
+        var error = await Assert.ThrowsAsync<SqliteException>(() => ExecuteAsync(
+            connection,
+            "INSERT INTO SupplierPresets "
+                + "(Name, NormalisedName, Url, IsEnabled, CreatedAtUtc, UpdatedAtUtc, "
+                + "ServesNationwide, ServedStates, PricesIncludeGst) "
+                + $"VALUES ('ALDI', 'ALDI', NULL, 1, '{PreExistingInstant}', '{PreExistingInstant}', "
+                + "0, '', 0);"));
+
+        Assert.Contains(
+            "UNIQUE constraint failed: SupplierPresets.NormalisedName",
+            error.Message,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The upgrade state no other test here covers, and the one that stopped the application from
+    /// starting: a database where somebody has <em>already</em> created a preset under one of the five
+    /// names this migration inserts. The Super Admin surface of #848 has accepted any name since
+    /// before this migration existed, <c>NormalisedName</c> is unique, and production applies
+    /// migrations at startup and fails closed - so an unconditional insert here would not merely skip
+    /// a row, it would fail the whole upgrade with
+    /// <c>UNIQUE constraint failed: SupplierPresets.NormalisedName</c> and stop the deployment from
+    /// serving requests.
+    ///
+    /// <para>Three pre-existing records, each in a state somebody put it in: one enabled with a
+    /// website, one typed in lower case and then deliberately disabled, and one JB Metro site pointed
+    /// at a different address. The upgrade must succeed, insert only the records whose names are free,
+    /// and leave all three exactly as they are.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_preset_already_holding_a_seeded_name_survives_the_upgrade_and_is_not_duplicated()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = OptionsFor(connection);
+
+        await using (var db = TestAppDbContext.Unrestricted(options))
+        {
+            await MigrateToAsync(db, PreviousMigration);
+            await InsertPreExistingPresetsAsync(connection);
+        }
+
+        // The upgrade itself: before this repair it threw a UNIQUE constraint violation here.
+        await using (var db = TestAppDbContext.Unrestricted(options))
+        {
+            await db.Database.MigrateAsync();
+            Assert.Empty(await db.Database.GetPendingMigrationsAsync());
+        }
+
+        var presets = await ReadPresetsAsync(connection);
+
+        // Nine rows and no duplicate: the four #848 shipped, the three that were already there under
+        // a name this migration would have used, and the two whose names were still free.
+        Assert.Equal(
+            [
+                "ALDI",
+                "BIG W",
+                "COLES",
+                "COSTCO",
+                "JB METRO NSW",
+                "JB METRO SA & NT",
+                "JB METRO SOUTH COAST & ACT",
+                "KMART",
+                "WOOLWORTHS",
+            ],
+            presets.Select(preset => preset.NormalisedName).Order(StringComparer.Ordinal).ToArray());
+
+        // Each of the three is untouched: its name, its website, whether it is suggested, and both
+        // instants. The migration skipped the insert; it did not merge into the row instead.
+        var aldi = Single(presets, "ALDI");
+        Assert.Equal("https://www.aldi.com.au", aldi.Url);
+        Assert.True(aldi.IsEnabled);
+
+        var kmart = Single(presets, "kmart");
+        Assert.Equal("KMART", kmart.NormalisedName);
+        Assert.False(kmart.IsEnabled);
+        Assert.Null(kmart.Url);
+
+        var jbMetro = Single(presets, "JB Metro NSW");
+        Assert.Equal("https://orders.jbmetro.com.au", jbMetro.Url);
+        Assert.True(jbMetro.IsEnabled);
+
+        var instants = await ReadInstantsAsync(connection);
+        Assert.Equal($"{PreExistingInstant}|{PreExistingInstant}", instants["ALDI"]);
+        Assert.Equal($"{PreExistingInstant}|{PreExistingInstant}", instants["KMART"]);
+        Assert.Equal($"{PreExistingInstant}|{PreExistingInstant}", instants["JB METRO NSW"]);
+
+        // And none of them is given the market, tax basis or collection route this migration would
+        // have inserted. They take the fail-closed defaults instead: a record somebody else created
+        // is not one this migration may declare GST-inclusive or point at a collector on their
+        // behalf, so it reads as "no market recorded" until a Super Admin completes it.
+        Assert.All(
+            new[] { aldi, kmart, jbMetro },
+            preset =>
+            {
+                Assert.False(preset.ServesNationwide);
+                Assert.Equal(string.Empty, preset.ServedStates);
+                Assert.False(preset.PricesIncludeGst);
+                Assert.Null(preset.PriceConnector);
+                Assert.Null(preset.PriceConnectorKey);
+            });
+
+        // The two records whose names were free arrive in full, so the skip is a skip of one row and
+        // not of the insert.
+        AssertPreset(
+            presets,
+            "JB Metro South Coast & ACT",
+            nationwide: false,
+            states: "NSW,ACT",
+            gst: false,
+            connector: 4,
+            key: null);
+        AssertPreset(
+            presets,
+            "JB Metro SA & NT",
+            nationwide: false,
+            states: "SA,NT",
+            gst: false,
+            connector: 4,
+            key: null);
+    }
+
+    /// <summary>
+    /// Reversing the upgrade over that same database removes only the records this migration created
+    /// and keeps the three that were already there. A row is recognised by its normalised name
+    /// <em>and</em> the fixed instant <c>Up</c> stamps on what it inserts; deleting by name alone
+    /// would destroy a preset somebody created themselves, which no rollback can give back.
+    /// </summary>
+    [Fact]
+    public async Task Reversing_the_migration_keeps_the_records_that_already_held_a_seeded_name()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await using var db = TestAppDbContext.Unrestricted(OptionsFor(connection));
+        await MigrateToAsync(db, PreviousMigration);
+        await InsertPreExistingPresetsAsync(connection);
+        await MigrateToAsync(db, MasterFieldsMigration);
+
+        await MigrateToAsync(db, PreviousMigration);
+
+        var rows = await QueryAsync(
+            connection,
+            "SELECT NormalisedName FROM SupplierPresets ORDER BY NormalisedName;",
+            reader => reader.GetString(0));
+
+        // The four #848 shipped and the three that were already there. The two records this
+        // migration inserted are gone with it.
+        Assert.Equal(
+            ["ALDI", "BIG W", "COLES", "COSTCO", "JB METRO NSW", "KMART", "WOOLWORTHS"],
+            rows);
+
+        // Still in the state somebody put them in, website and enabled flag included.
+        var kept = await QueryAsync(
+            connection,
+            "SELECT NormalisedName || '|' || Name || '|' || COALESCE(Url, '-') || '|' || IsEnabled "
+                + "FROM SupplierPresets WHERE NormalisedName IN ('ALDI', 'KMART', 'JB METRO NSW') "
+                + "ORDER BY NormalisedName;",
+            reader => reader.GetString(0));
+
+        Assert.Equal(
+            [
+                "ALDI|ALDI|https://www.aldi.com.au|1",
+                "JB METRO NSW|JB Metro NSW|https://orders.jbmetro.com.au|1",
+                "KMART|kmart|-|0",
+            ],
+            kept);
+    }
+
+    /// <summary>
+    /// The instants the five inserted records carry are the fixed literal, stored in the same text
+    /// form as the rows <c>AddSupplierPresets</c> inserted before them. That is what makes
+    /// <c>Down</c>'s comparison against that literal a comparison between like values, and what keeps
+    /// a reader unable to tell a migration-inserted row of one release from the other's.
+    /// </summary>
+    [Fact]
+    public async Task The_inserted_records_carry_the_fixed_literal_instant_in_the_stored_form()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+
+        await using var db = TestAppDbContext.Unrestricted(OptionsFor(connection));
+        await db.Database.MigrateAsync();
+
+        var instants = await ReadInstantsAsync(connection);
+
+        // What #848's InsertData wrote, unchanged by this migration.
+        Assert.Equal("2026-10-23 00:00:00|2026-10-23 00:00:00", instants["COLES"]);
+
+        // What this migration writes, in that same form.
+        Assert.All(
+            new[] { "ALDI", "KMART", "JB METRO NSW", "JB METRO SOUTH COAST & ACT", "JB METRO SA & NT" },
+            normalisedName =>
+                Assert.Equal("2026-10-27 00:00:00|2026-10-27 00:00:00", instants[normalisedName]));
+    }
+
+    #endregion
+
     /// <summary>
     /// Reversing the migration takes the columns and the five inserted records with it, and leaves the
     /// four rows that were there before - edits included. The values it set on those four are gone
@@ -494,6 +718,23 @@ public class AddSupplierPresetMasterFieldsMigrationTests
             reader => reader.GetString(0));
         Assert.Equal(["Big W"], disabled);
     }
+
+    /// <summary>
+    /// The three presets a Super Admin had already created, in the states they were left in: ALDI
+    /// enabled with a website, "kmart" typed in lower case and then disabled, and a JB Metro NSW
+    /// record pointed at a different address. They are written with SQL on the <em>previous</em>
+    /// schema, which is the point - this is a database the supplier-master columns have not reached
+    /// yet, and these rows were created by the #848 surface rather than by any migration.
+    /// </summary>
+    private static async Task InsertPreExistingPresetsAsync(SqliteConnection connection) =>
+        await ExecuteAsync(
+            connection,
+            "INSERT INTO SupplierPresets (Name, NormalisedName, Url, IsEnabled, CreatedAtUtc, UpdatedAtUtc) "
+                + "VALUES "
+                + $"('ALDI', 'ALDI', 'https://www.aldi.com.au', 1, '{PreExistingInstant}', '{PreExistingInstant}'), "
+                + $"('kmart', 'KMART', NULL, 0, '{PreExistingInstant}', '{PreExistingInstant}'), "
+                + "('JB Metro NSW', 'JB METRO NSW', 'https://orders.jbmetro.com.au', 1, "
+                + $"'{PreExistingInstant}', '{PreExistingInstant}');");
 
     private static SeededPreset Single(IReadOnlyList<SeededPreset> presets, string name) =>
         presets.Single(preset => preset.Name == name);

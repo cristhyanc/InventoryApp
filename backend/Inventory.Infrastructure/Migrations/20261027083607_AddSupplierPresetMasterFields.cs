@@ -1,4 +1,3 @@
-using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -16,8 +15,23 @@ namespace Inventory.Infrastructure.Migrations
     /// reason.</strong> EF Core's <c>HasData</c> and a startup seeding step both re-apply themselves,
     /// and production applies migrations at startup (AGENTS.md § Database and migrations), so either
     /// would quietly undo a Super Admin's edit or re-enable a preset they deliberately disabled on the
-    /// next deployment. A one-off <c>InsertData</c> runs once, when this migration is applied, and
-    /// never again - which is what makes an edit to a shipped row a permanent edit.</para>
+    /// next deployment. These five one-off <c>INSERT</c> statements run once, when this migration is
+    /// applied, and never again - which is what makes an edit to a shipped row a permanent edit.</para>
+    ///
+    /// <para><strong>Each insert is skipped when that normalised name is already taken.</strong> The
+    /// Super Admin surface of #848 has been able to create a preset by any name since before this
+    /// migration existed, so a database being upgraded may already hold an <c>ALDI</c>, a
+    /// <c>KMART</c> or a JB Metro record somebody added by hand. <c>NormalisedName</c> is unique, so
+    /// an unconditional insert would fail with <c>UNIQUE constraint failed</c> - and because
+    /// production applies migrations at startup and fails closed, that failure would stop the
+    /// application from starting. Every insert is therefore written as
+    /// <c>INSERT ... SELECT ... WHERE NOT EXISTS</c> over that name: a database without the record
+    /// gets it, a database that already has one keeps the record it has, exactly as it is. That row
+    /// is <em>not</em> given the values below either - its name, website, enabled state and both
+    /// instants stay untouched, and its new columns take the fail-closed defaults, because a preset
+    /// somebody else created is not a preset this migration may re-point at a collection route or
+    /// declare GST-inclusive on their behalf. It reads as "no market recorded", which is visible on
+    /// the page and refused by <c>SupplierPresetMasterPolicy</c> the moment it is edited.</para>
     ///
     /// <para><strong>The four existing rows are recognised by their normalised name, and nothing
     /// else.</strong> Each <c>UPDATE</c> is written out rather than expressed as an
@@ -44,7 +58,8 @@ namespace Inventory.Infrastructure.Migrations
     /// migration gave them columns they never had; it did not make an edit on anybody's behalf, and
     /// moving <c>UpdatedAtUtc</c> would have the Super Admin's own "last changed" column report a
     /// change no person made. The five inserted records carry a fixed literal instant rather than the
-    /// clock, so applying this migration produces the same rows on every database.</para>
+    /// clock, so applying this migration produces the same rows on every database - and that literal
+    /// is also what tells <c>Down</c> which rows this migration created.</para>
     ///
     /// <para><strong>The connector numbers are written out as literals.</strong> They are
     /// <c>Inventory.Domain.Suppliers.SupplierPriceConnector</c>'s declared values - <c>1</c>
@@ -58,11 +73,17 @@ namespace Inventory.Infrastructure.Migrations
     public partial class AddSupplierPresetMasterFields : Migration
     {
         /// <summary>
-        /// When the five inserted records are recorded as having been created. A literal, not
-        /// <c>DateTime.UtcNow</c>: a migration that wrote the clock would leave two databases of the
-        /// same release holding different data.
+        /// When the five inserted records are recorded as having been created, in the text form EF
+        /// Core's SQLite provider stores a <c>DateTime</c> in. A literal, not <c>DateTime.UtcNow</c>:
+        /// a migration that wrote the clock would leave two databases of the same release holding
+        /// different data.
+        ///
+        /// <para>It is also the provenance stamp <c>Down</c> recognises. Every row this migration
+        /// inserts carries exactly this instant as its <c>CreatedAtUtc</c>, and a preset a person
+        /// created carries the clock instant of the moment they created it, to the tick - so "created
+        /// at this exact literal" means "inserted by this migration" and nothing else.</para>
         /// </summary>
-        private static readonly DateTime SeededAtUtc = new(2026, 10, 27, 0, 0, 0, DateTimeKind.Utc);
+        private const string SeededAtUtc = "2026-10-27 00:00:00";
 
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -145,72 +166,63 @@ namespace Inventory.Infrastructure.Migrations
             // invariantly - written out here because a migration states the rows it inserts rather
             // than calling into application code that may change.
             //
+            // Each statement inserts nothing when a preset already holds that normalised name: the
+            // unique index would otherwise fail the whole upgrade, and a record somebody created
+            // themselves is theirs to keep (see the class remarks).
+            //
             // The three JB Metro records are one supplier per site: the JbMetro route reads the site
             // at the record's own Url, which is why a new JB Metro site is a new record and not new
             // code, and why all three share one route with no key between them. Their prices are
             // ex-GST, unlike every other record here.
-            migrationBuilder.InsertData(
-                table: "SupplierPresets",
-                columns: new[]
-                {
-                    "Name",
-                    "NormalisedName",
-                    "Url",
-                    "IsEnabled",
-                    "CreatedAtUtc",
-                    "UpdatedAtUtc",
-                    "ServesNationwide",
-                    "ServedStates",
-                    "PricesIncludeGst",
-                    "PriceConnector",
-                    "PriceConnectorKey",
-                },
-                values: new object[,]
-                {
-                    {
-                        "ALDI", "ALDI", null, true, SeededAtUtc, SeededAtUtc,
-                        true, "", true, 1, "aldi"
-                    },
-                    {
-                        "Kmart", "KMART", null, true, SeededAtUtc, SeededAtUtc,
-                        true, "", true, 2, null
-                    },
-                    {
-                        "JB Metro NSW", "JB METRO NSW", "https://www.jbmetro.com.au", true,
-                        SeededAtUtc, SeededAtUtc,
-                        false, "NSW", false, 4, null
-                    },
-                    {
-                        "JB Metro South Coast & ACT", "JB METRO SOUTH COAST & ACT",
-                        "https://www.jbmetro-sc-act.com.au", true, SeededAtUtc, SeededAtUtc,
-                        false, "NSW,ACT", false, 4, null
-                    },
-                    {
-                        "JB Metro SA & NT", "JB METRO SA & NT",
-                        "https://www.jbmetro-sa-nt.com.au", true, SeededAtUtc, SeededAtUtc,
-                        false, "SA,NT", false, 4, null
-                    },
-                });
+            InsertPresetUnlessTheNameIsTaken(
+                migrationBuilder,
+                normalisedName: "ALDI",
+                values: $"'ALDI', 'ALDI', NULL, 1, '{SeededAtUtc}', '{SeededAtUtc}', 1, '', 1, 1, 'aldi'");
+
+            InsertPresetUnlessTheNameIsTaken(
+                migrationBuilder,
+                normalisedName: "KMART",
+                values: $"'Kmart', 'KMART', NULL, 1, '{SeededAtUtc}', '{SeededAtUtc}', 1, '', 1, 2, NULL");
+
+            InsertPresetUnlessTheNameIsTaken(
+                migrationBuilder,
+                normalisedName: "JB METRO NSW",
+                values: $"'JB Metro NSW', 'JB METRO NSW', 'https://www.jbmetro.com.au', 1, "
+                    + $"'{SeededAtUtc}', '{SeededAtUtc}', 0, 'NSW', 0, 4, NULL");
+
+            InsertPresetUnlessTheNameIsTaken(
+                migrationBuilder,
+                normalisedName: "JB METRO SOUTH COAST & ACT",
+                values: $"'JB Metro South Coast & ACT', 'JB METRO SOUTH COAST & ACT', "
+                    + $"'https://www.jbmetro-sc-act.com.au', 1, '{SeededAtUtc}', '{SeededAtUtc}', "
+                    + "0, 'NSW,ACT', 0, 4, NULL");
+
+            InsertPresetUnlessTheNameIsTaken(
+                migrationBuilder,
+                normalisedName: "JB METRO SA & NT",
+                values: $"'JB Metro SA & NT', 'JB METRO SA & NT', "
+                    + $"'https://www.jbmetro-sa-nt.com.au', 1, '{SeededAtUtc}', '{SeededAtUtc}', "
+                    + "0, 'SA,NT', 0, 4, NULL");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // The five inserted records go, by the normalised name they were inserted with: reversing
-            // this migration means the list is the one #848 shipped again. A record somebody renamed
-            // in between matches nothing here and stays, for the same reason a renamed row is not
-            // updated above - it is no longer a row this migration recognises.
-            migrationBuilder.DeleteData(
-                table: "SupplierPresets",
-                keyColumn: "NormalisedName",
-                keyValues: new object[]
-                {
-                    "ALDI",
-                    "KMART",
-                    "JB METRO NSW",
-                    "JB METRO SOUTH COAST & ACT",
-                    "JB METRO SA & NT",
-                });
+            // The records this migration inserted go, so that reversing it leaves the list #848
+            // shipped again - and nothing else goes with them.
+            //
+            // A row qualifies only when it holds one of the five normalised names *and* carries the
+            // literal CreatedAtUtc Up stamps on the rows it creates. Deleting by name alone would
+            // remove a preset a Super Admin had created themselves under one of these names before
+            // this migration ever ran - exactly the record Up was careful not to touch - and a
+            // delete is not recoverable by reversing anything. A record somebody renamed in between
+            // matches no name here and stays, for the same reason a renamed row is not updated above:
+            // it is no longer a row this migration recognises.
+            DeleteInsertedPreset(migrationBuilder, "ALDI");
+            DeleteInsertedPreset(migrationBuilder, "KMART");
+            DeleteInsertedPreset(migrationBuilder, "JB METRO NSW");
+            DeleteInsertedPreset(migrationBuilder, "JB METRO SOUTH COAST & ACT");
+            DeleteInsertedPreset(migrationBuilder, "JB METRO SA & NT");
 
             // The values set on the four existing rows are not restored to anything: they go with the
             // columns that held them, which is what reversing an additive migration means. Everything
@@ -264,6 +276,50 @@ namespace Inventory.Infrastructure.Migrations
                     PriceConnector = {priceConnector},
                     PriceConnectorKey = {priceConnectorKey}
                 WHERE NormalisedName = '{normalisedName}';
+                """);
+
+        /// <summary>
+        /// Inserts one of the five records, unless a preset already holds
+        /// <paramref name="normalisedName"/>.
+        ///
+        /// <para>The <c>WHERE NOT EXISTS</c> is the whole point: <c>NormalisedName</c> is unique, the
+        /// Super Admin surface has been able to create any name since #848, and production applies
+        /// migrations at startup and fails closed - so an unconditional insert over a database that
+        /// already holds an <c>ALDI</c> would stop the application from starting. The existing row is
+        /// then left exactly as it is, values and instants included.</para>
+        ///
+        /// <para><paramref name="values"/> is the record's eleven column values as SQL literals, in
+        /// the order of the column list below. They are written out at each call site rather than
+        /// assembled from parameters, because the rows this migration inserts are data it records and
+        /// not a pattern it applies.</para>
+        /// </summary>
+        private static void InsertPresetUnlessTheNameIsTaken(
+            MigrationBuilder migrationBuilder,
+            string normalisedName,
+            string values) =>
+            migrationBuilder.Sql(
+                $"""
+                INSERT INTO SupplierPresets
+                    (Name, NormalisedName, Url, IsEnabled, CreatedAtUtc, UpdatedAtUtc,
+                     ServesNationwide, ServedStates, PricesIncludeGst, PriceConnector, PriceConnectorKey)
+                SELECT {values}
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM SupplierPresets WHERE NormalisedName = '{normalisedName}');
+                """);
+
+        /// <summary>
+        /// Removes the row <see cref="Up"/> inserted under <paramref name="normalisedName"/>, and
+        /// only that row: a preset that already held the name when this migration ran carries its
+        /// creator's own instant and is not matched here.
+        /// </summary>
+        private static void DeleteInsertedPreset(
+            MigrationBuilder migrationBuilder,
+            string normalisedName) =>
+            migrationBuilder.Sql(
+                $"""
+                DELETE FROM SupplierPresets
+                WHERE NormalisedName = '{normalisedName}'
+                  AND CreatedAtUtc = '{SeededAtUtc}';
                 """);
     }
 }
