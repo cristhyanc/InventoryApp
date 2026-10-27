@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { of, throwError } from 'rxjs';
 import {
+  SupplierPriceConnector,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
@@ -13,11 +14,25 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
     name: 'Coles',
     url: 'https://www.coles.com.au',
     isEnabled: true,
+    servesNationwide: true,
+    servedStates: [],
+    pricesIncludeGst: true,
+    priceConnector: null,
+    priceConnectorKey: null,
     createdAtUtc: '2026-10-23T00:00:00Z',
     updatedAtUtc: '2026-10-23T00:00:00Z',
     ...overrides
   };
 }
+
+/** The supplier-master half of the row a toggle re-sends unchanged. */
+const nationwideGstInclusive = {
+  servesNationwide: true,
+  servedStates: [],
+  pricesIncludeGst: true,
+  priceConnector: null,
+  priceConnectorKey: null
+};
 
 async function render(service: Partial<SuperAdminSupplierPresetsService>, toast?: Partial<ToastService>) {
   await TestBed.configureTestingModule({
@@ -175,7 +190,12 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
     buttonWithText(host, 'Confirm').click();
     fixture.detectChanges();
 
-    expect(update).toHaveBeenCalledWith(5, { name: 'Big W', url: null, isEnabled: false });
+    expect(update).toHaveBeenCalledWith(5, {
+      name: 'Big W',
+      url: null,
+      isEnabled: false,
+      ...nationwideGstInclusive
+    });
     expect(success).toHaveBeenCalledWith('Big W is no longer suggested.');
     expect(list).toHaveBeenCalledTimes(2);
   });
@@ -192,7 +212,50 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
     buttonWithText(host, 'Confirm').click();
     fixture.detectChanges();
 
-    expect(update).toHaveBeenCalledWith(6, { name: 'Costco', url: null, isEnabled: true });
+    expect(update).toHaveBeenCalledWith(6, {
+      name: 'Costco',
+      url: null,
+      isEnabled: true,
+      ...nationwideGstInclusive
+    });
+  });
+
+  /**
+   * The toggle is a `PUT` of the whole resource, so it has to carry the supplier-master fields the
+   * row already holds. If it sent the defaults instead, disabling a JB Metro record would also move
+   * its market to nationwide and its prices to GST-inclusive - a financial field changed by a button
+   * that says "Disable".
+   */
+  it('re-sends the row’s own served states, GST basis and connector when toggling', async () => {
+    const jbMetro = preset({
+      id: 7,
+      name: 'JB Metro SA & NT',
+      url: 'https://www.jbmetro-sa-nt.com.au',
+      servesNationwide: false,
+      servedStates: ['SA', 'NT'],
+      pricesIncludeGst: false,
+      priceConnector: SupplierPriceConnector.JbMetro,
+      priceConnectorKey: null
+    });
+    const list = jest.fn(() => of([jbMetro]));
+    const update = jest.fn(() => of({ ...jbMetro, isEnabled: false }));
+    const { fixture, host } = await render({ list, update });
+
+    buttonInRow(rowFor(host, 'JB Metro SA & NT'), 'Disable').click();
+    fixture.detectChanges();
+    buttonWithText(host, 'Confirm').click();
+    fixture.detectChanges();
+
+    expect(update).toHaveBeenCalledWith(7, {
+      name: 'JB Metro SA & NT',
+      url: 'https://www.jbmetro-sa-nt.com.au',
+      isEnabled: false,
+      servesNationwide: false,
+      servedStates: ['SA', 'NT'],
+      pricesIncludeGst: false,
+      priceConnector: SupplierPriceConnector.JbMetro,
+      priceConnectorKey: null
+    });
   });
 
   it('sends nothing when the confirmation is canceled', async () => {
@@ -222,6 +285,60 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
 
     expect(error).toHaveBeenCalledWith(message);
     expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  describe('the supplier-master columns (issue #931)', () => {
+    it('shows the market, the GST basis and the price connector for each preset', async () => {
+      const list = jest.fn(() =>
+        of([
+          preset({ id: 1, name: 'Coles', priceConnector: SupplierPriceConnector.Varnmill, priceConnectorKey: 'coles' }),
+          preset({
+            id: 2,
+            name: 'JB Metro SA & NT',
+            url: null,
+            servesNationwide: false,
+            servedStates: ['SA', 'NT'],
+            pricesIncludeGst: false,
+            priceConnector: SupplierPriceConnector.JbMetro
+          }),
+          preset({ id: 3, name: 'Costco', url: null })
+        ])
+      );
+      const { host } = await render({ list });
+
+      const coles = rowFor(host, 'Coles');
+      expect(coles.textContent).toContain('Nationwide');
+      expect(coles.textContent).toContain('Includes GST');
+      // The route and the retailer it is for, because one Varnmill row is not the same as another.
+      expect(coles.textContent).toContain('Varnmill');
+      expect(coles.textContent).toContain('coles');
+
+      const jbMetro = rowFor(host, 'JB Metro SA & NT');
+      expect(jbMetro.textContent).toContain('SA, NT');
+      expect(jbMetro.textContent).not.toContain('Nationwide');
+      expect(jbMetro.textContent).toContain('Excludes GST');
+      expect(jbMetro.textContent).toContain('JB Metro');
+
+      // A supplier nobody collects prices for says so, rather than showing an empty cell that could
+      // be read as a missing value.
+      expect(rowFor(host, 'Costco').textContent).toContain('Not collected');
+    });
+
+    /**
+     * A row the issue #931 migration could not recognise - one that was renamed before it ran - has
+     * no market recorded. That is a gap a Super Admin has to fill, so it is reported as one rather
+     * than drawn as nationwide or left blank.
+     */
+    it('reports a preset with no recorded market as not set', async () => {
+      const list = jest.fn(() =>
+        of([preset({ id: 4, name: 'Coles Group', url: null, servesNationwide: false, servedStates: [] })])
+      );
+      const { host } = await render({ list });
+
+      const row = rowFor(host, 'Coles Group');
+      expect(row.textContent).toContain('Not set');
+      expect(row.textContent).not.toContain('Nationwide');
+    });
   });
 
   it('offers no delete, because the API has none', async () => {

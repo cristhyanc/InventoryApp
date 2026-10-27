@@ -366,14 +366,22 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>
-    /// Puts the platform supplier presets back to exactly the four rows the <c>AddSupplierPresets</c>
-    /// migration inserts (issue #848), so each test starts from the same world rather than from
-    /// whatever its predecessor created, renamed or disabled.
+    /// Puts the platform supplier presets back to one known four-row baseline, so each test starts
+    /// from the same world rather than from whatever its predecessor created, renamed or disabled.
+    ///
+    /// <para><strong>It is a baseline, not a copy of what the migrations seed.</strong> Issue #848's
+    /// <c>AddSupplierPresets</c> inserted four rows and issue #931's
+    /// <c>AddSupplierPresetMasterFields</c> inserted five more, with real served states, GST bases and
+    /// price connectors; this helper deliberately replaces all nine with the four names below,
+    /// nationwide, GST-inclusive and with no connector at all. A fixture that mirrored the shipped
+    /// list would make every test that creates a preset depend on nine names it must not collide
+    /// with, and would quietly break the next time the platform ships another supplier. What the
+    /// migrations actually seed is proved where it belongs - <c>AddSupplierPresetsMigrationTests</c>,
+    /// <c>AddSupplierPresetMasterFieldsMigrationTests</c> and <c>EfSupplierPresetStoreTests</c> -
+    /// against databases this helper never writes to.</para>
     ///
     /// <para>It is deliberately <em>not</em> part of <see cref="ResetAsync"/>: presets are about no
-    /// business at all, so a test about businesses has no reason to touch them, and the migration's
-    /// own seed behaviour is proved by <c>AddSupplierPresetsMigrationTests</c> against a database
-    /// this helper never writes to.</para>
+    /// business at all, so a test about businesses has no reason to touch them.</para>
     /// </summary>
     public async Task ResetSupplierPresetsAsync()
     {
@@ -388,6 +396,14 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
                 Name = name,
                 NormalisedName = SupplierPresetPolicy.NormalisedName(name),
                 IsEnabled = true,
+                // A valid supplier-master claim, and the least interesting one there is: nationwide,
+                // GST-inclusive, collected by nobody (issue #931). A test that is about one of these
+                // fields seeds its own preset or edits one of these.
+                ServesNationwide = true,
+                ServedStates = string.Empty,
+                PricesIncludeGst = true,
+                PriceConnector = null,
+                PriceConnectorKey = null,
                 CreatedAtUtc = CreatedAt,
                 UpdatedAtUtc = CreatedAt,
             });
@@ -397,7 +413,11 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         ClearLog();
     }
 
-    /// <summary>The four suggestions the platform ships with (issue #848).</summary>
+    /// <summary>
+    /// The four names the baseline above holds. They are the four issue #848 shipped, and this list
+    /// is the fixture's own baseline rather than the platform's current suggestions - see
+    /// <see cref="ResetSupplierPresetsAsync"/>.
+    /// </summary>
     public static readonly string[] ShippedSupplierPresetNames =
         ["Coles", "Woolworths", "Big W", "Costco"];
 
@@ -486,8 +506,20 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
             .ToListAsync();
     }
 
-    /// <summary>One more preset in whichever state a test needs (issue #848).</summary>
-    public async Task<int> SeedSupplierPresetAsync(string name, string? url = null, bool isEnabled = true)
+    /// <summary>
+    /// One more preset in whichever state a test needs (issues #848 and #931). The supplier-master
+    /// values default to the baseline's - nationwide, GST-inclusive, no connector - so a test states
+    /// only the field it is about.
+    /// </summary>
+    public async Task<int> SeedSupplierPresetAsync(
+        string name,
+        string? url = null,
+        bool isEnabled = true,
+        bool servesNationwide = true,
+        string servedStates = "",
+        bool pricesIncludeGst = true,
+        SupplierPriceConnector? priceConnector = null,
+        string? priceConnectorKey = null)
     {
         await using var db = Database();
         var preset = new SupplierPreset
@@ -496,6 +528,11 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
             NormalisedName = SupplierPresetPolicy.NormalisedName(name),
             Url = url,
             IsEnabled = isEnabled,
+            ServesNationwide = servesNationwide,
+            ServedStates = servedStates,
+            PricesIncludeGst = pricesIncludeGst,
+            PriceConnector = priceConnector,
+            PriceConnectorKey = priceConnectorKey,
             CreatedAtUtc = CreatedAt,
             UpdatedAtUtc = CreatedAt,
         };

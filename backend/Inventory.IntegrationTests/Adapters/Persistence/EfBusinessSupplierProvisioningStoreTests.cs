@@ -69,6 +69,62 @@ public class EfBusinessSupplierProvisioningStoreTests
     }
 
     /// <summary>
+    /// The supplier-master fields of issue #931 are <strong>not</strong> copied, and could not be: a
+    /// <c>Supplier</c> has no served states, no price basis and no connector. What a preset claims
+    /// about a market and how the platform collects its prices is platform configuration, and a
+    /// business's own supplier row is a record of who it buys from - giving one the other's fields
+    /// would be a separate decision, which #931 excludes explicitly.
+    ///
+    /// <para>The assertion is made on the schema rather than only on the copied values, because
+    /// "the column does not exist" is the claim that cannot regress quietly: a copy that started
+    /// carrying a connector would need a column to carry it in.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_supplier_master_fields_are_not_copied_into_the_business_s_supplier()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.ReplacePresetsAsync(
+            ("JB Metro NSW", "https://www.jbmetro.com.au", true),
+            ("Coles", null, true));
+        await fixture.SetPresetMasterFieldsAsync(
+            "JB Metro NSW",
+            servesNationwide: false,
+            servedStates: "NSW",
+            pricesIncludeGst: false,
+            priceConnector: SupplierPriceConnector.JbMetro);
+        await fixture.SetPresetMasterFieldsAsync(
+            "Coles",
+            servesNationwide: true,
+            servedStates: "",
+            pricesIncludeGst: true,
+            priceConnector: SupplierPriceConnector.Varnmill,
+            priceConnectorKey: "coles");
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+
+        // The name and the website came across, and the copies are ordinary suppliers.
+        var copies = await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId);
+        Assert.Equal(["Coles", "JB Metro NSW"], copies.Select(supplier => supplier.Name));
+        Assert.Equal("https://www.jbmetro.com.au", copies[1].Url);
+
+        // And the suppliers table holds none of the supplier-master columns at all.
+        var columns = await fixture.SupplierColumnNamesAsync();
+        Assert.All(
+            ["ServesNationwide", "ServedStates", "PricesIncludeGst", "PriceConnector", "PriceConnectorKey"],
+            column => Assert.DoesNotContain(column, columns));
+
+        // The presets themselves are untouched by the copy, supplier-master fields included: the
+        // copying goes one way.
+        var presets = await fixture.PresetsAsync();
+        var jbMetro = presets.Single(preset => preset.Name == "JB Metro NSW");
+        Assert.False(jbMetro.ServesNationwide);
+        Assert.Equal("NSW", jbMetro.ServedStates);
+        Assert.False(jbMetro.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.JbMetro, jbMetro.PriceConnector);
+        Assert.Equal("coles", presets.Single(preset => preset.Name == "Coles").PriceConnectorKey);
+    }
+
+    /// <summary>
     /// The marker is stamped with the instant it was given - the approval's decision instant - in the
     /// same save as the suppliers.
     /// </summary>
@@ -389,6 +445,37 @@ public class EfBusinessSupplierProvisioningStoreTests
             await using var db = TestAppDbContext.Unrestricted(_options);
             return await db.SupplierPresets.AsNoTracking().OrderBy(preset => preset.Id).ToListAsync();
         }
+
+        /// <summary>
+        /// Records what one preset claims about its market, its price basis and its collection route
+        /// (issue #931), so a test can prove those values do not travel into a business's copy.
+        /// </summary>
+        public async Task SetPresetMasterFieldsAsync(
+            string name,
+            bool servesNationwide,
+            string servedStates,
+            bool pricesIncludeGst,
+            SupplierPriceConnector? priceConnector = null,
+            string? priceConnectorKey = null)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+
+            preset.ServesNationwide = servesNationwide;
+            preset.ServedStates = servedStates;
+            preset.PricesIncludeGst = pricesIncludeGst;
+            preset.PriceConnector = priceConnector;
+            preset.PriceConnectorKey = priceConnectorKey;
+
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Every column of <c>Suppliers</c>, so a test can assert that a supplier-master column is
+        /// not among them - the schema's own answer to "is this copied".
+        /// </summary>
+        public Task<List<string>> SupplierColumnNamesAsync() =>
+            MigrationSchemaProbe.ColumnNamesAsync(_connection, "Suppliers");
 
         public async Task<int> SeedBusinessAsync(string name, BusinessStatus status)
         {

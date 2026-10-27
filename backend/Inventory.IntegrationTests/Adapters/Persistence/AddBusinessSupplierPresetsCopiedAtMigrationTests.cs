@@ -103,12 +103,27 @@ public class AddBusinessSupplierPresetsCopiedAtMigrationTests
             Assert.Equal(("Wholesale Co", "https://wholesale.invalid", 1), (supplier.Name, supplier.Url, supplier.BusinessId));
 
             // The platform's own suggestions are exactly the rows AddSupplierPresets seeded: this
-            // migration copies nothing and changes nothing about them.
+            // migration copies nothing and changes nothing about them. Read with SQL rather than
+            // through the entity, because this test stands on a schema that predates issue #931's
+            // supplier-master columns and the model that maps them would ask for them.
             Assert.Equal(
                 ["Big W", "Coles", "Costco", "Woolworths"],
-                (await after.SupplierPresets.AsNoTracking().ToListAsync())
-                    .Select(preset => preset.Name)
-                    .Order(StringComparer.Ordinal));
+                await PresetNamesAsync(connection));
         }
+    }
+
+    private static async Task<List<string>> PresetNamesAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Name FROM SupplierPresets ORDER BY Name;";
+        await using var reader = await command.ExecuteReaderAsync();
+
+        var names = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return names;
     }
 }

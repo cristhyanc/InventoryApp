@@ -3,6 +3,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { Subject, takeUntil } from 'rxjs';
 import { ToastService } from '../../../services/toast.service';
 import {
+  SUPPLIER_PRICE_CONNECTOR_LABELS,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
@@ -89,6 +90,31 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
     return isSafeSupplierUrl(preset.url);
   }
 
+  /**
+   * What the table shows in the Serves column (issue #931): "Nationwide", the state codes, or
+   * `null` for a preset nobody has recorded a market for yet.
+   *
+   * The third answer is a real state rather than a missing value: a row the #931 migration could not
+   * recognise - one renamed before it ran - reads as neither nationwide nor any state, and the table
+   * reports that as a gap to fill instead of drawing it as the whole country.
+   */
+  servedMarket(preset: SuperAdminSupplierPreset): string | null {
+    if (preset.servesNationwide) {
+      return 'Nationwide';
+    }
+
+    return preset.servedStates.length > 0 ? preset.servedStates.join(', ') : null;
+  }
+
+  /**
+   * What the table shows in the Price source column: the route's own label, or `null` when nothing
+   * collects this supplier's prices - the state Costco is in, which the template reports in words
+   * rather than as an empty cell.
+   */
+  connectorLabel(preset: SuperAdminSupplierPreset): string | null {
+    return preset.priceConnector === null ? null : SUPPLIER_PRICE_CONNECTOR_LABELS[preset.priceConnector];
+  }
+
   requestAdd(): void {
     this.editTarget = null;
     this.dialogOpen = true;
@@ -147,7 +173,23 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
     this.toggleTarget = null;
 
     const isEnabled = !target.isEnabled;
-    this.presetsService.update(target.id, { name: target.name, url: target.url, isEnabled }).subscribe({
+
+    // The whole resource, because this endpoint is a PUT of it. The supplier-master fields are sent
+    // back exactly as the row holds them (issue #931): sending the form's defaults instead would
+    // move a JB Metro record's market to nationwide and its prices to GST-inclusive as a side effect
+    // of pressing Disable, which is a financial field changed by a button that does not say so.
+    const request = {
+      name: target.name,
+      url: target.url,
+      isEnabled,
+      servesNationwide: target.servesNationwide,
+      servedStates: target.servedStates,
+      pricesIncludeGst: target.pricesIncludeGst,
+      priceConnector: target.priceConnector,
+      priceConnectorKey: target.priceConnectorKey
+    };
+
+    this.presetsService.update(target.id, request).subscribe({
       next: (preset) => {
         this.toast.success(isEnabled ? `${preset.name} is suggested again.` : `${preset.name} is no longer suggested.`);
         this.load();

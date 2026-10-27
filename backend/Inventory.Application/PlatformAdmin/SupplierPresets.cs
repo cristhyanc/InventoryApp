@@ -29,7 +29,39 @@ public sealed class ListSupplierPresets
 }
 
 /// <summary>
-/// Adds one platform supplier preset (issue #848).
+/// What a Super Admin submits about one preset, before any rule has been applied to it (issues #848
+/// and #931): everything a create carries, and everything an edit carries except whether the preset
+/// stays suggested.
+///
+/// <para>It is one parameter object rather than seven positional arguments because the supplier-master
+/// fields of #931 are not independent of each other: served states are checked against each other,
+/// and the connector key is checked against the connector. Handing them over together is what lets
+/// one use case validate one coherent submission, and it keeps the two use cases' signatures the same
+/// shape as the resource they write.</para>
+///
+/// <para>Every value here is <em>submitted</em> and nothing here is trusted: the names mirror the
+/// request body, the types are as permissive as the wire is, and the policies in
+/// <c>Inventory.Domain.Suppliers</c> decide what is storable. <c>IsEnabled</c> is deliberately not
+/// part of it - a create never carries one, because a new preset is created suggested.</para>
+/// </summary>
+/// <param name="Name">The submitted name.</param>
+/// <param name="Url">The submitted website, or <see langword="null"/>/blank for none.</param>
+/// <param name="ServesNationwide">Whether the caller claims the whole country.</param>
+/// <param name="ServedStates">The submitted state codes, in any order, case or padding.</param>
+/// <param name="PricesIncludeGst">Whether the caller says the published prices include GST.</param>
+/// <param name="PriceConnector">The submitted collection route, which may be an undeclared number.</param>
+/// <param name="PriceConnectorKey">The submitted connector key.</param>
+public sealed record SupplierPresetSubmission(
+    string? Name,
+    string? Url,
+    bool ServesNationwide,
+    IReadOnlyList<string?>? ServedStates,
+    bool PricesIncludeGst,
+    SupplierPriceConnector? PriceConnector,
+    string? PriceConnectorKey);
+
+/// <summary>
+/// Adds one platform supplier preset (issue #848, with the supplier-master fields of #931).
 ///
 /// <para><strong>The name rule is enforced twice, and the two are not redundant.</strong> The
 /// pre-check turns the ordinary case - a Super Admin typing a name that is already in the list -
@@ -63,8 +95,9 @@ public sealed class CreateSupplierPreset
     }
 
     /// <exception cref="DomainValidationException">
-    /// The name is blank or too long, or the URL is not an absolute http(s) address or is too long.
-    /// Nothing is written.
+    /// The name is blank or too long, the URL is not an absolute http(s) address or is too long, or
+    /// the served states or the connector and its key are not a combination
+    /// <see cref="SupplierPresetMasterPolicy"/> accepts. Nothing is written.
     /// </exception>
     /// <exception cref="DomainConflictException">
     /// Another preset already holds this name, ignoring case. Nothing is written.
@@ -73,19 +106,29 @@ public sealed class CreateSupplierPreset
     /// The request carries no identifiable actor, so there is nobody to record the change for.
     /// </exception>
     public async Task<SupplierPresetRecord> Handle(
-        string? name,
-        string? url,
+        SupplierPresetSubmission submitted,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(submitted);
+
         // Read before anything else, so a preset is never written for a request whose actor the
         // audit trail could not name. The policy at the boundary has already established that this
         // is the configured platform administrator; this is who they are.
         var actor = _actorAccessor.GetCurrentActor().Actor
             ?? throw new BusinessAccessDeniedException(BusinessAccessDenialReason.NotAuthenticated);
 
-        var validatedName = SupplierPresetPolicy.NormaliseName(name);
+        var validatedName = SupplierPresetPolicy.NormaliseName(submitted.Name);
         var normalisedName = SupplierPresetPolicy.NormalisedName(validatedName);
-        var validatedUrl = SupplierPresetWebsite.Normalise(url);
+        var validatedUrl = SupplierPresetWebsite.Normalise(submitted.Url);
+
+        // Every supplier-master rule runs here, before the duplicate pre-check and before anything is
+        // written: a refused combination leaves the list exactly as it was.
+        var servedStates = SupplierPresetMasterPolicy.NormaliseServedStates(
+            submitted.ServesNationwide,
+            submitted.ServedStates);
+        var connectorKey = SupplierPresetMasterPolicy.NormaliseConnectorKey(
+            submitted.PriceConnector,
+            submitted.PriceConnectorKey);
 
         if (await _store
             .ExistsWithNormalisedNameAsync(normalisedName, excludingId: null, cancellationToken)
@@ -100,7 +143,16 @@ public sealed class CreateSupplierPreset
         {
             stored = await _store
                 .AddAsync(
-                    new NewSupplierPreset(validatedName, normalisedName, validatedUrl, createdAtUtc),
+                    new NewSupplierPreset(
+                        validatedName,
+                        normalisedName,
+                        validatedUrl,
+                        submitted.ServesNationwide,
+                        servedStates,
+                        submitted.PricesIncludeGst,
+                        submitted.PriceConnector,
+                        connectorKey,
+                        createdAtUtc),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -112,12 +164,11 @@ public sealed class CreateSupplierPreset
             throw new DomainConflictException(SupplierPresetPolicy.DuplicateNameMessage);
         }
 
-        _audit.Record(new SupplierPresetAuditEntry(
+        _audit.Record(SupplierPresetAuditEntry.For(
             actor.DirectoryTenantId,
             actor.ObjectId,
-            stored.Id,
             SupplierPresetChange.Created,
-            stored.IsEnabled,
+            stored,
             createdAtUtc));
 
         return stored;
@@ -125,12 +176,18 @@ public sealed class CreateSupplierPreset
 }
 
 /// <summary>
-/// Edits one platform supplier preset (issue #848): its name, its website and whether it is still
+/// Edits one platform supplier preset (issue #848, with the supplier-master fields of #931): its
+/// name, its website, what it serves, how its prices are collected and whether it is still
 /// suggested, in one <c>PUT</c> of the whole resource.
 ///
 /// <para>Enabling and disabling are this operation, deliberately rather than two extra endpoints:
-/// the three fields are what a preset is, they are all editable by the same authority, and a
+/// these fields are what a preset is, they are all editable by the same authority, and a
 /// separate toggle would be a second write path over one row with its own race to reason about.</para>
+///
+/// <para><strong>Every field is submitted together, which is what makes the supplier-master rules
+/// decidable.</strong> Whether nationwide and a state list conflict, and whether the connector key
+/// belongs to the connector, are questions about a whole submission; a partial edit would have to
+/// answer them against values it had not been given.</para>
 ///
 /// <para>The name rule is the one <see cref="CreateSupplierPreset"/> applies, with this preset's own
 /// row excluded - without the exclusion no preset could ever be saved without renaming it. Changing
@@ -165,8 +222,9 @@ public sealed class UpdateSupplierPreset
     /// <paramref name="id"/> exists.
     /// </returns>
     /// <exception cref="DomainValidationException">
-    /// The name is blank or too long, or the URL is not an absolute http(s) address or is too long.
-    /// Nothing is written.
+    /// The name is blank or too long, the URL is not an absolute http(s) address or is too long, or
+    /// the served states or the connector and its key are not a combination
+    /// <see cref="SupplierPresetMasterPolicy"/> accepts. Nothing is written.
     /// </exception>
     /// <exception cref="DomainConflictException">
     /// Another preset already holds this name, ignoring case. Nothing is written.
@@ -176,17 +234,25 @@ public sealed class UpdateSupplierPreset
     /// </exception>
     public async Task<SupplierPresetRecord?> Handle(
         int id,
-        string? name,
-        string? url,
+        SupplierPresetSubmission submitted,
         bool isEnabled,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(submitted);
+
         var actor = _actorAccessor.GetCurrentActor().Actor
             ?? throw new BusinessAccessDeniedException(BusinessAccessDenialReason.NotAuthenticated);
 
-        var validatedName = SupplierPresetPolicy.NormaliseName(name);
+        var validatedName = SupplierPresetPolicy.NormaliseName(submitted.Name);
         var normalisedName = SupplierPresetPolicy.NormalisedName(validatedName);
-        var validatedUrl = SupplierPresetWebsite.Normalise(url);
+        var validatedUrl = SupplierPresetWebsite.Normalise(submitted.Url);
+
+        var servedStates = SupplierPresetMasterPolicy.NormaliseServedStates(
+            submitted.ServesNationwide,
+            submitted.ServedStates);
+        var connectorKey = SupplierPresetMasterPolicy.NormaliseConnectorKey(
+            submitted.PriceConnector,
+            submitted.PriceConnectorKey);
 
         if (await _store
             .ExistsWithNormalisedNameAsync(normalisedName, excludingId: id, cancellationToken)
@@ -207,6 +273,11 @@ public sealed class UpdateSupplierPreset
                         normalisedName,
                         validatedUrl,
                         isEnabled,
+                        submitted.ServesNationwide,
+                        servedStates,
+                        submitted.PricesIncludeGst,
+                        submitted.PriceConnector,
+                        connectorKey,
                         updatedAtUtc),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -222,12 +293,11 @@ public sealed class UpdateSupplierPreset
             return null;
         }
 
-        _audit.Record(new SupplierPresetAuditEntry(
+        _audit.Record(SupplierPresetAuditEntry.For(
             actor.DirectoryTenantId,
             actor.ObjectId,
-            stored.Id,
             SupplierPresetChange.Updated,
-            stored.IsEnabled,
+            stored,
             updatedAtUtc));
 
         return stored;

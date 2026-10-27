@@ -140,14 +140,14 @@ public class SuperAdminSupplierPresetsApiTests
         var client = _factory.AsAdministrator();
         client.DefaultRequestHeaders.Add("X-Role-Preview", role);
 
-        var create = await client.PostAsJsonAsync(PresetsUrl, new { name = "Aldi" });
+        var create = await client.PostAsJsonAsync(PresetsUrl, CreateBody("Aldi"));
         Assert.Equal(HttpStatusCode.Forbidden, create.StatusCode);
         Assert.Equal("read_only_role_preview", await CodeAsync(create));
 
         var presetId = (await _factory.SupplierPresetsAsync())[0].Id;
         var update = await client.PutAsJsonAsync(
             PresetUrl(presetId),
-            new { name = "Renamed", isEnabled = false });
+            EditBody("Renamed", isEnabled: false));
         Assert.Equal(HttpStatusCode.Forbidden, update.StatusCode);
         Assert.Equal("read_only_role_preview", await CodeAsync(update));
 
@@ -191,13 +191,13 @@ public class SuperAdminSupplierPresetsApiTests
 
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(PresetsUrl)).StatusCode);
 
-        var create = await client.PostAsJsonAsync(PresetsUrl, new { name = "Aldi" });
+        var create = await client.PostAsJsonAsync(PresetsUrl, CreateBody("Aldi"));
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
         var created = (await ReadJsonAsync(create)).RootElement.GetProperty("id").GetInt32();
 
         var edit = await client.PutAsJsonAsync(
             PresetUrl(created),
-            new { name = "Aldi", url = (string?)null, isEnabled = false });
+            EditBody("Aldi", isEnabled: false));
         Assert.Equal(HttpStatusCode.OK, edit.StatusCode);
 
         var stored = (await _factory.SupplierPresetsAsync()).Single(preset => preset.Id == created);
@@ -258,8 +258,8 @@ public class SuperAdminSupplierPresetsApiTests
     #region The list
 
     /// <summary>
-    /// The shipped four, by name, with the six declared fields and nothing else. In particular the
-    /// stored normalised name is not published: it is the unique index's key, not a field of the
+    /// The baseline four, by name, with the eleven declared fields and nothing else. In particular
+    /// the stored normalised name is not published: it is the unique index's key, not a field of the
     /// resource.
     /// </summary>
     [Fact]
@@ -278,12 +278,73 @@ public class SuperAdminSupplierPresetsApiTests
             Assert.Equal(JsonValueKind.Null, preset.GetProperty("url").ValueKind);
             Assert.True(preset.GetProperty("id").GetInt32() > 0);
             Assert.Equal(
-                ["createdAtUtc", "id", "isEnabled", "name", "updatedAtUtc", "url"],
+                [
+                    "createdAtUtc",
+                    "id",
+                    "isEnabled",
+                    "name",
+                    "priceConnector",
+                    "priceConnectorKey",
+                    "pricesIncludeGst",
+                    "servedStates",
+                    "servesNationwide",
+                    "updatedAtUtc",
+                    "url",
+                ],
                 preset.EnumerateObject()
                     .Select(property => property.Name)
                     .Order(StringComparer.Ordinal)
                     .ToArray());
         });
+    }
+
+    /// <summary>
+    /// The supplier-master fields as the list reports them (issue #931): the market as the state
+    /// codes themselves, the GST basis as a flag, and the connector as its enum's number with its
+    /// key beside it. A nationwide preset reports an <em>empty</em> state list rather than all eight
+    /// codes, because those are different claims.
+    /// </summary>
+    [Fact]
+    public async Task The_list_reports_the_supplier_master_fields()
+    {
+        await _factory.SeedSupplierPresetAsync(
+            "JB Metro Example",
+            url: "https://www.jbmetro.example",
+            servesNationwide: false,
+            servedStates: "SA,NT",
+            pricesIncludeGst: false,
+            priceConnector: SupplierPriceConnector.JbMetro);
+        await _factory.SeedSupplierPresetAsync(
+            "Varnmill Example",
+            priceConnector: SupplierPriceConnector.Varnmill,
+            priceConnectorKey: "aldi");
+
+        var body = await ReadJsonAsync(await _factory.AsAdministrator().GetAsync(PresetsUrl));
+        var presets = body.RootElement.EnumerateArray().ToList();
+
+        var jbMetro = presets.Single(preset => preset.GetProperty("name").GetString() == "JB Metro Example");
+        Assert.False(jbMetro.GetProperty("servesNationwide").GetBoolean());
+        Assert.Equal(
+            ["SA", "NT"],
+            jbMetro.GetProperty("servedStates").EnumerateArray().Select(code => code.GetString()).ToArray());
+        Assert.False(jbMetro.GetProperty("pricesIncludeGst").GetBoolean());
+        Assert.Equal(
+            (int)SupplierPriceConnector.JbMetro,
+            jbMetro.GetProperty("priceConnector").GetInt32());
+        Assert.Equal(JsonValueKind.Null, jbMetro.GetProperty("priceConnectorKey").ValueKind);
+
+        var varnmill = presets.Single(preset => preset.GetProperty("name").GetString() == "Varnmill Example");
+        Assert.True(varnmill.GetProperty("servesNationwide").GetBoolean());
+        Assert.Empty(varnmill.GetProperty("servedStates").EnumerateArray());
+        Assert.True(varnmill.GetProperty("pricesIncludeGst").GetBoolean());
+        Assert.Equal(
+            (int)SupplierPriceConnector.Varnmill,
+            varnmill.GetProperty("priceConnector").GetInt32());
+        Assert.Equal("aldi", varnmill.GetProperty("priceConnectorKey").GetString());
+
+        // A preset nobody has given a connector reports none, rather than a number standing for one.
+        var coles = presets.Single(preset => preset.GetProperty("name").GetString() == "Coles");
+        Assert.Equal(JsonValueKind.Null, coles.GetProperty("priceConnector").ValueKind);
     }
 
     /// <summary>
@@ -313,7 +374,7 @@ public class SuperAdminSupplierPresetsApiTests
     {
         var response = await _factory.AsAdministrator().PostAsJsonAsync(
             PresetsUrl,
-            new { name = "  Aldi  ", url = " https://www.aldi.com.au " });
+            CreateBody("  Aldi  ", url: " https://www.aldi.com.au "));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
@@ -335,7 +396,7 @@ public class SuperAdminSupplierPresetsApiTests
     {
         var response = await _factory.AsAdministrator().PostAsJsonAsync(
             PresetsUrl,
-            new { name = "Aldi", url = "   " });
+            CreateBody("Aldi", url: "   "));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Equal(
@@ -356,7 +417,7 @@ public class SuperAdminSupplierPresetsApiTests
     [InlineData("  CoLeS  ")]
     public async Task A_duplicate_name_is_refused_with_a_conflict(string name)
     {
-        var response = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, new { name });
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, CreateBody(name));
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal(SupplierPresetPolicy.DuplicateNameMessage, await MessageAsync(response));
@@ -370,7 +431,7 @@ public class SuperAdminSupplierPresetsApiTests
     [InlineData("   ")]
     public async Task A_blank_name_is_refused(string? name)
     {
-        var response = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, new { name });
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, CreateBody(name));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(SupplierPresetPolicy.NameRequiredMessage, await MessageAsync(response));
@@ -383,7 +444,7 @@ public class SuperAdminSupplierPresetsApiTests
     {
         var response = await _factory.AsAdministrator().PostAsJsonAsync(
             PresetsUrl,
-            new { name = new string('n', SupplierPresetPolicy.MaxNameLength + 1) });
+            CreateBody(new string('n', SupplierPresetPolicy.MaxNameLength + 1)));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(SupplierPresetPolicy.NameTooLongMessage, await MessageAsync(response));
@@ -406,7 +467,7 @@ public class SuperAdminSupplierPresetsApiTests
     {
         var response = await _factory.AsAdministrator().PostAsJsonAsync(
             PresetsUrl,
-            new { name = "Aldi", url });
+            CreateBody("Aldi", url));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(SupplierUrlPolicy.InvalidMessage, await MessageAsync(response));
@@ -422,7 +483,7 @@ public class SuperAdminSupplierPresetsApiTests
 
         var response = await _factory.AsAdministrator().PostAsJsonAsync(
             PresetsUrl,
-            new { name = "Aldi", url = tooLong });
+            CreateBody("Aldi", url: tooLong));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(SupplierUrlPolicy.TooLongMessage, await MessageAsync(response));
@@ -444,8 +505,8 @@ public class SuperAdminSupplierPresetsApiTests
     [Fact]
     public async Task A_second_create_of_one_name_leaves_one_row_and_one_conflict()
     {
-        var first = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, new { name = "Aldi" });
-        var second = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, new { name = "aldi" });
+        var first = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, CreateBody("Aldi"));
+        var second = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, CreateBody("aldi"));
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
@@ -454,6 +515,283 @@ public class SuperAdminSupplierPresetsApiTests
         Assert.Single(
             await _factory.SupplierPresetsAsync(),
             preset => preset.NormalisedName == "ALDI");
+    }
+
+    #endregion
+
+    #region The supplier-master fields (issue #931)
+
+    /// <summary>
+    /// A create accepts and returns the supplier-master fields, and stores exactly what the Domain
+    /// made of them: the states in canonical order, the connector key trimmed.
+    /// </summary>
+    [Fact]
+    public async Task A_preset_is_created_with_its_served_states_gst_basis_and_connector()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody(
+                "JB Metro Example",
+                url: "https://www.jbmetro.example",
+                servesNationwide: false,
+                servedStates: ["nt", " sa "],
+                pricesIncludeGst: false,
+                priceConnector: (int)SupplierPriceConnector.Varnmill,
+                priceConnectorKey: "  jbmetro  "));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var created = (await ReadJsonAsync(response)).RootElement;
+        Assert.False(created.GetProperty("servesNationwide").GetBoolean());
+        Assert.Equal(
+            ["SA", "NT"],
+            created.GetProperty("servedStates").EnumerateArray().Select(code => code.GetString()).ToArray());
+        Assert.False(created.GetProperty("pricesIncludeGst").GetBoolean());
+        Assert.Equal((int)SupplierPriceConnector.Varnmill, created.GetProperty("priceConnector").GetInt32());
+        Assert.Equal("jbmetro", created.GetProperty("priceConnectorKey").GetString());
+
+        var stored = (await _factory.SupplierPresetsAsync())
+            .Single(preset => preset.Name == "JB Metro Example");
+        Assert.False(stored.ServesNationwide);
+        Assert.Equal("SA,NT", stored.ServedStates);
+        Assert.False(stored.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.Varnmill, stored.PriceConnector);
+        Assert.Equal("jbmetro", stored.PriceConnectorKey);
+    }
+
+    /// <summary>A nationwide preset stores no state list, which is a different claim from all eight.</summary>
+    [Fact]
+    public async Task A_nationwide_preset_stores_no_state_list()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Kmart Example", servesNationwide: true));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Empty(
+            (await ReadJsonAsync(response)).RootElement.GetProperty("servedStates").EnumerateArray());
+        Assert.Equal(
+            string.Empty,
+            (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Kmart Example").ServedStates);
+    }
+
+    /// <summary>
+    /// An edit rewrites the whole market, the GST basis and the route together, and the answer is the
+    /// stored state rather than the submission.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_stores_the_served_states_the_gst_basis_and_the_connector()
+    {
+        var id = await _factory.SeedSupplierPresetAsync(
+            "Regional Supplier",
+            servesNationwide: false,
+            servedStates: "VIC",
+            pricesIncludeGst: false,
+            priceConnector: SupplierPriceConnector.Varnmill,
+            priceConnectorKey: "regional");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(id),
+            EditBody(
+                "Regional Supplier",
+                isEnabled: true,
+                servesNationwide: true,
+                pricesIncludeGst: true,
+                priceConnector: (int)SupplierPriceConnector.Kmart));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var updated = (await ReadJsonAsync(response)).RootElement;
+        Assert.True(updated.GetProperty("servesNationwide").GetBoolean());
+        Assert.Empty(updated.GetProperty("servedStates").EnumerateArray());
+        Assert.True(updated.GetProperty("pricesIncludeGst").GetBoolean());
+        Assert.Equal((int)SupplierPriceConnector.Kmart, updated.GetProperty("priceConnector").GetInt32());
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(preset => preset.Id == id);
+        Assert.True(stored.ServesNationwide);
+        Assert.Equal(string.Empty, stored.ServedStates);
+        Assert.True(stored.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.Kmart, stored.PriceConnector);
+        // Moving to a route that takes no key clears the one the old route needed, rather than
+        // leaving behind a value nothing reads.
+        Assert.Null(stored.PriceConnectorKey);
+    }
+
+    /// <summary>
+    /// An edit may also take a preset to no connector at all, which is the state a supplier somebody
+    /// price-checks by hand is in.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_may_remove_the_connector_altogether()
+    {
+        var id = await _factory.SeedSupplierPresetAsync(
+            "Hand Checked",
+            priceConnector: SupplierPriceConnector.Varnmill,
+            priceConnectorKey: "hand");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(id),
+            EditBody("Hand Checked", isEnabled: true, priceConnector: null));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(
+            JsonValueKind.Null,
+            (await ReadJsonAsync(response)).RootElement.GetProperty("priceConnector").ValueKind);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(preset => preset.Id == id);
+        Assert.Null(stored.PriceConnector);
+        Assert.Null(stored.PriceConnectorKey);
+    }
+
+    /// <summary>
+    /// Every invalid supplier-master combination is a <c>400</c> carrying the Domain's own sentence,
+    /// and each one writes nothing: the create is refused before the preset exists, so the list is the
+    /// baseline four afterwards.
+    /// </summary>
+    [Fact]
+    public async Task An_invalid_served_state_or_connector_combination_is_refused_with_a_message()
+    {
+        var client = _factory.AsAdministrator();
+
+        var both = await client.PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", servesNationwide: true, servedStates: ["NSW"]));
+        Assert.Equal(HttpStatusCode.BadRequest, both.StatusCode);
+        Assert.Equal(SupplierPresetMasterPolicy.NationwideAndStatesMessage, await MessageAsync(both));
+
+        var neither = await client.PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", servesNationwide: false, servedStates: []));
+        Assert.Equal(HttpStatusCode.BadRequest, neither.StatusCode);
+        Assert.Equal(SupplierPresetMasterPolicy.ServedStatesRequiredMessage, await MessageAsync(neither));
+
+        var unknownState = await client.PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", servesNationwide: false, servedStates: ["NSW", "JBT"]));
+        Assert.Equal(HttpStatusCode.BadRequest, unknownState.StatusCode);
+        Assert.Equal(SupplierPresetMasterPolicy.UnknownServedStateMessage, await MessageAsync(unknownState));
+
+        var missingKey = await client.PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", priceConnector: (int)SupplierPriceConnector.Varnmill));
+        Assert.Equal(HttpStatusCode.BadRequest, missingKey.StatusCode);
+        Assert.Equal(SupplierPresetMasterPolicy.ConnectorKeyRequiredMessage, await MessageAsync(missingKey));
+
+        var keyWithNoRoute = await client.PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", priceConnector: null, priceConnectorKey: "coles"));
+        Assert.Equal(HttpStatusCode.BadRequest, keyWithNoRoute.StatusCode);
+        Assert.Equal(
+            SupplierPresetMasterPolicy.ConnectorKeyNotAllowedMessage,
+            await MessageAsync(keyWithNoRoute));
+
+        var keyOnAKeylessRoute = await client.PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody(
+                "Aldi",
+                priceConnector: (int)SupplierPriceConnector.JbMetro,
+                priceConnectorKey: "jb"));
+        Assert.Equal(HttpStatusCode.BadRequest, keyOnAKeylessRoute.StatusCode);
+        Assert.Equal(
+            SupplierPresetMasterPolicy.ConnectorKeyNotAllowedMessage,
+            await MessageAsync(keyOnAKeylessRoute));
+
+        var tooLongKey = await client.PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody(
+                "Aldi",
+                priceConnector: (int)SupplierPriceConnector.Varnmill,
+                priceConnectorKey: new string('k', SupplierPresetMasterPolicy.MaxConnectorKeyLength + 1)));
+        Assert.Equal(HttpStatusCode.BadRequest, tooLongKey.StatusCode);
+        Assert.Equal(SupplierPresetMasterPolicy.ConnectorKeyTooLongMessage, await MessageAsync(tooLongKey));
+
+        await AssertOnlyTheShippedPresetsExistAsync();
+    }
+
+    /// <summary>
+    /// A connector number outside the declared vocabulary is refused too. An enum is a compile-time
+    /// constraint and a JSON number is not: <c>0</c> and <c>99</c> bind to a
+    /// <c>SupplierPriceConnector</c> that names no collection route, which is not the same thing as
+    /// "no route".
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(99)]
+    public async Task An_undeclared_connector_number_is_refused(int connector)
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", priceConnector: connector));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(SupplierPresetMasterPolicy.UnknownConnectorMessage, await MessageAsync(response));
+
+        await AssertOnlyTheShippedPresetsExistAsync();
+    }
+
+    /// <summary>
+    /// An invalid combination on an <em>edit</em> leaves the preset exactly as it was - every field of
+    /// it, not only the one that was refused.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_with_an_invalid_combination_changes_nothing()
+    {
+        var id = await _factory.SeedSupplierPresetAsync(
+            "Regional Supplier",
+            servesNationwide: false,
+            servedStates: "VIC",
+            pricesIncludeGst: false,
+            priceConnector: SupplierPriceConnector.Varnmill,
+            priceConnectorKey: "regional");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(id),
+            EditBody(
+                "Regional Supplier",
+                isEnabled: true,
+                servesNationwide: true,
+                servedStates: ["NSW"],
+                pricesIncludeGst: true,
+                priceConnector: (int)SupplierPriceConnector.Kmart));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(SupplierPresetMasterPolicy.NationwideAndStatesMessage, await MessageAsync(response));
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(preset => preset.Id == id);
+        Assert.False(stored.ServesNationwide);
+        Assert.Equal("VIC", stored.ServedStates);
+        Assert.False(stored.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.Varnmill, stored.PriceConnector);
+        Assert.Equal("regional", stored.PriceConnectorKey);
+    }
+
+    /// <summary>
+    /// <c>pricesIncludeGst</c> is a <c>bool</c>, so a body that omitted it would bind <c>false</c>
+    /// indistinguishably from an explicit <c>false</c> and record the supplier's prices as ex-GST - a
+    /// wrong tax basis, stored silently, on a field AGENTS.md treats as financial data.
+    /// <c>JsonRequiredAttribute</c> refuses the under-posted body instead, on both writes.
+    /// </summary>
+    [Fact]
+    public async Task A_write_without_pricesIncludeGst_is_refused_and_changes_nothing()
+    {
+        var preset = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles");
+
+        var created = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            new { name = "Aldi", servesNationwide = true });
+        Assert.Equal(HttpStatusCode.BadRequest, created.StatusCode);
+
+        var updated = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(preset.Id),
+            new { name = "Coles", isEnabled = true, servesNationwide = true });
+        Assert.Equal(HttpStatusCode.BadRequest, updated.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == preset.Id);
+        Assert.Equal(preset.PricesIncludeGst, stored.PricesIncludeGst);
+        Assert.Equal(preset.UpdatedAtUtc, stored.UpdatedAtUtc);
+
+        await AssertOnlyTheShippedPresetsExistAsync();
     }
 
     #endregion
@@ -467,7 +805,7 @@ public class SuperAdminSupplierPresetsApiTests
 
         var response = await _factory.AsAdministrator().PutAsJsonAsync(
             PresetUrl(id),
-            new { name = " Coles Supermarkets ", url = "https://www.coles.com.au", isEnabled = false });
+            EditBody(" Coles Supermarkets ", isEnabled: false, url: "https://www.coles.com.au"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
@@ -493,7 +831,7 @@ public class SuperAdminSupplierPresetsApiTests
 
         var response = await _factory.AsAdministrator().PutAsJsonAsync(
             PresetUrl(id),
-            new { name = "Retired Wholesaler", isEnabled = true });
+            EditBody("Retired Wholesaler", isEnabled: true));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True((await _factory.SupplierPresetsAsync()).Single(p => p.Id == id).IsEnabled);
@@ -510,7 +848,7 @@ public class SuperAdminSupplierPresetsApiTests
 
         var response = await _factory.AsAdministrator().PutAsJsonAsync(
             PresetUrl(id),
-            new { name = "coles", url = "https://www.coles.com.au", isEnabled = true });
+            EditBody("coles", isEnabled: true, url: "https://www.coles.com.au"));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("coles", (await _factory.SupplierPresetsAsync()).Single(p => p.Id == id).Name);
@@ -523,7 +861,7 @@ public class SuperAdminSupplierPresetsApiTests
 
         var response = await _factory.AsAdministrator().PutAsJsonAsync(
             PresetUrl(id),
-            new { name = "woolworths", isEnabled = true });
+            EditBody("woolworths", isEnabled: true));
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal(SupplierPresetPolicy.DuplicateNameMessage, await MessageAsync(response));
@@ -538,7 +876,7 @@ public class SuperAdminSupplierPresetsApiTests
 
         var response = await _factory.AsAdministrator().PutAsJsonAsync(
             PresetUrl(id),
-            new { name = "   ", isEnabled = false });
+            EditBody("   ", isEnabled: false));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(SupplierPresetPolicy.NameRequiredMessage, await MessageAsync(response));
@@ -553,7 +891,7 @@ public class SuperAdminSupplierPresetsApiTests
     {
         var response = await _factory.AsAdministrator().PutAsJsonAsync(
             PresetUrl(999999),
-            new { name = "Aldi", isEnabled = true });
+            EditBody("Aldi", isEnabled: true));
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         await AssertOnlyTheShippedPresetsExistAsync();
@@ -607,9 +945,14 @@ public class SuperAdminSupplierPresetsApiTests
     #region The audit trail
 
     /// <summary>
-    /// Each committed write emits one event with the actor, the preset's key, the change and the
-    /// resulting state - and never the preset's name or its website, which is the restraint the two
-    /// platform-business audits already show about a business's name and contact address.
+    /// Each committed write emits one event with the actor, the preset's key, the change, the
+    /// resulting state and the supplier-master fields it ended in - and never the preset's name or
+    /// its website, which is the restraint the two platform-business audits already show about a
+    /// business's name and contact address.
+    ///
+    /// <para>The name here is deliberately one whose website shares a word with it, so "the name is
+    /// absent" and "the website is absent" are both real assertions rather than one accidentally
+    /// proving the other.</para>
     /// </summary>
     [Fact]
     public async Task A_committed_write_is_audited_without_the_name_or_the_website()
@@ -618,13 +961,21 @@ public class SuperAdminSupplierPresetsApiTests
 
         var created = await _factory.AsAdministrator().PostAsJsonAsync(
             PresetsUrl,
-            new { name = "Aldi Stores", url = "https://www.aldi.com.au" });
+            CreateBody("Aldi Stores", url: "https://www.aldi.com.au"));
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
 
         var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi Stores").Id;
         var updated = await _factory.AsAdministrator().PutAsJsonAsync(
             PresetUrl(id),
-            new { name = "Aldi Stores", url = "https://www.aldi.com.au", isEnabled = false });
+            EditBody(
+                "Aldi Stores",
+                isEnabled: false,
+                url: "https://www.aldi.com.au",
+                servesNationwide: false,
+                servedStates: ["ACT", "NSW"],
+                pricesIncludeGst: false,
+                priceConnector: (int)SupplierPriceConnector.Varnmill,
+                priceConnectorKey: "aldi-key"));
         Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
 
         var audit = _factory.LoggedEntries()
@@ -636,7 +987,7 @@ public class SuperAdminSupplierPresetsApiTests
         {
             Assert.Contains(SuperAdminBusinessesApiFactory.AdministratorObjectId, entry, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(id.ToString(CultureInfo.InvariantCulture), entry, StringComparison.Ordinal);
-            Assert.DoesNotContain("Aldi", entry, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Aldi Stores", entry, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("aldi.com.au", entry, StringComparison.OrdinalIgnoreCase);
         });
 
@@ -644,6 +995,19 @@ public class SuperAdminSupplierPresetsApiTests
         Assert.Contains("enabled True", audit[0], StringComparison.Ordinal);
         Assert.Contains("change Updated", audit[1], StringComparison.Ordinal);
         Assert.Contains("enabled False", audit[1], StringComparison.Ordinal);
+
+        // The create's own supplier-master state: nationwide, GST-inclusive, collected by nobody.
+        Assert.Contains("nationwide True", audit[0], StringComparison.Ordinal);
+        Assert.Contains("prices include GST True", audit[0], StringComparison.Ordinal);
+
+        // And the edit's, including the connector key that says which retailer the shared Varnmill
+        // route is for. It is recorded in the state the Domain stored it in - the states in canonical
+        // order rather than the order the request listed them.
+        Assert.Contains("nationwide False", audit[1], StringComparison.Ordinal);
+        Assert.Contains("states NSW,ACT", audit[1], StringComparison.Ordinal);
+        Assert.Contains("prices include GST False", audit[1], StringComparison.Ordinal);
+        Assert.Contains("connector Varnmill", audit[1], StringComparison.Ordinal);
+        Assert.Contains("connector key aldi-key", audit[1], StringComparison.Ordinal);
     }
 
     /// <summary>A refused write is not audited, because nothing happened.</summary>
@@ -654,7 +1018,7 @@ public class SuperAdminSupplierPresetsApiTests
 
         Assert.Equal(
             HttpStatusCode.Conflict,
-            (await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, new { name = "coles" })).StatusCode);
+            (await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, CreateBody("coles"))).StatusCode);
 
         Assert.DoesNotContain(
             _factory.LoggedEntries(),
@@ -680,14 +1044,14 @@ public class SuperAdminSupplierPresetsApiTests
 
         Assert.Equal(
             HttpStatusCode.Created,
-            (await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, new { name = "Aldi" })).StatusCode);
+            (await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, CreateBody("Aldi"))).StatusCode);
 
         var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi").Id;
         Assert.Equal(
             HttpStatusCode.OK,
             (await _factory.AsAdministrator().PutAsJsonAsync(
                 PresetUrl(id),
-                new { name = "Aldi", isEnabled = false })).StatusCode);
+                EditBody("Aldi", isEnabled: false))).StatusCode);
 
         var after = await ReadJsonAsync(await owner.GetAsync("/api/suppliers"));
         Assert.Empty(after.RootElement.EnumerateArray());
@@ -718,14 +1082,62 @@ public class SuperAdminSupplierPresetsApiTests
         string.Create(CultureInfo.InvariantCulture, $"{PresetsUrl}/{id}");
 
     /// <summary>
+    /// A create body that is valid in every respect a test is not about: nationwide, GST-inclusive
+    /// and with no price connector. Each test overrides the one field it is testing, so a refusal it
+    /// asserts is about that field and never about a value it forgot to send.
+    /// </summary>
+    private static object CreateBody(
+        string? name,
+        string? url = null,
+        bool servesNationwide = true,
+        string?[]? servedStates = null,
+        bool pricesIncludeGst = true,
+        int? priceConnector = null,
+        string? priceConnectorKey = null) =>
+        new
+        {
+            name,
+            url,
+            servesNationwide,
+            servedStates,
+            pricesIncludeGst,
+            priceConnector,
+            priceConnectorKey,
+        };
+
+    /// <summary>
+    /// An edit body on the same terms, plus the enabled flag the <c>PUT</c> always carries.
+    /// </summary>
+    private static object EditBody(
+        string? name,
+        bool isEnabled,
+        string? url = null,
+        bool servesNationwide = true,
+        string?[]? servedStates = null,
+        bool pricesIncludeGst = true,
+        int? priceConnector = null,
+        string? priceConnectorKey = null) =>
+        new
+        {
+            name,
+            url,
+            isEnabled,
+            servesNationwide,
+            servedStates,
+            pricesIncludeGst,
+            priceConnector,
+            priceConnectorKey,
+        };
+
+    /// <summary>
     /// Every endpoint on the surface, called once with the same client, so an authorization claim is
     /// made about the whole controller rather than about whichever action a test happened to pick.
     /// </summary>
     private static async Task<IReadOnlyList<HttpResponseMessage>> AllEndpointsAsync(HttpClient client) =>
     [
         await client.GetAsync(PresetsUrl),
-        await client.PostAsync(PresetsUrl, Json(new { name = "Smuggled", url = "https://smuggled.test" })),
-        await client.PutAsync(PresetUrl(1), Json(new { name = "Smuggled", isEnabled = false })),
+        await client.PostAsync(PresetsUrl, Json(CreateBody("Smuggled", url: "https://smuggled.test"))),
+        await client.PutAsync(PresetUrl(1), Json(EditBody("Smuggled", isEnabled: false))),
     ];
 
     private static StringContent Json(object body) =>
@@ -766,6 +1178,13 @@ public class SuperAdminSupplierPresetsApiTests
         {
             Assert.True(preset.IsEnabled);
             Assert.Null(preset.Url);
+            // The baseline's supplier-master values too, so "nothing was written" covers the fields
+            // of issue #931 and not only the three #848 had.
+            Assert.True(preset.ServesNationwide);
+            Assert.Equal(string.Empty, preset.ServedStates);
+            Assert.True(preset.PricesIncludeGst);
+            Assert.Null(preset.PriceConnector);
+            Assert.Null(preset.PriceConnectorKey);
         });
     }
 }

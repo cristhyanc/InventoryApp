@@ -21,6 +21,13 @@ namespace InventoryApi.Adapters.PlatformAdmin;
 /// afterwards <em>are</em> recorded, because an audit trail that cannot say who changed which preset
 /// is not an audit trail, and all four are identifiers or states rather than content.</para>
 ///
+/// <para><strong>And so are the supplier-master fields of issue #931</strong> - the market, whether
+/// the published prices include GST, the collection route and its key - because they are the
+/// configuration a Super Admin came here to change, and "who switched this supplier to ex-GST
+/// prices" is exactly the question this trail exists to answer. Each of them is a state or a closed
+/// vocabulary's value, and the connector key names which retailer a shared route is for; none is
+/// anybody's name, address or business data.</para>
+///
 /// <para>Emitted at <c>Information</c>, once, after the write is committed. A refused create or edit
 /// is not audited, because nothing happened. Destination and retention are the host's logging
 /// pipeline, which is platform configuration a human must verify rather than something this
@@ -45,13 +52,20 @@ public sealed class LoggingSupplierPresetAudit : ISupplierPresetAudit
 
         _logger.LogInformation(
             "Platform supplier preset audit. Actor {ActorDirectoryTenantId}/{ActorObjectId}; "
-                + "preset {PresetId}; change {Change}; enabled {IsEnabled}; occurred "
-                + "{OccurredAtUtc:O}; correlation {CorrelationId}.",
+                + "preset {PresetId}; change {Change}; enabled {IsEnabled}; nationwide "
+                + "{ServesNationwide}; states {ServedStates}; prices include GST "
+                + "{PricesIncludeGst}; connector {PriceConnector}; connector key "
+                + "{PriceConnectorKey}; occurred {OccurredAtUtc:O}; correlation {CorrelationId}.",
             entry.ActorDirectoryTenantId,
             entry.ActorObjectId,
             entry.PresetId,
             entry.Change,
             entry.IsEnabled,
+            entry.ServesNationwide,
+            entry.ServedStates,
+            entry.PricesIncludeGst,
+            entry.PriceConnector,
+            entry.PriceConnectorKey,
             entry.OccurredAtUtc,
             CorrelationId());
     }

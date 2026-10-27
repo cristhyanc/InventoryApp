@@ -1220,6 +1220,31 @@ public class AppDbContext : DbContext
         // column constraint cannot express.
         preset.Property(x => x.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
 
+        // The supplier-master fields of issue #931. The market is two columns because the two claims
+        // are different: ServesNationwide is "everywhere", and ServedStates is the closed, ordered,
+        // comma-separated code list SupplierPresetMasterPolicy writes - bounded at the longest value
+        // that policy's own vocabulary can produce, computed from it rather than guessed, so a ninth
+        // code could not leave the column too narrow for it. The list is one column and not a child
+        // table because the vocabulary is closed, a market is read and written whole, and nothing
+        // joins to a state.
+        preset.Property(x => x.ServesNationwide);
+        preset.Property(x => x.ServedStates)
+            .IsRequired()
+            .HasMaxLength(SupplierPresetMasterPolicy.MaxStoredServedStatesLength);
+
+        // Whether the published prices include GST. A stored fact, never inferred, and never a
+        // calculated amount: nothing in this mapping or this table holds money.
+        preset.Property(x => x.PricesIncludeGst);
+
+        // No HasConversion and no default on the connector, exactly as Business.SalesProvider is
+        // mapped (issue #759): a nullable enum maps to a nullable INTEGER, and null - "nothing
+        // collects this supplier's prices" - is the value a preset keeps unless somebody chose a
+        // route. SupplierPriceConnector is numbered from 1, so no stored number means Varnmill by
+        // accident.
+        preset.Property(x => x.PriceConnector);
+        preset.Property(x => x.PriceConnectorKey)
+            .HasMaxLength(SupplierPresetMasterPolicy.MaxConnectorKeyLength);
+
         // Both instants are persisted UTC and both are reported by this feature's API, so each is
         // marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why the
         // SQLite provider makes that necessary.
