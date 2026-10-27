@@ -88,13 +88,18 @@ public class BusinessOwnershipCoverageTests
     ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
-    /// by the ownership mechanism, because there is no ownership here to enforce. Reading is the same
-    /// for <see cref="SupplierPreset"/>, whose list no business endpoint knows exists. Issue #873's
-    /// one boolean is the single documented exception: <c>GET /api/me/access</c> publishes it to every
-    /// member, because an option the application switched off has to stop being offered to the people
-    /// it was switched off for. That read reaches this one column and nothing else - see AGENTS.md
-    /// § Tenant ownership and data isolation and docs/architecture.md § Switchable Admin option
-    /// visibility.</para>
+    /// by the ownership mechanism, because there is no ownership here to enforce. <strong>Reading has
+    /// two documented exceptions, each reviewed on its own issue.</strong> Issue #873's one boolean:
+    /// <c>GET /api/me/access</c> publishes it to every member, because an option the application
+    /// switched off has to stop being offered to the people it was switched off for, and that read
+    /// reaches one column and nothing else. And issue #935's "Available to add" suppliers:
+    /// <c>GET /api/suppliers/available-presets</c> publishes the id, name and website of the enabled
+    /// <see cref="SupplierPreset"/> rows that serve the caller's own business's state and that it
+    /// holds no copy of, so a record the platform added later is offered to a business rather than
+    /// pushed into it. Neither read takes a caller-supplied filter, and neither publishes anything
+    /// about any business - see AGENTS.md § Tenant ownership and data isolation,
+    /// docs/architecture.md § Switchable Admin option visibility and § Supplier records by business
+    /// state.</para>
     /// </summary>
     private static readonly HashSet<Type> PlatformEntities =
     [

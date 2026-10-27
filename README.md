@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A supplier that came from the platform's supplier list keeps that list's name and website, cannot be deleted, and can be marked **Not used** to keep it out of the pickers (see [Suppliers from the platform list](#suppliers-from-the-platform-list)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A supplier that came from the platform's supplier list keeps that list's name and website, cannot be deleted, and can be marked **Not used** to keep it out of the pickers; a business receives the ones that serve the state it trades in, picks up more when it changes state, and can add any other that serves it in one click from **Available to add** (see [Suppliers from the platform list](#suppliers-from-the-platform-list)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
@@ -563,7 +563,7 @@ POST /api/super-admin/supplier-presets          { "name", "url", "servesNationwi
 PUT  /api/super-admin/supplier-presets/{id}     the same, plus "isEnabled": true|false
 ```
 
-- **It only affects businesses approved later.** This list is a source to copy *from*. Nothing on this surface reads or writes any business's own suppliers: a preset never appears in `/api/suppliers`, editing or disabling one changes nothing a business already has, and a business's supplier of the same name is an entirely separate row that business owns outright. A preset added or re-enabled today reaches no business that was approved yesterday.
+- **It never writes to a business.** This list is a source to copy *from*. Nothing on this surface reads or writes any business's own suppliers: a preset is never a supplier in a business's own list, editing or disabling one changes nothing a business already has, and a business's supplier of the same name is an entirely separate row that business owns outright. A preset added or re-enabled today is **not pushed** into any existing business (issue #935): it is *offered* to the ones it serves, under **Available to add** on their own Suppliers page, and becomes a supplier only when somebody there adds it — see [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the three surfaces above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair unset — the shipped state — nobody can reach it at all.** A business Owner, Admin or member is refused with `403` like anybody else, and an anonymous request is `401`. A [role preview](#previewing-the-app-as-a-role-issues-720-and-721) is refused on both writes as read-only, exactly as on the Businesses surface, while a previewed **read** is unaffected: this controller declares no capability for a preview to narrow. The `X-Support-Session` header is **not acted on here at all** — as on every endpoint of this class — so an ordinary member who sets it is still an ordinary member refused `403`, and an administrator who happens to hold a live [support session](#super-admin-support-sessions) reaches this surface as themselves, writes included, exactly as they still reach the Businesses surface.
 - **What a preset is.** A name (required, trimmed, at most 200 characters), an optional website, whether it is still suggested, the three supplier-master facts below, and the instants it was created and last changed. The website must be a complete `http://` or `https://` address of at most 2048 characters; a blank one is stored as "no website" rather than as an empty string, and nothing fetches, resolves or checks the address. That is not a rule of this feature's own: it is [the one a business supplier's own website uses](#a-suppliers-website) (issue #847), reused here so a preset and a supplier cannot disagree about what a valid address is — which matters because the copy below turns the one into the other.
 - **What it serves, what its prices mean, and who collects them (issue #931).** Each record says **which states it serves** — Australia nationwide, *or* one or more of NSW, VIC, QLD, SA, WA, TAS, ACT and NT, never both and never neither — whether **its published prices include GST** (yes for the supermarkets, Kmart and BIG W; no for JB Metro, whose prices are ex-GST), and **how those prices are collected**: nothing at all, Varnmill with a key naming the retailer (`coles`, `woolworths`, `aldi`), Kmart, BIG W, or JB Metro. The key is required for Varnmill and refused for every other route and for no route, and an invalid combination is `400` with a sentence saying which rule it broke. Whether prices include GST is a **recorded fact and never inferred** from a name, a connector or an amount, and it is required on every write so an omitted value cannot silently record a price list as ex-GST. A JB Metro record's **website is the site its connector reads**, which is why a new JB Metro site is a new record and not new code. No price is collected, stored or compared by this feature: it records what a later price check needs to know.
@@ -576,11 +576,19 @@ PUT  /api/super-admin/supplier-presets/{id}     the same, plus "isEnabled": true
 ### New businesses start with the enabled presets
 
 When a Super Admin **approves** a business application, that business is created with **one supplier
-of its own per enabled preset**, name and website copied, so it starts trading with a usable supplier
-list instead of an empty one (issue #849). It happens as part of the approval: either the business
-becomes active with its copies, or the approval fails and it is still waiting for a decision — never
-one without the other.
+of its own per enabled preset that serves the state it trades in**, name and website copied, so it
+starts trading with a usable supplier list instead of an empty one (issues #849 and #935). It happens
+as part of the approval: either the business becomes active with its copies, or the approval fails and
+it is still waiting for a decision — never one without the other.
 
+- **Only the records that serve its state** (issue #935). A record marked *Australia nationwide* goes
+  to every business; a record that serves particular states and territories goes only to a business
+  trading in one of them — so a Canberra business gets JB Metro South Coast & ACT and a Perth one does
+  not. A business with **no state recorded** — every business that existed before that field did —
+  gets the nationwide records only: its state is never guessed from its time zone, its address or its
+  ABN. A record whose market nobody has set yet goes to nobody. What happens **after** the approval —
+  when the business changes state, and when the platform adds a supplier — is in
+  [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **Who gets them.** Only a business whose `Pending` application is approved, and only the first time
   it is approved. A business that **already exists** gets nothing and is never backfilled: it already
   has the suppliers it uses, and adding the whole suggested list to it would be a change to its own
@@ -593,8 +601,8 @@ one without the other.
 - **Who never gets them.** A rejected application, a deactivation, a reactivation, a repeated
   approval attempt, a business created by `bootstrap-business`, and the disposable end-to-end test
   fixture.
-- **Disabled presets are not copied**, and a list with nothing enabled approves the business
-  normally, with no suppliers.
+- **Disabled presets are not copied**, and a list with nothing enabled — or nothing that serves the
+  business's state — approves the business normally, with no suppliers.
 - **A copy is the business's own supplier from that moment on, and it stays linked to the list it
   came from** (issue #934). It is listed on the ordinary Suppliers page under the ordinary supplier
   permission, with no contact details and no GST defaults set — a supplier's GST default is always
@@ -1357,10 +1365,27 @@ no website is normal, and editing one you recorded earlier works without touchin
 
 ## Suppliers from the platform list
 
-A business approved from now on starts with one supplier of its own per enabled platform preset (see
+A business approved from now on starts with one supplier of its own per enabled platform preset that
+serves the state it trades in (see
 [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets)), and
 each of those copies **stays linked** to the list it came from. The Suppliers page marks a linked
 supplier with a **Platform list** label.
+
+- **Change your state and the suppliers that serve it are added** (issue #935). When an Owner changes
+  the state or territory in Business settings, every supplier on the platform's list that now serves
+  you and that you do not already have is added as part of that save. **Nothing is ever removed**: a
+  supplier you no longer "match" stays exactly as it is, with its purchase history, because you did
+  buy from it — mark it **Not used** if you have stopped. Saving anything else on that page changes
+  no supplier at all.
+- **A supplier the platform adds later appears under "Available to add"** (issue #935). It is never
+  pushed into your business. The Suppliers page shows an **Available to add** section listing the
+  platform suppliers that serve your state and that you have not added yet, with their name and
+  website; **Add** creates your own copy of one, with that list's name and website, in one click. The
+  section is not shown at all when there is nothing left to add. Adding needs the same permission as
+  the rest of the Suppliers page, and the action is hidden — and refused — in a read-only support
+  session and while previewing another role. Adding the same one twice (two tabs, say) tells you it
+  has already been added and leaves one supplier; a supplier that serves another state is not offered
+  and cannot be added.
 
 - **Its name and website are the platform's.** Open a linked supplier for editing and the Name and
   Website fields are read-only, with a note saying why. The API refuses a change to either with
@@ -1384,7 +1409,12 @@ supplier with a **Platform list** label.
   controls; the server enforces the rules either way. `GET /api/suppliers` leaves the suppliers
   marked "Not used" **out** unless you ask for them with `?includeHidden=true`, so every picker gets
   the right list by default. `PUT /api/suppliers/{id}/not-used` takes `{ "isHidden": true|false }`.
-  The nested `supplier` object on a purchase, supplier order or expense is unchanged.
+  `GET /api/suppliers/available-presets` lists what you may add — each with `id`, `name` and `url`
+  and nothing else — and `POST /api/suppliers/available-presets/{presetId}` adds one, with **no
+  body**: its name and website come from the platform's list, and the business is your own. That add
+  answers `201` with the new supplier, `409` if you already have it, and `404` for a supplier that
+  does not exist, is no longer suggested, or does not serve your state. The nested `supplier` object
+  on a purchase, supplier order or expense is unchanged.
 - **Businesses approved before this** had their existing suppliers linked once, by name: a supplier
   whose name matches a list entry exactly (ignoring case and surrounding spaces) was linked, and
   nothing else about it was touched. Where one business held **two** suppliers matching the same
@@ -2342,9 +2372,10 @@ territory that must be one of **NSW, VIC, QLD, SA, WA, TAS, ACT or NT**.
   time zone just saved is not confirmed a second time.
 - **The state or territory decides which supplier records a business can be offered** (issue #933,
   under #817), which is why it is recorded rather than worked out: the time zone cannot tell NSW
-  from the ACT, and nothing infers a state from a time zone or an address. Changing it changes
-  nothing else at all — no supplier is added, removed or relinked, and no stock, cost or report
-  figure moves.
+  from the ACT, and nothing infers a state from a time zone or an address. **Changing it adds the
+  platform suppliers the new state serves** and nothing else (issue #935): no supplier is removed,
+  hidden or relinked — a supplier you have bought from stays — and no stock, cost or report figure
+  moves. See [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **The migrated business is missing its contact email, GST registration and state**, because it
   predates the application form (issue #540, and the state column itself — no existing business has
   one and nothing backfills them). While any of them is unrecorded, a dismissible prompt on the
