@@ -1413,8 +1413,10 @@ supplier with a **Platform list** label.
   and nothing else — and `POST /api/suppliers/available-presets/{presetId}` adds one, with **no
   body**: its name and website come from the platform's list, and the business is your own. That add
   answers `201` with the new supplier, `409` if you already have it, and `404` for a supplier that
-  does not exist, is no longer suggested, or does not serve your state. The nested `supplier` object
-  on a purchase, supplier order or expense is unchanged.
+  does not exist, is no longer suggested, or does not serve your state — including when it stopped
+  being one of those while your Suppliers page was open, because the add checks all three for itself
+  at the moment it writes rather than trusting the list you are looking at. The nested `supplier`
+  object on a purchase, supplier order or expense is unchanged.
 - **Businesses approved before this** had their existing suppliers linked once, by name: a supplier
   whose name matches a list entry exactly (ignoring case and surrounding spaces) was linked, and
   nothing else about it was touched. Where one business held **two** suppliers matching the same

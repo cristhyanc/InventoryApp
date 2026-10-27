@@ -68,15 +68,21 @@ public sealed class AddSupplierFromPreset
     /// <summary>
     /// Adds the record with <paramref name="presetId"/> to the caller's business.
     ///
-    /// <para><strong>The availability check is enforced twice, and the two are not
-    /// redundant.</strong> The pre-check turns the ordinary cases - a record this business already
-    /// has, a record the platform disabled or re-pointed since the page was loaded - into an answer
-    /// the caller can act on. The filtered unique index of issue #934 is what makes "one copy per
-    /// record" true: between the check and the insert another request, or a state change's top-up,
-    /// can create that copy, and a <c>WHERE</c> clause cannot see a row that does not exist yet. So
-    /// the insert's own constraint violation is translated into the <em>same</em> "already added"
-    /// answer, which is why two simultaneous adds leave one copy and one conflict rather than one
-    /// copy and a server error.</para>
+    /// <para><strong>Eligibility is not checked here, and that is the point.</strong> Whether the
+    /// record is still suggested, whether it still serves this business's recorded state, and
+    /// whether this business already holds a copy are decided by <c>CopyAsync</c> itself, with the
+    /// write lock held, in the same operation as the insert. An answer this use case read first
+    /// would be a stale read by the time the row was written - a Super Admin disabling the record, a
+    /// change of its served states, an Owner changing the business's state, or another tab's add all
+    /// commit on their own schedule - and acting on it is how a business acquires a supplier nothing
+    /// entitles it to. So the three outcomes come back as outcomes, and this use case's only job is
+    /// to name the business they apply to.</para>
+    ///
+    /// <para><strong>The unique index is still the backstop.</strong> The filtered index of issue
+    /// #934 on <c>(BusinessId, SupplierPresetId)</c> is what makes "one copy per record" true
+    /// against a writer this process did not serialise with - a second process, or a row written by
+    /// hand - and when it refuses, the violation is translated into the <em>same</em> "already
+    /// added" answer rather than surfacing as a server error. One copy either way.</para>
     /// </summary>
     /// <exception cref="BusinessAccessDeniedException">
     /// The caller has no usable membership. Nothing is written.
@@ -86,28 +92,15 @@ public sealed class AddSupplierFromPreset
         var businessId = await _currentBusiness.RequireBusinessIdAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var availability = await _store
-            .FindAvailableAsync(businessId, presetId, cancellationToken)
-            .ConfigureAwait(false);
-
-        switch (availability)
-        {
-            case SupplierPresetAvailability.NotOffered:
-                return SupplierPresetAddition.NotAvailable();
-            case SupplierPresetAvailability.AlreadyCopied:
-                return SupplierPresetAddition.AlreadyAdded();
-        }
-
         try
         {
-            return SupplierPresetAddition.Added(
-                await _store.CopyAsync(businessId, presetId, cancellationToken).ConfigureAwait(false));
+            return await _store.CopyAsync(businessId, presetId, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (_store.IsDuplicateCopy(exception))
         {
-            // The pre-check passed and the index refused: this copy was created in between. The
-            // caller gets the same answer either way, which is what makes the race invisible to them
-            // rather than a server error - and there is still exactly one copy.
+            // The index refused a copy the in-lock read did not see. The caller gets the same answer
+            // either way, which is what makes it invisible to them rather than a server error - and
+            // there is still exactly one copy.
             return SupplierPresetAddition.AlreadyAdded();
         }
     }
@@ -123,10 +116,18 @@ public sealed class AddSupplierFromPreset
 /// new state is simply left where it is.</para>
 ///
 /// <para><strong>It is a use case rather than a method on the store</strong> because the loop and
-/// what to do when one copy is refused are decisions, not statements: a record another request
+/// what to do when one copy is not made are decisions, not statements: a record another request
 /// copied between the list and the insert is skipped, because the outcome this top-up wanted - one
-/// copy of it, which now exists - has already happened. Reporting it as a failure would make an
-/// Owner's state change fail over a supplier they have.</para>
+/// copy of it, which now exists - has already happened, and a record that stopped being offered in
+/// between is skipped because it is no longer one this business is entitled to. Reporting either as
+/// a failure would make an Owner's state change fail over a supplier they have, or over a platform
+/// record they never asked for.</para>
+///
+/// <para><strong>Each copy decides its own eligibility</strong> (<c>CopyAsync</c>, inside the write
+/// lock), so the list this loop walks is a candidate list rather than a decision. The list and the
+/// copies normally run inside the settings save's own write transaction, where nothing can commit
+/// between them at all; the per-copy check is what keeps the rule true when they do not - this same
+/// use case called outside that transaction, or a database another process is writing.</para>
 ///
 /// <para><strong>Which business is passed in, not resolved here.</strong> Its one caller is
 /// <c>UpdateBusinessSettings</c>, which has already resolved the caller's own business from their
@@ -152,14 +153,25 @@ public sealed class AddMatchingSupplierPresets
         {
             try
             {
-                await _store.CopyAsync(businessId, preset.Id, cancellationToken).ConfigureAwait(false);
-                added++;
+                var copy = await _store
+                    .CopyAsync(businessId, preset.Id, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (copy.Outcome == SupplierPresetAdditionOutcome.Added)
+                {
+                    added++;
+                }
+
+                // Anything else is skipped rather than counted or reported: "already added" means
+                // the one copy this top-up wanted exists, and "not available" means the record
+                // stopped being one this business may hold between the list and the write. Neither
+                // is a reason to fail an Owner's state change.
             }
             catch (Exception exception) when (_store.IsDuplicateCopy(exception))
             {
-                // The unique index refusing a copy this business already acquired in between. It is
-                // skipped rather than counted: one copy exists, which is the rule, and the state
-                // change carries on.
+                // The unique index refusing a copy this business acquired in between, from a writer
+                // the in-lock read could not see. Skipped for the same reason: one copy exists,
+                // which is the rule, and the state change carries on.
             }
         }
 

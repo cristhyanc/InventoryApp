@@ -35,12 +35,24 @@ namespace Inventory.Infrastructure.Persistence;
 /// one stored comma-separated list of codes, and a <c>LIKE</c> over it would match a code inside
 /// another's text. The same policy decides the approval's copy, so the two cannot disagree.</para>
 ///
-/// <para><strong>The filtered unique index is the rule, and this adapter only reports it.</strong>
-/// <c>(BusinessId, SupplierPresetId)</c> is unique over the linked rows (issue #934), so two
-/// concurrent copies of one record end with one row and one <c>SQLITE_CONSTRAINT</c>.
-/// <see cref="IsDuplicateCopy"/> recognises exactly that violation and nothing else, so any other
-/// database failure stays a database failure rather than being reported to a caller as "already
-/// added".</para>
+/// <para><strong><see cref="CopyAsync"/> is one atomic operation, and that is what makes it
+/// authoritative.</strong> It opens the <c>BEGIN IMMEDIATE</c> transaction of
+/// <see cref="SqliteWriteLockTransaction"/> - so the write lock is held <em>before</em> it reads the
+/// record's enabled flag and served states, the business's own recorded state, and the existing copy
+/// - and inserts inside the same transaction. Nothing can commit in that window, so a Super Admin's
+/// disable or re-point and an Owner's state change either land before the lock and are seen, or wait
+/// behind it; and a change of eligibility comes back as
+/// <c>SupplierPresetAdditionOutcome.NotAvailable</c> or <c>AlreadyAdded</c> rather than as a
+/// failure. A deferred transaction would not be enough: it takes the write lock at the first write,
+/// which is after the reads the decision was made from. Inside a caller's own transaction - the
+/// settings save's top-up - the lock is already held and this one is a no-op.</para>
+///
+/// <para><strong>The filtered unique index is the backstop under that, and this adapter only reports
+/// it.</strong> <c>(BusinessId, SupplierPresetId)</c> is unique over the linked rows (issue #934),
+/// so a copy written by a writer this process did not serialise with ends with one row and one
+/// <c>SQLITE_CONSTRAINT</c>. <see cref="IsDuplicateCopy"/> recognises exactly that violation and
+/// nothing else, so any other database failure stays a database failure rather than being reported
+/// to a caller as "already added".</para>
 /// </summary>
 public sealed class EfAvailableSupplierPresetStore : IAvailableSupplierPresetStore
 {
@@ -73,46 +85,54 @@ public sealed class EfAvailableSupplierPresetStore : IAvailableSupplierPresetSto
     }
 
     /// <inheritdoc />
-    public async Task<SupplierPresetAvailability> FindAvailableAsync(
+    public async Task<SupplierPresetAddition> CopyAsync(
         BusinessId businessId,
         int presetId,
         CancellationToken cancellationToken)
     {
+        // BEGIN IMMEDIATE: the write lock is taken here, before the three reads the copy is decided
+        // on, so none of them can be overtaken by a commit before the insert. Without it the record
+        // could be disabled, re-pointed at other states, or the business's state changed, between
+        // the answer and the row - and the business would acquire a supplier nothing entitles it to.
+        // A deferred transaction would not do: it takes the lock at the first write, which is after
+        // those reads. Inside somebody else's transaction - the settings save's top-up - this is a
+        // no-op and the lock is already held by them.
+        await using var transaction = await SqliteWriteLockTransaction
+            .BeginAsync(_db, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Read rather than taken from the caller: the name, the website and the link are the
+        // platform record's, so nothing a request carried decides what is stored - and whether it is
+        // still suggested is decided here rather than before, which is what makes the answer
+        // authoritative.
         var preset = await EnabledPresetAsync(presetId, cancellationToken).ConfigureAwait(false);
         if (preset is null)
         {
-            return SupplierPresetAvailability.NotOffered;
+            return SupplierPresetAddition.NotAvailable();
         }
 
+        // The business's own recorded state, read in the lock for the same reason: an Owner's state
+        // change is a committed write like any other, and the rule is about the state as it now
+        // stands rather than the one a page was rendered from.
         var state = await StateOfAsync(businessId, cancellationToken).ConfigureAwait(false);
         if (!SupplierPresetMarketPolicy.ServesState(
             preset.ServesNationwide,
             preset.ServedStates,
             state))
         {
-            return SupplierPresetAvailability.NotOffered;
+            return SupplierPresetAddition.NotAvailable();
         }
 
-        return await AlreadyCopiedAsync(presetId, cancellationToken).ConfigureAwait(false)
-            ? SupplierPresetAvailability.AlreadyCopied
-            : SupplierPresetAvailability.Available;
-    }
+        if (await AlreadyCopiedAsync(presetId, cancellationToken).ConfigureAwait(false))
+        {
+            return SupplierPresetAddition.AlreadyAdded();
+        }
 
-    /// <inheritdoc />
-    public async Task<SupplierRecord> CopyAsync(
-        BusinessId businessId,
-        int presetId,
-        CancellationToken cancellationToken)
-    {
-        // Re-read rather than taken from the caller: the name, the website and the link are the
-        // platform record's, so nothing a request carried decides what is stored. A record that has
-        // gone by now is a caller the availability check already answered, so this is the
-        // fail-closed direction rather than a reachable path.
-        var preset = await EnabledPresetAsync(presetId, cancellationToken).ConfigureAwait(false)
-            ?? throw new InvalidOperationException(
-                $"Supplier preset {presetId} is no longer available to copy.");
+        var copy = await InsertCopyAsync(preset, cancellationToken).ConfigureAwait(false);
 
-        return await InsertCopyAsync(preset, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return SupplierPresetAddition.Added(copy);
     }
 
     /// <inheritdoc />

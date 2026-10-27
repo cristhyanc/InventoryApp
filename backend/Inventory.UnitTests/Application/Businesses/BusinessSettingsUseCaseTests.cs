@@ -351,6 +351,34 @@ public class BusinessSettingsUseCaseTests
     }
 
     /// <summary>
+    /// A record that stopped being offered between the top-up's list and its copy is skipped, and
+    /// the Owner's state change still saves. The top-up's list is a candidate list: each copy judges
+    /// the record's enabled flag, its served states and the business's own state for itself, so a
+    /// record the Super Admin disabled in that window is never written - and refusing it is not a
+    /// reason to fail a settings save. The other matching record is still added.
+    /// </summary>
+    [Fact]
+    public async Task A_record_that_stopped_being_offered_during_the_state_change_is_skipped()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var presets = new FakeAvailableSupplierPresetStore()
+            .WithPreset(1, "Coles", servesNationwide: true)
+            .WithPreset(2, "JB Metro South Coast & ACT", servesNationwide: false, servedStates: "NSW,ACT");
+        presets.BusinessState = "ACT";
+        var writeStore = new FakeBusinessMembershipWriteStore();
+
+        // The Super Admin stops suggesting it after the candidate list was read.
+        presets.AfterListing = () => presets.Disable(2);
+
+        var saved = await Create(store, new RecordingAudit(), presets: presets, writeStore: writeStore)
+            .Handle(Submission(state: "ACT"), CancellationToken.None);
+
+        Assert.Equal("ACT", saved.State);
+        Assert.Equal([1], presets.Copies);
+        Assert.Contains(FakeBusinessMembershipWriteStore.Commit, writeStore.Operations);
+    }
+
+    /// <summary>
     /// A refused save adds nothing either: the business was deactivated, so neither the settings nor
     /// a supplier is written. The top-up is inside the transaction the guard rolls back, and it is
     /// never reached at all when the status check refuses first.

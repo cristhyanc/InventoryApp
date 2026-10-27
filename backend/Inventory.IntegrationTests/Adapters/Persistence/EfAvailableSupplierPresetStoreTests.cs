@@ -177,10 +177,6 @@ public class EfAvailableSupplierPresetStoreTests
 
         foreach (var presetId in new[] { perthOnly, disabled, 9999 })
         {
-            Assert.Equal(
-                SupplierPresetAvailability.NotOffered,
-                await fixture.AvailabilityAsync(fixture.CanberraId, presetId));
-
             var attempt = await fixture.AddAsync(fixture.CanberraId, presetId);
             Assert.Equal(SupplierPresetAdditionOutcome.NotAvailable, attempt.Outcome);
         }
@@ -205,19 +201,21 @@ public class EfAvailableSupplierPresetStoreTests
             (await fixture.AddAsync(fixture.CanberraId, coles)).Outcome);
 
         Assert.Single(await fixture.SuppliersOfAsync(fixture.CanberraId));
-        Assert.Equal(
-            SupplierPresetAvailability.AlreadyCopied,
-            await fixture.AvailabilityAsync(fixture.CanberraId, coles));
+        Assert.Empty(await fixture.ListAsync(fixture.CanberraId));
     }
 
     /// <summary>
-    /// The race the pre-check cannot win, against the real index: the copy exists by the time the
-    /// insert runs, the database refuses it, and the adapter recognises <em>that</em> violation - so
-    /// the use case can answer the same "already added" instead of a <c>500</c>. One row either way.
+    /// The backstop under the in-lock answer, against the real index: a second linked copy of one
+    /// record is refused by the database itself, and the adapter recognises <em>that</em> violation -
+    /// so the use cases translate it into the same "already added" and the same skip instead of a
+    /// <c>500</c>. One row either way.
     ///
-    /// <para>It is staged by copying twice through the adapter's own write method, which is exactly
-    /// what the losing request of two simultaneous adds does after its pre-check answered
-    /// "available".</para>
+    /// <para>It is staged by inserting the second copy directly rather than through
+    /// <see cref="EfAvailableSupplierPresetStore.CopyAsync"/>, because that method now reads the
+    /// existing copy inside the write lock it inserts under: no single-threaded caller can reach the
+    /// violation through it any more, which is the repair. What is still worth proving is that the
+    /// index exists, that it is the one over <c>(BusinessId, SupplierPresetId)</c>, and that the
+    /// adapter recognises its refusal and nothing else.</para>
     /// </summary>
     [Fact]
     public async Task The_unique_index_refuses_a_second_copy_and_the_adapter_recognises_that_refusal()
@@ -228,17 +226,17 @@ public class EfAvailableSupplierPresetStoreTests
         await using var db = fixture.ScopedContext(fixture.CanberraId);
         var store = new EfAvailableSupplierPresetStore(db);
 
-        await store.CopyAsync(BusinessId.From(fixture.CanberraId), coles, CancellationToken.None);
+        Assert.Equal(
+            SupplierPresetAdditionOutcome.Added,
+            (await store.CopyAsync(BusinessId.From(fixture.CanberraId), coles, CancellationToken.None)).Outcome);
 
-        var error = await Assert.ThrowsAnyAsync<Exception>(() =>
-            store.CopyAsync(BusinessId.From(fixture.CanberraId), coles, CancellationToken.None));
+        var error = await Assert.ThrowsAnyAsync<Exception>(
+            () => fixture.SeedCopyAsync(fixture.CanberraId, coles, "Coles"));
 
         Assert.True(
             store.IsDuplicateCopy(error),
             $"The adapter must recognise the (BusinessId, SupplierPresetId) index refusing a second copy. It saw: {error}");
 
-        // One row, and the context is still usable: the refused insert was detached rather than left
-        // tracked for the next save to retry.
         Assert.Single(await fixture.SuppliersOfAsync(fixture.CanberraId));
         Assert.False(store.IsDuplicateCopy(new InvalidOperationException("something else")));
     }
@@ -258,6 +256,165 @@ public class EfAvailableSupplierPresetStoreTests
 
         Assert.Equal(coles, Assert.Single(await fixture.SuppliersOfAsync(fixture.CanberraId)).SupplierPresetId);
         Assert.Equal(coles, Assert.Single(await fixture.SuppliersOfAsync(fixture.PerthId)).SupplierPresetId);
+    }
+
+    #endregion
+
+    #region Eligibility that changed between the list and the copy
+
+    /// <summary>
+    /// A record the Super Admin disables after the page was rendered is <em>not</em> added: the copy
+    /// re-reads the enabled flag inside its own write lock, answers "not available", writes nothing,
+    /// and throws nothing. Before the repair this reached the insert's re-read and came out as an
+    /// unhandled <c>InvalidOperationException</c> - a <c>500</c> - instead of a <c>404</c>.
+    /// </summary>
+    [Fact]
+    public async Task An_add_of_a_record_disabled_after_the_list_was_read_is_refused_and_writes_nothing()
+    {
+        await using var fixture = await AvailablePresetFixture.CreateAsync();
+        var coles = await fixture.AddPresetAsync("Coles", null, nationwide: true);
+
+        // What the Suppliers page showed, and still shows in the member's browser.
+        Assert.Equal(["Coles"], (await fixture.ListAsync(fixture.CanberraId)).Select(preset => preset.Name));
+
+        // The Super Admin disables it in between, which is the whole window this test is about.
+        await fixture.SetPresetEnabledAsync(coles, isEnabled: false);
+
+        var attempt = await fixture.AddAsync(fixture.CanberraId, coles);
+
+        Assert.Equal(SupplierPresetAdditionOutcome.NotAvailable, attempt.Outcome);
+        Assert.Null(attempt.Supplier);
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.CanberraId));
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.PerthId));
+    }
+
+    /// <summary>
+    /// The same for a record re-pointed at other states in between: it stays enabled, so only the
+    /// state half of the rule refuses it - and the copy re-reads the served states rather than
+    /// trusting that the record it was asked for is still one this business is entitled to.
+    /// </summary>
+    [Fact]
+    public async Task An_add_of_a_record_re_pointed_at_other_states_is_refused_and_writes_nothing()
+    {
+        await using var fixture = await AvailablePresetFixture.CreateAsync();
+        var jbMetro = await fixture.AddPresetAsync(
+            "JB Metro South Coast & ACT", "https://jbmetro.test", servedStates: "NSW,ACT");
+
+        Assert.Single(await fixture.ListAsync(fixture.CanberraId));
+
+        await fixture.SetServedStatesAsync(jbMetro, "WA");
+
+        var attempt = await fixture.AddAsync(fixture.CanberraId, jbMetro);
+
+        Assert.Equal(SupplierPresetAdditionOutcome.NotAvailable, attempt.Outcome);
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.CanberraId));
+
+        // And it is on offer to the business it now serves, which is the other half of the rule.
+        Assert.Equal(
+            ["JB Metro South Coast & ACT"],
+            (await fixture.ListAsync(fixture.PerthId)).Select(preset => preset.Name));
+    }
+
+    /// <summary>
+    /// And for the third thing that governs eligibility: the <em>business's</em> own state, changed
+    /// between the list and the add. The record is untouched and still enabled; it is the business
+    /// that moved, and the copy reads its state from the row rather than from whatever the page was
+    /// rendered against.
+    /// </summary>
+    [Fact]
+    public async Task An_add_is_refused_when_the_business_changed_state_after_the_list_was_read()
+    {
+        await using var fixture = await AvailablePresetFixture.CreateAsync();
+        var jbMetro = await fixture.AddPresetAsync(
+            "JB Metro South Coast & ACT", null, servedStates: "NSW,ACT");
+
+        Assert.Single(await fixture.ListAsync(fixture.CanberraId));
+
+        await fixture.SetStateAsync(fixture.CanberraId, "WA");
+
+        var attempt = await fixture.AddAsync(fixture.CanberraId, jbMetro);
+
+        Assert.Equal(SupplierPresetAdditionOutcome.NotAvailable, attempt.Outcome);
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.CanberraId));
+    }
+
+    /// <summary>
+    /// A copy created in between is "already added" rather than a second row or a failure - the
+    /// ordinary case of two tabs, and the same answer the state change's top-up is skipped with. The
+    /// existing copy is left exactly as it was, including its "Not used" flag.
+    /// </summary>
+    [Fact]
+    public async Task An_add_of_a_record_copied_after_the_list_was_read_is_already_added()
+    {
+        await using var fixture = await AvailablePresetFixture.CreateAsync();
+        var coles = await fixture.AddPresetAsync("Coles", "https://www.coles.com.au", nationwide: true);
+
+        Assert.Single(await fixture.ListAsync(fixture.CanberraId));
+
+        // The copy the other tab, or the state change, created in between - marked "Not used" so
+        // that leaving it alone is visible rather than merely counted.
+        await fixture.SeedCopyAsync(fixture.CanberraId, coles, "Coles", isHidden: true);
+
+        var attempt = await fixture.AddAsync(fixture.CanberraId, coles);
+
+        Assert.Equal(SupplierPresetAdditionOutcome.AlreadyAdded, attempt.Outcome);
+
+        var copy = Assert.Single(await fixture.SuppliersOfAsync(fixture.CanberraId));
+        Assert.Equal(coles, copy.SupplierPresetId);
+        Assert.True(copy.IsHidden);
+    }
+
+    /// <summary>
+    /// <strong>The regression test for the repair.</strong> The copy is asked for an id - which is
+    /// what both the add and the state change's top-up do - and it decides for itself, against all
+    /// three facts that govern eligibility: the record is still suggested, it still serves this
+    /// business, and the business's own recorded state is what it is now. Each is "not available"
+    /// with nothing written and nothing thrown.
+    ///
+    /// <para>Before the repair the copy's own read checked only the <em>enabled</em> flag, so this
+    /// test failed three times over: the disabled record came out as an unhandled
+    /// <c>InvalidOperationException</c> - a <c>500</c> rather than the <c>404</c> the caller is owed
+    /// - and the re-pointed record and the business that moved were <em>copied</em>, leaving a
+    /// business holding a supplier record nothing entitles it to.</para>
+    ///
+    /// <para>It is stated on the copy rather than by interleaving two reads because the copy is now
+    /// one operation: the eligibility reads happen under the <c>BEGIN IMMEDIATE</c> write lock the
+    /// insert holds, so there is no window left between them to write into. The three tests above
+    /// cover the window a caller does still have - a page it is looking at - end to end through the
+    /// use case, and <c>BusinessSettingsUseCaseTests</c> covers the top-up's skip through the real
+    /// <c>UpdateBusinessSettings</c>.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_authoritative_copy_refuses_a_record_that_stopped_being_offered()
+    {
+        await using var fixture = await AvailablePresetFixture.CreateAsync();
+        var disabled = await fixture.AddPresetAsync("Coles", null, nationwide: true);
+        var rePointed = await fixture.AddPresetAsync("JB Metro NSW", null, servedStates: "NSW,ACT");
+        var businessMoved = await fixture.AddPresetAsync("Canberra Wholesale", null, servedStates: "ACT");
+
+        // All three were offered to Canberra a moment ago.
+        Assert.Equal(3, (await fixture.ListAsync(fixture.CanberraId)).Count);
+
+        // One record stops being suggested, one is pointed at another market, and the business
+        // itself moves - three separate writes, none of which the caller can see.
+        await fixture.SetPresetEnabledAsync(disabled, isEnabled: false);
+        await fixture.SetServedStatesAsync(rePointed, "QLD");
+        await fixture.SetStateAsync(fixture.CanberraId, "WA");
+
+        await using var db = fixture.ScopedContext(fixture.CanberraId);
+        var store = new EfAvailableSupplierPresetStore(db);
+
+        foreach (var presetId in new[] { disabled, rePointed, businessMoved })
+        {
+            var attempt = await store.CopyAsync(
+                BusinessId.From(fixture.CanberraId), presetId, CancellationToken.None);
+
+            Assert.Equal(SupplierPresetAdditionOutcome.NotAvailable, attempt.Outcome);
+            Assert.Null(attempt.Supplier);
+        }
+
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.CanberraId));
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.PerthId));
     }
 
     #endregion
@@ -414,13 +571,6 @@ public class EfAvailableSupplierPresetStoreTests
                 .ListAvailableAsync(BusinessId.From(businessId), CancellationToken.None);
         }
 
-        public async Task<SupplierPresetAvailability> AvailabilityAsync(int businessId, int presetId)
-        {
-            await using var db = TestAppDbContext.For(_options, businessId);
-            return await new EfAvailableSupplierPresetStore(db)
-                .FindAvailableAsync(BusinessId.From(businessId), presetId, CancellationToken.None);
-        }
-
         /// <summary>The one-click add, through the real use case on a scoped context.</summary>
         public async Task<SupplierPresetAddition> AddAsync(int businessId, int presetId)
         {
@@ -523,6 +673,27 @@ public class EfAvailableSupplierPresetStoreTests
         {
             await using var db = TestAppDbContext.Unrestricted(_options);
             (await db.Businesses.SingleAsync(business => business.Id == businessId)).State = state;
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// A Super Admin stopping (or resuming) the suggestion of one record, as the platform list's
+        /// own surface does - the change a member's "Available to add" list cannot know about.
+        /// </summary>
+        public async Task SetPresetEnabledAsync(int presetId, bool isEnabled)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            (await db.SupplierPresets.SingleAsync(preset => preset.Id == presetId)).IsEnabled = isEnabled;
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>A Super Admin pointing one record at a different market.</summary>
+        public async Task SetServedStatesAsync(int presetId, string servedStates)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Id == presetId);
+            preset.ServesNationwide = false;
+            preset.ServedStates = servedStates;
             await db.SaveChangesAsync();
         }
 

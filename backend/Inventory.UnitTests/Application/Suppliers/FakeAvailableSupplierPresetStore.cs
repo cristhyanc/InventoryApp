@@ -10,13 +10,19 @@ namespace InventoryApi.Tests.Application.Suppliers;
 ///
 /// <para>It records every call and the business id each was given, because "the business is the
 /// caller's own and never a value a request supplied" is a property a use-case test has to be able
-/// to state. <see cref="RefuseNextCopy"/> stages the one race the pre-check cannot win - the unique
-/// index refusing a copy created between the check and the insert - so the use case's translation of
-/// that violation is covered without two threads interleaving.</para>
+/// to state. <see cref="CopyAsync"/> applies the same rule the adapter applies inside its write
+/// lock, so this double cannot make a use case look correct by being more permissive than the real
+/// one: a record that stopped being offered is <c>NotAvailable</c> here too.</para>
+///
+/// <para><see cref="AfterListing"/> stages the window the real adapter closes - something committing
+/// between the available list and a copy - so a test can disable a record, re-point it or move the
+/// business and then assert the top-up skipped it. <see cref="RefuseNextCopy"/> stages the one thing
+/// the in-lock read cannot see: the unique index refusing a copy a writer outside this operation
+/// created, which the use cases translate rather than surfacing as a server error.</para>
 /// </summary>
 public sealed class FakeAvailableSupplierPresetStore : IAvailableSupplierPresetStore
 {
-    private readonly List<(int Id, string Name, string? Url, bool IsEnabled, bool Nationwide, string States)> _presets = [];
+    private readonly List<StoredPreset> _presets = [];
     private readonly List<int> _copied = [];
     private int _nextSupplierId = 500;
 
@@ -34,9 +40,16 @@ public sealed class FakeAvailableSupplierPresetStore : IAvailableSupplierPresetS
 
     /// <summary>
     /// Makes the next <see cref="CopyAsync"/> fail the way the filtered unique index does, which is
-    /// what the losing request of two simultaneous adds sees.
+    /// what a copy written by a writer this operation was not serialised with produces.
     /// </summary>
     public bool RefuseNextCopy { get; set; }
+
+    /// <summary>
+    /// Runs immediately after <see cref="ListAvailableAsync"/> has answered, which is the window the
+    /// real adapter's write lock closes: it is how a test commits a disable, a re-point or a state
+    /// change between the candidate list and the authoritative copy.
+    /// </summary>
+    public Action? AfterListing { get; set; }
 
     /// <summary>The marker exception <see cref="IsDuplicateCopy"/> recognises.</summary>
     private sealed class DuplicateCopyException : Exception
@@ -55,7 +68,7 @@ public sealed class FakeAvailableSupplierPresetStore : IAvailableSupplierPresetS
         bool servesNationwide = true,
         string servedStates = "")
     {
-        _presets.Add((id, name, url, isEnabled, servesNationwide, servedStates));
+        _presets.Add(new StoredPreset(id, name, url, isEnabled, servesNationwide, servedStates));
         return this;
     }
 
@@ -65,6 +78,13 @@ public sealed class FakeAvailableSupplierPresetStore : IAvailableSupplierPresetS
         _copied.Add(presetId);
         return this;
     }
+
+    /// <summary>Stops suggesting that record, as a Super Admin disabling it does.</summary>
+    public void Disable(int presetId) => Replace(presetId, preset => preset with { IsEnabled = false });
+
+    /// <summary>Points that record at other states only, as a Super Admin editing its market does.</summary>
+    public void ServeOnly(int presetId, string servedStates) =>
+        Replace(presetId, preset => preset with { Nationwide = false, States = servedStates });
 
     /// <summary>The preset ids this business holds a copy of, in the order they were created.</summary>
     public IReadOnlyList<int> Copies => _copied;
@@ -76,29 +96,16 @@ public sealed class FakeAvailableSupplierPresetStore : IAvailableSupplierPresetS
         BusinessIds.Add(businessId.Value);
         ListCalls++;
 
-        return Task.FromResult<IReadOnlyList<AvailableSupplierPreset>>(
-            Offered().Select(preset => new AvailableSupplierPreset(preset.Id, preset.Name, preset.Url)).ToList());
+        var offered = Offered()
+            .Select(preset => new AvailableSupplierPreset(preset.Id, preset.Name, preset.Url))
+            .ToList();
+
+        AfterListing?.Invoke();
+
+        return Task.FromResult<IReadOnlyList<AvailableSupplierPreset>>(offered);
     }
 
-    public Task<SupplierPresetAvailability> FindAvailableAsync(
-        BusinessId businessId,
-        int presetId,
-        CancellationToken cancellationToken)
-    {
-        BusinessIds.Add(businessId.Value);
-
-        var preset = _presets.Find(candidate => candidate.Id == presetId);
-        if (preset.Id == 0 || !Serves(preset))
-        {
-            return Task.FromResult(SupplierPresetAvailability.NotOffered);
-        }
-
-        return Task.FromResult(_copied.Contains(presetId)
-            ? SupplierPresetAvailability.AlreadyCopied
-            : SupplierPresetAvailability.Available);
-    }
-
-    public Task<SupplierRecord> CopyAsync(
+    public Task<SupplierPresetAddition> CopyAsync(
         BusinessId businessId,
         int presetId,
         CancellationToken cancellationToken)
@@ -108,15 +115,26 @@ public sealed class FakeAvailableSupplierPresetStore : IAvailableSupplierPresetS
         if (RefuseNextCopy)
         {
             RefuseNextCopy = false;
-            // As the index does: the copy exists, written by whoever won the race.
+            // As the index does: the copy exists, written by whoever this operation did not see.
             _copied.Add(presetId);
             throw new DuplicateCopyException();
         }
 
+        // The same decision the adapter makes inside its write lock, and in the same order.
         var preset = _presets.Find(candidate => candidate.Id == presetId);
+        if (preset is null || !Serves(preset))
+        {
+            return Task.FromResult(SupplierPresetAddition.NotAvailable());
+        }
+
+        if (_copied.Contains(presetId))
+        {
+            return Task.FromResult(SupplierPresetAddition.AlreadyAdded());
+        }
+
         _copied.Add(presetId);
 
-        return Task.FromResult(new SupplierRecord(
+        return Task.FromResult(SupplierPresetAddition.Added(new SupplierRecord(
             _nextSupplierId++,
             preset.Name,
             null,
@@ -125,22 +143,37 @@ public sealed class FakeAvailableSupplierPresetStore : IAvailableSupplierPresetS
             null,
             preset.Url,
             presetId,
-            IsHidden: false));
+            IsHidden: false)));
     }
 
     public bool IsDuplicateCopy(Exception exception) => exception is DuplicateCopyException;
 
-    private IEnumerable<(int Id, string Name, string? Url, bool IsEnabled, bool Nationwide, string States)> Offered() =>
+    private void Replace(int presetId, Func<StoredPreset, StoredPreset> change)
+    {
+        var index = _presets.FindIndex(candidate => candidate.Id == presetId);
+        _presets[index] = change(_presets[index]);
+    }
+
+    private IEnumerable<StoredPreset> Offered() =>
         _presets
             .Where(preset => !_copied.Contains(preset.Id))
             .Where(Serves)
             .OrderBy(preset => preset.Name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The real rule, so this double cannot disagree with the adapter about a market.</summary>
-    private bool Serves((int Id, string Name, string? Url, bool IsEnabled, bool Nationwide, string States) preset) =>
+    private bool Serves(StoredPreset preset) =>
         SupplierPresetMarketPolicy.IsOfferedTo(
             preset.IsEnabled,
             preset.Nationwide,
             preset.States,
             BusinessState);
+
+    /// <summary>One platform record as this double holds it.</summary>
+    private sealed record StoredPreset(
+        int Id,
+        string Name,
+        string? Url,
+        bool IsEnabled,
+        bool Nationwide,
+        string States);
 }

@@ -580,12 +580,13 @@ public class SuppliersControllerTests
     }
 
     /// <summary>
-    /// The race the pre-check cannot win: the copy is created between the availability answer and
-    /// the insert, and the unique index of issue #934 refuses it. The caller gets the same
-    /// <c>409</c> the pre-check would have given, and there is one copy.
+    /// The one case the in-lock read cannot see: a copy written by a writer this operation was not
+    /// serialised with - another process, or a row written by hand - which the unique index of issue
+    /// #934 refuses. The caller gets the same <c>409</c> the in-lock answer gives, and there is one
+    /// copy; never a <c>500</c>.
     /// </summary>
     [Fact]
-    public async Task An_add_whose_pre_check_missed_the_copy_is_still_a_conflict()
+    public async Task An_add_the_unique_index_refuses_is_still_a_conflict()
     {
         var presets = new FakeAvailableSupplierPresetStore().WithPreset(1, "Coles");
         presets.BusinessState = "ACT";

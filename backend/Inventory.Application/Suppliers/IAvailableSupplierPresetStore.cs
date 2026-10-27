@@ -17,32 +17,6 @@ namespace Inventory.Application.Suppliers;
 /// <param name="Url">Its website, or <see langword="null"/> when none is recorded.</param>
 public sealed record AvailableSupplierPreset(int Id, string Name, string? Url);
 
-/// <summary>
-/// Whether one platform supplier record is one this business may add (issue #935), as the answer a
-/// copy is decided from.
-/// </summary>
-public enum SupplierPresetAvailability
-{
-    /// <summary>
-    /// There is no such record to add: no record with that id, one that is no longer suggested, or
-    /// one that does not serve this business's state. All three are one answer on purpose - a member
-    /// of one business learns nothing about the platform's list beyond what the "Available to add"
-    /// list already told them.
-    /// </summary>
-    NotOffered,
-
-    /// <summary>
-    /// The record serves this business and it holds no copy of it: a copy may be created.
-    /// </summary>
-    Available,
-
-    /// <summary>
-    /// The record serves this business and it already holds a copy. It is the answer to a
-    /// double-click, a second tab, and a state change that committed between the list and the add.
-    /// </summary>
-    AlreadyCopied,
-}
-
 /// <summary>How a request to add one platform supplier record ended (issue #935).</summary>
 public enum SupplierPresetAdditionOutcome
 {
@@ -50,7 +24,11 @@ public enum SupplierPresetAdditionOutcome
     Added,
 
     /// <summary>
-    /// There is no such record to add; see <see cref="SupplierPresetAvailability.NotOffered"/>.
+    /// There is no such record to add: no record with that id, one that is no longer suggested, or
+    /// one that does not serve this business's state. All three are one answer on purpose - a member
+    /// of one business learns nothing about the platform's list beyond what the "Available to add"
+    /// list already told them. It is also the answer when one of the three became true between the
+    /// list the caller was looking at and the copy, because the copy decides it for itself.
     /// </summary>
     NotAvailable,
 
@@ -83,8 +61,9 @@ public sealed record SupplierPresetAddition(
 
 /// <summary>
 /// The narrow port behind the "Available to add" suppliers of issue #935 (third task of #817): the
-/// platform supplier records that serve a business's state and that it holds no copy of, and the
-/// two ways a copy comes into existence afterwards.
+/// platform supplier records that serve a business's state and that it holds no copy of, and the one
+/// write both ways a copy comes into existence - the one-click add and the state change's top-up -
+/// go through.
 ///
 /// <para><strong>It is a member-facing read of a platform table, and that is a reviewed tenancy
 /// decision.</strong> Until this issue no business endpoint knew the supplier records existed, and
@@ -108,11 +87,25 @@ public sealed record SupplierPresetAddition(
 /// itself, which is why <see cref="CopyAsync"/> takes an id rather than values a caller could have
 /// chosen.</para>
 ///
+/// <para><strong>Eligibility is decided by the copy itself, not before it.</strong> There is
+/// deliberately no "is this record available?" method beside <see cref="CopyAsync"/>: a list a
+/// caller is looking at, and any answer given before the write, are stale reads by definition, and a
+/// record the Super Admin disables or re-points - or a state the Owner changes - between such an
+/// answer and the insert would otherwise add a supplier nothing entitles the business to. So the
+/// enabled flag, the served states, the business's own state and the existing copy are all read
+/// inside the write lock the insert holds, and a changed answer comes back as
+/// <see cref="SupplierPresetAdditionOutcome.NotAvailable"/> or
+/// <see cref="SupplierPresetAdditionOutcome.AlreadyAdded"/> rather than as a failure. The only read
+/// that stands on its own is <see cref="ListAvailableAsync"/>, which is a page's contents and
+/// decides nothing.</para>
+///
 /// <para><strong>At most one copy per business per record</strong>, which is the filtered unique
-/// index issue #934 added on <c>(BusinessId, SupplierPresetId)</c>. The availability answer is the
-/// pre-check that turns the ordinary case into a clear refusal, and the index is what makes the rule
-/// true when two requests race - which is why <see cref="IsDuplicateCopy"/> exists, exactly as
-/// <c>ISupplierPresetStore.IsDuplicateName</c> does for the platform list's own name rule.</para>
+/// index issue #934 added on <c>(BusinessId, SupplierPresetId)</c>. The in-lock answer is what turns
+/// the ordinary case into a clear response, and the index is the backstop under it for a writer this
+/// process did not serialise with - which is why <see cref="IsDuplicateCopy"/> exists, exactly as
+/// <c>IBusinessMembershipWriteStore.IsDuplicateActiveMembership</c> does under that path's own
+/// in-lock check and <c>ISupplierPresetStore.IsDuplicateName</c> does for the platform list's own
+/// name rule.</para>
 /// </summary>
 public interface IAvailableSupplierPresetStore
 {
@@ -131,30 +124,36 @@ public interface IAvailableSupplierPresetStore
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Whether the record with <paramref name="presetId"/> is one
-    /// <paramref name="businessId"/> may add, judged by the same state rule
-    /// <see cref="ListAvailableAsync"/> applies and re-read now: the list a caller is looking at may
-    /// be stale, and a record disabled, re-pointed at other states or already copied in between is
-    /// not one to add.
+    /// Decides whether <paramref name="businessId"/> may hold a copy of the record with
+    /// <paramref name="presetId"/>, and writes it, as <strong>one atomic operation</strong>.
+    ///
+    /// <para><strong>The authoritative eligibility read and the insert are one step.</strong>
+    /// Whether the record is still suggested, whether it still serves this business, what state the
+    /// business now records, and whether a copy already exists are all read with the write lock
+    /// already held, so nothing can commit in between: a disable, a change of served states, a
+    /// change of the business's state and another copy either land before the lock and are seen, or
+    /// wait behind it. That is the whole reason this method takes an id rather than values and
+    /// answers rather than assuming - a caller cannot hold an eligibility answer that is still true.
+    /// </para>
+    ///
+    /// <para>What is stored is that record's name, its website and its id, exactly as the approval's
+    /// copy stores one - no contact detail, no GST default, not hidden, and nothing written back to
+    /// the platform table.</para>
     /// </summary>
-    Task<SupplierPresetAvailability> FindAvailableAsync(
-        BusinessId businessId,
-        int presetId,
-        CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Writes <paramref name="businessId"/>'s own copy of the record with
-    /// <paramref name="presetId"/>: a <c>Supplier</c> with that record's name, its website and its
-    /// id, exactly as the approval's copy writes one - no contact detail, no GST default, not
-    /// hidden, and nothing written back to the platform table.
-    /// </summary>
-    /// <returns>The supplier as it was stored.</returns>
+    /// <returns>
+    /// <see cref="SupplierPresetAdditionOutcome.Added"/> with the stored supplier;
+    /// <see cref="SupplierPresetAdditionOutcome.NotAvailable"/> when the record is not one this
+    /// business may add, by the time the lock was held; or
+    /// <see cref="SupplierPresetAdditionOutcome.AlreadyAdded"/> when it already holds a copy.
+    /// Eligibility that changed is one of those answers and never an exception.
+    /// </returns>
     /// <exception cref="Exception">
-    /// The unique index refused a second copy of that record, which <see cref="IsDuplicateCopy"/>
-    /// recognises. Nothing is written, and the caller is answered
-    /// <see cref="SupplierPresetAdditionOutcome.AlreadyAdded"/> rather than a server error.
+    /// The unique index refused the copy regardless - the backstop for a writer this process did not
+    /// serialise with - which <see cref="IsDuplicateCopy"/> recognises. Nothing is written, and the
+    /// caller is answered <see cref="SupplierPresetAdditionOutcome.AlreadyAdded"/> rather than a
+    /// server error.
     /// </exception>
-    Task<SupplierRecord> CopyAsync(
+    Task<SupplierPresetAddition> CopyAsync(
         BusinessId businessId,
         int presetId,
         CancellationToken cancellationToken);
