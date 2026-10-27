@@ -38,8 +38,13 @@ public class ProductPriceTrackingPolicyTests
     public void A_consistent_mapping_is_accepted(
         ProductPriceTrackingStatus status,
         long? masterProductId,
-        ProductPriceTrackingMatchSource? matchSource) =>
-        ProductPriceTrackingPolicy.RequireConsistentMatch(status, masterProductId, matchSource);
+        ProductPriceTrackingMatchSource? matchSource)
+    {
+        var refusal = Record.Exception(
+            () => ProductPriceTrackingPolicy.RequireConsistentMatch(status, masterProductId, matchSource));
+
+        Assert.Null(refusal);
+    }
 
     /// <summary>
     /// A matched mapping that names no master product is refused. It is the state that reads as

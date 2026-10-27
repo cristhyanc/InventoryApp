@@ -29,22 +29,30 @@ public class ProductMatchSuggestionPolicyTests
     #region One proposal
 
     [Fact]
-    public void A_suggestion_may_name_an_existing_master_product() =>
-        ProductMatchSuggestionPolicy.RequireExactlyOneProposal(
+    public void A_suggestion_may_name_an_existing_master_product()
+    {
+        var refusal = Record.Exception(() => ProductMatchSuggestionPolicy.RequireExactlyOneProposal(
             masterProductId: 7L,
             suggestedBrand: null,
             suggestedName: null,
             suggestedSize: null,
-            suggestedSizeUnit: null);
+            suggestedSizeUnit: null));
+
+        Assert.Null(refusal);
+    }
 
     [Fact]
-    public void A_suggestion_may_describe_a_new_master_product() =>
-        ProductMatchSuggestionPolicy.RequireExactlyOneProposal(
+    public void A_suggestion_may_describe_a_new_master_product()
+    {
+        var refusal = Record.Exception(() => ProductMatchSuggestionPolicy.RequireExactlyOneProposal(
             masterProductId: null,
             "Coca-Cola",
             "Classic",
             375m,
-            MasterProductSizeUnit.Millilitre);
+            MasterProductSizeUnit.Millilitre));
+
+        Assert.Null(refusal);
+    }
 
     /// <summary>
     /// Both at once is two different things to do about one waiting key, and the reviewer of #928
