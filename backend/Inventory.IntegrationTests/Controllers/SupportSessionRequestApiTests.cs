@@ -145,6 +145,10 @@ public class SupportSessionRequestApiTests
     // the central refusal is what stops it, not an eligibility check it might have passed.
     [InlineData("Inventory.Operate", "DELETE", "/api/local-machines/999999")]
     [InlineData("Purchasing.Operate", "POST", "/api/supplierorders")]
+    // The supplier "Not used" switch of issue #934, which declares no rule of its own: the method
+    // rule refuses it under the capability the session does grant, so a supporter cannot take a
+    // business's supplier out of its pickers while looking at it.
+    [InlineData("Purchasing.Operate", "PUT", "/api/suppliers/999999/not-used")]
     [InlineData("Expenses.Manage", "POST", "/api/operating-expenses")]
     [InlineData("Expenses.Manage", "PUT", "/api/operating-expenses/999999")]
     [InlineData("Expenses.Manage", "DELETE", "/api/operating-expenses/999999")]

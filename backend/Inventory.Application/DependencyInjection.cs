@@ -226,6 +226,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateSupplier>();
         services.AddScoped<UpdateSupplier>();
         services.AddScoped<DeleteSupplier>();
+        services.AddScoped<SetSupplierNotUsed>();
         services.AddScoped<GetSupplierGstDefaults>();
         services.AddScoped<SetSupplierGstDefaults>();
         services.AddScoped<ListOperatingExpenses>();

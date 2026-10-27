@@ -32,8 +32,29 @@ export class SupplierService {
 
   constructor(private http: HttpClient, private config: ConfigService) {}
 
+  /**
+   * The suppliers a purchase, a supplier order or a product's order dialog may be recorded
+   * against. The API leaves out the ones marked "Not used" unless asked for them (issue #934), so
+   * a picker gets the right list by asking for nothing.
+   */
   getAll(): Observable<Supplier[]> {
     return this.http.get<Supplier[]>(this.baseUrl);
+  }
+
+  /**
+   * Every supplier, the ones marked "Not used" included (issue #934). Only the Suppliers page asks
+   * for these: switching "Not used" back off requires seeing the row.
+   */
+  getAllIncludingHidden(): Observable<Supplier[]> {
+    return this.http.get<Supplier[]>(`${this.baseUrl}?includeHidden=true`);
+  }
+
+  /**
+   * Sets or clears a linked supplier's "Not used" switch (issue #934). Nothing is removed either
+   * way: a purchase or order that already names the supplier still shows it.
+   */
+  setNotUsed(id: number, isHidden: boolean): Observable<void> {
+    return this.http.put<void>(`${this.baseUrl}/${id}/not-used`, { isHidden });
   }
 
   get(id: number): Observable<Supplier> {

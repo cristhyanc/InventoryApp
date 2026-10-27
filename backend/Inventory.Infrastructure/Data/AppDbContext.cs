@@ -858,6 +858,7 @@ public class AppDbContext : DbContext
         // [MaxLength] attribute on the entity, which Swashbuckle would publish as a maxLength
         // keyword on the legacy Supplier component the API pins.
         modelBuilder.Entity<Supplier>().Property(s => s.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
+        ConfigureSupplierPresetLink(modelBuilder);
         modelBuilder.Entity<Product>().HasIndex(p => p.Sku);
         modelBuilder.Entity<SupplierOrder>().HasIndex(order => new { order.SupplierId, order.Status, order.OrderDate });
         modelBuilder.Entity<SupplierOrderLine>().HasIndex(line => new { line.ProductId, line.SupplierOrderId });
@@ -1254,6 +1255,49 @@ public class AppDbContext : DbContext
         preset.Property(x => x.UpdatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the link from a business's supplier to the platform supplier preset it was copied from
+    /// (issue #934, second task of #817).
+    ///
+    /// <para><strong>A tenant-owned table referencing a platform table, which is new here.</strong>
+    /// It does not make <see cref="Supplier"/> any less owned or <see cref="SupplierPreset"/> any
+    /// more so: the copy is still the business's own row, the master is still about no business, and
+    /// the only thing crossing between them is which suggestion this row came from.
+    /// <c>BusinessOwnershipCoverageTests</c> accepts this one key by name rather than by exception,
+    /// so a second tenant-to-platform key is a decision somebody has to make there.</para>
+    ///
+    /// <para><strong>No navigation, and <c>Restrict</c>.</strong> Nothing about a business's supplier
+    /// reads the master's row, so there is no navigation property in either direction - a copy is
+    /// complete in itself, and a navigation would put a platform entity into a tenant-owned entity's
+    /// object graph where a careless <c>Include</c> could publish it. The delete behaviour is
+    /// <c>Restrict</c> because the alternatives are both wrong: cascading would delete a business's
+    /// supplier (and its purchase history's counterparty) when the platform tidied its list, and
+    /// setting null would silently unlink a copy and let the business rename it. It costs nothing in
+    /// practice - a preset is disabled, never deleted (see <see cref="ConfigureSupplierPresets"/>).
+    /// </para>
+    ///
+    /// <para><strong>One copy per preset per business.</strong> The unique index is filtered to the
+    /// rows that carry a link, because "no preset" is the normal case and every unlinked supplier
+    /// would otherwise collide with every other. It leads with <c>BusinessId</c>, as every unique
+    /// index on tenant-owned data must: two businesses hold a copy of the same preset, and a global
+    /// index would let whichever was approved first deny the other.</para>
+    /// </summary>
+    private static void ConfigureSupplierPresetLink(ModelBuilder modelBuilder)
+    {
+        var supplier = modelBuilder.Entity<Supplier>();
+
+        supplier
+            .HasOne<SupplierPreset>()
+            .WithMany()
+            .HasForeignKey(s => s.SupplierPresetId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        supplier
+            .HasIndex(s => new { s.BusinessId, s.SupplierPresetId })
+            .IsUnique()
+            .HasFilter(@"""SupplierPresetId"" IS NOT NULL");
     }
 
     /// <summary>

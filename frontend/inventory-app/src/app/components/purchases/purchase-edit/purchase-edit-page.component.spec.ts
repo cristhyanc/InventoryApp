@@ -89,7 +89,10 @@ function createPage(stubs: Stubs = {}) {
   const get = stubs.get ?? jest.fn(() => of(purchase()));
   const update = stubs.update ?? jest.fn(() => of(purchase()));
   const purchaseService = { get, update } as unknown as PurchaseService;
-  const supplierService = { getAll: jest.fn(() => of([])) } as unknown as SupplierService;
+  // `getAllIncludingHidden` is deliberately absent (issue #934): a picker must ask for the
+  // selectable list, and calling the Suppliers page's own read here would fail this render.
+  const getSuppliers = jest.fn(() => of([]));
+  const supplierService = { getAll: getSuppliers } as unknown as SupplierService;
   const productService = {
     getAll: jest.fn(() => of([product(10, 'Coke'), product(20, 'Chips')]))
   } as unknown as ProductService;
@@ -102,7 +105,7 @@ function createPage(stubs: Stubs = {}) {
   const component = new PurchaseEditPageComponent(purchaseService, supplierService, productService, router, route, supportSession);
   component.ngOnInit();
 
-  return { component, get, update, navigate, paramMap };
+  return { component, get, update, navigate, paramMap, getSuppliers };
 }
 
 /** The update payload the page handed to `PurchaseService.update`, with the id it used. */
@@ -130,6 +133,17 @@ describe('PurchaseEditPageComponent loading (issue #475)', () => {
     expect(component.purchase?.id).toBe(42);
     expect(component.loading).toBe(false);
     expect(component.unavailable).toBe('');
+  });
+
+  /**
+   * The supplier picker asks for the selectable list (issue #934), which the API answers without
+   * the suppliers the business has marked "Not used" - so one cannot be chosen for a new purchase
+   * while a purchase that already names it still shows it.
+   */
+  it('asks for the selectable suppliers rather than the Suppliers page list', () => {
+    const { getSuppliers } = createPage();
+
+    expect(getSuppliers).toHaveBeenCalledTimes(1);
   });
 
   it('reloads for a different route id, so browser Back and Forward show the right purchase', () => {
