@@ -61,6 +61,27 @@ export interface Supplier {
    * absolute http(s) address the server accepted. Render it only through `isSafeSupplierUrl`.
    */
   url?: string | null;
+
+  /**
+   * Whether this supplier came from the platform's supplier list (issue #934). A linked copy's
+   * name and website are the master's and it cannot be deleted; the business hides one it does not
+   * buy from with `isHidden` instead.
+   *
+   * The four fields below are optional because this same shape is also the nested `supplier` of a
+   * purchase, a supplier order and an operating expense, which is the legacy payload and carries
+   * none of them. Only `/api/suppliers` publishes them, so treat an absent value as "not stated"
+   * and never as `false`: the Suppliers page reads them from its own request.
+   */
+  isLinked?: boolean;
+
+  /** Whether the business has marked this supplier "Not used" (issue #934). */
+  isHidden?: boolean;
+
+  /** Whether the server will accept a change to this supplier's name (issue #934). */
+  canRename?: boolean;
+
+  /** Whether the server will accept a delete of this supplier (issue #934). */
+  canDelete?: boolean;
 }
 
 export interface Product {

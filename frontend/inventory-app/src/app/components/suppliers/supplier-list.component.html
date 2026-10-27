@@ -5,15 +5,37 @@
     </div>
   </header>
 
+  @if (error) {
+    <p class="field-error" role="alert">{{ error }}</p>
+  }
+
   <section class="card">
     <div class="card-header">
       <h2 class="card-title">{{ editing ? 'Edit Supplier' : 'New Supplier' }}</h2>
     </div>
     <div class="card-body">
       <form class="flex flex-col gap-4" (ngSubmit)="save()">
+        <!-- A supplier that came from the platform's list keeps that list's name and website
+             (issue #934). The inputs are shown read-only rather than removed, because the
+             operator still needs to see which supplier they are editing; the API refuses a
+             change to either whatever this form sends. -->
+        @if (nameAndWebsiteLocked) {
+          <p class="text-md-body value-muted" data-testid="supplier-locked-note">
+            This supplier comes from the platform's supplier list, so its name and website cannot be
+            changed and it cannot be deleted. Mark it "Not used" to hide it from the supplier lists.
+          </p>
+        }
         <div class="field">
           <label class="field-label" for="supplierName">Name</label>
-          <input id="supplierName" [(ngModel)]="form.name" name="name" required placeholder="e.g. General Distributors Inc." />
+          <input
+            id="supplierName"
+            [(ngModel)]="form.name"
+            name="name"
+            required
+            [readonly]="nameAndWebsiteLocked"
+            [attr.aria-readonly]="nameAndWebsiteLocked ? 'true' : null"
+            placeholder="e.g. General Distributors Inc."
+          />
         </div>
         <div class="field">
           <label class="field-label" for="supplierContactName">Contact Name</label>
@@ -36,6 +58,8 @@
             type="url"
             inputmode="url"
             [maxlength]="urlMaxLength"
+            [readonly]="nameAndWebsiteLocked"
+            [attr.aria-readonly]="nameAndWebsiteLocked ? 'true' : null"
             placeholder="Optional, e.g. https://example.com"
             [attr.aria-invalid]="urlError ? 'true' : null"
             [attr.aria-describedby]="urlError ? 'supplierUrlError' : null"
@@ -82,13 +106,24 @@
                 <th scope="col" class="table-cell">Phone</th>
                 <th scope="col" class="table-cell">Email</th>
                 <th scope="col" class="table-cell">Website</th>
+                <th scope="col" class="table-cell">Not used</th>
                 <th scope="col" class="table-cell"></th>
               </tr>
             </thead>
             <tbody>
               @for (s of suppliers; track s.id) {
                 <tr class="table-row">
-                  <td class="table-cell">{{ s.name }}</td>
+                  <td class="table-cell">
+                    {{ s.name }}
+                    <!-- The lock state, from the server's own answer (issue #934). -->
+                    @if (isLinked(s)) {
+                      <span
+                        class="badge badge-neutral"
+                        [attr.data-testid]="'supplier-linked-' + s.id"
+                        title="This supplier came from the platform's supplier list. Its name and website cannot be changed and it cannot be deleted."
+                      >Platform list</span>
+                    }
+                  </td>
                   <td class="table-cell">{{ s.contactName }}</td>
                   <td class="table-cell">{{ s.phone }}</td>
                   <td class="table-cell">{{ s.email }}</td>
@@ -103,6 +138,24 @@
                     }
                   </td>
                   <td class="table-cell">
+                    <!-- Offered only for a supplier that came from the platform's list, which is
+                         what it is for: a supplier the business added itself can be deleted.
+                         Hidden in a support session, like every other write on this page. -->
+                    @if (isLinked(s) && !sessionActive) {
+                      <label class="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          [checked]="s.isHidden === true"
+                          [attr.data-testid]="'supplier-not-used-' + s.id"
+                          (change)="setNotUsed(s, !(s.isHidden === true))"
+                        />
+                        <span class="text-md-body value-muted">Not used</span>
+                      </label>
+                    } @else if (s.isHidden === true) {
+                      <span class="text-md-body value-muted">Not used</span>
+                    }
+                  </td>
+                  <td class="table-cell">
                     <div class="flex flex-wrap gap-2">
                       <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(s)">
                         <app-icon name="edit" [size]="16" />
@@ -110,8 +163,9 @@
                       </button>
                       <!-- Hidden rather than disabled while a support session is active (issue
                            #657): a session grants PurchasingOperate, so this write would
-                           otherwise still render. -->
-                      @if (!sessionActive) {
+                           otherwise still render. Hidden for a linked supplier too (issue #934),
+                           which the API refuses to delete at all. -->
+                      @if (!sessionActive && s.canDelete !== false) {
                         <button type="button" class="btn btn-sm btn-danger" (click)="remove(s)">
                           <app-icon name="delete" [size]="16" />
                           Delete
