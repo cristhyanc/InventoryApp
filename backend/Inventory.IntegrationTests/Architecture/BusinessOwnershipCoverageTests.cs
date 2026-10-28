@@ -86,6 +86,20 @@ public class BusinessOwnershipCoverageTests
     /// key the row could carry and no filter a business could match it by. One row, one boolean, and
     /// nothing about anybody's data.</para>
     ///
+    /// <para><see cref="MasterProduct"/>, <see cref="SupplierListing"/> and
+    /// <see cref="ProductMatchSuggestion"/> are the third, fourth and fifth, and the reviewed
+    /// ownership decision on issue #923 (parent #817). The structural reason is the same for all
+    /// three and is the whole point of the parent issue: a product is looked up at a supplier
+    /// <em>once</em> for every business, so a brand, a name, a size, a supplier's shelf and a
+    /// matcher's opinion about them are facts about products and about no business at all. None of
+    /// them has a <c>BusinessId</c> to carry, and a <see cref="ProductMatchSuggestion"/> in
+    /// particular names a folded product description rather than the business whose product produced
+    /// it - which is what keeps one business from being able to learn that another is tracking
+    /// anything. What a business has instead is its own tenant-owned
+    /// <see cref="ProductPriceTracking"/> row, which is asserted to be owned in
+    /// <see cref="The_named_entity_is_business_owned"/> below. See docs/architecture.md § Supplier
+    /// price catalogue.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
     /// by the ownership mechanism, because there is no ownership here to enforce. Reading is the same
@@ -100,6 +114,9 @@ public class BusinessOwnershipCoverageTests
     [
         typeof(SupplierPreset),
         typeof(PlatformOptionVisibility),
+        typeof(MasterProduct),
+        typeof(SupplierListing),
+        typeof(ProductMatchSuggestion),
     ];
 
     /// <summary>
@@ -124,14 +141,22 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are two, each
-    /// added by its own reviewed issue - the supplier presets (#848) and the option-visibility
-    /// setting (#873) - and a third one arriving is the change this assertion exists to make visible.
+    /// about no business is a tenancy decision, not an implementation detail. There are five, each
+    /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
+    /// (#873), and the shared price catalogue's master products, supplier listings and match
+    /// suggestions (#923) - and a sixth one arriving is the change this assertion exists to make
+    /// visible.
     /// </summary>
     [Fact]
-    public void Exactly_two_entities_are_declared_platform_tables() =>
+    public void Exactly_five_entities_are_declared_platform_tables() =>
         Assert.Equal(
-            ["PlatformOptionVisibility", "SupplierPreset"],
+            [
+                "MasterProduct",
+                "PlatformOptionVisibility",
+                "ProductMatchSuggestion",
+                "SupplierListing",
+                "SupplierPreset",
+            ],
             PlatformEntities
                 .Select(type => type.Name)
                 .Order(StringComparer.Ordinal)
@@ -286,21 +311,22 @@ public class BusinessOwnershipCoverageTests
     }
 
     /// <summary>
-    /// Exactly one foreign key points from a tenant-owned table at a platform table, and it is
-    /// issue #934's: a business's <see cref="Supplier"/> records which <see cref="SupplierPreset"/>
-    /// it was copied from.
+    /// Exactly two foreign keys point from a tenant-owned table at a platform table: issue #934's,
+    /// where a business's <see cref="Supplier"/> records which <see cref="SupplierPreset"/> it was
+    /// copied from, and issue #923's, where a business's <see cref="ProductPriceTracking"/> records
+    /// which shared <see cref="MasterProduct"/> its product is.
     ///
-    /// <para>It is accepted here <strong>by name</strong> rather than by exception, because it is a
-    /// tenancy decision and not an implementation detail. What makes it safe is what it does
-    /// <em>not</em> do: the copy is still tenant-owned, filtered and stamped exactly as before; the
-    /// preset is still about no business; nothing is read back out of the business; and the key is
-    /// <c>Restrict</c>, so the platform cannot delete a row a business depends on and nothing is
-    /// cascaded or nulled into a business's data. A <em>second</em> such key, or one in the other
-    /// direction - a platform table referencing a tenant-owned one, which would give a row about no
-    /// business a dependency on one business's data - is a decision somebody has to make here.</para>
+    /// <para>They are accepted here <strong>by name</strong> rather than by exception, because each is
+    /// a tenancy decision and not an implementation detail. What makes them safe is what they do
+    /// <em>not</em> do: the referencing row is still tenant-owned, filtered and stamped exactly as
+    /// before; the platform row is still about no business; nothing is read back out of the business;
+    /// and the key is <c>Restrict</c>, so the platform cannot delete a row a business depends on and
+    /// nothing is cascaded or nulled into a business's data. A <em>third</em> such key, or one in the
+    /// other direction - a platform table referencing a tenant-owned one, which would give a row about
+    /// no business a dependency on one business's data - is a decision somebody has to make here.</para>
     /// </summary>
     [Fact]
-    public void Exactly_one_foreign_key_runs_from_tenant_owned_data_to_a_platform_table()
+    public void Exactly_two_foreign_keys_run_from_tenant_owned_data_to_a_platform_table()
     {
         var model = BuildModel();
 
@@ -319,11 +345,15 @@ public class BusinessOwnershipCoverageTests
             .ToArray();
 
         Assert.Equal(
-            ["Supplier(SupplierPresetId) -> SupplierPreset Restrict"],
+            [
+                "ProductPriceTracking(MasterProductId) -> MasterProduct Restrict",
+                "Supplier(SupplierPresetId) -> SupplierPreset Restrict",
+            ],
             described);
 
         // Optional, so a supplier the business created itself carries no link at all - the normal
-        // case, and the one the lock rules read as "this row is the business's own".
+        // case, and the one the lock rules read as "this row is the business's own" - and a mapping
+        // still waiting for a match names no master product.
         Assert.All(crossing, key => Assert.All(key.Properties, property => Assert.True(property.IsNullable)));
     }
 
@@ -523,6 +553,10 @@ public class BusinessOwnershipCoverageTests
     [InlineData(typeof(ImportedDevicePayment))]
     [InlineData(typeof(ImportedFee))]
     [InlineData(typeof(ImportedPaymentMethod))]
+    // The one tenant-owned table of the shared price catalogue (issue #923): the three tables beside
+    // it are about products and are declared in PlatformEntities above, and this one is a business
+    // saying it wants one of its own products priced - which is exactly what tenant ownership is for.
+    [InlineData(typeof(ProductPriceTracking))]
     public void The_named_entity_is_business_owned(Type entityType)
     {
         Assert.True(
