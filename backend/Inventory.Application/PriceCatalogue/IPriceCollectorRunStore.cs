@@ -53,6 +53,26 @@ public sealed record IssuedPriceCollectorRun(
     IReadOnlyList<IssuedPriceCollectorWorkItem> WorkItems);
 
 /// <summary>
+/// Where the most recently issued run stopped (issue #924): the product its last work item was for,
+/// named in exactly one of the two ways a product can be named, and <see langword="null"/> as a whole
+/// while no run has ever been issued.
+///
+/// <para><strong>It is the continuation of a bounded run, and it is read rather than stored.</strong>
+/// A run's work items are written in the order the work list publishes them, so the last one is the
+/// product that run stopped at - there is no separate cursor column to keep in step with the work it
+/// describes, and nothing to migrate. The next run starts at the product after this one
+/// (<c>PriceCollectorWorkListPolicy.MatchedProductComesAfter</c>), which is what makes a catalogue
+/// larger than one run's budget get searched in full over successive runs instead of the same prefix
+/// for ever.</para>
+/// </summary>
+/// <param name="MasterProductId">
+/// The master product that run stopped at, or <see langword="null"/> when it stopped at a waiting
+/// product.
+/// </param>
+/// <param name="WaitingKey">The waiting key it stopped at, on the same terms.</param>
+public sealed record PriceCollectorWorkCursor(long? MasterProductId, string? WaitingKey);
+
+/// <summary>
 /// The narrow write port the collector work list is issued through (issue #924, parent #817): one
 /// run, its work items, and the expiry of whatever run was still open.
 ///
@@ -82,4 +102,14 @@ public interface IPriceCollectorRunStore
     Task<IssuedPriceCollectorRun> IssueAsync(
         NewPriceCollectorRun run,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Where the most recently issued run stopped, or <see langword="null"/> while none ever has
+    /// been - the last work item of the newest run, which is the product that run was issued up to.
+    ///
+    /// <para>One row, read rather than counted: it is the next run's starting point in the product
+    /// rotation, and it says nothing about any business because a work item names a product
+    /// description and a supplier's shelf.</para>
+    /// </summary>
+    Task<PriceCollectorWorkCursor?> LastIssuedWorkAsync(CancellationToken cancellationToken);
 }

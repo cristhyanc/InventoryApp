@@ -34,9 +34,18 @@ namespace Inventory.Infrastructure.Persistence;
 /// not filtered because there is no owner for a filter to compare against.</para>
 ///
 /// <para><strong>The tracked-products read deliberately does not join.</strong> It takes the distinct
-/// master product ids the mappings name and then reads those products and their listings, rather than
-/// joining mappings to listings - which is what makes two businesses tracking one product produce one
-/// entry instead of the same listing twice.</para>
+/// master product ids the mappings name and then reads those products, rather than joining mappings
+/// to listings - which is what makes two businesses tracking one product produce one entry instead of
+/// the same listing twice.</para>
+///
+/// <para><strong>Every variable-size read is bounded, and counted before it is read.</strong> The
+/// listings of a product, the proposals under a waiting key and that key's refusals are read for the
+/// products one run was issued for and never for the catalogue, and each is counted per product in
+/// one grouped statement first - so what comes back is at most the asked-for bound per product, and a
+/// product beyond the bound is answered as "beyond the bound" rather than with a prefix. Without the
+/// count the read would be the unbounded one the response bound exists to prevent: a single product
+/// with ten thousand listings would be materialised in full before anything could decide not to
+/// publish it.</para>
 /// </summary>
 public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
 {
@@ -98,44 +107,79 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
     public async Task<IReadOnlyList<TrackedMasterProduct>> ListTrackedMasterProductsAsync(
         CancellationToken cancellationToken)
     {
-        var trackedMasterProductIds = await _db.ProductPriceTrackings
-            .AsNoTracking()
-            // The second half of the same reviewed read: which master products are tracked, and by
-            // nobody in particular - the projection is one id and the DISTINCT is what makes five
-            // businesses' five mappings one product.
-            .IgnoreQueryFilters()
-            .Where(tracking => tracking.MasterProductId != null)
-            .Select(tracking => tracking.MasterProductId!.Value)
-            .Distinct()
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
+        var trackedMasterProductIds = await TrackedMasterProductIdsAsync(cancellationToken);
 
         if (trackedMasterProductIds.Count == 0)
         {
             return [];
         }
 
-        var masterProducts = await _db.MasterProducts
+        // By the row key, because the row key is what a bounded run's rotation continues from: the
+        // cursor the next run starts after is a stored master product id, so the order products are
+        // issued in has to be the order of those ids. It is as deterministic as the comparison key
+        // would have been and does not depend on any collation.
+        return await _db.MasterProducts
             .AsNoTracking()
             .Where(master => trackedMasterProductIds.Contains(master.Id))
-            // By the comparison key and then the row key, so the order does not depend on the
-            // database's collation for a brand or a name.
-            .OrderBy(master => master.NormalisedKey)
-            .ThenBy(master => master.Id)
-            .Select(master => new
-            {
+            .OrderBy(master => master.Id)
+            .Select(master => new TrackedMasterProduct(
                 master.Id,
                 master.Brand,
                 master.Name,
                 master.SizeValue,
-                master.SizeUnit,
-            })
+                master.SizeUnit))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<BoundedMasterProductListings> ListListingsForMasterProductsAsync(
+        IReadOnlyCollection<long> masterProductIds,
+        int perProductLimit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(masterProductIds);
+
+        if (masterProductIds.Count == 0 || perProductLimit <= 0)
+        {
+            return BoundedMasterProductListings.None;
+        }
+
+        var ids = masterProductIds.ToList();
+
+        // How many each product has before any of them is read, which is what makes the read itself
+        // bounded rather than only the answer: one grouped statement returning one row per product,
+        // and then rows for the products that are inside the bound. A product beyond it is answered
+        // as "beyond the bound" rather than with a prefix nobody asked for.
+        var counts = await _db.SupplierListings
+            .AsNoTracking()
+            .Where(listing => listing.MasterProductId != null
+                && ids.Contains(listing.MasterProductId.Value))
+            .GroupBy(listing => listing.MasterProductId!.Value)
+            .Select(group => new { MasterProductId = group.Key, Count = group.Count() })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        // One statement for every tracked product's listings rather than one per product: a read that
-        // went back to the database per master product would be the per-row pattern AGENTS.md refuses
-        // for Nayax, for the same reason.
+        var beyondLimit = counts
+            .Where(entry => entry.Count > perProductLimit)
+            .Select(entry => entry.MasterProductId)
+            .ToHashSet();
+
+        var withinLimit = counts
+            .Where(entry => entry.Count <= perProductLimit)
+            .Select(entry => entry.MasterProductId)
+            .ToList();
+
+        if (withinLimit.Count == 0)
+        {
+            return new BoundedMasterProductListings(
+                new Dictionary<long, IReadOnlyList<TrackedSupplierListing>>(),
+                beyondLimit);
+        }
+
+        // One statement for every selected product's listings rather than one per product: a read
+        // that went back to the database per master product would be the per-row pattern AGENTS.md
+        // refuses for Nayax, for the same reason.
         //
         // One listing per (supplier master record, supplier product id) needs no DISTINCT: that pair
         // is a unique index, and this read names the master products rather than joining through the
@@ -143,7 +187,7 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
         var listings = await _db.SupplierListings
             .AsNoTracking()
             .Where(listing => listing.MasterProductId != null
-                && trackedMasterProductIds.Contains(listing.MasterProductId.Value))
+                && withinLimit.Contains(listing.MasterProductId.Value))
             .OrderBy(listing => listing.SupplierPresetId)
             .ThenBy(listing => listing.SupplierProductId)
             .Select(listing => new
@@ -164,22 +208,32 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var listingsByMasterProduct = listings
-            .GroupBy(entry => entry.MasterProductId)
-            .ToDictionary(
-                group => group.Key,
-                group => (IReadOnlyList<TrackedSupplierListing>)group
-                    .Select(entry => entry.Listing)
-                    .ToList());
-
-        return masterProducts.ConvertAll(master => new TrackedMasterProduct(
-            master.Id,
-            master.Brand,
-            master.Name,
-            master.SizeValue,
-            master.SizeUnit,
-            listingsByMasterProduct.TryGetValue(master.Id, out var own) ? own : []));
+        return new BoundedMasterProductListings(
+            listings
+                .GroupBy(entry => entry.MasterProductId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => (IReadOnlyList<TrackedSupplierListing>)group
+                        .Select(entry => entry.Listing)
+                        .ToList()),
+            beyondLimit);
     }
+
+    /// <summary>
+    /// The distinct master products at least one mapping names, as ids.
+    ///
+    /// <para>The second half of the same reviewed cross-business read: the projection is one id and
+    /// the <c>DISTINCT</c> is what makes five businesses' five mappings one product.</para>
+    /// </summary>
+    private async Task<List<long>> TrackedMasterProductIdsAsync(CancellationToken cancellationToken) =>
+        await _db.ProductPriceTrackings
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .Where(tracking => tracking.MasterProductId != null)
+            .Select(tracking => tracking.MasterProductId!.Value)
+            .Distinct()
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<CollectableSupplier>> ListCollectableSuppliersAsync(
@@ -262,23 +316,50 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyDictionary<string, IReadOnlyList<TrackedSupplierListing>>>
-        ListWaitingListingsAsync(
-            IReadOnlyCollection<string> waitingKeys,
-            CancellationToken cancellationToken)
+    public async Task<BoundedWaitingListings> ListWaitingListingsAsync(
+        IReadOnlyCollection<string> waitingKeys,
+        int perKeyLimit,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(waitingKeys);
 
-        if (waitingKeys.Count == 0)
+        if (waitingKeys.Count == 0 || perKeyLimit <= 0)
         {
-            return new Dictionary<string, IReadOnlyList<TrackedSupplierListing>>(StringComparer.Ordinal);
+            return BoundedWaitingListings.None;
         }
 
         var keys = waitingKeys.ToList();
 
-        var listings = await _db.SupplierListings
+        // Counted before any of them is read, for the reason the matched products' listings are:
+        // what has to be bounded is the read as well as the answer.
+        var counts = await _db.SupplierListings
             .AsNoTracking()
             .Where(listing => listing.WaitingKey != null && keys.Contains(listing.WaitingKey))
+            .GroupBy(listing => listing.WaitingKey!)
+            .Select(group => new { WaitingKey = group.Key, Count = group.Count() })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var beyondLimit = counts
+            .Where(entry => entry.Count > perKeyLimit)
+            .Select(entry => entry.WaitingKey)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var withinLimit = counts
+            .Where(entry => entry.Count <= perKeyLimit)
+            .Select(entry => entry.WaitingKey)
+            .ToList();
+
+        if (withinLimit.Count == 0)
+        {
+            return new BoundedWaitingListings(
+                new Dictionary<string, IReadOnlyList<TrackedSupplierListing>>(StringComparer.Ordinal),
+                beyondLimit);
+        }
+
+        var listings = await _db.SupplierListings
+            .AsNoTracking()
+            .Where(listing => listing.WaitingKey != null && withinLimit.Contains(listing.WaitingKey))
             .OrderBy(listing => listing.SupplierPresetId)
             .ThenBy(listing => listing.SupplierProductId)
             .Select(listing => new
@@ -299,40 +380,62 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return listings
-            .GroupBy(entry => entry.WaitingKey, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => (IReadOnlyList<TrackedSupplierListing>)group
-                    .Select(entry => entry.Listing)
-                    .ToList(),
-                StringComparer.Ordinal);
+        return new BoundedWaitingListings(
+            listings
+                .GroupBy(entry => entry.WaitingKey, StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => (IReadOnlyList<TrackedSupplierListing>)group
+                        .Select(entry => entry.Listing)
+                        .ToList(),
+                    StringComparer.Ordinal),
+            beyondLimit);
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<RefusedMasterProduct>> ListRefusedMasterProductsAsync(
+    public async Task<BoundedRefusedMasterProducts> ListRefusedMasterProductsAsync(
         IReadOnlyCollection<string> waitingKeys,
+        int perKeyLimit,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(waitingKeys);
 
-        if (waitingKeys.Count == 0)
+        if (waitingKeys.Count == 0 || perKeyLimit <= 0)
         {
-            return [];
+            return BoundedRefusedMasterProducts.None;
         }
 
         var keys = waitingKeys.ToList();
 
-        // Rejected and undone, and nothing else: those are the two statuses a person decided, and
-        // they are kept forever precisely so a matcher never re-applies a pair somebody refused. A
-        // refusal that proposed a new master product names none, so it has no id to send.
-        var refusals = await _db.ProductMatchSuggestions
-            .AsNoTracking()
-            .Where(suggestion =>
-                keys.Contains(suggestion.WaitingKey)
-                && suggestion.MasterProductId != null
-                && (suggestion.Status == ProductMatchSuggestionStatus.Rejected
-                    || suggestion.Status == ProductMatchSuggestionStatus.Undone))
+        // Counted as distinct pairs, because that is what a refusal is: one pair refused twice -
+        // rejected once and undone once - is one refusal, and counting it twice could put a key
+        // beyond the bound that is not.
+        var counts = await RefusedSuggestions(keys)
+            .GroupBy(suggestion => suggestion.WaitingKey)
+            .Select(group => new
+            {
+                WaitingKey = group.Key,
+                Count = group.Select(suggestion => suggestion.MasterProductId).Distinct().Count(),
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var beyondLimit = counts
+            .Where(entry => entry.Count > perKeyLimit)
+            .Select(entry => entry.WaitingKey)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var withinLimit = counts
+            .Where(entry => entry.Count <= perKeyLimit)
+            .Select(entry => entry.WaitingKey)
+            .ToList();
+
+        if (withinLimit.Count == 0)
+        {
+            return new BoundedRefusedMasterProducts([], beyondLimit);
+        }
+
+        var refusals = await RefusedSuggestions(withinLimit)
             .Select(suggestion => new RefusedMasterProduct(
                 suggestion.WaitingKey,
                 suggestion.MasterProductId!.Value))
@@ -342,11 +445,30 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return refusals
-            .OrderBy(refusal => refusal.WaitingKey, StringComparer.Ordinal)
-            .ThenBy(refusal => refusal.MasterProductId)
-            .ToList();
+        return new BoundedRefusedMasterProducts(
+            refusals
+                .OrderBy(refusal => refusal.WaitingKey, StringComparer.Ordinal)
+                .ThenBy(refusal => refusal.MasterProductId)
+                .ToList(),
+            beyondLimit);
     }
+
+    /// <summary>
+    /// The refusals recorded against <paramref name="waitingKeys"/>, as the suggestion rows that
+    /// hold them.
+    ///
+    /// <para>Rejected and undone, and nothing else: those are the two statuses a person decided, and
+    /// they are kept forever precisely so a matcher never re-applies a pair somebody refused. A
+    /// refusal that proposed a new master product names none, so it has no id to send.</para>
+    /// </summary>
+    private IQueryable<Models.ProductMatchSuggestion> RefusedSuggestions(List<string> waitingKeys) =>
+        _db.ProductMatchSuggestions
+            .AsNoTracking()
+            .Where(suggestion =>
+                waitingKeys.Contains(suggestion.WaitingKey)
+                && suggestion.MasterProductId != null
+                && (suggestion.Status == ProductMatchSuggestionStatus.Rejected
+                    || suggestion.Status == ProductMatchSuggestionStatus.Undone));
 
     /// <summary>
     /// One waiting mapping's search text exactly as its columns hold it, which is what a SQL

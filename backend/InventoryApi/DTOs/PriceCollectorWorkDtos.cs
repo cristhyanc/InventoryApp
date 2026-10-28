@@ -92,6 +92,10 @@ public sealed record PriceCollectorKnownListingResponse(
 /// <para>One entry per master product, however many businesses track it, and the product is a shared
 /// description: a brand, a name and a size. No business id, no business name, no business product id
 /// and no count of how many wanted it.</para>
+///
+/// <para><c>knownListingsOmitted</c> is how a bound states itself: a product holding more listings
+/// than one run may carry is published with <strong>none</strong> of them and this flag set, so an
+/// empty list is never read as "this product has no listings". The product is still issued its work.</para>
 /// </summary>
 public sealed record PriceCollectorMatchedProductResponse(
     long MasterProductId,
@@ -100,6 +104,7 @@ public sealed record PriceCollectorMatchedProductResponse(
     decimal SizeValue,
     MasterProductSizeUnit SizeUnit,
     IReadOnlyList<PriceCollectorKnownListingResponse> KnownListings,
+    bool KnownListingsOmitted,
     IReadOnlyList<PriceCollectorWorkItemResponse> WorkItems)
 {
     public static PriceCollectorMatchedProductResponse From(PriceCollectorMatchedProduct product)
@@ -113,6 +118,7 @@ public sealed record PriceCollectorMatchedProductResponse(
             product.SizeValue,
             product.SizeUnit,
             [.. product.KnownListings.Select(PriceCollectorKnownListingResponse.From)],
+            product.KnownListingsOmitted,
             [.. product.WorkItems.Select(PriceCollectorWorkItemResponse.From)]);
     }
 }
@@ -124,13 +130,22 @@ public sealed record PriceCollectorMatchedProductResponse(
 /// to, and the waiting key is that fold - which is the whole reason one product is one search. The
 /// refused master products are the ones a Super Admin rejected or undid for this key, sent so a
 /// matcher does not propose them again.</para>
+///
+/// <para><c>matchingSuppressed</c> is the one flag with a <strong>rule</strong> attached: it says the
+/// refusals for this key exceeded what one run may carry, so none of them is above and
+/// <em>no master product may be proposed or applied for this key on this run</em>. Half a refusal
+/// list would let a pair somebody rejected be proposed again, which is the one thing the refusals
+/// exist to prevent. The search itself is still issued. <c>proposedListingsOmitted</c> is the
+/// ordinary size bound, as on a matched product.</para>
 /// </summary>
 public sealed record PriceCollectorWaitingProductResponse(
     string WaitingKey,
     string SearchName,
     string UnitLabel,
     IReadOnlyList<PriceCollectorKnownListingResponse> ProposedListings,
+    bool ProposedListingsOmitted,
     IReadOnlyList<long> RefusedMasterProductIds,
+    bool MatchingSuppressed,
     IReadOnlyList<PriceCollectorWorkItemResponse> WorkItems)
 {
     public static PriceCollectorWaitingProductResponse From(PriceCollectorWaitingProduct product)
@@ -142,7 +157,9 @@ public sealed record PriceCollectorWaitingProductResponse(
             product.SearchName,
             product.UnitLabel,
             [.. product.ProposedListings.Select(PriceCollectorKnownListingResponse.From)],
+            product.ProposedListingsOmitted,
             product.RefusedMasterProductIds,
+            product.MatchingSuppressed,
             [.. product.WorkItems.Select(PriceCollectorWorkItemResponse.From)]);
     }
 }
@@ -179,9 +196,12 @@ public sealed record PriceCollectorMasterProductResponse(
 /// a type rather than as a promise. Every product in it is either a shared master product's
 /// description or the folded search text of one nothing has matched yet.</para>
 ///
-/// <para><strong>It is bounded.</strong> <paramref name="WorkItemLimitReached"/> says the catalogue
-/// held more work than one run may be issued with, so a collector knows it has a deterministic prefix
-/// rather than everything there is to search.</para>
+/// <para><strong>It is bounded, and the bound is a schedule.</strong>
+/// <paramref name="WorkItemLimitReached"/> says the catalogue held more work than one run may be
+/// issued with, so a collector knows it has a deterministic stretch of the product rotation rather
+/// than everything there is to search - and the next run is issued the stretch after it, so the
+/// remainder is searched on later runs. What travels under each published product is bounded per
+/// product, and a product whose listings or refusals were omitted says so.</para>
 /// </summary>
 /// <param name="RunId">The run the collector reports its results under (#937).</param>
 /// <param name="IssuedAtUtc">When the run was issued.</param>
@@ -196,7 +216,11 @@ public sealed record PriceCollectorMasterProductResponse(
 /// The master products a waiting product may be matched against. Empty unless something is actually
 /// waiting.
 /// </param>
-/// <param name="WorkItemLimitReached">Whether more work was due than this run was issued with.</param>
+/// <param name="WorkItemLimitReached">
+/// Whether more work was due than this run was issued with. The products this run omitted are the
+/// next run's first, so the flag says "there is more, and it is coming" rather than "the rest is
+/// lost".
+/// </param>
 public sealed record PriceCollectorWorkResponse(
     long RunId,
     DateTime IssuedAtUtc,

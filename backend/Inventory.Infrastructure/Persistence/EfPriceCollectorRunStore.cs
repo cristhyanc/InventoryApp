@@ -117,4 +117,22 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
                 item.MasterProductId,
                 item.WaitingKey)));
     }
+
+    /// <inheritdoc />
+    public async Task<PriceCollectorWorkCursor?> LastIssuedWorkAsync(
+        CancellationToken cancellationToken)
+    {
+        // The newest run's last work item: work is written in the order the work list publishes it,
+        // so the highest key in the highest run is the product that run was issued up to. One row,
+        // and no count - the next run needs where to start, not how much there was.
+        var last = await _db.PriceCollectorWorkItems
+            .AsNoTracking()
+            .OrderByDescending(item => item.PriceCollectorRunId)
+            .ThenByDescending(item => item.Id)
+            .Select(item => new PriceCollectorWorkCursor(item.MasterProductId, item.WaitingKey))
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return last;
+    }
 }
