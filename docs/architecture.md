@@ -3939,8 +3939,8 @@ change.
 
 Issue #539 — the last slice of #506, under #328 — is the explanation every other Nayax-dependent
 screen was missing: Machines (`MachineListComponent`, `MachineDetailComponent`), Sites
-(`SiteListComponent`, `SiteProductsComponent`), Pick List (`PickListComponent`) and the Sync Restock
-workflow (`MachineRestockSyncComponent`) all read a live Nayax projection through
+(`SiteListComponent`, `SiteProductsComponent`), Pick List (`PickListComponent`, until it was removed
+there - see below) and the Sync Restock workflow (`MachineRestockSyncComponent`) all read a live Nayax projection through
 `INayaxLynxClient` (`ListMachineDashboard`, `ListMachineProducts`, `GetSiteSummaries`,
 `GetSiteProducts`, the Pick List projection and `SyncMachineStockFromNayax`), so each of them now
 composes the one shared `NayaxStatusBannerComponent`
@@ -3972,15 +3972,22 @@ guarded by the same capability); a Manager or Operator sees the fixed sentence "
 connected for this business. Ask a business Owner to finish the Nayax connection." with no link at
 all - never a derived "ask your admin" message, because this is the one sentence #328 agreed on.
 
+**The Pick List no longer composes it.** At the owner's request the banner was taken off
+`PickListComponent`: on the Pick List it showed for a connection that still works
+(`PendingPermissions` passes the status gate), and the page already says in its own words when Nayax
+actually refuses it (`calculatedUnavailableReason`, which falls back to manual entry). Its spec now
+proves the banner is absent there even for a non-`Ready` status. Every other screen listed above
+still shows it.
+
 **What is deliberately not here.** The wizard itself (#538) and making these screens usable without
 Nayax at all, which is #329's release-gated work - the banner only explains the failure these
 screens already have; it does not give any of them a working degraded mode.
 
 **What proves it.** `NayaxStatusBannerComponent`'s own spec - every published status for an Owner
 and for a non-Owner, hidden on `Ready`, hidden while unread and while the status call fails, the
-Owner's link target, and the Manager/Operator sentence verbatim. Each host component's own spec
+Owner's link target, and the Manager/Operator sentence verbatim. Each remaining host component's own spec
 proves the banner is composed and reacts to the same `NotConfigured`/`Ready` stub the banner's own
-spec already covers in full, rather than re-asserting that matrix six more times.
+spec already covers in full, rather than re-asserting that matrix five more times.
 
 ### Document storage
 

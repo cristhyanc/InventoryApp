@@ -13,7 +13,6 @@ import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 import { PERMISSION_NOT_GRANTED_REASON, nayaxUnavailableMessage } from '../../provider/nayax-availability';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { loadProviderList } from '../../provider/provider-list-load';
-import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
 import { ManualPickListCatalogueState, ManualPickListComponent } from './manual-pick-list.component';
 
@@ -83,7 +82,7 @@ export type PickListMode = 'calculated' | 'manual';
 @Component({
   selector: 'app-pick-list',
   standalone: true,
-  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe, NayaxStatusBannerComponent, ManualPickListComponent],
+  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe, ManualPickListComponent],
   templateUrl: './pick-list.component.html'
 })
 export class PickListComponent implements OnInit {
