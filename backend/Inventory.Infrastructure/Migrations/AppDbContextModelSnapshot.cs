@@ -1580,6 +1580,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime?>("CompletedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("FailureCount")
                         .HasColumnType("INTEGER");
 
@@ -1599,9 +1602,63 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("StartedAtUtc");
 
+                    b.HasIndex("Status");
+
                     b.ToTable("PriceCollectorRuns", t =>
                         {
                             t.HasCheckConstraint("CK_PriceCollectorRuns_CountsNotNegative", "\"ListingsCheckedCount\" >= 0 AND \"ObservationsRecordedCount\" >= 0 AND \"FailureCount\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorWorkItem", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("IssuedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("MasterProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("Outcome")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("OutcomeAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("PriceCollectorRunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SupplierPresetId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("WaitingKey")
+                        .HasMaxLength(509)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MasterProductId");
+
+                    b.HasIndex("PriceCollectorRunId");
+
+                    b.HasIndex("SupplierPresetId");
+
+                    b.HasIndex("PriceCollectorRunId", "SupplierPresetId", "MasterProductId")
+                        .IsUnique()
+                        .HasFilter("\"MasterProductId\" IS NOT NULL");
+
+                    b.HasIndex("PriceCollectorRunId", "SupplierPresetId", "WaitingKey")
+                        .IsUnique()
+                        .HasFilter("\"WaitingKey\" IS NOT NULL");
+
+                    b.ToTable("PriceCollectorWorkItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_PriceCollectorWorkItems_OneProduct", "(\"MasterProductId\" IS NOT NULL AND \"WaitingKey\" IS NULL) OR (\"MasterProductId\" IS NULL AND \"WaitingKey\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_PriceCollectorWorkItems_OutcomeAndInstantTogether", "(\"Outcome\" IS NULL AND \"OutcomeAtUtc\" IS NULL) OR (\"Outcome\" IS NOT NULL AND \"OutcomeAtUtc\" IS NOT NULL)");
                         });
                 });
 
@@ -2866,6 +2923,32 @@ namespace Inventory.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Refill");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorWorkItem", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.MasterProduct", "MasterProduct")
+                        .WithMany()
+                        .HasForeignKey("MasterProductId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Inventory.Infrastructure.Models.PriceCollectorRun", "PriceCollectorRun")
+                        .WithMany()
+                        .HasForeignKey("PriceCollectorRunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.SupplierPreset", "SupplierPreset")
+                        .WithMany()
+                        .HasForeignKey("SupplierPresetId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("MasterProduct");
+
+                    b.Navigation("PriceCollectorRun");
+
+                    b.Navigation("SupplierPreset");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>

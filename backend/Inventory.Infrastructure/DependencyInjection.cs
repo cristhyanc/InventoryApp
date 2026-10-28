@@ -211,12 +211,18 @@ public static class InfrastructureServiceCollectionExtensions
         // The shared supplier price catalogue (issue #923, parent #817). Two adapters because they
         // answer two different kinds of question: one business's own mappings, which are ordinary
         // tenant-owned data read and written through the central filters and the ownership stamp; and
-        // the deduplicated work list the collector of #924 will be built from, which reads the
-        // platform catalogue tables and carries no business identity out. Both are scoped on the
-        // request's own AppDbContext like every adapter here - neither is given an unscoped context,
-        // and neither makes an IgnoreQueryFilters statement.
+        // the deduplicated work list the collector of #924 is built from, which reads the platform
+        // catalogue tables and carries no business identity out. Both are scoped on the request's own
+        // AppDbContext like every adapter here, and neither is given an unscoped context. The work
+        // list store is where issue #924's reviewed cross-business read lives: two
+        // IgnoreQueryFilters statements over the mappings' business-free text columns, reachable only
+        // from the collector endpoint - see EfPriceCatalogueWorkListStore and
+        // docs/architecture.md § Collector work list.
         services.AddScoped<IProductPriceTrackingStore, EfProductPriceTrackingStore>();
         services.AddScoped<IPriceCatalogueWorkListStore, EfPriceCatalogueWorkListStore>();
+        // The collector work list's one write (issue #924): a run and its work items, both platform
+        // tables, in one transaction on the request's own denied-scope context.
+        services.AddScoped<IPriceCollectorRunStore, EfPriceCollectorRunStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has

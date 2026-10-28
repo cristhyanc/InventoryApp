@@ -85,6 +85,14 @@ public class SupplierPriceObservationBoundaryTests
     /// themselves, the two entities, the supplier listing and supplier master record that carry the
     /// columns, and the EF model that maps all of it.
     ///
+    /// <para>Since issue #924 the list also holds the collector work list: the two Domain rules about
+    /// issued work and a run's lifetime, the work-item entity, the Application port and use case that
+    /// issue a run, the two EF adapters behind them, and the two files that read the collector's
+    /// configuration. None of them reads a <em>price</em> - the work list publishes product
+    /// descriptions, suppliers and listings and no amount at all - but each names a run, a run status
+    /// or a supplier's cadence, which is exactly the kind of mention this list is deliberately strict
+    /// about.</para>
+    ///
     /// <para>Accepted <strong>by name</strong> rather than by exception, the way
     /// <c>BusinessOwnershipCoverageTests</c> accepts the two tenant-to-platform foreign keys: the next
     /// file to read an observed price is a reviewed decision - #937 writes them, #930 publishes a
@@ -93,16 +101,27 @@ public class SupplierPriceObservationBoundaryTests
     /// </summary>
     private static readonly string[] FilesThatMayNameThem =
     [
+        "Inventory.Application/PriceCatalogue/IPriceCatalogueWorkListStore.cs",
+        "Inventory.Application/PriceCatalogue/IPriceCollectorRunSettings.cs",
+        "Inventory.Application/PriceCatalogue/IPriceCollectorRunStore.cs",
+        "Inventory.Application/PriceCatalogue/IssuePriceCollectorWorkList.cs",
         "Inventory.Domain/PriceCatalogue/CheapestUnitOfferPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorRunPolicy.cs",
+        "Inventory.Domain/PriceCatalogue/PriceCollectorWorkItemPolicy.cs",
+        "Inventory.Domain/PriceCatalogue/PriceCollectorWorkListPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierListingPriceStatePolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierPriceFreshnessPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierPriceObservationPolicy.cs",
         "Inventory.Infrastructure/Data/AppDbContext.cs",
         "Inventory.Infrastructure/Models/PriceCollectorRun.cs",
+        "Inventory.Infrastructure/Models/PriceCollectorWorkItem.cs",
         "Inventory.Infrastructure/Models/SupplierListing.cs",
         "Inventory.Infrastructure/Models/SupplierPreset.cs",
         "Inventory.Infrastructure/Models/SupplierPriceObservation.cs",
+        "Inventory.Infrastructure/Persistence/EfPriceCatalogueWorkListStore.cs",
+        "Inventory.Infrastructure/Persistence/EfPriceCollectorRunStore.cs",
+        "InventoryApi/Adapters/PriceCatalogue/ConfiguredPriceCollectorRunSettings.cs",
+        "InventoryApi/Auth/PriceCollector/PriceCollectorOptions.cs",
     ];
 
     private static readonly string[] ProductionProjects =

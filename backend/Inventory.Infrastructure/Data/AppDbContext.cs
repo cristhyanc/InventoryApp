@@ -361,6 +361,14 @@ public class AppDbContext : DbContext
         Set<SupplierPriceObservation>();
 
     /// <summary>
+    /// One product and one supplier a collector run was asked to search (issue #924, parent #817).
+    /// The eighth platform table, on the terms <see cref="SupplierPresets"/> states - a piece of work
+    /// is a product description and a supplier's shelf, so it is about no business - and the thing
+    /// every result of #937 is attributed to. See <see cref="PriceCollectorWorkItem"/>.
+    /// </summary>
+    public DbSet<PriceCollectorWorkItem> PriceCollectorWorkItems => Set<PriceCollectorWorkItem>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -1424,7 +1432,86 @@ public class AppDbContext : DbContext
         ConfigureProductMatchSuggestions(modelBuilder);
         ConfigureProductPriceTracking(modelBuilder);
         ConfigurePriceCollectorRuns(modelBuilder);
+        ConfigurePriceCollectorWorkItems(modelBuilder);
         ConfigureSupplierPriceObservations(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps one issued piece of collector work (issue #924, parent #817).
+    ///
+    /// <para>A platform table like the runs beside it: no business key, no index on one and no query
+    /// filter, because a product description and a supplier's shelf are about no business. The
+    /// exactly-one-product rule is a check constraint as well as a
+    /// <c>PriceCollectorWorkItemPolicy</c> rule, for the reason the listing's exclusive-ownership
+    /// rule is one: a row naming two products or none is work no result could be attributed to, and a
+    /// stored row is not something an application-level check can be trusted to have prevented. The
+    /// outcome vocabulary is deliberately the Domain's alone, because expressing it in SQL would
+    /// hard-code the enum's numbers into migration history.</para>
+    ///
+    /// <para>Every reference restricts. A run, a supplier master record and a master product are all
+    /// things this row depends on for its meaning, and work issued against something that was then
+    /// deleted would be a search nobody could place.</para>
+    /// </summary>
+    private static void ConfigurePriceCollectorWorkItems(ModelBuilder modelBuilder)
+    {
+        var workItem = modelBuilder.Entity<PriceCollectorWorkItem>();
+
+        workItem.Property(x => x.WaitingKey).HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+
+        // The read #937 makes: one run's work. One work item by its own id needs no index, because
+        // that id is the primary key.
+        workItem.HasIndex(x => x.PriceCollectorRunId);
+
+        // "One work item per product and supplier in a run" is the database's rule rather than a
+        // WHERE clause two concurrent issues could both pass - and it is <em>two</em> filtered unique
+        // indexes rather than one over all four columns, because SQLite treats NULLs as distinct in a
+        // unique index. A single index would have compared (run, supplier, master, NULL) against
+        // (run, supplier, master, NULL) and found them different, so the rule it looked like it was
+        // enforcing would have been enforced for nothing: a work item names exactly one product, so
+        // one of those two columns is always NULL. Each filtered index covers the rows whose own key
+        // column is present, where there is no NULL left to be distinct from.
+        workItem
+            .HasIndex(x => new { x.PriceCollectorRunId, x.SupplierPresetId, x.MasterProductId })
+            .IsUnique()
+            .HasFilter(@"""MasterProductId"" IS NOT NULL");
+        workItem
+            .HasIndex(x => new { x.PriceCollectorRunId, x.SupplierPresetId, x.WaitingKey })
+            .IsUnique()
+            .HasFilter(@"""WaitingKey"" IS NOT NULL");
+
+        workItem.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorWorkItems_OneProduct",
+            @"(""MasterProductId"" IS NOT NULL AND ""WaitingKey"" IS NULL) "
+                + @"OR (""MasterProductId"" IS NULL AND ""WaitingKey"" IS NOT NULL)"));
+
+        // The outcome and the instant it was recorded at travel together, each being the evidence
+        // about the other - the same shape the listing's price state uses. An issued work item has
+        // neither; a reported one has both.
+        workItem.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorWorkItems_OutcomeAndInstantTogether",
+            @"(""Outcome"" IS NULL AND ""OutcomeAtUtc"" IS NULL) "
+                + @"OR (""Outcome"" IS NOT NULL AND ""OutcomeAtUtc"" IS NOT NULL)"));
+
+        workItem
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        workItem
+            .HasOne(x => x.SupplierPreset)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierPresetId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        workItem
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(workItem.Property(x => x.IssuedAtUtc));
+        MarkUtcNullable(workItem.Property(x => x.OutcomeAtUtc));
     }
 
     /// <summary>
@@ -1452,8 +1539,14 @@ public class AppDbContext : DbContext
         // The one read a collector and the summary of #930 both make: the most recent runs.
         run.HasIndex(x => x.StartedAtUtc);
 
+        // And the one issuing a work list makes (issue #924): the runs that are still open, which a
+        // new run expires. Indexed on the status alone because "open" is one value of it and the
+        // table holds one row per run rather than per listing.
+        run.HasIndex(x => x.Status);
+
         MarkUtc(run.Property(x => x.StartedAtUtc));
         MarkUtcNullable(run.Property(x => x.CompletedAtUtc));
+        MarkUtcNullable(run.Property(x => x.ExpiresAtUtc));
     }
 
     /// <summary>

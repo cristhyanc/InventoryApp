@@ -26,6 +26,9 @@ using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
 using InventoryApi.Auth.ExternalIdentity;
 using InventoryApi.Auth.PlatformAdmin;
+using InventoryApi.Auth.PriceCollector;
+using InventoryApi.Adapters.PriceCatalogue;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Infrastructure.PlatformDiagnostics;
 using Microsoft.AspNetCore.Authorization;
@@ -124,6 +127,14 @@ builder.Services.AddSingleton(configuredPlatformAdmin);
 builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
 builder.Services.AddScoped<IAuthorizationHandler, BusinessCapabilityAuthorizationHandler>();
 
+// The price collector policy (issue #924). It is satisfied only by an app-only token carrying the
+// PriceCollector.Run application role, no delegated scope at all, the configured collector tenant
+// and the configured collector application - never by a business role, a membership row, a support
+// session or anything else a request supplies. With the collector unconfigured, which is the shipped
+// state, it denies everyone. The decision it reads was made in AddInventoryApiAuthentication above,
+// from configuration, before any request existed.
+builder.Services.AddScoped<IAuthorizationHandler, PriceCollectorAuthorizationHandler>();
+
 // Gives the two support-session authorization refusals a body carrying their stable code (issue
 // #551), and leaves every other authorization failure exactly as the framework answers it - a bare
 // 403 that tells a caller nothing about the role matrix. A singleton, because it holds no
@@ -135,6 +146,12 @@ builder.Services.AddAuthorization(options =>
     {
         policy.RequireAuthenticatedUser();
         policy.AddRequirements(new PlatformAdminRequirement());
+    });
+
+    options.AddPolicy(PriceCollectorPolicy.Name, policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.AddRequirements(new PriceCollectorRequirement());
     });
 
     foreach (var capability in Capabilities.All)
@@ -295,6 +312,17 @@ builder.Services.AddScoped<IBusinessDeactivationHook, EndSupportSessionsOnBusine
 builder.Services.AddSingleton<ISelfServiceOnboardingFlag>(
     new ConfiguredSelfServiceOnboardingFlag(builder.Configuration));
 
+// How long an issued price collector run stays open (issue #924). Read once here, because only the
+// composition root reads configuration, and published as the Application layer's narrow port so the
+// run that is stored and the expiry the work list publishes cannot disagree. A blank, unparseable or
+// out-of-range value falls back to the owner's six-hour default and logs that it did - never to "no
+// expiry". A singleton, because it is one startup decision rather than a per-request one.
+builder.Services.AddSingleton<IPriceCollectorRunSettings>(serviceProvider =>
+    new ConfiguredPriceCollectorRunSettings(
+        builder.Configuration,
+        serviceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("InventoryApi.Auth.PriceCollector")));
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngularDevClient", policy =>
@@ -410,6 +438,13 @@ var app = builder.Build();
 // secret, and no token or claim reaches it.
 app.Services.GetRequiredService<ExternalIdAuthenticationDecision>()
     .LogTo(app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.Auth.ExternalIdentity"));
+
+// And one about whether this deployment trusts a scheduled price collector (issue #924), logged for
+// the same reason and on the same terms: the decision was made in the composition root, from
+// configuration, before any request existed, and an unusable section is an error in the log rather
+// than a silently missing surface. It carries identifiers only; this configuration holds no secret.
+app.Services.GetRequiredService<PriceCollectorAuthenticationDecision>()
+    .LogTo(app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.Auth.PriceCollector"));
 
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
 // Production apply pending migrations automatically; any other environment applies nothing and

@@ -98,4 +98,90 @@ public class PriceCollectorRunPolicyTests
             Refusal((PriceCollectorRunStatus)0, Started.AddMinutes(5)));
         Assert.Equal(PriceCollectorRunPolicy.UnknownStatusMessage, refusal.Message);
     }
+
+    /// <summary>
+    /// An expired run is a <em>finished</em> run (issue #924), so it records an end instant like every
+    /// other finished status and a running one still records none. That is what keeps "the collector
+    /// never reported" a recorded outcome rather than a run stuck open forever.
+    /// </summary>
+    [Fact]
+    public void An_expired_run_is_finished_and_records_when_it_ended()
+    {
+        Assert.True(PriceCollectorRunPolicy.IsFinished(PriceCollectorRunStatus.Expired));
+        Assert.Null(Refusal(PriceCollectorRunStatus.Expired, Started.AddHours(6)));
+
+        var refusal = Assert.IsType<DomainValidationException>(
+            Refusal(PriceCollectorRunStatus.Expired, completedAtUtc: null));
+        Assert.Equal(PriceCollectorRunPolicy.EndInstantMismatchMessage, refusal.Message);
+    }
+
+    /// <summary>
+    /// An expired run is its own outcome, deliberately not a failed one: a failed run reported
+    /// failing, and an expired run reported nothing at all.
+    /// </summary>
+    [Fact]
+    public void The_declared_statuses_are_the_five_the_two_issues_name() =>
+        Assert.Equal(
+            ["Running", "Succeeded", "PartiallySucceeded", "Failed", "Expired"],
+            Enum.GetNames<PriceCollectorRunStatus>());
+
+    #region The run lifetime (issue #924)
+
+    /// <summary>
+    /// The owner's default is six hours, and the expiry instant is that lifetime after the run was
+    /// issued.
+    /// </summary>
+    [Fact]
+    public void A_run_expires_its_configured_lifetime_after_it_was_issued()
+    {
+        Assert.Equal(6, PriceCollectorRunPolicy.DefaultExpiryHours);
+        Assert.Equal(
+            Started.AddHours(6),
+            PriceCollectorRunPolicy.ExpiresAt(Started, PriceCollectorRunPolicy.DefaultExpiryHours));
+    }
+
+    /// <summary>
+    /// The expiry instant belongs to the expired side, the way the freshness limit belongs to the
+    /// stale side: "six hours" answers "how long may this stay open", so a run at exactly its expiry
+    /// has expired.
+    /// </summary>
+    [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    public void The_expiry_instant_belongs_to_the_expired_side(int minutesPastExpiry, bool hasExpired)
+    {
+        var expiresAt = PriceCollectorRunPolicy.ExpiresAt(Started, PriceCollectorRunPolicy.DefaultExpiryHours);
+
+        Assert.Equal(
+            hasExpired,
+            PriceCollectorRunPolicy.HasExpired(expiresAt, expiresAt.AddMinutes(minutesPastExpiry)));
+    }
+
+    /// <summary>
+    /// A lifetime outside the accepted range is refused rather than resolved. Zero in particular is
+    /// refused rather than read as "never expires" or "expires immediately": both are silently wrong,
+    /// and which one a reader picked would decide whether a collector ever gets any work.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(PriceCollectorRunPolicy.MaxExpiryHours + 1)]
+    public void A_lifetime_outside_the_accepted_range_is_refused(int expiryHours)
+    {
+        Assert.False(PriceCollectorRunPolicy.IsAcceptedExpiry(expiryHours));
+
+        var refusal = Assert.Throws<DomainValidationException>(
+            () => PriceCollectorRunPolicy.RequireExpiryHours(expiryHours));
+        Assert.Equal(PriceCollectorRunPolicy.ExpiryOutOfRangeMessage, refusal.Message);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(PriceCollectorRunPolicy.DefaultExpiryHours)]
+    [InlineData(PriceCollectorRunPolicy.MaxExpiryHours)]
+    public void A_lifetime_inside_the_accepted_range_is_kept(int expiryHours) =>
+        Assert.Equal(expiryHours, PriceCollectorRunPolicy.RequireExpiryHours(expiryHours));
+
+    #endregion
 }

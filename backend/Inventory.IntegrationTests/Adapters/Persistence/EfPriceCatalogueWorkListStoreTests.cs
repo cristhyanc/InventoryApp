@@ -13,12 +13,14 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// 27 October 2026). Two businesses with differently spelled copies of one product therefore run
 /// through every test here.</para>
 ///
-/// <para><strong>What is read, and by what.</strong> The adapter reads the mappings through the
-/// ordinary tenant query filters and adds no cross-business read path of its own, so the
-/// cross-business deduplication is asserted over a context that already sees both businesses - which
-/// the fixture names <c>UnscopedWorkListStore</c> so it cannot be mistaken for a request. The last
-/// test here is the other half of that claim: under a business's own scope the same adapter answers
-/// for that business and nothing else.</para>
+/// <para><strong>What is read, and by what.</strong> Since issue #924 the adapter makes the reviewed
+/// cross-business read of the mappings' business-free text columns, so the deduplication is asserted
+/// over the scope a collector request actually carries - a <em>denied</em> one, which the fixture
+/// names <c>DeniedWorkListStore</c>. The last test here is the other half of that claim: what the
+/// read may project is a product description and nothing that says whose product it is, and the
+/// answer is the same whatever scope the context happens to carry, because what bounds this read is
+/// the authorization on the one endpoint that reaches it (docs/architecture.md § Collector work
+/// list).</para>
 /// </summary>
 public class EfPriceCatalogueWorkListStoreTests
 {
@@ -39,7 +41,7 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
         await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessPepsiId);
 
-        var waiting = await fixture.UnscopedWorkListStore()
+        var waiting = await fixture.DeniedWorkListStore()
             .ListProductsAwaitingMatchAsync(CancellationToken.None);
 
         Assert.Equal(
@@ -80,7 +82,7 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.TrackAsync(fixture.FirstBusinessId, trailing);
         await fixture.TrackAsync(fixture.FirstBusinessId, leading);
 
-        var waiting = await fixture.UnscopedWorkListStore()
+        var waiting = await fixture.DeniedWorkListStore()
             .ListProductsAwaitingMatchAsync(CancellationToken.None);
 
         Assert.Equal(
@@ -121,7 +123,7 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.MarkNotFoundAsync(mapping.Id);
 
         Assert.Empty(
-            await fixture.UnscopedWorkListStore()
+            await fixture.DeniedWorkListStore()
                 .ListProductsAwaitingMatchAsync(CancellationToken.None));
     }
 
@@ -135,7 +137,7 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.MatchAsync(mapping.Id, master);
 
         Assert.Empty(
-            await fixture.UnscopedWorkListStore()
+            await fixture.DeniedWorkListStore()
                 .ListProductsAwaitingMatchAsync(CancellationToken.None));
     }
 
@@ -156,7 +158,7 @@ public class EfPriceCatalogueWorkListStoreTests
             ProductPriceTrackingMatchSource.CollectorAutomaticMatch);
 
         Assert.Empty(
-            await fixture.UnscopedWorkListStore()
+            await fixture.DeniedWorkListStore()
                 .ListProductsAwaitingMatchAsync(CancellationToken.None));
     }
 
@@ -211,7 +213,7 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.MatchAsync(theirs.Id, master);
 
         var tracked = Assert.Single(
-            await fixture.UnscopedWorkListStore()
+            await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
 
         Assert.Equal(master, tracked.Id);
@@ -220,8 +222,10 @@ public class EfPriceCatalogueWorkListStoreTests
         Assert.Equal(375m, tracked.SizeValue);
         Assert.Equal(MasterProductSizeUnit.Millilitre, tracked.SizeUnit);
 
-        // And its one listing exactly once, with the pack size and the barcode as published.
-        var listing = Assert.Single(tracked.Listings);
+        // And its one listing exactly once, with the pack size and the barcode as published - read
+        // for the products a run is issued for, which is where a listing travels from since the
+        // response bounds of #924.
+        var listing = Assert.Single(await ListingsOfAsync(fixture, master));
         Assert.Equal("SKU-1", listing.SupplierProductId);
         Assert.Equal(30, listing.UnitsPerPack);
         Assert.Equal("0012345678905", listing.Barcode);
@@ -246,8 +250,8 @@ public class EfPriceCatalogueWorkListStoreTests
         var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(mapping.Id, master);
 
-        var tracked = Assert.Single(
-            await fixture.UnscopedWorkListStore()
+        Assert.Single(
+            await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
 
         Assert.Equal(
@@ -256,7 +260,7 @@ public class EfPriceCatalogueWorkListStoreTests
                 (fixture.SupplierPresetId, "SKU-2"),
                 (otherSupplier, "SKU-1"),
             ],
-            tracked.Listings
+            (await ListingsOfAsync(fixture, master))
                 .Select(listing => (listing.SupplierPresetId, listing.SupplierProductId))
                 .Order());
     }
@@ -273,7 +277,7 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.SeedListingAsync(untracked, "SKU-9");
 
         Assert.Empty(
-            await fixture.UnscopedWorkListStore()
+            await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
     }
 
@@ -289,11 +293,11 @@ public class EfPriceCatalogueWorkListStoreTests
         var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(mapping.Id, master);
 
-        var tracked = Assert.Single(
-            await fixture.UnscopedWorkListStore()
+        Assert.Single(
+            await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
 
-        Assert.Empty(tracked.Listings);
+        Assert.Empty(await ListingsOfAsync(fixture, master));
     }
 
     /// <summary>
@@ -309,11 +313,38 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.MatchAsync(mapping.Id, master);
         await fixture.SeedWaitingListingAsync(mapping.WaitingKey, "SKU-WAITING");
 
-        var tracked = Assert.Single(
-            await fixture.UnscopedWorkListStore()
+        Assert.Single(
+            await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
 
-        Assert.Empty(tracked.Listings);
+        Assert.Empty(await ListingsOfAsync(fixture, master));
+    }
+
+    /// <summary>
+    /// The tracked products are ordered by their own key, which is what a bounded run's rotation
+    /// continues from (issue #924): the cursor the next run starts after is a stored master product
+    /// id, so "the product after the one we stopped at" only means something while the issue order is
+    /// the id order.
+    /// </summary>
+    [Fact]
+    public async Task Tracked_master_products_are_ordered_by_their_own_key()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+
+        // Seeded so the row order and the comparison-key order disagree: "Zephyr" is created first
+        // and sorts last by brand.
+        var last = await fixture.SeedMasterProductAsync("Zephyr", "Cola");
+        var first = await fixture.SeedMasterProductAsync("Alpine", "Water");
+
+        var mine = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var theirs = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessPepsiId);
+        await fixture.MatchAsync(mine.Id, last);
+        await fixture.MatchAsync(theirs.Id, first);
+
+        Assert.Equal(
+            [last, first],
+            (await fixture.DeniedWorkListStore().ListTrackedMasterProductsAsync(CancellationToken.None))
+                .Select(product => product.Id));
     }
 
     /// <summary>
@@ -329,46 +360,190 @@ public class EfPriceCatalogueWorkListStoreTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(["Brand", "Id", "Listings", "Name", "SizeUnit", "SizeValue"], published);
+        Assert.Equal(["Brand", "Id", "Name", "SizeUnit", "SizeValue"], published);
     }
 
     #endregion
 
-    #region The scope the adapter reads under
+    #region The context reads are bounded per product (issue #924)
 
     /// <summary>
-    /// The other half of this adapter's boundary claim: it reads the mappings through the ordinary
-    /// tenant query filters and nothing else, so under a business's own scope it answers for that
-    /// business alone - the other business's waiting products and tracked master products are not
-    /// in either answer.
-    ///
-    /// <para>That is what makes the cross-business reads above a property of the <em>context</em>
-    /// rather than of a second read path this issue added: there is no <c>IgnoreQueryFilters</c>, no
-    /// raw SQL and no unscoped registration anywhere in it, and which caller may read the work list
-    /// across businesses is #924's own reviewed decision.</para>
+    /// A product holding more listings than the bound allows comes back as "beyond the bound" with
+    /// <strong>none</strong> of its listings, and a product inside the bound comes back with all of
+    /// them. The prefix is deliberately not sent: an unflagged prefix would read as the product's
+    /// whole catalogue entry.
     /// </summary>
     [Fact]
-    public async Task Under_one_business_s_scope_the_work_list_answers_for_that_business_alone()
+    public async Task A_product_with_more_listings_than_the_bound_is_answered_as_beyond_it()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var crowded = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var ordinary = await fixture.SeedMasterProductAsync("Pepsi", "Max");
+        await fixture.SeedListingsAsync(crowded, count: 4);
+        await fixture.SeedListingsAsync(ordinary, count: 3);
+
+        var bounded = await fixture.DeniedWorkListStore().ListListingsForMasterProductsAsync(
+            [crowded, ordinary],
+            perProductLimit: 3,
+            CancellationToken.None);
+
+        Assert.Equal([crowded], bounded.MasterProductsBeyondLimit);
+        Assert.DoesNotContain(crowded, bounded.ByMasterProduct.Keys);
+        Assert.Equal(3, bounded.ByMasterProduct[ordinary].Count);
+    }
+
+    /// <summary>The same bound over a waiting key's proposals.</summary>
+    [Fact]
+    public async Task A_waiting_key_with_more_proposals_than_the_bound_is_answered_as_beyond_it()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var crowded = PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL");
+        var ordinary = PriceCatalogueWaitingKey.For("Pepsi Max", "375mL");
+
+        for (var index = 0; index < 4; index++)
+        {
+            await fixture.SeedWaitingListingAsync(crowded, $"SKU-CROWDED-{index}");
+        }
+
+        await fixture.SeedWaitingListingAsync(ordinary, "SKU-ORDINARY");
+
+        var bounded = await fixture.DeniedWorkListStore().ListWaitingListingsAsync(
+            [crowded, ordinary],
+            perKeyLimit: 3,
+            CancellationToken.None);
+
+        Assert.Equal([crowded], bounded.WaitingKeysBeyondLimit);
+        Assert.DoesNotContain(crowded, bounded.ByWaitingKey.Keys);
+        Assert.Single(bounded.ByWaitingKey[ordinary]);
+    }
+
+    /// <summary>
+    /// And over a key's refusals, where the stakes are different: a refusal list is the safeguard
+    /// that stops a matcher re-proposing a pair somebody rejected, so a key beyond the bound comes
+    /// back with none of its refusals and is never answered with a prefix of them.
+    ///
+    /// <para>One pair refused twice - rejected once and undone once - counts once, which is why the
+    /// count is taken over the distinct pairs: counting it twice could put a key beyond a bound it is
+    /// inside.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_waiting_key_with_more_refusals_than_the_bound_is_answered_as_beyond_it()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var crowded = PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL");
+        var ordinary = PriceCatalogueWaitingKey.For("Pepsi Max", "375mL");
+
+        foreach (var index in Enumerable.Range(0, 4))
+        {
+            var refused = await fixture.SeedMasterProductAsync("Refused", $"Variant {index}");
+            await fixture.SeedMatchSuggestionAsync(
+                crowded, refused, ProductMatchSuggestionStatus.Rejected);
+        }
+
+        // Refused twice, which is one refusal: the only key inside the bound stays inside it.
+        var twice = await fixture.SeedMasterProductAsync("Refused", "Twice");
+        await fixture.SeedMatchSuggestionAsync(ordinary, twice, ProductMatchSuggestionStatus.Rejected);
+        await fixture.SeedMatchSuggestionAsync(ordinary, twice, ProductMatchSuggestionStatus.Undone);
+
+        var bounded = await fixture.DeniedWorkListStore().ListRefusedMasterProductsAsync(
+            [crowded, ordinary],
+            perKeyLimit: 3,
+            CancellationToken.None);
+
+        Assert.Equal([crowded], bounded.WaitingKeysBeyondLimit);
+        Assert.Equal(
+            [new RefusedMasterProduct(ordinary, twice)],
+            bounded.Refusals);
+    }
+
+    private static async Task<IReadOnlyList<TrackedSupplierListing>> ListingsOfAsync(
+        PriceCatalogueFixture fixture,
+        long masterProductId)
+    {
+        var bounded = await fixture.DeniedWorkListStore().ListListingsForMasterProductsAsync(
+            [masterProductId],
+            PriceCollectorWorkListPolicy.MaxListingsPerProduct,
+            CancellationToken.None);
+
+        return bounded.ByMasterProduct.TryGetValue(masterProductId, out var own) ? own : [];
+    }
+
+    #endregion
+
+    #region The scope the adapter reads under (issue #924)
+
+    /// <summary>
+    /// The reviewed cross-business read of issue #924, stated as the property that matters: the work
+    /// list answers the same thing under the <em>denied</em> scope a collector request carries as it
+    /// does on a context with no filter at all.
+    ///
+    /// <para>Before #924 the mappings were read through the ordinary tenant filters, which under a
+    /// denied scope match nothing - so the work list a collector was handed would have been silently
+    /// empty, which is the one failure mode a bounded response must not have. The two mapping reads
+    /// therefore ignore the filter, over the projection the port declares and no wider: a waiting key,
+    /// a search name, a unit label and a master product id. What bounds the read is the authorization
+    /// on the one endpoint that reaches it, not the context it was given, and that is exactly what
+    /// this asserts.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_work_list_answers_across_businesses_under_the_denied_scope_a_collector_carries()
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
         var theirMaster = await fixture.SeedMasterProductAsync("Pepsi", "Max");
         await fixture.SeedListingAsync(theirMaster, "SKU-9");
 
-        // The second business has one waiting product and one matched one; the first has nothing.
+        // One waiting product in each business, spelled differently, and one matched product in the
+        // second - so an answer that respected the filters could only ever be a subset of this.
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
         var theirPepsi = await fixture.SeedProductAsync(fixture.SecondBusinessId, "Pepsi Max", "375mL");
         var theirMapping = await fixture.TrackAsync(fixture.SecondBusinessId, theirPepsi);
         await fixture.MatchAsync(theirMapping.Id, theirMaster);
 
-        var mine = fixture.WorkListStoreFor(fixture.FirstBusinessId);
-        Assert.Empty(await mine.ListProductsAwaitingMatchAsync(CancellationToken.None));
-        Assert.Empty(await mine.ListTrackedMasterProductsAsync(CancellationToken.None));
+        var denied = fixture.DeniedWorkListStore();
+        var unfiltered = fixture.UnscopedWorkListStore();
 
-        // And the second business sees its own, which is what proves the emptiness above is the
-        // filter and not an empty database.
+        // One waiting entry, because the two spellings fold to one key, and one tracked product.
+        var waitingUnderDeniedScope = await denied.ListProductsAwaitingMatchAsync(CancellationToken.None);
+        var trackedUnderDeniedScope = await denied.ListTrackedMasterProductsAsync(CancellationToken.None);
+
+        Assert.Single(waitingUnderDeniedScope);
+        Assert.Single(trackedUnderDeniedScope);
+
+        Assert.Equal(
+            await unfiltered.ListProductsAwaitingMatchAsync(CancellationToken.None),
+            waitingUnderDeniedScope);
+        Assert.Equal(
+            (await unfiltered.ListTrackedMasterProductsAsync(CancellationToken.None))
+                .Select(product => product.Id),
+            trackedUnderDeniedScope.Select(product => product.Id));
+    }
+
+    /// <summary>
+    /// A business's own scope reads the same work list, which is the companion fact to the one above
+    /// and is what makes the read's safety a property of the <em>projection</em> rather than of the
+    /// scope it happens to run under.
+    ///
+    /// <para>It is deliberately not a leak: no business endpoint reaches this adapter at all - the one
+    /// endpoint that does is <c>GET api/price-collector/work</c>, which is class 5 and refuses every
+    /// delegated user token - and what the answer carries is a product description with nowhere for a
+    /// business to be, which the two shape tests above assert.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_work_list_is_the_same_whatever_scope_the_context_carries()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
+
         var theirs = fixture.WorkListStoreFor(fixture.SecondBusinessId);
-        Assert.Single(await theirs.ListProductsAwaitingMatchAsync(CancellationToken.None));
-        Assert.Single(await theirs.ListTrackedMasterProductsAsync(CancellationToken.None));
+        var someoneElses = fixture.WorkListStoreFor(fixture.FirstBusinessId);
+
+        var waiting = await theirs.ListProductsAwaitingMatchAsync(CancellationToken.None);
+
+        Assert.Single(waiting);
+        Assert.Equal(
+            waiting,
+            await someoneElses.ListProductsAwaitingMatchAsync(CancellationToken.None));
     }
 
     #endregion

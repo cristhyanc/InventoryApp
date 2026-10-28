@@ -59,10 +59,14 @@ public class AddSupplierPriceObservationsMigrationTests
             var tables = await MigrationSchemaProbe.TableNamesAsync(connection);
             Assert.All(CreatedTables, table => Assert.Contains(table, tables));
 
-            // Both tables arrive empty: the collector import of #937 is their writer, and this
-            // migration seeds no price and no run.
-            Assert.Empty(await after.PriceCollectorRuns.AsNoTracking().ToListAsync());
-            Assert.Empty(await after.SupplierPriceObservations.AsNoTracking().ToListAsync());
+            // Both tables arrive empty: this migration seeds no price and no run. Counted through
+            // SQL rather than through the model, because the model has since gained a column this
+            // schema does not have - PriceCollectorRuns.ExpiresAtUtc, added by
+            // AddPriceCollectorWorkItems (issue #924) - and a model-built SELECT would name it. An
+            // upgrade test stands on the schema at its own migration, so the question it asks has to
+            // be the schema's.
+            Assert.Equal(0, await RowCountAsync(connection, "PriceCollectorRuns"));
+            Assert.Equal(0, await RowCountAsync(connection, "SupplierPriceObservations"));
 
             // The product and purchase rows that were already there, column for column - the costing
             // values above all, which are the ones AGENTS.md treats as financial data.
@@ -328,6 +332,18 @@ public class AddSupplierPriceObservationsMigrationTests
     /// <para>Written as SQL rather than through the EF model, because the model describes the schema
     /// <em>after</em> every migration and this database deliberately stops one short.</para>
     /// </summary>
+    /// <summary>
+    /// How many rows one table holds, asked of the schema rather than of the model, for the reason
+    /// <see cref="SeedAsync"/> is SQL: the model describes the schema after every migration, and this
+    /// database deliberately stops one short.
+    /// </summary>
+    private static async Task<long> RowCountAsync(SqliteConnection connection, string table)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $@"SELECT COUNT(*) FROM ""{table}"";";
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
     private static async Task SeedAsync(SqliteConnection connection)
     {
         await using var seed = connection.CreateCommand();

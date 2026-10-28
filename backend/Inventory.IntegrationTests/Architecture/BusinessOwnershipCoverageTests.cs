@@ -111,6 +111,15 @@ public class BusinessOwnershipCoverageTests
     /// and the comparison the summary of #930 will run for it. See docs/architecture.md § Supplier
     /// price observations and comparison.</para>
     ///
+    /// <para><see cref="PriceCollectorWorkItem"/> is the eighth, and the reviewed ownership decision on
+    /// issue #924 (parent #817). The structural reason is the same again: one issued piece of work is
+    /// a product description - a master product, or the folded search text of one nothing has matched
+    /// yet - and a supplier's shelf, so it is about no business either. There is no
+    /// <c>BusinessId</c> to carry and no business the work could be attributed to; what a business has
+    /// instead is still its own tenant-owned <see cref="ProductPriceTracking"/> mapping, and the
+    /// collector that reads the work list cannot learn which business any mapping came from. See
+    /// docs/architecture.md § Collector work list.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
     /// by the ownership mechanism, because there is no ownership here to enforce. <strong>Reading has
@@ -135,6 +144,7 @@ public class BusinessOwnershipCoverageTests
         typeof(ProductMatchSuggestion),
         typeof(PriceCollectorRun),
         typeof(SupplierPriceObservation),
+        typeof(PriceCollectorWorkItem),
     ];
 
     /// <summary>
@@ -159,19 +169,20 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are seven, each
+    /// about no business is a tenancy decision, not an implementation detail. There are eight, each
     /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
     /// (#873), the shared price catalogue's master products, supplier listings and match suggestions
-    /// (#923), and the collector runs and observed prices of #925 - and an eighth one arriving is the
-    /// change this assertion exists to make visible.
+    /// (#923), the collector runs and observed prices of #925, and the collector work items of #924 -
+    /// and a ninth one arriving is the change this assertion exists to make visible.
     /// </summary>
     [Fact]
-    public void Exactly_seven_entities_are_declared_platform_tables() =>
+    public void Exactly_eight_entities_are_declared_platform_tables() =>
         Assert.Equal(
             [
                 "MasterProduct",
                 "PlatformOptionVisibility",
                 "PriceCollectorRun",
+                "PriceCollectorWorkItem",
                 "ProductMatchSuggestion",
                 "SupplierListing",
                 "SupplierPreset",
