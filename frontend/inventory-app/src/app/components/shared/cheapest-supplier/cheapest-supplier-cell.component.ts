@@ -100,7 +100,7 @@ export function cheapestSupplierDisplay(
   if (state !== 'loaded') {
     return 'Unavailable';
   }
-  if (!product || product.trackingStatus === null) {
+  if (product?.trackingStatus == null) {
     return 'Not tracked';
   }
   if (product.trackingStatus === ProductPriceTrackingStatus.NotFound) {
@@ -173,7 +173,7 @@ export class CheapestSupplierCellComponent {
 
   open = false;
 
-  @ViewChild('trigger') private trigger?: ElementRef<HTMLButtonElement>;
+  @ViewChild('trigger') private readonly trigger?: ElementRef<HTMLButtonElement>;
 
   @ViewChild('dialogPanel')
   private set dialogPanel(panel: ElementRef<HTMLElement> | undefined) {

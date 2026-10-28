@@ -194,7 +194,7 @@ describe('ProductNeedsOrderingComponent Cheapest supplier column (issue #930)', 
     expect(host.textContent).toContain(CHEAPEST_SUPPLIERS_FAILED_MESSAGE);
     expect(cells(host).map((cell) => cell.textContent?.trim())).toEqual(['Unavailable']);
     // The page's own reorder figures are untouched: the row is still there with its need-to-order.
-    expect(host.querySelectorAll('tbody tr').length).toBe(1);
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
     expect(host.textContent).toContain('Coca-Cola Classic');
   });
 });

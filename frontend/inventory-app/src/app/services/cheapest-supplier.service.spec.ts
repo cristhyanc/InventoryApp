@@ -59,8 +59,8 @@ describe('CheapestSupplierService (issue #930)', () => {
     service.getSummary(ids).subscribe((received) => (summary = received));
 
     const requests = http.match(url);
-    expect(requests.length).toBe(2);
-    expect(requests[0].request.body.productIds.length).toBe(CHEAPEST_SUPPLIER_MAX_IDS);
+    expect(requests).toHaveLength(2);
+    expect(requests[0].request.body.productIds).toHaveLength(CHEAPEST_SUPPLIER_MAX_IDS);
     expect(requests[1].request.body.productIds).toEqual([CHEAPEST_SUPPLIER_MAX_IDS + 1]);
 
     requests[0].flush(answer(requests[0].request.body.productIds));
