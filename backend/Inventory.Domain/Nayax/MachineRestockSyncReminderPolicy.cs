@@ -40,6 +40,15 @@ public static class MachineRestockSyncReminderPolicy
     public const int OverdueAfterDays = 3;
 
     /// <summary>
+    /// How many business calendar days back the reminder looks for pending restock events (issue
+    /// #948). An unresolved event dated before that is still stored, still listed by Sync Restock
+    /// once its From date is moved back, and still resolvable there - it is only no longer counted
+    /// on the Dashboard, by the owner's decision of 28 October 2026, because months of stale
+    /// discrepancies were burying the restocks that actually needed attention.
+    /// </summary>
+    public const int PendingLookbackDays = 14;
+
+    /// <summary>
     /// Whether the machine's last fully successful restock-event fetch is at least
     /// <see cref="OverdueAfterDays"/> business calendar days old.
     ///
@@ -77,6 +86,15 @@ public static class MachineRestockSyncReminderPolicy
         businessToday.Date.AddDays(-OverdueAfterDays);
 
     /// <summary>
+    /// The first business calendar date whose pending restock events the reminder counts:
+    /// <see cref="PendingLookbackDays"/> days before <paramref name="businessToday"/>, inclusive
+    /// (issue #948). A date comparison, like the overdue rule, so a daylight-saving transition
+    /// inside the window cannot move its first day.
+    /// </summary>
+    public static DateTime PendingFromBusinessDate(DateTime businessToday) =>
+        businessToday.Date.AddDays(-PendingLookbackDays);
+
+    /// <summary>
     /// Whether the machine has known pending restock work dated before the Sync Restock dialog's
     /// default From date, so opening the dialog with that default would hide it.
     ///
@@ -92,9 +110,9 @@ public static class MachineRestockSyncReminderPolicy
     /// Whether this machine belongs on the reminder: either its fetch is overdue, or it has known
     /// pending restock events.
     ///
-    /// The pending half deliberately carries no date bound. An event that ages out of the
-    /// three-day window is still unresolved work, and letting the window clear it is exactly the
-    /// silent disappearance this reminder exists to prevent.
+    /// The count it is given is already bounded to the last <see cref="PendingLookbackDays"/>
+    /// business days (issue #948), which is wider than the three-day overdue window on purpose: an
+    /// event does not stop counting the moment the dialog's default From date passes it.
     /// </summary>
     public static bool NeedsAttention(bool isFetchOverdue, int knownPendingEventCount) =>
         isFetchOverdue || knownPendingEventCount > 0;

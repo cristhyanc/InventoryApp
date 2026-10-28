@@ -85,9 +85,17 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
 
   private machineId: number | null = null;
 
+  /**
+   * The `restockFrom` query parameter (issue #948): the oldest pending restock date the Dashboard's
+   * restock-sync reminder links here with, handed to Sync Restock as a From date candidate. Passed
+   * through unvalidated; `MachineRestockSyncComponent` decides whether it is usable.
+   */
+  restockFrom: string | null = null;
+
   private readonly sessionActiveSubscription: Subscription;
   private readonly financialsAccessSubscription: Subscription;
   private routeSubscription?: Subscription;
+  private queryParamSubscription?: Subscription;
 
   /** The one in-flight product read, so a superseded one can be cancelled rather than raced. */
   private productsSubscription?: Subscription;
@@ -136,6 +144,7 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     this.sessionActiveSubscription.unsubscribe();
     this.financialsAccessSubscription.unsubscribe();
     this.routeSubscription?.unsubscribe();
+    this.queryParamSubscription?.unsubscribe();
     this.cancelProductsRead();
   }
 
@@ -155,6 +164,10 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
       this.cancelProductsRead();
       this.products = [];
       this.productsState = 'not-requested';
+    });
+
+    this.queryParamSubscription = this.route.queryParamMap.subscribe((params) => {
+      this.restockFrom = params.get('restockFrom');
     });
   }
 

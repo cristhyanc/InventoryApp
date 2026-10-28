@@ -472,6 +472,61 @@ describe('MachineRestockSyncComponent sync', () => {
     expect(component.fromDate$.value).toBe('2026-06-15');
     jest.useRealTimers();
   });
+
+  /**
+   * The Dashboard reminder's link (issue #948) hands over the oldest pending date it counted; the
+   * dialog opens there only when that is a real date earlier than its own default.
+   */
+  describe('the pending From date the Dashboard reminder links with', () => {
+    afterEach(() => jest.useRealTimers());
+
+    function openedFromDate(pendingFromDate: string | null): string {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T01:00:00Z')); // 28 Oct in Sydney
+      const { component } = createHarness(jest.fn(() => of(preview([]))));
+      component.pendingFromDate = pendingFromDate;
+      component.syncRestock();
+      return component.fromDate$.value;
+    }
+
+    it('opens at an earlier pending date and asks for that window', () => {
+      const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T01:00:00Z'));
+      const { component } = createHarness(syncRestock);
+      component.pendingFromDate = '2026-10-16';
+
+      component.syncRestock();
+
+      expect(component.fromDate$.value).toBe('2026-10-16');
+      const [, fromDateIso] = syncRestock.mock.calls[0];
+      expect(fromDateIso).toBe(startOfDayUtc(2026, 10, 16, BUSINESS_TIME_ZONE).toISOString());
+    });
+
+    it('keeps the three-day default when there is no pending date', () => {
+      expect(openedFromDate(null)).toBe('2026-10-25');
+    });
+
+    it('keeps the three-day default when the pending date is not earlier than it', () => {
+      expect(openedFromDate('2026-10-25')).toBe('2026-10-25');
+      expect(openedFromDate('2026-10-27')).toBe('2026-10-25');
+    });
+
+    it('ignores a malformed or impossible pending date', () => {
+      expect(openedFromDate('16/10/2026')).toBe('2026-10-25');
+      expect(openedFromDate('2026-02-30')).toBe('2026-10-25');
+      expect(openedFromDate('')).toBe('2026-10-25');
+    });
+
+    it('still lets the operator change the date after opening at it', () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T01:00:00Z'));
+      const { component } = createHarness(jest.fn(() => of(preview([]))));
+      component.pendingFromDate = '2026-10-16';
+      component.syncRestock();
+
+      component.onFromDateChange('');
+
+      expect(component.fromDate$.value).toBe('');
+    });
+  });
 });
 
 describe('MachineRestockSyncComponent filters', () => {

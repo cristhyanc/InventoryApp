@@ -42,6 +42,9 @@ internal sealed class FakeMachineRestockSyncCoverageStore : IMachineRestockSyncC
     /// <summary>How many times the aggregate read was made.</summary>
     public int Reads { get; private set; }
 
+    /// <summary>The pending window start the last aggregate read was asked for (issue #948).</summary>
+    public DateTime? LastPendingFromUtc { get; private set; }
+
     /// <summary>Declares what the aggregate read returns, replacing anything declared before.</summary>
     public FakeMachineRestockSyncCoverageStore WithMachines(params MachineRestockSyncCoverageRecord[] machines)
     {
@@ -77,9 +80,10 @@ internal sealed class FakeMachineRestockSyncCoverageStore : IMachineRestockSyncC
     }
 
     public Task<IReadOnlyList<MachineRestockSyncCoverageRecord>> GetProviderMachineCoverageAsync(
-        CancellationToken cancellationToken)
+        DateTime pendingFromUtc, CancellationToken cancellationToken)
     {
         Reads++;
+        LastPendingFromUtc = pendingFromUtc;
 
         if (ReadFailure is not null)
         {

@@ -128,14 +128,20 @@ public sealed record HiddenMachineRestockSyncReminderDto(string Reason) : IMachi
 /// calendar days old, or there is no recorded sync at all.
 /// </param>
 /// <param name="KnownPendingEventCount">
-/// How many imported restock events are still unresolved - needs-review, insufficient-stock and
-/// unresolved possible-duplicate events included, applied and explicitly reconciled ones excluded.
+/// How many imported restock events dated inside the pending window are still unresolved -
+/// needs-review, insufficient-stock and unresolved possible-duplicate events included; applied and
+/// explicitly reconciled ones, and ones reporting a zero or negative quantity, excluded (issue #948).
 /// A count of <em>persisted</em> facts: zero does not prove Nayax holds no un-fetched alert, which
 /// is why an overdue fetch is reported separately.
 /// </param>
 /// <param name="OldestKnownPendingEventAtUtc">
 /// The canonical event instant of the oldest of those, or <see langword="null"/> when there is
 /// none.
+/// </param>
+/// <param name="OldestKnownPendingEventBusinessDate">
+/// The business calendar date that instant falls on, or <see langword="null"/> when there is none
+/// (issue #948). The banner's machine link hands it to the Sync Restock dialog as its From date, so
+/// the client never dates an instant itself.
 /// </param>
 /// <param name="HasPendingWorkBeforeDefaultFrom">
 /// Whether some of that pending work is dated before the Sync Restock dialog's default From date,
@@ -150,6 +156,7 @@ public sealed record MachineRestockSyncReminderMachineDto(
     bool IsFetchOverdue,
     int KnownPendingEventCount,
     DateTime? OldestKnownPendingEventAtUtc,
+    DateTime? OldestKnownPendingEventBusinessDate,
     bool HasPendingWorkBeforeDefaultFrom);
 
 /// <summary>
@@ -176,6 +183,14 @@ public sealed record MachineRestockSyncReminderMachineDto(
 /// The From date the Sync Restock dialog will default to, so the instruction to clear or move it
 /// back can name the date an operator will actually see.
 /// </param>
+/// <param name="PendingLookbackDays">
+/// How many business calendar days back pending events are counted (issue #948), published so a
+/// client never restates it.
+/// </param>
+/// <param name="PendingFromBusinessDate">
+/// The first business calendar date whose pending events are counted. Older unresolved events are
+/// still stored and still listed by Sync Restock; they are only not counted here.
+/// </param>
 /// <param name="SyncAvailability">
 /// Whether a completed connection check confirmed the machine alerts read; see
 /// <see cref="MachineRestockSyncAvailability"/>.
@@ -186,6 +201,8 @@ public sealed record MachineRestockSyncReminderDto(
     DateTime BusinessDate,
     int OverdueAfterDays,
     DateTime DefaultFromBusinessDate,
+    int PendingLookbackDays,
+    DateTime PendingFromBusinessDate,
     string SyncAvailability,
     IReadOnlyList<MachineRestockSyncReminderMachineDto> Machines) : IMachineRestockSyncReminderDto
 {

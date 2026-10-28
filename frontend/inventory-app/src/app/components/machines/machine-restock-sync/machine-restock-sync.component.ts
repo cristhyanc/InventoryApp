@@ -158,6 +158,15 @@ import {
 export class MachineRestockSyncComponent implements OnDestroy {
   @Input() machineId: number | null | undefined = null;
 
+  /**
+   * The oldest pending restock date the Dashboard's restock-sync reminder linked here with
+   * (`?restockFrom=yyyy-MM-dd`, issue #948). When it is a real date earlier than the usual From
+   * default, the dialog opens at it instead, so every event the reminder counted is on screen
+   * without editing the date. Anything else - absent, malformed, or not earlier - leaves the
+   * default exactly as it was, and the operator can still change or clear the date.
+   */
+  @Input() pendingFromDate: string | null | undefined = null;
+
   /** Emitted only after at least one event was actually applied, so the page can reload products. */
   @Output() readonly restockApplied = new EventEmitter<void>();
 
@@ -393,7 +402,8 @@ export class MachineRestockSyncComponent implements OnDestroy {
 
   /**
    * Three calendar days before the operator's current business date (issue #206; timezone
-   * corrected by issue #218; shortened from seven days by issue #242), as `yyyy-MM-dd`. Empty
+   * corrected by issue #218; shortened from seven days by issue #242), as `yyyy-MM-dd` - or the
+   * earlier `pendingFromDate` the Dashboard reminder linked here with (issue #948). Empty
    * while the business timezone is still unknown (issue #499), which is the loading state
    * `refreshPreview` reports rather than dating the filter in a zone nobody confirmed.
    */
@@ -405,7 +415,11 @@ export class MachineRestockSyncComponent implements OnDestroy {
     const today = currentDateInTimeZone(new Date(), timeZone);
     const { year, month, day } = shiftCalendarDate(today, -3);
     const pad = (value: number) => value.toString().padStart(2, '0');
-    return `${year}-${pad(month)}-${pad(day)}`;
+    const standardDefault = `${year}-${pad(month)}-${pad(day)}`;
+
+    // `yyyy-MM-dd` strings order the same way as the dates they name.
+    const pendingFrom = this.pendingFromDate;
+    return isCalendarDate(pendingFrom) && pendingFrom < standardDefault ? pendingFrom : standardDefault;
   }
 
   /**
@@ -531,4 +545,14 @@ export class MachineRestockSyncComponent implements OnDestroy {
       }
     });
   }
+}
+
+/** Whether a value is a real calendar date written as `yyyy-MM-dd` (so not `2026-02-30`). */
+function isCalendarDate(value: string | null | undefined): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }

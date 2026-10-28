@@ -70,6 +70,12 @@ public class MachineRestockSyncCoverageTests
 
     private static readonly MachineIdentity Machine = new(LocalMachineId, NayaxMachineId);
     private static readonly DateTime EventTime = new(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// A pending window start earlier than every event here, for the tests about which events are
+    /// unresolved rather than about the window itself (issue #948).
+    /// </summary>
+    private static readonly DateTime AllTime = new(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime SyncStartedAt = new(2026, 9, 2, 8, 0, 0, DateTimeKind.Utc);
 
     #region Recording a successful fetch
@@ -576,7 +582,7 @@ public class MachineRestockSyncCoverageTests
 
         await using var db = Scoped(options);
         var machines = await new EfMachineRestockSyncCoverageStore(db)
-            .GetProviderMachineCoverageAsync(CancellationToken.None);
+            .GetProviderMachineCoverageAsync(AllTime, CancellationToken.None);
 
         // Only the provider-named machine: the one the operator created themselves has no provider
         // restock sync to be overdue for.
@@ -590,6 +596,50 @@ public class MachineRestockSyncCoverageTests
         Assert.Equal(DateTimeKind.Utc, machine.OldestKnownPendingEventAtUtc!.Value.Kind);
     }
 
+    /// <summary>
+    /// The pending window and the quantity rule (issue #948), relationally: an event at exactly the
+    /// window's start counts and one a second before does not, a zero or negative quantity never
+    /// counts, an unparsed event with no quantity still does, and the oldest pending instant is the
+    /// oldest <em>counted</em> event. Nothing outside the bounds is changed.
+    /// </summary>
+    [Fact]
+    public async Task The_aggregate_read_counts_only_positive_or_unparsed_events_inside_the_pending_window()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        var windowStart = EventTime.AddDays(-14);
+
+        await using (var seed = Scoped(options))
+        {
+            seed.NayaxMachineStockEvents.AddRange(
+                Event(1, windowStart, NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 6),
+                Event(2, windowStart.AddSeconds(-1), NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 6),
+                Event(3, EventTime.AddDays(-60), NayaxStockEventProcessingStatus.Unprocessed),
+                Event(4, EventTime, NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: -2),
+                Event(5, EventTime, NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 0),
+                Event(6, EventTime.AddDays(-1), NayaxStockEventProcessingStatus.Unprocessed),
+                Event(7, EventTime, NayaxStockEventProcessingStatus.Applied, parsedQuantity: 4));
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var db = Scoped(options))
+        {
+            var machine = Assert.Single(
+                await new EfMachineRestockSyncCoverageStore(db)
+                    .GetProviderMachineCoverageAsync(windowStart, CancellationToken.None));
+
+            // Event 1 (on the boundary, positive) and event 6 (unparsed, needs review).
+            Assert.Equal(2, machine.KnownPendingEventCount);
+            Assert.Equal(windowStart, machine.OldestKnownPendingEventAtUtc);
+        }
+
+        await using var verify = Scoped(options);
+        Assert.Equal(
+            6,
+            await verify.NayaxMachineStockEvents.CountAsync(
+                stockEvent => stockEvent.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed));
+    }
+
     [Fact]
     public async Task A_provider_named_machine_with_nothing_outstanding_is_reported_with_no_pending_work()
     {
@@ -598,7 +648,7 @@ public class MachineRestockSyncCoverageTests
 
         await using var db = Scoped(options);
         var machine = Assert.Single(
-            await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(CancellationToken.None));
+            await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
 
         Assert.Equal(0, machine.KnownPendingEventCount);
         Assert.Null(machine.OldestKnownPendingEventAtUtc);
@@ -632,7 +682,7 @@ public class MachineRestockSyncCoverageTests
 
         await using var db = Scoped(options);
         var machine = Assert.Single(
-            await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(CancellationToken.None));
+            await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
 
         Assert.Equal(LocalMachineId, machine.LocalMachineId);
         Assert.Equal(0, machine.KnownPendingEventCount);
@@ -642,7 +692,7 @@ public class MachineRestockSyncCoverageTests
         await using var otherRead = TestAppDbContext.For(options, OtherBusinessId);
         var otherMachine = Assert.Single(
             await new EfMachineRestockSyncCoverageStore(otherRead)
-                .GetProviderMachineCoverageAsync(CancellationToken.None));
+                .GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
 
         Assert.Equal(OtherLocalMachineId, otherMachine.LocalMachineId);
         Assert.Equal(2, otherMachine.KnownPendingEventCount);
@@ -663,7 +713,7 @@ public class MachineRestockSyncCoverageTests
         await using var denied = TestAppDbContext.Denied(options);
         var store = new EfMachineRestockSyncCoverageStore(denied);
 
-        Assert.Empty(await store.GetProviderMachineCoverageAsync(CancellationToken.None));
+        Assert.Empty(await store.GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
         Assert.False(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, default));
     }
 
@@ -902,7 +952,8 @@ public class MachineRestockSyncCoverageTests
         long eventLogId,
         DateTime eventDateTimeGmt,
         NayaxStockEventProcessingStatus processingStatus,
-        NayaxDuplicateResolution duplicateResolution = NayaxDuplicateResolution.None) => new()
+        NayaxDuplicateResolution duplicateResolution = NayaxDuplicateResolution.None,
+        int? parsedQuantity = null) => new()
         {
             NayaxEventLogId = eventLogId,
             MachineId = NayaxMachineId,
@@ -910,6 +961,7 @@ public class MachineRestockSyncCoverageTests
             EventDateTimeGmt = eventDateTimeGmt,
             EventDateTimeVmc = DateTime.SpecifyKind(eventDateTimeGmt.AddHours(10), DateTimeKind.Unspecified),
             RawEventData = "Adjusted Stock",
+            ParsedQuantity = parsedQuantity,
             MatchStatus = NayaxStockEventMatchStatus.NeedsReview,
             ProcessingStatus = processingStatus,
             DuplicateResolution = duplicateResolution,

@@ -80,16 +80,20 @@ public sealed class GetMachineRestockSyncReminder
             return HiddenMachineRestockSyncReminderDto.NayaxNotConnected;
         }
 
-        var machines = await _coverage.GetProviderMachineCoverageAsync(cancellationToken).ConfigureAwait(false);
+        // Resolved once, before the aggregate read that needs the pending window's start (issue
+        // #948), so every row on the banner - and the window itself - is measured against one
+        // "today".
+        var nowUtc = _clock.UtcNow;
+        var businessToday = _businessCalendar.ToBusinessDate(nowUtc);
+        var pendingFromBusinessDate = MachineRestockSyncReminderPolicy.PendingFromBusinessDate(businessToday);
+        var pendingFromUtc = _businessCalendar.StartOfBusinessDayUtc(pendingFromBusinessDate);
+
+        var machines = await _coverage.GetProviderMachineCoverageAsync(pendingFromUtc, cancellationToken)
+            .ConfigureAwait(false);
         if (machines.Count == 0)
         {
             return HiddenMachineRestockSyncReminderDto.NoProviderMachines;
         }
-
-        // Resolved once, after the reads that decide whether there is anything to report and before
-        // any machine is judged, so every row on the banner is measured against one "today".
-        var nowUtc = _clock.UtcNow;
-        var businessToday = _businessCalendar.ToBusinessDate(nowUtc);
 
         var needingAttention = machines
             .Select(machine => Evaluate(machine, connection.CredentialRevision, businessToday))
@@ -102,6 +106,8 @@ public sealed class GetMachineRestockSyncReminder
             businessToday,
             MachineRestockSyncReminderPolicy.OverdueAfterDays,
             MachineRestockSyncReminderPolicy.DefaultFromBusinessDate(businessToday),
+            MachineRestockSyncReminderPolicy.PendingLookbackDays,
+            pendingFromBusinessDate,
             Availability(connection),
             needingAttention);
     }
@@ -136,6 +142,7 @@ public sealed class GetMachineRestockSyncReminder
             MachineRestockSyncReminderPolicy.IsFetchOverdue(lastSyncedBusinessDate, businessToday),
             machine.KnownPendingEventCount,
             machine.OldestKnownPendingEventAtUtc,
+            oldestPendingBusinessDate,
             MachineRestockSyncReminderPolicy.HasPendingWorkBeforeDefaultFrom(
                 oldestPendingBusinessDate, businessToday));
     }

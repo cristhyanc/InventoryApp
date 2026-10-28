@@ -763,6 +763,11 @@ export interface MachineRestockSyncReminderMachine {
   isFetchOverdue: boolean;
   knownPendingEventCount: number;
   oldestKnownPendingEventAtUtc: string | null;
+  /**
+   * The business calendar date (`yyyy-MM-ddT00:00:00`) of that oldest counted event, or `null`
+   * (issue #948). The machine link hands its date part to Sync Restock as `restockFrom`.
+   */
+  oldestKnownPendingEventBusinessDate: string | null;
   /** Some of that pending work predates the Sync Restock dialog's default From date. */
   hasPendingWorkBeforeDefaultFrom: boolean;
 }
@@ -783,6 +788,10 @@ export interface MachineRestockSyncReminder {
   overdueAfterDays: number;
   /** The From date the Sync Restock dialog will default to, in the business's own timezone. */
   defaultFromBusinessDate: string;
+  /** How many business calendar days back pending events are counted (issue #948). */
+  pendingLookbackDays: number;
+  /** The first business calendar date whose pending events are counted (issue #948). */
+  pendingFromBusinessDate: string;
   syncAvailability: MachineRestockSyncAvailability;
   machines: MachineRestockSyncReminderMachine[];
 }

@@ -46,6 +46,7 @@
          write workflow rather than one of the page's two views of this machine. -->
     <app-machine-restock-sync
       [machineId]="machine?.localMachineId"
+      [pendingFromDate]="restockFrom"
       (restockApplied)="refreshProducts()">
     </app-machine-restock-sync>
 
