@@ -345,6 +345,22 @@ public class AppDbContext : DbContext
     public DbSet<ProductPriceTracking> ProductPriceTrackings => Set<ProductPriceTracking>();
 
     /// <summary>
+    /// One run of the supplier price collector (issue #925, parent #817): when it started, when it
+    /// finished, how it finished and how much it accounted for. The sixth platform table, on the
+    /// terms <see cref="SupplierPresets"/> states - a run reads suppliers' shelves for every business
+    /// at once, so it is about none of them. See <see cref="PriceCollectorRun"/>.
+    /// </summary>
+    public DbSet<PriceCollectorRun> PriceCollectorRuns => Set<PriceCollectorRun>();
+
+    /// <summary>
+    /// One price one supplier published for one listing at one instant (issue #925). The seventh
+    /// platform table, append-only, and read by no purchase, cost, inventory, GST-accounting or
+    /// reporting code at all; see <see cref="SupplierPriceObservation"/>.
+    /// </summary>
+    public DbSet<SupplierPriceObservation> SupplierPriceObservations =>
+        Set<SupplierPriceObservation>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -1277,6 +1293,22 @@ public class AppDbContext : DbContext
         preset.Property(x => x.PriceConnectorKey)
             .HasMaxLength(SupplierPresetMasterPolicy.MaxConnectorKeyLength);
 
+        // How old an observed price of this supplier may be and still be compared (issue #925). It is
+        // stored here, on the supplier master record, precisely so that no code names a supplier: the
+        // owner's 30 hours for a daily supplier and 102 for a twice-weekly one are two values of one
+        // column, and a supplier whose schedule changes is an edit rather than a release. The column
+        // default is the daily limit, because daily is what the collector does unless somebody
+        // records otherwise, and the range is checked here as well as in
+        // SupplierPriceFreshnessPolicy - a limit of zero would read as "never stale" or "always
+        // stale" depending on who resolved it.
+        preset.Property(x => x.PriceCheckFreshnessHours)
+            .IsRequired()
+            .HasDefaultValue(SupplierPriceFreshnessPolicy.DailyCheckLimitHours);
+        preset.ToTable(table => table.HasCheckConstraint(
+            "CK_SupplierPresets_PriceCheckFreshnessHoursInRange",
+            $@"""PriceCheckFreshnessHours"" > 0 "
+                + $@"AND ""PriceCheckFreshnessHours"" <= {SupplierPriceFreshnessPolicy.MaxLimitHours}"));
+
         // Both instants are persisted UTC and both are reported by this feature's API, so each is
         // marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why the
         // SQLite provider makes that necessary.
@@ -1391,6 +1423,123 @@ public class AppDbContext : DbContext
         ConfigureSupplierListings(modelBuilder);
         ConfigureProductMatchSuggestions(modelBuilder);
         ConfigureProductPriceTracking(modelBuilder);
+        ConfigurePriceCollectorRuns(modelBuilder);
+        ConfigureSupplierPriceObservations(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps one run of the supplier price collector (issue #925, parent #817).
+    ///
+    /// <para>A platform table like the three above: no business key, no index on one and no query
+    /// filter, because a run reads suppliers' shelves for every business at once. The counts are
+    /// checked non-negative in the database as well as in <c>PriceCollectorRunPolicy</c>, because a
+    /// stored row is not something an application-level check can be trusted to have prevented. The
+    /// status-against-end-instant rule is deliberately the Domain's alone, for the reason the
+    /// mapping's status rule is: expressing it in SQL would hard-code the status enum's numbers into
+    /// migration history.</para>
+    /// </summary>
+    private static void ConfigurePriceCollectorRuns(ModelBuilder modelBuilder)
+    {
+        var run = modelBuilder.Entity<PriceCollectorRun>();
+
+        run.Property(x => x.Status).IsRequired();
+
+        run.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorRuns_CountsNotNegative",
+            @"""ListingsCheckedCount"" >= 0 AND ""ObservationsRecordedCount"" >= 0 "
+                + @"AND ""FailureCount"" >= 0"));
+
+        // The one read a collector and the summary of #930 both make: the most recent runs.
+        run.HasIndex(x => x.StartedAtUtc);
+
+        MarkUtc(run.Property(x => x.StartedAtUtc));
+        MarkUtcNullable(run.Property(x => x.CompletedAtUtc));
+    }
+
+    /// <summary>
+    /// Maps one observed supplier price (issue #925, parent #817).
+    ///
+    /// <para><strong>A platform table, and an append-only one.</strong> What a supplier charges for a
+    /// pack is a fact about that supplier's shelf and about no business, so there is no business key,
+    /// no index on one and no query filter. There is no updated instant either: a correction is a
+    /// later observation, never an edit of a stored one, which is what keeps the raw facts separate
+    /// from the derived comparison (AGENTS.md § Nayax integration states the same rule for imported
+    /// facts).</para>
+    ///
+    /// <para><strong>Both references restrict.</strong> An observation whose listing or whose
+    /// collector run had been deleted from under it would be a price nobody could place or
+    /// trust.</para>
+    ///
+    /// <para><strong>The check constraints are the facts the comparison depends on.</strong> A pack
+    /// price of zero divides into a unit price of zero and compares as cheaper than every real offer;
+    /// a GST rate that is not a proportion - 10 where 0.10 belongs - converts a price to eleven times
+    /// itself; a promotion end date on a price that is not a promotion silently withdraws a real
+    /// offer; and a currency that is not AUD would be compared as though it were dollars. Each is
+    /// also a <c>SupplierPriceObservationPolicy</c> rule.</para>
+    /// </summary>
+    private static void ConfigureSupplierPriceObservations(ModelBuilder modelBuilder)
+    {
+        var observation = modelBuilder.Entity<SupplierPriceObservation>();
+
+        // Published amounts at the scale the imported financial facts in this schema are stored at.
+        // Nothing here is divided or rounded: the per-unit figure is derived by
+        // CheapestUnitOfferPolicy at full precision and rounded only where it is displayed.
+        observation.Property(x => x.PackPrice).HasColumnType("decimal(18,4)");
+        observation.Property(x => x.RegularPackPrice).HasColumnType("decimal(18,4)");
+
+        // A proportion, like a match suggestion's confidence beside it.
+        observation.Property(x => x.SupplierGstRate).HasColumnType("decimal(5,4)");
+
+        observation.Property(x => x.Currency)
+            .IsRequired()
+            .HasMaxLength(SupplierPriceObservationPolicy.Currency.Length);
+        observation.Property(x => x.PriceBasis).IsRequired();
+        observation.Property(x => x.StockStatus).IsRequired();
+        observation.Property(x => x.SourceReference)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceReferenceLength);
+        observation.Property(x => x.SourceUrl)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceUrlLength);
+
+        // The two reads this table exists for: one listing's prices newest-first - which is how the
+        // latest observation of each listing is found - and one run's own results.
+        observation.HasIndex(x => new { x.SupplierListingId, x.ObservedAtUtc });
+        observation.HasIndex(x => x.PriceCollectorRunId);
+
+        observation.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_PackPricePositive",
+                @"""PackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_RegularPackPricePositive",
+                @"""RegularPackPrice"" IS NULL OR ""RegularPackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_GstRateIsAProportion",
+                @"""SupplierGstRate"" IS NULL "
+                    + @"OR (""SupplierGstRate"" >= 0 AND ""SupplierGstRate"" <= 1)");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_PromotionEndNeedsPromotion",
+                @"""PromotionEndsAtUtc"" IS NULL OR ""IsPromotion"" = 1");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_CurrencyIsAud",
+                $@"""Currency"" = '{SupplierPriceObservationPolicy.Currency}'");
+        });
+
+        observation
+            .HasOne(x => x.SupplierListing)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierListingId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        observation
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(observation.Property(x => x.ObservedAtUtc));
+        MarkUtcNullable(observation.Property(x => x.PromotionEndsAtUtc));
+        MarkUtc(observation.Property(x => x.CreatedAtUtc));
     }
 
     private static void ConfigureMasterProducts(ModelBuilder modelBuilder)
@@ -1492,8 +1641,36 @@ public class AppDbContext : DbContext
             .HasForeignKey(x => x.MasterProductId)
             .OnDelete(DeleteBehavior.Restrict);
 
+        // The listing's own price state (issue #925): which observation is current, when it was last
+        // checked successfully, and when its price last changed. Three facts rather than one, because
+        // "how old is this price?" and "when did this supplier last move it?" are different
+        // questions, and a daily re-read that finds the same price answers only the first.
+        //
+        // The pointer has no navigation property in either direction, like the supplier's link to its
+        // preset: it is a cursor into an append-only table, not a parent-child graph, and no Include
+        // may pull a listing's whole price history with it. Restrict, because the observation a
+        // listing points at is not something to delete from under it.
+        listing
+            .HasOne<SupplierPriceObservation>()
+            .WithMany()
+            .HasForeignKey(x => x.LatestObservationId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // SupplierListingPriceStatePolicy's rule, in the database too: the observation and the check
+        // instant are recorded together - each is the evidence about the other - and a price that was
+        // never observed cannot have changed. Nothing here clears any of the three: a failed or
+        // missing check leaves the last good price exactly where it was, which is the owner's
+        // constraint of 27 October 2026.
+        listing.ToTable(table => table.HasCheckConstraint(
+            "CK_SupplierListings_PriceStateConsistent",
+            @"((""LatestObservationId"" IS NULL AND ""LastCheckedAtUtc"" IS NULL "
+                + @"AND ""LastPriceChangeAtUtc"" IS NULL) "
+                + @"OR (""LatestObservationId"" IS NOT NULL AND ""LastCheckedAtUtc"" IS NOT NULL))"));
+
         MarkUtc(listing.Property(x => x.CreatedAtUtc));
         MarkUtc(listing.Property(x => x.UpdatedAtUtc));
+        MarkUtcNullable(listing.Property(x => x.LastCheckedAtUtc));
+        MarkUtcNullable(listing.Property(x => x.LastPriceChangeAtUtc));
     }
 
     private static void ConfigureProductMatchSuggestions(ModelBuilder modelBuilder)
@@ -1621,6 +1798,18 @@ public class AppDbContext : DbContext
         instant.HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+    /// <summary>
+    /// The same for an instant that may be absent, where "absent" stays absent rather than becoming
+    /// a UTC-marked default - the shape <c>SupportSession.EndedAtUtc</c> uses.
+    /// </summary>
+    private static void MarkUtcNullable(
+        Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime?> instant) =>
+        instant.HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
 
     /// <summary>
     /// Maps the provider identity of a business, a product and a category (issue #759, parent #329

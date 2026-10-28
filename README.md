@@ -253,7 +253,7 @@ Open <http://localhost:4200>. The `start` script builds the Tailwind stylesheet 
 
 ### 4. Sign in
 
-The application requires a Microsoft Entra sign-in. Click **Sign in** in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
+Opening the application signed out shows the public Restockroo landing page at `/` (see [The public landing page](#the-public-landing-page) below); everything else requires a Microsoft Entra sign-in. Click **Sign in** on the landing page or in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route except the landing page requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
 
 A deployment that has a customer identity tenant configured offers a choice first, on the public `/sign-in` page: **Continue with Google or an email address** or **Sign in with a Microsoft work account** — see [Signing in with Google](#signing-in-with-google-issue-711) and [Signing in with an email address and password](#signing-in-with-an-email-address-and-password-issue-712) below. With no such tenant configured, which is the state in source control, nothing changes: **Sign in** redirects straight to the workforce authority with no extra page and no extra click.
 
@@ -379,6 +379,28 @@ Who may apply: an account with **no active membership anywhere** — never a mem
 **The flag is `false` in source control and must stay off in production until a human has verified the release gate** — see [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541). With it off, the endpoint answers `404` and `onboardingEnabled` is `false`.
 
 The journey a second live business needs is now complete end to end. The application form exists (issue #543, `/apply`, above), and the approval **user interface** of issue #510 does too: the Super Admin's own Businesses page (issue #547, see [Super Admin businesses API](#super-admin-businesses-api) above) approves, rejects, deactivates and reactivates a business and releases a member of a deactivated one. The Nayax credential is no longer a blocker either: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). An Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and drives it from the connection wizard on Admin → Integrations (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners of issue #539 are on the screens that depend on Nayax — the machine list and machine detail, Sync Restock, the site list and a site's products, and the pick list — so a member who cannot reach that wizard still sees why those screens have no Nayax data. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+
+## The public landing page
+
+A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
+application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
+integration, a three-step workflow and FAQs. It makes no request to the API at all, so opening or
+refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+
+- **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
+  is configured, otherwise a redirect straight to Microsoft that returns to `/`.
+- **Get started** opens the business application at `/apply` (see
+  [Starting a business](#starting-a-business-self-service-onboarding)), taking the visitor through
+  sign-in first. While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome
+  page instead, exactly as before.
+- **Signed in**, `/` is still the dashboard. The landing page stays reachable at `/home`, where the
+  **Open app** button returns to `/`.
+
+Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
+the page presents Nayax only as an optional connection for supported sales data and the reports
+built on it. The page has **no Privacy Policy, Terms of Service or Contact link**, because none of
+those pages exists yet; add them to its footer once they do. The approved design and every wording
+change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
 
 ## Roles and capabilities
 
@@ -553,7 +575,7 @@ POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   w
 
 ## Super Admin supplier presets
 
-The Super Admin also keeps **one platform-wide list of suggested suppliers**, which is two things at once: the list **a business approved from now on starts with its own copy of** instead of an empty supplier list (issue #849, child C of #835), and the **supplier master a price check reads** (issue #931, the first task of #817). Keeping the list is issue #848, child B. The shipped list is nine records: Coles, Woolworths, ALDI, Big W, Kmart, Costco and three JB Metro sites. See [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets) below for exactly who gets them, and [docs/architecture.md § Tenant ownership](docs/architecture.md#tenant-ownership-issue-64) for why this is one of the two tables in the schema that belong to no business.
+The Super Admin also keeps **one platform-wide list of suggested suppliers**, which is two things at once: the list **a business approved from now on starts with its own copy of** instead of an empty supplier list (issue #849, child C of #835), and the **supplier master a price check reads** (issue #931, the first task of #817). Keeping the list is issue #848, child B. The shipped list is nine records: Coles, Woolworths, ALDI, Big W, Kmart, Costco and three JB Metro sites. See [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets) below for exactly who gets them, and [docs/architecture.md § Tenant ownership](docs/architecture.md#tenant-ownership-issue-64) for why this is one of the few tables in the schema that belong to no business.
 
 ```text
 GET  /api/super-admin/supplier-presets          every preset, enabled and disabled, ordered by name
@@ -566,7 +588,7 @@ PUT  /api/super-admin/supplier-presets/{id}     the same, plus "isEnabled": true
 - **It never writes to a business.** This list is a source to copy *from*. Nothing on this surface reads or writes any business's own suppliers: a preset is never a supplier in a business's own list, editing or disabling one changes nothing a business already has, and a business's supplier of the same name is an entirely separate row that business owns outright. A preset added or re-enabled today is **not pushed** into any existing business (issue #935): it is *offered* to the ones it serves, under **Available to add** on their own Suppliers page, and becomes a supplier only when somebody there adds it — see [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the three surfaces above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair unset — the shipped state — nobody can reach it at all.** A business Owner, Admin or member is refused with `403` like anybody else, and an anonymous request is `401`. A [role preview](#previewing-the-app-as-a-role-issues-720-and-721) is refused on both writes as read-only, exactly as on the Businesses surface, while a previewed **read** is unaffected: this controller declares no capability for a preview to narrow. The `X-Support-Session` header is **not acted on here at all** — as on every endpoint of this class — so an ordinary member who sets it is still an ordinary member refused `403`, and an administrator who happens to hold a live [support session](#super-admin-support-sessions) reaches this surface as themselves, writes included, exactly as they still reach the Businesses surface.
 - **What a preset is.** A name (required, trimmed, at most 200 characters), an optional website, whether it is still suggested, the three supplier-master facts below, and the instants it was created and last changed. The website must be a complete `http://` or `https://` address of at most 2048 characters; a blank one is stored as "no website" rather than as an empty string, and nothing fetches, resolves or checks the address. That is not a rule of this feature's own: it is [the one a business supplier's own website uses](#a-suppliers-website) (issue #847), reused here so a preset and a supplier cannot disagree about what a valid address is — which matters because the copy below turns the one into the other.
-- **What it serves, what its prices mean, and who collects them (issue #931).** Each record says **which states it serves** — Australia nationwide, *or* one or more of NSW, VIC, QLD, SA, WA, TAS, ACT and NT, never both and never neither — whether **its published prices include GST** (yes for the supermarkets, Kmart and BIG W; no for JB Metro, whose prices are ex-GST), and **how those prices are collected**: nothing at all, Varnmill with a key naming the retailer (`coles`, `woolworths`, `aldi`), Kmart, BIG W, or JB Metro. The key is required for Varnmill and refused for every other route and for no route, and an invalid combination is `400` with a sentence saying which rule it broke. Whether prices include GST is a **recorded fact and never inferred** from a name, a connector or an amount, and it is required on every write so an omitted value cannot silently record a price list as ex-GST. A JB Metro record's **website is the site its connector reads**, which is why a new JB Metro site is a new record and not new code. No price is collected, stored or compared by this feature: it records what a later price check needs to know.
+- **What it serves, what its prices mean, and who collects them (issue #931).** Each record says **which states it serves** — Australia nationwide, *or* one or more of NSW, VIC, QLD, SA, WA, TAS, ACT and NT, never both and never neither — whether **its published prices include GST** (yes for the supermarkets, Kmart and BIG W; no for JB Metro, whose prices are ex-GST), and **how those prices are collected**: nothing at all, Varnmill with a key naming the retailer (`coles`, `woolworths`, `aldi`), Kmart, BIG W, or JB Metro. The key is required for Varnmill and refused for every other route and for no route, and an invalid combination is `400` with a sentence saying which rule it broke. Whether prices include GST is a **recorded fact and never inferred** from a name, a connector or an amount, and it is required on every write so an omitted value cannot silently record a price list as ex-GST. A JB Metro record's **website is the site its connector reads**, which is why a new JB Metro site is a new record and not new code. No price is collected, stored or compared by this feature: it records what a later price check needs to know. Each record also carries **how old one of its prices may be and still be compared** (issue #925): 30 hours for a supplier checked daily, and 102 for Big W, which is checked on Thursday and Sunday — each one the longest expected gap between two checks plus a six-hour margin, so a collection run that starts a little later than yesterday's does not make every price look out of date. It is stored on the record rather than decided in code, so a supplier whose schedule changes is an edit to data; it is **not on this page or in this API yet**, and the shipped records were given their two values by the migration that added the column.
 - **Names are unique, ignoring case.** "Coles" and "COLES" are the same suggestion, so the second one is refused with `409` and "A supplier preset with this name already exists." The rule is a unique database index over a stored normalised name, not a check made before the insert, so two requests arriving at once leave one preset and one refusal — never two rows and never a server error.
 - **There is no delete.** A preset that should stop being suggested is **disabled**, which is reversible and leaves whatever a business already copied from it untouched. Disabled presets stay in the list, because one nobody can see is one nobody can re-enable.
 - **The shipped records are inserted once, by migrations.** The original four came with the migration that created the table; ALDI, Kmart and the three JB Metro records came with the one that added the supplier-master columns, which also set those columns on the four that already existed, matching them **by name**. Neither is seeded at startup and neither is declared as EF `HasData`, both of which re-apply themselves: production applies migrations on startup, so either would quietly undo an edit, or switch a deliberately disabled preset back on, at the next deployment. Rename one, give it a website, change what it serves, disable it or delete it directly in the database, and it stays that way — and a record that was **renamed before** the supplier-master migration ran is left entirely alone by it, which shows on the page as a market that is **not set** until somebody fills it in. A record you had **already created yourself** under one of those five names is left alone in the same way: the migration inserts a record only when that name is free, so your record keeps its name, website, enabled state and instants, its new fields start **not set**, and the upgrade cannot fail on the duplicate name. Reversing that migration removes only the records it created itself, never one that was already there.
@@ -1587,8 +1609,9 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
 
 - **A machine is listed for either of two reasons.** Its last fully successful restock sync is three
   or more business days old — counted as calendar days in your own business time zone, so a
-  daylight-saving change never moves the line — or it still has imported restock events nobody has
-  resolved. Either one alone is enough, and both are shown: a recent sync clears only the first.
+  daylight-saving change never moves the line — or it still has imported restock events from the
+  last 14 business days nobody has resolved. Either one alone is enough, and both are shown: a
+  recent sync clears only the first.
 - **"No recorded sync" means exactly that, not "never synced".** A successful sync has been recorded
   since this feature was added; machines you were already syncing before then start with nothing
   recorded, and nothing guesses a date for them from an event, a sales sync or a stock count. The
@@ -1597,14 +1620,18 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
   of what it read, records nothing at all — and one that succeeded and found no new alert counts as
   a success, because an empty answer is an answer. A successful sync is never a promise that all of
   your history has been fetched: Nayax's last-alerts list is a rolling window of recent events.
-- **Pending counts are what has been imported.** They include events needing review, events you have
-  not got enough storage stock for, and possible duplicates you have not resolved; they exclude ones
-  you have applied or marked as already recorded manually. A count of zero means nothing imported is
-  outstanding — it cannot promise that Nayax is holding no alert nobody has fetched yet, which is why
-  the overdue-sync warning is reported separately.
-- **Old work never disappears quietly.** The Sync Restock dialog opens on the last three days by
-  default, so when a machine has pending events older than that, the reminder says so and tells you
-  to clear the From date or move it back to the oldest pending date.
+- **Pending counts are what has been imported in the last 14 days.** They include events needing
+  review, events you have not got enough storage stock for, and possible duplicates you have not
+  resolved; they exclude ones you have applied or marked as already recorded manually, and events
+  reporting a zero or negative quantity — those are machine discrepancies, never restocks, and Sync
+  Restock never applies them. Events older than 14 days are not counted, but nothing is deleted:
+  clear or move back the From date in Sync Restock and they are still there to resolve. A count of
+  zero means nothing imported in that window is outstanding — it cannot promise that Nayax is holding
+  no alert nobody has fetched yet, which is why the overdue-sync warning is reported separately.
+- **The link opens Sync Restock far enough back.** The Sync Restock dialog opens on the last three
+  days by default. A machine's link on the reminder carries the date of its oldest counted pending
+  event (`?restockFrom=yyyy-MM-dd`), and when that date is earlier, the dialog opens from it instead,
+  so every event the reminder counted is on screen. You can still change or clear the date.
 - **It reminds, and does nothing else.** Each row links to the machine and names the **Sync Restock**
   action there. Opening the dashboard, following a link or opening a preview applies nothing,
   resolves no duplicate, changes no inventory and does not mark anything as seen — after you apply or

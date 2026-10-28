@@ -103,8 +103,12 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     /// still <c>Unprocessed</c> and not explicitly reconciled as already recorded manually. A
     /// needs-review, an insufficient-stock and an unresolved possible-duplicate event therefore all
     /// count - each is work an operator still has to do - while an applied event and one reconciled
-    /// as already recorded manually do not. There is no date bound: work that ages out of the Sync
-    /// Restock dialog's default window is still work.</para>
+    /// as already recorded manually do not. Two further bounds come from issue #948: only events at
+    /// or after <paramref name="pendingFromUtc"/> count, and an event whose parsed quantity is zero
+    /// or negative never counts - that is a machine discrepancy, which
+    /// <c>NayaxMachineStockApplyPolicy</c> never applies, not a restock. An unparsed event has no
+    /// quantity and still counts, because it needs review. Nothing outside those bounds is changed:
+    /// it is simply not on the Dashboard, and Sync Restock still lists it.</para>
     ///
     /// <para>A machine whose stored external id is not text <see cref="NayaxExternalId"/> could have
     /// written resolves to no provider number, so its events cannot be found and it is reported with
@@ -112,7 +116,7 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     /// because that is recorded against the local machine.</para>
     /// </summary>
     public async Task<IReadOnlyList<MachineRestockSyncCoverageRecord>> GetProviderMachineCoverageAsync(
-        CancellationToken cancellationToken)
+        DateTime pendingFromUtc, CancellationToken cancellationToken)
     {
         var machines = await _db.Machines
             .AsNoTracking()
@@ -138,7 +142,9 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
             .AsNoTracking()
             .Where(stockEvent =>
                 stockEvent.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
-                && stockEvent.DuplicateResolution != NayaxDuplicateResolution.ReconciledManually)
+                && stockEvent.DuplicateResolution != NayaxDuplicateResolution.ReconciledManually
+                && stockEvent.EventDateTimeGmt >= pendingFromUtc
+                && (stockEvent.ParsedQuantity == null || stockEvent.ParsedQuantity > 0))
             .GroupBy(stockEvent => stockEvent.MachineId)
             .Select(group => new
             {

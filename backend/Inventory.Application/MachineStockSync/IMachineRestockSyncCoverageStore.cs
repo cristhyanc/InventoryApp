@@ -21,13 +21,15 @@ namespace Inventory.Application.MachineStockSync;
 /// evidence about the token that replaced it.
 /// </param>
 /// <param name="KnownPendingEventCount">
-/// How many imported restock events of this machine are still unresolved - neither applied nor
-/// explicitly reconciled as already recorded manually. It counts <em>persisted</em> facts only:
-/// zero means nothing imported is outstanding, never that Nayax holds no un-fetched alert.
+/// How many imported restock events of this machine, dated on or after the pending window's start,
+/// are still unresolved - neither applied nor explicitly reconciled as already recorded manually -
+/// and do not report a zero or negative quantity (issue #948). It counts <em>persisted</em> facts
+/// only: zero means nothing imported inside the window is outstanding, never that Nayax holds no
+/// un-fetched alert.
 /// </param>
 /// <param name="OldestKnownPendingEventAtUtc">
-/// The canonical <c>EventDateTimeGMT</c> of the oldest of those events, or <see langword="null"/>
-/// when there is none.
+/// The canonical <c>EventDateTimeGMT</c> of the oldest of those counted events, or
+/// <see langword="null"/> when there is none.
 /// </param>
 public sealed record MachineRestockSyncCoverageRecord(
     long LocalMachineId,
@@ -119,6 +121,12 @@ public interface IMachineRestockSyncCoverageStore
     /// credential and writes nothing - which is what makes it safe to run on every Dashboard
     /// load.</para>
     /// </summary>
+    /// <param name="pendingFromUtc">
+    /// The instant the pending window starts (issue #948): the start of the business day
+    /// <c>MachineRestockSyncReminderPolicy.PendingFromBusinessDate</c> names. Only events whose
+    /// canonical instant is at or after it are counted; older ones stay stored and untouched.
+    /// </param>
+    /// <param name="cancellationToken">The request's cancellation token.</param>
     Task<IReadOnlyList<MachineRestockSyncCoverageRecord>> GetProviderMachineCoverageAsync(
-        CancellationToken cancellationToken);
+        DateTime pendingFromUtc, CancellationToken cancellationToken);
 }

@@ -94,3 +94,20 @@ Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is available with a FAQ at: https://openfontlicense.org
 ```
+
+## Hanken Grotesk (bundled font)
+
+The Hanken Grotesk typeface is bundled and self-hosted through the `@fontsource/hanken-grotesk` npm
+package (weights 400/500/600/700), loaded from `frontend/inventory-app/angular.json`, for the public
+landing page (issue #954). The font files are served from this application; no Google Fonts or other
+content-delivery-network request is made for them.
+
+Upstream project: <https://github.com/marcologous/hanken-grotesk>. The full licence text ships with
+the package at `node_modules/@fontsource/hanken-grotesk/LICENSE`.
+
+```text
+Copyright 2021 The Hanken Grotesk Project Authors (https://github.com/marcologous/hanken-grotesk)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at: https://openfontlicense.org
+```

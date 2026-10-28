@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Router, provideRouter } from '@angular/router';
+import { Router, Routes, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, AuthenticationResult, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
@@ -23,6 +23,7 @@ import { configureExternalId, unconfigureExternalId } from './auth/external-id.s
 import { peekIntendedDestination, rememberIntendedDestination } from './auth/intended-destination';
 import { SELECTED_AUTHORITY_KEY } from './auth/selected-authority';
 import { SignInService } from './auth/sign-in.service';
+import { PUBLIC_LAYOUT_DATA } from './public/public-layout';
 
 @Component({ standalone: true, template: 'page body' })
 class BlankPageComponent {}
@@ -199,6 +200,8 @@ async function render(
      * is a cancelled or failed hosted sign-in coming back to `/auth` (issue #711).
      */
     redirect?: Observable<AuthenticationResult | null>;
+    /** The route table; defaults to one blank page for every URL. */
+    routes?: Routes;
   } = {}
 ): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
@@ -243,7 +246,7 @@ async function render(
   await TestBed.configureTestingModule({
     imports: [AppComponent],
     providers: [
-      provideRouter([{ path: '**', component: BlankPageComponent }]),
+      provideRouter(options.routes ?? [{ path: '**', component: BlankPageComponent }]),
       { provide: MsalService, useValue: msalService },
       { provide: MsalBroadcastService, useValue: broadcast },
       // The shell renders the sidebar, which asks the diagnostics API whether to offer the
@@ -1790,5 +1793,59 @@ describe('AppComponent version footer (issue #648)', () => {
     const footer = host.querySelector('footer');
     expect(footer).not.toBeNull();
     expect(footer?.textContent?.trim()).toBe(`Version ${packageJson.version}`);
+  });
+});
+
+describe('AppComponent public layout (issue #954)', () => {
+  const routes: Routes = [
+    { path: 'home', data: PUBLIC_LAYOUT_DATA, component: BlankPageComponent },
+    { path: '**', component: BlankPageComponent }
+  ];
+
+  beforeEach(() => stubMatchMedia(true));
+
+  async function navigate(fixture: ComponentFixture<AppComponent>, url: string): Promise<void> {
+    await TestBed.inject(Router).navigateByUrl(url);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  it('renders a public route with none of the authenticated chrome', async () => {
+    const { fixture, host } = await render({ signedIn: false, routes });
+
+    await navigate(fixture, '/home');
+
+    expect(host.textContent).toContain('page body');
+    expect(host.querySelector('app-sidebar-nav')).toBeNull();
+    expect(host.querySelector('app-user-menu')).toBeNull();
+    expect(host.querySelector('app-support-session-banner')).toBeNull();
+    expect(host.querySelector('app-role-preview-banner')).toBeNull();
+    expect(host.querySelector('app-breadcrumbs')).toBeNull();
+  });
+
+  it('shows a public route to a signed-in person without waiting for their business', async () => {
+    // The business lookup never answers: an authenticated page would stay behind "Loading your
+    // business…", but the public page reads no business and must not wait for one.
+    const { fixture, host } = await render({ signedIn: true, business: () => NEVER, routes });
+
+    await navigate(fixture, '/home');
+
+    expect(host.textContent).toContain('page body');
+    expect(host.textContent).not.toContain('Loading your business');
+    expect(host.querySelector('app-sidebar-nav')).toBeNull();
+  });
+
+  it('puts the shell back for an authenticated route after a public one', async () => {
+    const { fixture, host } = await render({ signedIn: true, routes });
+
+    await navigate(fixture, '/home');
+    expect(host.querySelector('app-user-menu')).toBeNull();
+
+    await navigate(fixture, '/reports/bookkeeping');
+
+    expect(host.querySelector('app-user-menu')).not.toBeNull();
+    expect(host.querySelector('app-sidebar-nav')).not.toBeNull();
+    expect(host.textContent).toContain('page body');
   });
 });

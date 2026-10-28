@@ -216,8 +216,8 @@ public class AddSupplierPresetsMigrationTests
     /// <summary>
     /// The table is about no business, which is the half of the tenancy decision a schema can carry:
     /// there is no <c>BusinessId</c> column for anything to filter or stamp - including after issue
-    /// #931 added the five supplier-master columns, which say what a supplier serves and never whose
-    /// supplier it is.
+    /// #931 added the five supplier-master columns and issue #925 the price-check freshness limit,
+    /// all of which say something about a supplier and never whose supplier it is.
     /// </summary>
     [Fact]
     public async Task The_table_carries_no_business_column()
@@ -238,6 +238,7 @@ public class AddSupplierPresetsMigrationTests
                 "IsEnabled",
                 "Name",
                 "NormalisedName",
+                "PriceCheckFreshnessHours",
                 "PriceConnector",
                 "PriceConnectorKey",
                 "PricesIncludeGst",

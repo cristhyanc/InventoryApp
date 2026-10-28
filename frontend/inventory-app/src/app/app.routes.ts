@@ -22,6 +22,9 @@ import { SignInComponent } from './auth/sign-in.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
 import { requireProvider } from './provider/provider-lock.guard';
+import { PUBLIC_HOME_ROUTE } from './public/landing/landing-routes';
+import { PUBLIC_LAYOUT_DATA } from './public/public-layout';
+import { signedOutVisitorGuard } from './public/signed-out-visitor.guard';
 
 /**
  * Every authenticated route carries `MsalGuard`, then, since issue #529, `accountStateGuard`, then
@@ -134,6 +137,25 @@ export const routes: Routes = [
     // silently landing on the dashboard. Public, like `auth`: it makes no request at all.
     path: INVITE_ADDRESS_BAR_ROUTE,
     component: InviteLinkReopenComponent
+  },
+  {
+    // Public: the Restockroo landing page (issue #954) for a signed-out visitor at `/`. It is
+    // matched only while nobody is signed in (`signedOutVisitorGuard`); otherwise the router falls
+    // through to the dashboard route below, unchanged, so sign-in, the sign-in page guard and the
+    // wildcard still land a signed-in person on their dashboard. It makes no request and renders in
+    // the public layout, without the authenticated shell.
+    path: '',
+    pathMatch: 'full',
+    canMatch: [signedOutVisitorGuard],
+    data: PUBLIC_LAYOUT_DATA,
+    loadComponent: () => import('./public/landing/landing-page.component').then((m) => m.LandingPageComponent)
+  },
+  {
+    // Public: the same landing page for everyone, signed in or not (issue #954), so a signed-in
+    // person can still reach it; its "Open app" action returns them to `/`.
+    path: PUBLIC_HOME_ROUTE,
+    data: PUBLIC_LAYOUT_DATA,
+    loadComponent: () => import('./public/landing/landing-page.component').then((m) => m.LandingPageComponent)
   },
   {
     path: '',

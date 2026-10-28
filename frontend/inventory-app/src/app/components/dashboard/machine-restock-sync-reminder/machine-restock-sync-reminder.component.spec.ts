@@ -24,6 +24,7 @@ function machine(
     isFetchOverdue: true,
     knownPendingEventCount: 0,
     oldestKnownPendingEventAtUtc: null,
+    oldestKnownPendingEventBusinessDate: null,
     hasPendingWorkBeforeDefaultFrom: false,
     ...overrides
   };
@@ -39,6 +40,8 @@ function reminder(
     businessDate: '2026-10-25T00:00:00',
     overdueAfterDays: 3,
     defaultFromBusinessDate: '2026-10-22T00:00:00',
+    pendingLookbackDays: 14,
+    pendingFromBusinessDate: '2026-10-11T00:00:00',
     syncAvailability: 'Confirmed',
     machines,
     ...overrides
@@ -144,30 +147,56 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
     expect(banner(host)?.textContent).toContain('2 known pending restock events');
   });
 
+  it('says pending events are counted over the published window', async () => {
+    const { host } = await render();
+
+    expect(banner(host)?.textContent).toContain('restock events from the last 14 days are still waiting for you');
+  });
+
   /**
    * Work older than the dialog's default From date would otherwise simply not be in the list an
-   * operator opens, which is the silent disappearance this reminder exists to prevent.
+   * operator opens, so the link carries the oldest counted date and the row says so (issue #948).
    */
-  it('tells the operator to clear or move the From date back when pending work predates it', async () => {
+  it('links to the machine with the oldest pending date when pending work predates the default From date', async () => {
     const { host } = await render({
       response: of(
         reminder([
-          machine({ knownPendingEventCount: 1, oldestKnownPendingEventAtUtc: '2026-10-14T03:00:00Z', hasPendingWorkBeforeDefaultFrom: true })
+          machine({
+            knownPendingEventCount: 1,
+            oldestKnownPendingEventAtUtc: '2026-10-13T23:00:00Z',
+            oldestKnownPendingEventBusinessDate: '2026-10-14T00:00:00',
+            hasPendingWorkBeforeDefaultFrom: true
+          })
         ])
       )
     });
 
+    const link = host.querySelector('[data-testid="restock-sync-reminder-link-31"]');
+    expect(link?.getAttribute('href')).toBe('/machines/31?restockFrom=2026-10-14');
+
     const note = host.querySelector('[data-testid="restock-sync-reminder-older-than-default-31"]');
-    expect(note?.textContent).toContain('older than');
-    expect(note?.textContent).toContain('22 Oct 2026');
+    expect(note?.textContent).toContain('opens Sync Restock from');
+    expect(note?.textContent).toContain('14 Oct 2026');
+    expect(note?.textContent).not.toContain('clear that date');
   });
 
-  it('does not show that instruction when nothing pending predates the default From date', async () => {
+  it('does not show that note when nothing pending predates the default From date', async () => {
     const { host } = await render({
-      response: of(reminder([machine({ knownPendingEventCount: 1, oldestKnownPendingEventAtUtc: '2026-10-24T03:00:00Z' })]))
+      response: of(
+        reminder([
+          machine({
+            knownPendingEventCount: 1,
+            oldestKnownPendingEventAtUtc: '2026-10-24T03:00:00Z',
+            oldestKnownPendingEventBusinessDate: '2026-10-24T00:00:00'
+          })
+        ])
+      )
     });
 
     expect(host.querySelector('[data-testid="restock-sync-reminder-older-than-default-31"]')).toBeNull();
+    expect(host.querySelector('[data-testid="restock-sync-reminder-link-31"]')?.getAttribute('href')).toBe(
+      '/machines/31?restockFrom=2026-10-24'
+    );
   });
 
   it('says the sync may be unavailable when the alerts permission is unconfirmed', async () => {

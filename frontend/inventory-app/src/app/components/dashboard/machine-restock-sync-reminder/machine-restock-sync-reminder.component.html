@@ -22,7 +22,7 @@
     <p class="mt-1">
       Review restocks to keep storage inventory accurate. A machine is listed here when its last
       successful restock sync is {{ reminder.overdueAfterDays }} or more days old, or when restock
-      events are still waiting for you.
+      events from the last {{ reminder.pendingLookbackDays }} days are still waiting for you.
     </p>
 
     @if (isSyncAvailabilityUnconfirmed) {
@@ -46,6 +46,7 @@
         <li class="mt-1" [attr.data-testid]="'restock-sync-reminder-machine-' + machine.localMachineId">
           <a
             [routerLink]="['/machines', machine.localMachineId]"
+            [queryParams]="restockLinkQueryParams(machine)"
             class="btn-link"
             [attr.data-testid]="'restock-sync-reminder-link-' + machine.localMachineId"
           >{{ machine.machineName }}</a>:
@@ -56,11 +57,10 @@
             [attr.title]="machine.oldestKnownPendingEventAtUtc ? ('Oldest: ' + (machine.oldestKnownPendingEventAtUtc | businessDateTime)) : null"
           >{{ pendingLabel(machine) }}</span>.
           Open the machine and use <strong>Sync Restock</strong> to review them.
-          @if (machine.hasPendingWorkBeforeDefaultFrom) {
+          @if (machine.hasPendingWorkBeforeDefaultFrom && machine.oldestKnownPendingEventBusinessDate) {
             <span [attr.data-testid]="'restock-sync-reminder-older-than-default-' + machine.localMachineId">
-              Some of this work is older than the dialog's default From date
-              ({{ reminder.defaultFromBusinessDate | date: 'd MMM yyyy' }}), so clear that date or
-              move it back to the oldest pending date to see all of it.
+              Following this link opens Sync Restock from
+              {{ machine.oldestKnownPendingEventBusinessDate | date: 'd MMM yyyy' }}, the oldest of them.
             </span>
           }
         </li>

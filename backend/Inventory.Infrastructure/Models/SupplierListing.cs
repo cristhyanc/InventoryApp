@@ -27,8 +27,11 @@ namespace Inventory.Infrastructure.Models;
 /// current ownership in one column would have forced a choice between losing the first and breaking
 /// the second.</para>
 ///
-/// <para><strong>Nothing here is a price.</strong> What this listing costs on a given day is the
-/// price-observation work of #925; this row is what a price would later be observed <em>for</em>.</para>
+/// <para><strong>The prices themselves are not here.</strong> What this listing cost on a given day
+/// is a <see cref="SupplierPriceObservation"/> (issue #925); what this row keeps is <em>which</em>
+/// observation is current, when the listing was last checked successfully and when its price last
+/// changed - three facts, deliberately not one, and none of them ever cleared by a failed or missing
+/// check. See <see cref="LatestObservationId"/>.</para>
 /// </summary>
 public class SupplierListing
 {
@@ -117,6 +120,43 @@ public class SupplierListing
     /// proposed by the collector, confirmed, or flagged for a person to look at.
     /// </summary>
     public SupplierListingMatchStatus MatchStatus { get; set; } = SupplierListingMatchStatus.Proposed;
+
+    /// <summary>
+    /// The latest accepted observation of this listing's price (issue #925), or
+    /// <see langword="null"/> while it has never been checked - which is every listing as issue #923
+    /// shipped them. Restricted on delete, so the observation a listing points at cannot be removed
+    /// from under it.
+    ///
+    /// <para><strong>It is replaced only by a later accepted observation, never by an absence.</strong>
+    /// A collector run that fails, or that never reaches this listing, leaves this column and
+    /// <see cref="LastCheckedAtUtc"/> exactly as they were - the owner's constraint of 27 October
+    /// 2026 - and <c>SupplierPriceFreshnessPolicy</c> is what eventually stops that price being
+    /// compared. Emptying it on a failure would turn a missed check into "this supplier has no
+    /// price", which is the same mistake the report availability model exists to prevent.</para>
+    ///
+    /// <para>There is deliberately no navigation property in either direction: the pointer is a
+    /// cursor into an append-only table, not a parent-child graph, and no <c>Include</c> may pull a
+    /// listing's whole price history along with it.</para>
+    /// </summary>
+    public long? LatestObservationId { get; set; }
+
+    /// <summary>
+    /// When this listing was last checked <em>successfully</em>, or <see langword="null"/> while it
+    /// never has been. Recorded together with <see cref="LatestObservationId"/> -
+    /// <c>SupplierListingPriceStatePolicy</c> and the database both hold that - because each half is
+    /// the evidence about the other.
+    /// </summary>
+    public DateTime? LastCheckedAtUtc { get; set; }
+
+    /// <summary>
+    /// When this listing's price last changed, or <see langword="null"/> while it holds no
+    /// observation.
+    ///
+    /// <para>Separate from <see cref="LastCheckedAtUtc"/> on purpose: a daily re-read that finds the
+    /// same price moves the check instant and leaves this one alone. A single "last updated" column
+    /// would answer neither "how old is this price?" nor "when did this supplier last move it?".</para>
+    /// </summary>
+    public DateTime? LastPriceChangeAtUtc { get; set; }
 
     /// <summary>When the listing was first recorded, from the application clock.</summary>
     public DateTime CreatedAtUtc { get; set; }

@@ -44,7 +44,7 @@ describe('MachineDetailComponent product refresh', () => {
       getProducts,
       getLatestSales: () => of(emptyLatestSales())
     } as unknown as MachineService;
-    const route = { paramMap: of(convertToParamMap({ id: '7' })) } as unknown as ActivatedRoute;
+    const route = { paramMap: of(convertToParamMap({ id: '7' })), queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
     const component = new MachineDetailComponent(
       route,
       machineService,
@@ -67,6 +67,32 @@ describe('MachineDetailComponent product refresh', () => {
   });
 });
 
+describe('MachineDetailComponent restockFrom query parameter (issue #948)', () => {
+  function componentWith(queryParams: Record<string, string>) {
+    const machineService = {
+      get: () => of({ machineID: 7 } as Machine),
+      getProducts: () => of([]),
+      getLatestSales: () => of(emptyLatestSales())
+    } as unknown as MachineService;
+    const route = {
+      paramMap: of(convertToParamMap({ id: '7' })),
+      queryParamMap: of(convertToParamMap(queryParams))
+    } as unknown as ActivatedRoute;
+    const instance = new MachineDetailComponent(
+      route, machineService, breadcrumbServiceStub(), supportSessionStub(), accessServiceStub());
+    instance.ngOnInit();
+    return instance;
+  }
+
+  it('passes the Dashboard reminder\'s restockFrom date on for Sync Restock', () => {
+    expect(componentWith({ restockFrom: '2026-10-16' }).restockFrom).toBe('2026-10-16');
+  });
+
+  it('has no pending From date without the parameter', () => {
+    expect(componentWith({}).restockFrom).toBeNull();
+  });
+});
+
 /**
  * The two tabs the owner asked for (issue #768): Sales first and selected on arrival at every
  * machine, Products second and read only when it is opened.
@@ -78,7 +104,7 @@ describe('MachineDetailComponent Sales and Products tabs (issue #768)', () => {
       getProducts,
       getLatestSales: () => of(emptyLatestSales())
     } as unknown as MachineService;
-    const route = { paramMap: of(convertToParamMap({ id: '7' })) } as unknown as ActivatedRoute;
+    const route = { paramMap: of(convertToParamMap({ id: '7' })), queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
     const instance = new MachineDetailComponent(
       route,
       machineService,
@@ -200,7 +226,7 @@ describe('MachineDetailComponent Products panel read (issue #768)', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { apiBaseUrl: '/api' } },
-        { provide: ActivatedRoute, useValue: { paramMap: paramMap$ } },
+        { provide: ActivatedRoute, useValue: { paramMap: paramMap$, queryParamMap: of(convertToParamMap({})) } },
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
@@ -353,7 +379,7 @@ describe('MachineDetailComponent breadcrumb label', () => {
       getProducts: () => of([]),
       getLatestSales: () => of(emptyLatestSales())
     } as unknown as MachineService;
-    const route = { paramMap: of(convertToParamMap({ id })) } as unknown as ActivatedRoute;
+    const route = { paramMap: of(convertToParamMap({ id })), queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
     const breadcrumbService = breadcrumbServiceStub();
     const component = new MachineDetailComponent(
       route, machineService, breadcrumbService, supportSessionStub(), accessServiceStub()
@@ -393,7 +419,7 @@ describe('MachineDetailComponent Nayax status banner (issue #539)', () => {
         provideRouter([]),
         {
           provide: ActivatedRoute,
-          useValue: { paramMap: of(convertToParamMap({ id: '7' })) }
+          useValue: { paramMap: of(convertToParamMap({ id: '7' })), queryParamMap: of(convertToParamMap({})) }
         },
         {
           provide: MachineService,
@@ -443,7 +469,7 @@ describe('MachineDetailComponent Record refill link (issue #744 machine-page con
       imports: [MachineDetailComponent],
       providers: [
         provideRouter([]),
-        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })) } },
+        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })), queryParamMap: of(convertToParamMap({})) } },
         {
           provide: MachineService,
           useValue: {
@@ -533,7 +559,7 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
       imports: [MachineDetailComponent],
       providers: [
         provideRouter([]),
-        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })) } },
+        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })), queryParamMap: of(convertToParamMap({})) } },
         {
           provide: MachineService,
           useValue: {
@@ -612,7 +638,7 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
       imports: [MachineDetailComponent],
       providers: [
         provideRouter([]),
-        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })) } },
+        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })), queryParamMap: of(convertToParamMap({})) } },
         {
           provide: MachineService,
           useValue: {

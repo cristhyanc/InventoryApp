@@ -157,6 +157,16 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
       : `${machine.knownPendingEventCount} known pending restock events`;
   }
 
+  /**
+   * The query parameters a row's machine link carries (issue #948): the business date of the
+   * oldest counted pending event as `restockFrom`, so Sync Restock opens far enough back to show
+   * every event this row counted. `null` - a plain link - when nothing is pending.
+   */
+  restockLinkQueryParams(machine: MachineRestockSyncReminderMachine): { restockFrom: string } | null {
+    const oldest = machine.oldestKnownPendingEventBusinessDate;
+    return oldest ? { restockFrom: oldest.slice(0, 10) } : null;
+  }
+
   private ensureLoaded(): void {
     if (this.reminderSubscription !== null || this.sessionActive) {
       return;
