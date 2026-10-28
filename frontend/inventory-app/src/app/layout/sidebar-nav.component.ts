@@ -153,7 +153,22 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
    */
   pendingBusinessCount: number | null = null;
 
-  @ViewChild('sheet') private readonly sheet?: ElementRef<HTMLElement>;
+  private sheet?: HTMLDialogElement;
+
+  /**
+   * The More sheet is a native `<dialog>` opened with `showModal()` (issue #972), so the browser
+   * itself makes everything behind it inert: no click, programmatic focus or assistive-technology
+   * navigation reaches the page while the sheet is open. It is opened the moment it is rendered,
+   * which is whenever the shell shows the menu on a narrow layout.
+   */
+  @ViewChild('sheet')
+  private set sheetElement(ref: ElementRef<HTMLDialogElement> | undefined) {
+    this.sheet = ref?.nativeElement;
+    if (this.sheet !== undefined && !this.sheet.open) {
+      openModal(this.sheet);
+    }
+  }
+
   @ViewChild('closeControl') private readonly closeControl?: ElementRef<HTMLButtonElement>;
 
   private readonly openGroups = new Set<string>();
@@ -292,17 +307,41 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    // Leave the top layer before the element goes, so the page is interactive again at once.
+    if (this.sheet?.open) {
+      closeModal(this.sheet);
+    }
     this.destroying$.next();
     this.destroying$.complete();
   }
 
   /**
-   * Keeps Tab and Shift+Tab inside the open More sheet (issue #972), wrapping from its last
-   * focusable element to its first and back, so the page behind the modal is never reached while
-   * it covers it. Escape is the shell's, which also restores focus.
+   * The dialog's own close request (Escape, or a platform back gesture). The browser would close
+   * the dialog by itself, behind the shell's back; it is cancelled and reported instead, so the
+   * shell closes the menu and returns focus to the control that opened it.
+   */
+  onSheetCancel(event: Event): void {
+    event.preventDefault();
+    this.dismissed.emit();
+  }
+
+  /**
+   * A click whose target is the dialog element itself landed on its `::backdrop` - the dimmed page
+   * above the sheet - because the sheet's content fills the dialog box. That dismisses the sheet.
+   */
+  onSheetClick(event: MouseEvent): void {
+    if (event.target === this.sheet) {
+      this.dismissed.emit();
+    }
+  }
+
+  /**
+   * Keeps Tab and Shift+Tab cycling inside the open More sheet (issue #972), wrapping from its last
+   * focusable element to its first and back. The modal dialog already makes the page inert; this
+   * only stops Tab leaving the sheet for the browser's own controls.
    */
   containFocus(event: KeyboardEvent): void {
-    const sheet = this.sheet?.nativeElement;
+    const sheet = this.sheet;
     if (event.key !== 'Tab' || sheet === undefined) {
       return;
     }
@@ -521,4 +560,25 @@ export function renderedCapabilities(state: MemberAccessState): CapabilitySet | 
   }
 
   return state.status === 'unread' ? NO_CAPABILITIES : undefined;
+}
+
+/**
+ * Opens the sheet as a modal dialog. A host without `showModal()` (the unit-test DOM) still gets an
+ * open dialog, so the sheet renders and can be tested; every browser the app supports has it, and
+ * the browser run in `e2e/visual/dashboard-redesign.visual.ts` is what proves the page is inert.
+ */
+function openModal(dialog: HTMLDialogElement): void {
+  if (typeof dialog.showModal === 'function') {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute('open', '');
+  }
+}
+
+function closeModal(dialog: HTMLDialogElement): void {
+  if (typeof dialog.close === 'function') {
+    dialog.close();
+  } else {
+    dialog.removeAttribute('open');
+  }
 }

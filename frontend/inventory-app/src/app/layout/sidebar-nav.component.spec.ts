@@ -1112,8 +1112,9 @@ describe('SidebarNavComponent drawer behaviour (issue #391)', () => {
     const { host } = await render({ drawer: true });
     const sheet = host.querySelector<HTMLElement>('[data-testid="more-sheet"]');
 
-    expect(sheet?.getAttribute('role')).toBe('dialog');
-    expect(sheet?.getAttribute('aria-modal')).toBe('true');
+    expect(sheet?.tagName).toBe('DIALOG');
+    expect((sheet as HTMLDialogElement).open).toBe(true);
+    expect(sheet?.getAttribute('aria-label')).toBe('Menu');
     expect(sheet?.querySelector('nav[aria-label="Primary"]')).not.toBeNull();
     expect(document.activeElement).toBe(host.querySelector('button[aria-label="Close navigation menu"]'));
     for (const group of ['Inventory', 'Purchases', 'Reports', 'Admin']) {
@@ -1138,11 +1139,40 @@ describe('SidebarNavComponent drawer behaviour (issue #391)', () => {
     expect(document.activeElement).toBe(last);
   });
 
+  /**
+   * The dialog's own close request (Escape, or a back gesture) is cancelled and reported, so the
+   * shell - not the browser - closes the menu and returns focus to the opener.
+   */
+  it('reports the dialog close request instead of letting the browser close it', async () => {
+    const { component, host } = await render({ drawer: true });
+    const dismissed = jest.fn();
+    component.dismissed.subscribe(dismissed);
+    const cancel = new Event('cancel', { cancelable: true });
+
+    host.querySelector('[data-testid="more-sheet"]')?.dispatchEvent(cancel);
+
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(dismissed).toHaveBeenCalledTimes(1);
+  });
+
+  it('dismisses on a click on the backdrop, and not on a click inside the sheet', async () => {
+    const { component, host } = await render({ drawer: true });
+    const dismissed = jest.fn();
+    component.dismissed.subscribe(dismissed);
+    const sheet = host.querySelector<HTMLElement>('[data-testid="more-sheet"]') as HTMLElement;
+
+    sheet.querySelector('nav')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(dismissed).not.toHaveBeenCalled();
+
+    sheet.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(dismissed).toHaveBeenCalledTimes(1);
+  });
+
   it('renders no sheet or dialog on a wide layout', async () => {
     const { host } = await render();
 
     expect(host.querySelector('[data-testid="more-sheet"]')).toBeNull();
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector('dialog')).toBeNull();
   });
 
   it('reports every navigation so the shell can dismiss a narrow drawer', async () => {

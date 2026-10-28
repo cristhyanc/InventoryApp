@@ -16,18 +16,9 @@
     <app-role-preview-banner />
     <div class="flex flex-1 items-stretch">
       <!--
-        The backdrop sits above the top bar (z-30), which now follows it inside the content column,
-        and below the drawer (z-40).
+        On a narrow layout the menu is a modal dialog (issue #972) whose own ::backdrop dims the
+        page and dismisses it on a click, so the shell renders no backdrop of its own.
       -->
-      @if (isSidebarDrawer && isSidebarOpen) {
-        <button
-          type="button"
-          aria-label="Close navigation menu"
-          class="fixed inset-0 z-[35] bg-md-dark/40"
-          (click)="closeSidebar()"
-        ></button>
-      }
-
       @if (isSidebarVisible) {
         <app-sidebar-nav
           [navId]="sidebarId"

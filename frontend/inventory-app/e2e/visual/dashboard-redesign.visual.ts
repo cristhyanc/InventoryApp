@@ -1,4 +1,4 @@
-import { Page, Route, expect, test } from '@playwright/test';
+import { Locator, Page, Route, expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -11,7 +11,8 @@ import { join, resolve } from 'node:path';
  * two sites (one with a deliberately long name), three machines, seven reorder products and one
  * pending restock sync - so no business data, account name or credential can appear in a capture.
  *
- * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule.
+ * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule,
+ * and the More sheet's modality is exercised in the browser at 390px from both of its openers.
  * It runs once, in the `desktop-1440` project, and sets each width itself.
  */
 const screenshotDirectory = resolve(__dirname, '..', '..', '..', '..', 'docs', 'screenshots', 'issue-972');
@@ -269,6 +270,101 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       await page.keyboard.press('Escape');
       await expect(sheet).toHaveCount(0);
       await expect(page.getByTestId('bottom-nav-more')).toBeFocused();
+    });
+  }
+
+  /**
+   * The More sheet is a modal dialog, and these prove it in a real browser rather than by its
+   * attributes: while it is open the page behind it can be neither focused nor activated, Tab never
+   * leaves it, and closing it - by Escape, Close or the backdrop - returns focus to whichever
+   * control opened it. Both openers are covered: More in the bottom bar and the top bar's menu
+   * button.
+   */
+  const openers: readonly { name: string; open: (page: Page) => Locator }[] = [
+    { name: 'More in the bottom bar', open: (page) => page.getByTestId('bottom-nav-more') },
+    { name: 'the top-bar menu button', open: (page) => page.getByRole('button', { name: 'Open navigation menu' }) }
+  ];
+
+  for (const opener of openers) {
+    test.describe(`More sheet modality, opened from ${opener.name}`, () => {
+      async function openSheet(page: Page): Promise<{ control: Locator; sheet: Locator }> {
+        await openDashboard(page, 390);
+        // Tag the control first: the top-bar button's accessible name changes once the sheet opens.
+        await opener.open(page).evaluate((element) => element.setAttribute('data-e2e-opener', ''));
+        const control = page.locator('[data-e2e-opener]');
+        await control.click();
+        const sheet = page.getByTestId('more-sheet');
+        await expect(sheet).toBeVisible();
+        await expect(sheet.getByRole('button', { name: 'Close navigation menu' })).toBeFocused();
+        return { control, sheet };
+      }
+
+      const focusIsInSheet = (page: Page) =>
+        page.evaluate(() => document.querySelector('[data-testid="more-sheet"]')?.contains(document.activeElement) ?? false);
+
+      test('keeps focus inside through repeated Tab and Shift+Tab', async ({ page }) => {
+        await openSheet(page);
+        const stops = await page.getByTestId('more-sheet').locator('a[href], button:not([disabled])').count();
+
+        for (let press = 0; press < stops + 3; press++) {
+          await page.keyboard.press('Tab');
+          expect(await focusIsInSheet(page)).toBe(true);
+        }
+        for (let press = 0; press < stops + 3; press++) {
+          await page.keyboard.press('Shift+Tab');
+          expect(await focusIsInSheet(page)).toBe(true);
+        }
+      });
+
+      test('lets nothing behind it take focus or be activated', async ({ page }) => {
+        const { sheet } = await openSheet(page);
+
+        // Programmatic focus on background controls is refused while the page is inert.
+        const backgroundFocus = await page.evaluate(() => {
+          const targets = [
+            document.querySelector<HTMLElement>('[data-testid="bottom-nav-more"]'),
+            document.querySelector<HTMLElement>('[data-testid="reorder-view-all"]'),
+            document.querySelector<HTMLElement>('app-user-menu button')
+          ];
+          return targets.map((target) => {
+            target?.focus();
+            return document.activeElement === target;
+          });
+        });
+        expect(backgroundFocus).toEqual([false, false, false]);
+        expect(await focusIsInSheet(page)).toBe(true);
+
+        // A pointer press where a background control sits lands on the backdrop: it dismisses the
+        // sheet and does not reach the control (the user menu stays closed, the page stays put).
+        const userMenu = page.locator('app-user-menu button[aria-haspopup="true"]');
+        const box = await userMenu.boundingBox();
+        expect(box).not.toBeNull();
+        await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+        await expect(sheet).toHaveCount(0);
+        await expect(userMenu).not.toHaveAttribute('aria-expanded', 'true');
+        await expect(page).toHaveURL(/\/$/);
+      });
+
+      test('returns focus to its opener on Escape', async ({ page }) => {
+        const { control, sheet } = await openSheet(page);
+
+        await page.keyboard.press('Escape');
+
+        await expect(sheet).toHaveCount(0);
+        await expect(control).toBeFocused();
+        // The page is interactive again: a background control takes focus.
+        await page.getByTestId('reorder-view-all').focus();
+        await expect(page.getByTestId('reorder-view-all')).toBeFocused();
+      });
+
+      test('returns focus to its opener from Close', async ({ page }) => {
+        const { control, sheet } = await openSheet(page);
+
+        await sheet.getByRole('button', { name: 'Close navigation menu' }).click();
+
+        await expect(sheet).toHaveCount(0);
+        await expect(control).toBeFocused();
+      });
     });
   }
 });

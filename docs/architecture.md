@@ -8740,10 +8740,18 @@ over nothing. The sidebar renders an expanded heading as a visible `h2`, and a c
 **Narrow layout.** Below the wide breakpoint `AppComponent` renders `BottomNavComponent`, whose
 shortcuts are `shortcutsOf(navigationFor(...))` — Dashboard, Pick List, Sites and the Inventory
 group's first page — so the bar can only offer an entry the member's own menu offers, with the same
-lock summary. Its More control opens the existing sidebar drawer as a bottom sheet
-(`role="dialog"`, `aria-modal`): a sticky Close header, a scrolling body, safe-area padding, Tab
-contained in the sheet, Escape closing it, and focus returned to the control that opened it
-(`openSidebarFrom`). Groups start open in the sheet so its whole menu can be scrolled.
+lock summary. Its More control, like the top bar's menu button, opens the existing sidebar drawer
+as a bottom sheet: a native `<dialog>` opened with `showModal()`, so the browser makes the rest of
+the page inert — no pointer, programmatic focus or assistive-technology navigation reaches it while
+the sheet is open. The sheet has a sticky Close header, a scrolling body and safe-area padding;
+`containFocus` keeps Tab and Shift+Tab cycling inside it; the dialog's own close request (Escape) is
+cancelled and reported, and a click on its `::backdrop` dismisses it, so the shell always closes it.
+`closeSidebar` removes the dialog before returning focus to the control that opened it
+(`openSidebarFrom`, or the top-bar button), because nothing behind a modal dialog can take focus.
+Groups start open in the sheet so its whole menu can be scrolled. The browser run in
+`e2e/visual/dashboard-redesign.visual.ts` proves the modality from both openers: focus starts inside,
+repeated Tab and Shift+Tab stay inside, background controls refuse focus and a press over one only
+dismisses the sheet, and Escape and Close return focus to the opener.
 
 **Styles.** The shell and the Dashboard use the `rr` tokens and `font-rr` of issue #954 through
 Tailwind utilities in their own templates. No global class changed meaning and no other

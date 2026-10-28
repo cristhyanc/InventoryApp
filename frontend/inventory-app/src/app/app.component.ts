@@ -438,9 +438,15 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   closeSidebar(): void {
+    if (!this.isSidebarOpen) {
+      return;
+    }
     this.isSidebarOpen = false;
     const opener = this.sidebarOpener;
     this.sidebarOpener = null;
+    // On a narrow layout the menu is a modal dialog (issue #972) that keeps the rest of the page
+    // inert while it is open, so it is removed first; only then can the opener take focus back.
+    this.changeDetector.detectChanges();
     (opener ?? this.sidebarToggle?.nativeElement)?.focus();
   }
 

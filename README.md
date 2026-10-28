@@ -437,9 +437,11 @@ Businesses and Supplier Presets; nobody else does. Locked entries are shown exac
 [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 
 **On a phone** a bottom bar offers Dashboard, Pick List, Sites and Inventory — only those your role
-already has in its menu — and **More**, which opens the whole menu as a sheet from the bottom. The
-sheet scrolls to its last entry, keeps a **Close** button at the top, keeps clear of the phone's
-home indicator, keeps keyboard focus inside itself, closes with Escape, and returns focus to More.
+already has in its menu — and **More**, which opens the whole menu as a sheet from the bottom (the
+top bar's menu button opens the same sheet). While it is open the page behind it cannot be clicked,
+focused or reached by a screen reader. The sheet scrolls to its last entry, keeps a **Close** button
+at the top, keeps clear of the phone's home indicator, keeps keyboard focus inside itself, closes
+with Escape, Close or a tap on the dimmed page, and returns focus to the button that opened it.
 
 ## Roles and capabilities
 

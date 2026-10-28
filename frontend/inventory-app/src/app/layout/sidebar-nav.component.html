@@ -1,21 +1,25 @@
 <!--
-  On a narrow layout the menu is the "More" sheet (issue #972): a modal dialog that rises from the
-  bottom of the screen above the bottom navigation, with the whole permitted menu scrolling under
-  a sticky heading and Close control. On a wide layout it is the sidebar, exactly as before. Both
+  On a narrow layout the menu is the "More" sheet (issue #972): a native <dialog> opened with
+  showModal(), so the page behind it is inert, rising from the bottom of the screen with the whole
+  permitted menu scrolling under a sticky heading and Close control. Its ::backdrop dims the page
+  and a click there dismisses it. On a wide layout it is the sidebar, exactly as before. Both
   render the same `<nav>` below, so the two can never offer different destinations.
+
+  The UA dialog box (centred, padded, bordered, width-capped) is reset so it sits flush along the
+  bottom edge; it is display:none until open, then a column whose body scrolls.
 -->
 @if (drawer) {
-  <div
+  <dialog
     #sheet
-    role="dialog"
-    aria-modal="true"
     aria-label="Menu"
-    class="fixed inset-x-0 bottom-0 z-40 flex max-h-[85vh] flex-col overflow-hidden rounded-t-2xl bg-white font-rr text-rr-navy shadow-md-lg"
+    class="fixed inset-x-0 bottom-0 top-auto m-0 hidden max-h-[85vh] w-full max-w-none flex-col overflow-hidden rounded-t-2xl border-0 bg-white p-0 font-rr text-rr-navy shadow-md-lg backdrop:bg-md-dark/40 open:flex"
     data-testid="more-sheet"
     (keydown)="containFocus($event)"
+    (cancel)="onSheetCancel($event)"
+    (click)="onSheetClick($event)"
   >
     <ng-container *ngTemplateOutlet="navigationPanel" />
-  </div>
+  </dialog>
 } @else {
   <ng-container *ngTemplateOutlet="navigationPanel" />
 }
