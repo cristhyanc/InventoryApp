@@ -143,19 +143,23 @@
       head surface itself separates the header from the body, as it does in every other #410 table;
       a collapsed border between <thead> and <tbody> would scroll away with the body, and #410
       defines no shadow token for that rule.
+
+      The table sizes to its columns (w-auto) instead of filling the card, so spare width is not
+      handed to the widest content: Product, MDB Code, Storage Qty and Total to Pick stay as narrow as
+      their content, with compact padding, and the product name wraps inside a bounded block.
     -->
     <div data-testid="pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
-      <table class="table">
+      <table class="table w-auto">
         <thead>
           <tr>
-            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('name')">
+            <th scope="col" class="table-cell sm:px-3 sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('name')">
               <button type="button" class="hover:underline" (click)="sortBy('name')">{{ sortLabel('Product', 'name') }}</button>
             </th>
-            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
+            <th scope="col" class="table-cell sm:px-3 sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
               <button type="button" class="hover:underline" (click)="sortBy('mdbCode')">{{ sortLabel('MDB Code', 'mdbCode') }}</button>
             </th>
-            <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Storage Qty</th>
-            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
+            <th scope="col" class="table-cell sm:px-3 table-num sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Storage Qty</th>
+            <th scope="col" class="table-cell sm:px-3 sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
             @for (machineId of appliedMachineIds; track machineId) {
               <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
             }
@@ -164,17 +168,19 @@
         <tbody>
           @for (product of visibleProducts(); track product.productId) {
             <tr class="table-row">
-              <td class="table-cell">
-                {{ product.productName }}
-                @if (product.storageShortageQuantity > 0) {
-                  <span data-testid="storage-shortage-badge" class="badge badge-danger ml-2">
-                    Storage short {{ product.storageShortageQuantity }}
-                  </span>
-                }
+              <td class="table-cell sm:px-3">
+                <div data-testid="pick-list-product-name" class="min-w-[8rem] max-w-[14rem]">
+                  {{ product.productName }}
+                  @if (product.storageShortageQuantity > 0) {
+                    <span data-testid="storage-shortage-badge" class="badge badge-danger mt-1 block w-fit">
+                      Storage short {{ product.storageShortageQuantity }}
+                    </span>
+                  }
+                </div>
               </td>
-              <td data-testid="pick-list-mdb-code" class="table-cell text-md-gray-800">{{ product.mdbCode ?? '—' }}</td>
-              <td data-testid="pick-list-storage-qty" class="table-cell table-num text-md-gray-800">{{ product.storageQuantityInStock }}</td>
-              <td class="table-cell font-semibold text-md-gray-800">{{ product.totalQuantityToPick }}</td>
+              <td data-testid="pick-list-mdb-code" class="table-cell sm:px-3 text-md-gray-800">{{ product.mdbCode ?? '—' }}</td>
+              <td data-testid="pick-list-storage-qty" class="table-cell sm:px-3 table-num text-md-gray-800">{{ product.storageQuantityInStock }}</td>
+              <td class="table-cell sm:px-3 font-semibold text-md-gray-800">{{ product.totalQuantityToPick }}</td>
               @for (machineId of appliedMachineIds; track machineId) {
                 @if (cellFor(product, machineId); as cell) {
                   <td class="table-cell">

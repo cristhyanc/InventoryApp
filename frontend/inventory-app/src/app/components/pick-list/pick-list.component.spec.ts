@@ -894,6 +894,43 @@ describe('PickListComponent rendered structure', () => {
     }
   });
 
+  it('sizes the Product, MDB Code, Storage Qty and Total to Pick columns to their content instead of stretching them across the card', async () => {
+    const pickList = jest.fn(() => of(pickListResult({
+      products: [{
+        productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 1, totalQuantityToPick: 4, storageShortageQuantity: 3,
+        machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 6, targetQuantity: 10, quantityToPick: 4 }]
+      }]
+    })));
+    const { host, requireElement, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    // The shared .table fills its container, which hands spare width to the widest content. This
+    // table sizes to its columns instead, so leftover width stays empty to the right.
+    expect(Array.from(requireElement('table').classList)).toEqual(expect.arrayContaining(['table', 'w-auto']));
+
+    // The four fixed columns keep the compact padding at every breakpoint; machine columns do not.
+    const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
+    const cells = Array.from(host.querySelectorAll<HTMLTableCellElement>('tbody tr:first-child td'));
+    for (const cell of [...headers.slice(0, 4), ...cells.slice(0, 4)]) {
+      expect(Array.from(cell.classList)).toContain('sm:px-3');
+    }
+    expect(Array.from(headers[4].classList)).not.toContain('sm:px-3');
+    expect(Array.from(cells[4].classList)).not.toContain('sm:px-3');
+
+    // The product name wraps inside a bounded block, with the shortage badge on its own line below it.
+    const nameBlock = requireElement('[data-testid="pick-list-product-name"]');
+    expect(cells[0].contains(nameBlock)).toBe(true);
+    expect(Array.from(nameBlock.classList)).toEqual(expect.arrayContaining(['min-w-[8rem]', 'max-w-[14rem]']));
+    expect(nameBlock.textContent).toContain('Coke');
+    const badge = requireElement('[data-testid="storage-shortage-badge"]');
+    expect(nameBlock.contains(badge)).toBe(true);
+    expect(badge.textContent?.trim()).toBe('Storage short 3');
+    expect(Array.from(badge.classList)).toEqual(expect.arrayContaining(['badge', 'badge-danger', 'block', 'w-fit']));
+    expect(Array.from(badge.classList)).not.toContain('ml-2');
+  });
+
   it('a product-only Apply filters the visible rows without an extra Pick List request', async () => {
     const pickList = jest.fn(() => of(pickListResult()));
     const { openDropdown, checkOption, applyFilters, host } = await render(undefined, undefined, pickList);
