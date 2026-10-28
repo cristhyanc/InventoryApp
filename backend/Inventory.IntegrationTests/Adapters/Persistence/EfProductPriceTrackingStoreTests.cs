@@ -600,15 +600,14 @@ public class EfProductPriceTrackingStoreTests
         Assert.Equal("coca-cola  classic", untouched.SearchName);
         Assert.Equal("375 ML", untouched.UnitLabel);
 
-        // Their match still supplies that master product; mine does not.
+        // Their match still supplies that master product to the collector's work list, which since
+        // issue #924 reads across businesses under the denied scope a collector request carries; mine
+        // no longer does, which the suspended mapping above already shows.
         Assert.Equal(
             [master],
-            (await fixture.WorkListStoreFor(fixture.SecondBusinessId)
+            (await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None))
                 .Select(tracked => tracked.Id));
-        Assert.Empty(
-            await fixture.WorkListStoreFor(fixture.FirstBusinessId)
-                .ListTrackedMasterProductsAsync(CancellationToken.None));
     }
 
     /// <summary>
