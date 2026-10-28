@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 
 namespace Inventory.Infrastructure.Models;
@@ -132,6 +133,26 @@ public class SupplierPreset
     /// compares.</para>
     /// </summary>
     public string? PriceConnectorKey { get; set; }
+
+    /// <summary>
+    /// How old an observed price of this supplier may be and still be compared, in hours (issue
+    /// #925).
+    ///
+    /// <para><strong>The limit lives on the supplier master record precisely so no code names a
+    /// supplier.</strong> The owner's decision of 27 October 2026 is 30 hours for a supplier checked
+    /// daily and 102 for BIG W, which is checked on Thursday and Sunday; both are the longest
+    /// expected gap between two checks plus a six-hour margin, so a run that starts a little later
+    /// than yesterday's does not mark every price stale. A supplier whose schedule changes is an edit
+    /// to this column, and a supplier added later needs none.</para>
+    ///
+    /// <para>It defaults to <c>SupplierPriceFreshnessPolicy.DailyCheckLimitHours</c>, because daily
+    /// is what the collector does unless somebody records otherwise, and
+    /// <c>AddSupplierPriceObservations</c> set the twice-weekly limit on the one shipped record whose
+    /// cadence the owner stated. <c>SupplierPriceFreshnessPolicy</c> owns the arithmetic and the
+    /// accepted range; this column stores one supplier's answer.</para>
+    /// </summary>
+    public int PriceCheckFreshnessHours { get; set; } =
+        SupplierPriceFreshnessPolicy.DailyCheckLimitHours;
 
     /// <summary>When the preset was created, from the application clock.</summary>
     public DateTime CreatedAtUtc { get; set; }

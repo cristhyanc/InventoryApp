@@ -80,10 +80,15 @@ public class AddSupplierPriceCatalogueMigrationTests
             // The four tables arrive empty. Nothing is seeded here, unlike AddSupplierPresets: a
             // master product is a description somebody has to decide, not a list this application can
             // ship on anybody's behalf.
-            Assert.Empty(await after.MasterProducts.AsNoTracking().ToListAsync());
-            Assert.Empty(await after.SupplierListings.AsNoTracking().ToListAsync());
-            Assert.Empty(await after.ProductMatchSuggestions.AsNoTracking().ToListAsync());
-            Assert.Empty(await after.ProductPriceTrackings.AsNoTracking().ToListAsync());
+            //
+            // Counted over the connection rather than through the DbSets, because this database stops
+            // at this migration while the EF model describes the schema after every one of them -
+            // SupplierListings has carried three more columns since issue #925, and a DbSet read here
+            // would fail on a column this database correctly does not have yet.
+            foreach (var table in CreatedTables)
+            {
+                Assert.Equal(0L, await MigrationSchemaProbe.RowCountAsync(connection, table));
+            }
 
             // And the rows that were already there are exactly as they were - the product's costing
             // values above all, which are the ones AGENTS.md treats as financial data.

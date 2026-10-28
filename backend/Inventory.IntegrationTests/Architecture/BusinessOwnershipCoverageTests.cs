@@ -100,6 +100,17 @@ public class BusinessOwnershipCoverageTests
     /// <see cref="The_named_entity_is_business_owned"/> below. See docs/architecture.md § Supplier
     /// price catalogue.</para>
     ///
+    /// <para><see cref="PriceCollectorRun"/> and <see cref="SupplierPriceObservation"/> are the sixth
+    /// and seventh, and the reviewed ownership decision on issue #925 (parent #817). The structural
+    /// reason is the one above, one step further on: a product is looked up at a supplier once for
+    /// every business, so <em>what that supplier charged</em>, and the run that read it, are facts
+    /// about that supplier's shelf and about no business either. Neither has a <c>BusinessId</c> to
+    /// carry, and an observation names the listing it is a price of rather than anybody who wanted
+    /// that price - which is what keeps one business from learning that another is tracking anything.
+    /// What a business does with those prices is its own <see cref="ProductPriceTracking"/> mapping
+    /// and the comparison the summary of #930 will run for it. See docs/architecture.md § Supplier
+    /// price observations and comparison.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
     /// by the ownership mechanism, because there is no ownership here to enforce. <strong>Reading has
@@ -122,6 +133,8 @@ public class BusinessOwnershipCoverageTests
         typeof(MasterProduct),
         typeof(SupplierListing),
         typeof(ProductMatchSuggestion),
+        typeof(PriceCollectorRun),
+        typeof(SupplierPriceObservation),
     ];
 
     /// <summary>
@@ -146,21 +159,23 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are five, each
+    /// about no business is a tenancy decision, not an implementation detail. There are seven, each
     /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
-    /// (#873), and the shared price catalogue's master products, supplier listings and match
-    /// suggestions (#923) - and a sixth one arriving is the change this assertion exists to make
-    /// visible.
+    /// (#873), the shared price catalogue's master products, supplier listings and match suggestions
+    /// (#923), and the collector runs and observed prices of #925 - and an eighth one arriving is the
+    /// change this assertion exists to make visible.
     /// </summary>
     [Fact]
-    public void Exactly_five_entities_are_declared_platform_tables() =>
+    public void Exactly_seven_entities_are_declared_platform_tables() =>
         Assert.Equal(
             [
                 "MasterProduct",
                 "PlatformOptionVisibility",
+                "PriceCollectorRun",
                 "ProductMatchSuggestion",
                 "SupplierListing",
                 "SupplierPreset",
+                "SupplierPriceObservation",
             ],
             PlatformEntities
                 .Select(type => type.Name)
