@@ -489,6 +489,9 @@ PlatformAdmin__ObjectId
 ExternalId__Instance
 ExternalId__TenantId
 ExternalId__ClientId
+PriceCollector__TenantId
+PriceCollector__ClientId
+PriceCollector__RunExpiryHours
 SelfServiceOnboarding__Enabled
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
@@ -505,9 +508,36 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 
 `ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId` name the one Microsoft Entra External ID tenant whose tokens the API also trusts (issue #710) — see [Customer identity: a second trusted issuer](#customer-identity-a-second-trusted-issuer-issue-710). None of the three is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. All three empty is the shipped, fail-closed state: the second bearer scheme is not registered, every token from that authority is rejected, and workforce sign-in is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. The values are read once at startup, so filling them in takes effect on the next restart.
 
+`PriceCollector__TenantId` and `PriceCollector__ClientId` name the one scheduled price collector whose app-only token the API trusts (issue #924) — see [The scheduled price collector](#the-scheduled-price-collector-issue-924) below. Neither is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. Both empty is the shipped, fail-closed state: the collector bearer scheme accepts nothing, the collector policy denies everybody, and `GET /api/price-collector/work` answers `401` to every request while every other endpoint is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. `PriceCollector__RunExpiryHours` is how long an issued run stays open unless the collector reports back; blank, unparseable or outside 1–168 means the owner's default of **6 hours**, logged when it falls back, and it is never read as "no expiry". All three are read once at startup, so filling them in takes effect on the next restart.
+
 `SelfServiceOnboarding__Enabled` switches [self-service business onboarding](#starting-a-business-self-service-onboarding) on (issue #541). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off `POST /api/onboarding/business-applications` answers `404` and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can create a business in a deployment that has not deliberately opened the door. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on in production is a human decision with a verified release gate in front of it — [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541).
 
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
+
+## The scheduled price collector (issue #924)
+
+The shared supplier price catalogue is collected by a scheduled GitHub Actions workflow, and it signs in to this API **without a person and without a stored password**. This section is the human setup that makes that possible; the boundary itself is [docs/architecture.md § The price collector's app-only path](docs/architecture.md#the-price-collectors-app-only-path-issue-924) and [§ Collector work list](docs/architecture.md#collector-work-list-issue-924).
+
+```text
+GET /api/price-collector/work   issues one run and answers the work it is to do
+```
+
+**What has shipped.** The authentication path and the work list. The results endpoint (#937), the matches endpoint (#941), the workflow itself (#929) and the collector prompt and scripts (#926, #927) are separate tasks.
+
+**The shipped state trusts no collector.** `PriceCollector__TenantId` and `PriceCollector__ClientId` are **empty** in `appsettings.json`, which is both the fail-closed state and the rollback lever: with them empty the collector endpoint answers `401` to every request, issues nothing, and no other endpoint is affected in any way. A half-filled or malformed section means the same thing and is logged as a startup error. Neither identifier is a credential — the API validates with Entra's published signing keys and the collector holds no secret either — so they are ordinary application settings with no Key Vault reference, and no real identifier may be committed. Supply them with `dotnet user-secrets` locally or application settings in Azure; see [Configuration and secrets](#configuration-and-secrets).
+
+Human-controlled portal setup this depends on (no agent may perform any of it, and the API deliberately does not check that it was done):
+
+- **Add the app role to the API app registration.** Value exactly `PriceCollector.Run`, with **Applications** as the allowed member type — an application role, not a delegated scope. The API compares the value ordinally, so the spelling has to match.
+- **Register the collector application** in the owner's tenant, as its own app registration. It needs **no** client secret, **no** certificate and **no** redirect URI.
+- **Add a federated credential** on that registration for GitHub OIDC workload identity federation, scoped to this repository and to the workflow's own environment or branch — that scoping is what stops another repository obtaining the same token. Nothing about it is stored here.
+- **Assign the role**: grant the collector application the `PriceCollector.Run` **application** permission on the API registration, and grant admin consent for it. An unassigned application authenticates nowhere: a token without the role is `401`.
+- **Set the two App Service settings** to that tenant's GUID and that registration's application id, and restart. Optionally set `PriceCollector__RunExpiryHours`.
+- Decide the API registration's accepted access-token version if you have not already; the API pins both audience spellings (`<client-id>` and `api://<client-id>`), so either validates, and reads the calling application from `azp` or `appid` accordingly.
+
+**Why both identifiers are pinned, and not just the role.** The workforce scheme is multi-tenant (`TenantId: common`), so another Entra tenant can consent to this API and assign `PriceCollector.Run` to an application of its own — and Microsoft signs that tenant's tokens with the same key set, so the signature is genuine. Pinning `tid` is what makes that somebody else's token, and pinning `azp`/`appid` is what stops the owner's *other* workloads. The token must also carry **no delegated scope at all**, because Entra puts an assigned application role in a signed-in person's token too: that rule is what stops a person impersonating the collector.
+
+**What the collector can and cannot reach.** One route. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. The response carries no business id, business name, business product id or price. The two tables it writes, the collector runs and their work items, belong to no business. Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
 
 ## Platform diagnostics API
 

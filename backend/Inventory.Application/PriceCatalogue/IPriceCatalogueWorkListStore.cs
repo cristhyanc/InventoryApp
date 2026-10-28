@@ -1,4 +1,5 @@
 using Inventory.Domain.PriceCatalogue;
+using Inventory.Domain.Suppliers;
 
 namespace Inventory.Application.PriceCatalogue;
 
@@ -24,6 +25,68 @@ namespace Inventory.Application.PriceCatalogue;
 public sealed record ProductAwaitingMatch(string WaitingKey, string SearchName, string UnitLabel);
 
 /// <summary>
+/// One supplier master record as the collector work list reads it (issue #924, with the master
+/// fields of #931): what it is called, how its prices are collected, and when it was last checked.
+///
+/// <para><strong>Whether it is due is not this record's answer.</strong> The record carries the
+/// stored facts - enabled, connector, cadence, last successful check - and
+/// <see cref="PriceCollectorWorkListPolicy.IsSupplierDue"/> is the one place they become a decision,
+/// so no adapter and no controller holds a second version of the cadence rule.</para>
+/// </summary>
+/// <param name="SupplierPresetId">The supplier master record's own key.</param>
+/// <param name="Name">Its name, which is what a collector's log and a reviewer read.</param>
+/// <param name="IsEnabled">Whether the platform still suggests it.</param>
+/// <param name="PriceConnector">
+/// How its prices are collected, or <see langword="null"/> when nothing collects them.
+/// </param>
+/// <param name="PriceConnectorKey">
+/// What that connector needs in order to know which retailer it is for, or <see langword="null"/>
+/// where the route takes none.
+/// </param>
+/// <param name="SiteUrl">
+/// The supplier's own site, which is the endpoint the JB Metro route talks to, or
+/// <see langword="null"/>.
+/// </param>
+/// <param name="PricesIncludeGst">Whether the prices it publishes include GST.</param>
+/// <param name="PriceCheckFreshnessHours">Its own stored freshness limit, which is its cadence.</param>
+/// <param name="LastCheckedAtUtc">
+/// The most recent instant any of its listings was checked successfully, or <see langword="null"/>
+/// while none ever has been.
+/// </param>
+public sealed record CollectableSupplier(
+    int SupplierPresetId,
+    string Name,
+    bool IsEnabled,
+    SupplierPriceConnector? PriceConnector,
+    string? PriceConnectorKey,
+    string? SiteUrl,
+    bool PricesIncludeGst,
+    int PriceCheckFreshnessHours,
+    DateTime? LastCheckedAtUtc);
+
+/// <summary>
+/// One master product as the matching list of #941 needs it (issue #924): its id and its description,
+/// and deliberately nothing else - no listing, no price, no provenance and nothing about any
+/// business.
+/// </summary>
+public sealed record CatalogueMasterProduct(
+    long Id,
+    string Brand,
+    string Name,
+    decimal SizeValue,
+    MasterProductSizeUnit SizeUnit);
+
+/// <summary>
+/// One master product a Super Admin has refused for one waiting key (issue #924): a suggestion that
+/// was rejected, or undone after it had been applied.
+///
+/// <para>It is sent so the matcher of #941 does not propose that pair again. A person who rejected a
+/// match once must not have to reject it every run, which is why the refusals outlive the refusal
+/// itself (see <c>ProductMatchSuggestion</c>).</para>
+/// </summary>
+public sealed record RefusedMasterProduct(string WaitingKey, long MasterProductId);
+
+/// <summary>
 /// One supplier's listing of a tracked master product (issue #923), as the collector work list reads
 /// it.
 /// </summary>
@@ -38,6 +101,11 @@ public sealed record ProductAwaitingMatch(string WaitingKey, string SearchName, 
 /// Whether that barcode is the unit's or the carton's, or <see langword="null"/> when there is none.
 /// </param>
 /// <param name="MatchStatus">Whether the listing is proposed, confirmed or flagged for review.</param>
+/// <param name="LastCheckedAtUtc">
+/// When the listing was last checked <em>successfully</em>, or <see langword="null"/> while it never
+/// has been (issue #924). It is the listing's own instant rather than its supplier's, because that is
+/// what tells the collector which of a supplier's known listings it has already priced today.
+/// </param>
 public sealed record TrackedSupplierListing(
     long Id,
     int SupplierPresetId,
@@ -47,7 +115,8 @@ public sealed record TrackedSupplierListing(
     int? UnitsPerPack,
     string? Barcode,
     BarcodeScope? BarcodeScope,
-    SupplierListingMatchStatus MatchStatus);
+    SupplierListingMatchStatus MatchStatus,
+    DateTime? LastCheckedAtUtc);
 
 /// <summary>
 /// One master product that at least one business is tracking, with the listings the catalogue holds
@@ -90,14 +159,24 @@ public sealed record TrackedMasterProduct(
 /// so case and spacing cannot make two searches of one product - and tracked master products are
 /// returned once each however many mappings point at them.</para>
 ///
-/// <para><strong>What this port does not do is widen anything.</strong> The adapter behind it reads
-/// the mappings through the ordinary tenant query filters, with no <c>IgnoreQueryFilters</c>, no raw
-/// SQL and no unscoped context: under a business's scope it answers for that business, and the
-/// deduplication is over whatever rows the reader may already see. <strong>Which caller may read the
-/// work list across businesses, and how it authenticates, is #924's own reviewed decision</strong> -
-/// collector authentication is explicitly out of this issue's scope, and nothing here grants it. See
-/// AGENTS.md § Tenant ownership and data isolation, whose cross-business rules this issue leaves
-/// exactly as they are.</para>
+/// <para><strong>This is the one cross-business read of the collector surface, and issue #924 is the
+/// reviewed decision that made it one.</strong> Issue #923 left the adapter reading the mappings
+/// through the ordinary tenant query filters and recorded that "which caller may read the work list
+/// across businesses, and how it authenticates, is #924's own reviewed decision". That decision is
+/// made: the collector is not an actor and has no business, its request carries a <em>denied</em>
+/// <c>BusinessScope</c>, and the only tenant-owned rows it may reach are the three text columns of
+/// <c>ProductPriceTracking</c> that this port's answers are built from - a waiting key, a search name
+/// and a unit label, plus the master product id a mapping names. None of those says whose product it
+/// is, which is the whole of what makes the read safe. The adapter makes exactly one
+/// <c>IgnoreQueryFilters</c> statement per read, over that projection and no other, and it is bounded
+/// by authorization rather than by ownership: the only endpoint that calls it is
+/// <c>GET /api/price-collector/work</c>, which no member, Super Admin or support session can reach.
+/// See AGENTS.md § Tenant ownership and data isolation and docs/architecture.md § Collector work
+/// list.</para>
+///
+/// <para><strong>Everything else it reads is platform data.</strong> The supplier master records, the
+/// master products, the listings and the match refusals carry no owner at all, so there is no filter
+/// for them to ignore and no business for them to leak.</para>
 /// </summary>
 public interface IPriceCatalogueWorkListStore
 {
@@ -122,5 +201,56 @@ public interface IPriceCatalogueWorkListStore
     /// listings.</para>
     /// </summary>
     Task<IReadOnlyList<TrackedMasterProduct>> ListTrackedMasterProductsAsync(
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Every supplier master record the platform holds, with its collection route, its cadence and
+    /// its most recent successful check (issue #924), ordered by its own key.
+    ///
+    /// <para>All of them, not the due ones: whether a supplier is due is
+    /// <see cref="PriceCollectorWorkListPolicy.IsSupplierDue"/>'s decision, and an adapter that
+    /// filtered by it would be a second copy of that rule in SQL. It is a platform read - a supplier
+    /// master record is about no business - so no filter applies to it either way.</para>
+    /// </summary>
+    Task<IReadOnlyList<CollectableSupplier>> ListCollectableSuppliersAsync(
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The master products a waiting product may be matched against (issue #924, for the automatic
+    /// and tentative matching of #941): id, brand, name, size and unit, and nothing else.
+    ///
+    /// <para>At most <paramref name="limit"/> of them, ordered by comparison key then row key, so a
+    /// catalogue larger than the limit yields the same deterministic prefix on two reads rather than
+    /// an arbitrary one. The caller sends this list only while something is actually waiting.</para>
+    /// </summary>
+    Task<IReadOnlyList<CatalogueMasterProduct>> ListMasterProductsForMatchingAsync(
+        int limit,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The listings already discovered under each of <paramref name="waitingKeys"/> and still held
+    /// there - the proposals a previous run found and nothing has matched yet - keyed by that waiting
+    /// key.
+    ///
+    /// <para>They are sent so the collector can recognise what it already found for a search it is
+    /// about to run again, the same way the known listings under a matched product exist. A platform
+    /// read: a listing is a fact about a supplier's shelf.</para>
+    /// </summary>
+    Task<IReadOnlyDictionary<string, IReadOnlyList<TrackedSupplierListing>>>
+        ListWaitingListingsAsync(
+            IReadOnlyCollection<string> waitingKeys,
+            CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The master products a Super Admin has rejected, or undone after applying, for each of
+    /// <paramref name="waitingKeys"/> (issue #924), ordered by key and then by master product.
+    ///
+    /// <para>A refusal that proposed creating a <em>new</em> master product names none, so it is not
+    /// in this answer: there is no master product id to send, and what to do about such a refusal is
+    /// #941's matching decision rather than this list's. Nothing here says who rejected anything or
+    /// when.</para>
+    /// </summary>
+    Task<IReadOnlyList<RefusedMasterProduct>> ListRefusedMasterProductsAsync(
+        IReadOnlyCollection<string> waitingKeys,
         CancellationToken cancellationToken);
 }

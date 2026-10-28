@@ -22,6 +22,7 @@ using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -165,6 +166,12 @@ public static class ApplicationServiceCollectionExtensions
         // business, so neither one's scope selects anything.
         services.AddScoped<GetOptionVisibility>();
         services.AddScoped<SetHistoricalGstClassificationVisibility>();
+
+        // Issuing the price collector's work list (issue #924, parent #817). Scoped like the
+        // platform-admin surfaces above, and for the same reason: it reads and writes through the
+        // request's own AppDbContext, which for a collector request carries a denied business scope
+        // because the collector is not an actor and has no business at all.
+        services.AddScoped<IssuePriceCollectorWorkList>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are

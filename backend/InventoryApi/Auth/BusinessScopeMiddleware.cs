@@ -5,6 +5,7 @@ using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth.PlatformAdmin;
+using InventoryApi.Auth.PriceCollector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -47,7 +48,19 @@ namespace InventoryApi.Auth;
 /// (docs/architecture.md § Super Admin businesses API). "Unrestricted request-scoped context"
 /// remains something no request path can obtain.</para>
 ///
-/// <para><strong>A second endpoint-specific exception (issue #523).</strong> An endpoint marked
+/// <para><strong>A second endpoint-specific exception, and the only caller that is not a person
+/// (issue #924).</strong> The price collector endpoints are marked with
+/// <see cref="PriceCollector.PriceCollectorEndpointAttribute"/> and may proceed without a business
+/// membership - but only after this middleware re-evaluates
+/// <see cref="PriceCollector.PriceCollectorPolicy"/> and it succeeds on this request, for exactly the
+/// reason the platform-admin bypass above re-evaluates its own. There is nothing for such a request's
+/// scope to be resolved to: the collector is an application authenticated by an app-only token, it
+/// holds no membership anywhere, and it carries a <em>denied</em> scope throughout. The one
+/// tenant-owned thing it may read is the business-free search text of
+/// <c>IPriceCatalogueWorkListStore</c>'s reviewed cross-business read - see
+/// docs/architecture.md § Collector work list.</para>
+///
+/// <para><strong>A third endpoint-specific exception (issue #523).</strong> An endpoint marked
 /// with <see cref="MembershipNotRequiredEndpointAttribute"/> may proceed without a membership for
 /// any authenticated caller, because it is the family of endpoints a person with no usable
 /// membership has to be able to call - <c>GET /api/me/account-state</c>, which tells them which
@@ -58,7 +71,7 @@ namespace InventoryApi.Auth;
 /// endpoint reads no business data at all, and the marker does nothing on any other endpoint. An
 /// endpoint carrying both markers stays a diagnostics endpoint, decided by the policy above.</para>
 ///
-/// <para><strong>A third way to resolve a business, and the only one that is not a membership
+/// <para><strong>A second way to resolve a business, and the only one that is not a membership
 /// (issue #551).</strong> A platform administrator who presents the session id of an active support
 /// session of their own, for a business that is still active, has that business published as
 /// <see cref="BusinessScopeState.SupportReadOnly"/>: the tenant query filters treat it exactly as
@@ -135,6 +148,30 @@ public sealed class BusinessScopeMiddleware
             _logger.LogWarning(
                 "Platform-admin access denied by the business-scope middleware: the "
                     + "platform-admin policy did not succeed for this request.");
+
+            await WriteForbiddenAsync(context, BusinessAccessDenialReason.MembershipMissing);
+            return;
+        }
+
+        if (context.GetEndpoint()?.Metadata.GetMetadata<PriceCollectorEndpointAttribute>() is not null)
+        {
+            var collector = await authorizationService.AuthorizeAsync(
+                context.User,
+                resource: null,
+                PriceCollectorPolicy.Name);
+
+            if (collector.Succeeded)
+            {
+                // The scope stays denied on purpose, and there is nothing it could be resolved to:
+                // the collector is an application with no membership in any business. See the class
+                // remarks.
+                await _next(context);
+                return;
+            }
+
+            _logger.LogWarning(
+                "Price collector access denied by the business-scope middleware: the price "
+                    + "collector policy did not succeed for this request.");
 
             await WriteForbiddenAsync(context, BusinessAccessDenialReason.MembershipMissing);
             return;

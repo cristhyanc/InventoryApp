@@ -114,22 +114,37 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     public IProductPriceTrackingStore DeniedTrackingStore() =>
         new EfProductPriceTrackingStore(Track(TestAppDbContext.Denied(_options)));
 
-    /// <summary>The work-list store scoped to one business, which sees that business's mappings only.</summary>
+    /// <summary>The work-list store on a context scoped to one business.</summary>
     public IPriceCatalogueWorkListStore WorkListStoreFor(int businessId) =>
         new EfPriceCatalogueWorkListStore(Track(TestAppDbContext.For(_options, businessId)));
 
     /// <summary>
-    /// The work-list store over a context that sees every business's mappings.
+    /// The work-list store as a <strong>collector request</strong> reaches it: the real adapter on a
+    /// context whose caller has no business at all.
     ///
-    /// <para>This is setup-shaped rather than request-shaped, deliberately and visibly: the adapter
-    /// reads the mappings through the ordinary tenant filters and adds no cross-business read path of
-    /// its own, so the deduplication <em>across</em> businesses - which is what issue #923's third and
-    /// seventh criteria are about - is stated here over a context that already sees both. Which caller
-    /// may read the work list that way, and how it authenticates, is #924's own reviewed decision; no
-    /// request path in this application can do it today.</para>
+    /// <para>That is request-shaped, and it is the shape that matters since issue #924. A collector
+    /// request carries a denied <c>BusinessScope</c>, so the central filter matches none of the
+    /// mappings - which is exactly why the two mapping reads make that issue's reviewed
+    /// <c>IgnoreQueryFilters</c> statement over the mappings' business-free text columns. The
+    /// deduplication <em>across</em> businesses, which is what issue #923's third and seventh criteria
+    /// are about, is therefore asserted here over the scope the one endpoint that reaches this adapter
+    /// actually has.</para>
+    /// </summary>
+    public IPriceCatalogueWorkListStore DeniedWorkListStore() =>
+        new EfPriceCatalogueWorkListStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>
+    /// The work-list store over a context that sees every business's rows without any filter at all.
+    /// Setup-shaped, kept so a test can state that the reviewed read answers the same thing a
+    /// completely unfiltered one does - the read is bounded by the collector endpoint's
+    /// authorization, not by the context it is given.
     /// </summary>
     public IPriceCatalogueWorkListStore UnscopedWorkListStore() =>
         new EfPriceCatalogueWorkListStore(Track(TestAppDbContext.Unrestricted(_options)));
+
+    /// <summary>The collector run store as a collector request reaches it: a denied scope.</summary>
+    public IPriceCollectorRunStore DeniedRunStore() =>
+        new EfPriceCollectorRunStore(Track(TestAppDbContext.Denied(_options)));
 
     public async Task<int> SeedBusinessAsync(string name)
     {
@@ -307,6 +322,168 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         row.UpdatedAtUtc = CreatedAt;
 
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// The same fixture with <strong>no supplier the collector could search</strong>: every shipped
+    /// supplier master record's collection route is cleared, so the only due suppliers in a test are
+    /// the ones that test configures itself.
+    ///
+    /// <para>The nine shipped presets arrive with the migrations and most of them carry a real
+    /// connector, which is right for production and useless for a test about which suppliers are due:
+    /// every assertion would be about rows a migration chose. Clearing the route is the smallest way
+    /// to say "this test owns the supplier list", and it is a write to platform configuration rather
+    /// than to anybody's data.</para>
+    /// </summary>
+    public static async Task<PriceCatalogueFixture> CreateWithNoCollectableSuppliersAsync()
+    {
+        var fixture = await CreateAsync();
+
+        await using var db = TestAppDbContext.Unrestricted(fixture._options);
+
+        foreach (var preset in await db.SupplierPresets.ToListAsync())
+        {
+            preset.PriceConnector = null;
+            preset.PriceConnectorKey = null;
+        }
+
+        await db.SaveChangesAsync();
+
+        return fixture;
+    }
+
+    /// <summary>
+    /// Records how one supplier master record's prices are collected (issue #931's fields), which is
+    /// what makes it due on a collector run at all. No port writes these - the Super Admin's preset
+    /// edit does, and it is out of #924's scope - so the state is arranged directly and only the reads
+    /// are under test.
+    /// </summary>
+    public async Task SetSupplierCollectionAsync(
+        int supplierPresetId,
+        SupplierPriceConnector? connector,
+        string? connectorKey = null,
+        string? url = null,
+        int freshnessHours = SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+        bool isEnabled = true)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var preset = await db.SupplierPresets.SingleAsync(row => row.Id == supplierPresetId);
+        preset.PriceConnector = connector;
+        preset.PriceConnectorKey = connectorKey;
+        preset.Url = url;
+        preset.PriceCheckFreshnessHours = freshnessHours;
+        preset.IsEnabled = isEnabled;
+        preset.UpdatedAtUtc = CreatedAt;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Records a match suggestion against one waiting key, which no port writes either: the matcher of
+    /// #941 and the review of #928 do, and both are out of #924's scope.
+    /// </summary>
+    public async Task SeedMatchSuggestionAsync(
+        string waitingKey,
+        long masterProductId,
+        ProductMatchSuggestionStatus status)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        db.ProductMatchSuggestions.Add(new ProductMatchSuggestion
+        {
+            WaitingKey = waitingKey,
+            MasterProductId = masterProductId,
+            Confidence = 0.9m,
+            Reason = "Seeded by the fixture.",
+            CollectorRun = "fixture",
+            Status = status,
+            CreatedAtUtc = CreatedAt,
+            UpdatedAtUtc = CreatedAt,
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Records one open collector run directly, for the constraint tests: the run store issues one
+    /// with its whole work list, and what those tests are about is a single row the database refuses.
+    /// </summary>
+    public async Task<long> SeedRunAsync(DateTime startedAtUtc)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var run = new PriceCollectorRun
+        {
+            StartedAtUtc = startedAtUtc,
+            ExpiresAtUtc = PriceCollectorRunPolicy.ExpiresAt(
+                startedAtUtc, PriceCollectorRunPolicy.DefaultExpiryHours),
+            Status = PriceCollectorRunStatus.Running,
+        };
+
+        db.PriceCollectorRuns.Add(run);
+        await db.SaveChangesAsync();
+
+        return run.Id;
+    }
+
+    /// <summary>
+    /// Inserts one work item directly, so the check constraints and the unique index are what refuse
+    /// a row rather than the use case that would never have built it.
+    /// </summary>
+    public async Task InsertWorkItemAsync(
+        long priceCollectorRunId,
+        int supplierPresetId,
+        long? masterProductId,
+        string? waitingKey,
+        PriceCollectorWorkItemOutcome? outcome = null,
+        DateTime? outcomeAtUtc = null)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        db.PriceCollectorWorkItems.Add(new PriceCollectorWorkItem
+        {
+            PriceCollectorRunId = priceCollectorRunId,
+            SupplierPresetId = supplierPresetId,
+            MasterProductId = masterProductId,
+            WaitingKey = waitingKey,
+            IssuedAtUtc = CreatedAt,
+            Outcome = outcome,
+            OutcomeAtUtc = outcomeAtUtc,
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Deletes one collector run, so a restricted reference can be proved to refuse it.</summary>
+    public async Task DeleteRunAsync(long priceCollectorRunId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        db.PriceCollectorRuns.Remove(
+            await db.PriceCollectorRuns.SingleAsync(run => run.Id == priceCollectorRunId));
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Every column of one table, read from the schema rather than from the model.</summary>
+    public Task<List<string>> ColumnNamesAsync(string table) =>
+        MigrationSchemaProbe.ColumnNamesAsync(_connection, table);
+
+    /// <summary>Every collector run in the database, from outside the boundary, for verifying a write.</summary>
+    public async Task<IReadOnlyList<PriceCollectorRun>> AllRunsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.PriceCollectorRuns.AsNoTracking().OrderBy(run => run.Id).ToListAsync();
+    }
+
+    /// <summary>Every issued work item in the database, on the same terms.</summary>
+    public async Task<IReadOnlyList<PriceCollectorWorkItem>> AllWorkItemsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.PriceCollectorWorkItems.AsNoTracking().OrderBy(item => item.Id).ToListAsync();
     }
 
     /// <summary>Every mapping in the database, from outside the boundary, for verifying a write.</summary>

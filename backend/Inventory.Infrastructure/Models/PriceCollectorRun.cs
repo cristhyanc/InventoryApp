@@ -23,8 +23,9 @@ namespace Inventory.Infrastructure.Models;
 /// constraint of 27 October 2026: a listing missing from a day's results keeps its last good price.
 /// </para>
 ///
-/// <para>Nothing writes this table yet. The collector import of #937 is its writer; this issue is the
-/// schema, the rules and nothing else.</para>
+/// <para>Issue #924 is what first writes this table: issuing the collector's work list creates one
+/// run, with its own <see cref="PriceCollectorWorkItem"/> rows, and expires any run still open. The
+/// collector import of #937 is what later records the counts and the finished status.</para>
 /// </summary>
 public class PriceCollectorRun
 {
@@ -46,8 +47,23 @@ public class PriceCollectorRun
     public DateTime? CompletedAtUtc { get; set; }
 
     /// <summary>
+    /// When this run stops being open unless the collector reports back (issue #924):
+    /// <c>PriceCollectorRunPolicy.ExpiresAt</c> of the start instant and the deployment's configured
+    /// run lifetime, which defaults to six hours.
+    ///
+    /// <para>It is stored rather than derived from the start instant and today's setting, so a run
+    /// says for itself how long it was given: editing the setting must not retroactively expire or
+    /// revive work that was already issued. It is nullable only because the runs #925 shipped the
+    /// schema for carry no lifetime - the migration invents none for them, exactly as every other
+    /// additive migration here refuses to - and a run with no expiry is one nothing expires
+    /// automatically.</para>
+    /// </summary>
+    public DateTime? ExpiresAtUtc { get; set; }
+
+    /// <summary>
     /// How the run ended. <see cref="PriceCollectorRunStatus.Running"/> until it does, and then one
-    /// of three distinct outcomes - a run that failed is not a run that found nothing.
+    /// of four distinct outcomes - a run that failed is not a run that found nothing, and an expired
+    /// run is one that never reported at all (issue #924).
     /// </summary>
     public PriceCollectorRunStatus Status { get; set; } = PriceCollectorRunStatus.Running;
 
