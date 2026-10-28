@@ -23,6 +23,7 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
@@ -207,6 +208,15 @@ public static class InfrastructureServiceCollectionExtensions
         // approval's transaction on it - which is also the only way its narrow provisioning lease
         // can be taken at all.
         services.AddScoped<IBusinessSupplierProvisioningStore, EfBusinessSupplierProvisioningStore>();
+        // The shared supplier price catalogue (issue #923, parent #817). Two adapters because they
+        // answer two different kinds of question: one business's own mappings, which are ordinary
+        // tenant-owned data read and written through the central filters and the ownership stamp; and
+        // the deduplicated work list the collector of #924 will be built from, which reads the
+        // platform catalogue tables and carries no business identity out. Both are scoped on the
+        // request's own AppDbContext like every adapter here - neither is given an unscoped context,
+        // and neither makes an IgnoreQueryFilters statement.
+        services.AddScoped<IProductPriceTrackingStore, EfProductPriceTrackingStore>();
+        services.AddScoped<IPriceCatalogueWorkListStore, EfPriceCatalogueWorkListStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
