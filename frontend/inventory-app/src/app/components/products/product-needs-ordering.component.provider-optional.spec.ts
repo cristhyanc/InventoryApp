@@ -10,8 +10,10 @@ import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { ToastService } from '../../services/toast.service';
 import { Product, ReorderAlertListing } from '../../models/models';
+import { SupplierPriceBasis } from '../../models/cheapest-supplier';
 
 /**
  * Products -> Needs Ordering for a business whose Nayax connection is not usable, or whose Nayax
@@ -83,6 +85,12 @@ async function render(listing$: Observable<ReorderAlertListing>) {
               }
             ])
         }
+      },
+      // The Cheapest supplier column (issue #930) is observed supplier pricing and has nothing to
+      // do with the provider either, so it is answered here and stays present in both modes.
+      {
+        provide: CheapestSupplierService,
+        useValue: { getSummary: () => of({ displayBasis: SupplierPriceBasis.InclusiveOfGst, products: [] }) }
       },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },

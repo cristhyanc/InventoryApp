@@ -20,6 +20,14 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 import { AccessService } from '../../access/access.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
+import {
+  CHEAPEST_SUPPLIERS_NOT_READ_YET,
+  CheapestSuppliers,
+  CheapestSuppliersComponent,
+  cheapestSupplierFor
+} from '../shared/cheapest-supplier/cheapest-suppliers.component';
+import { CheapestSupplierCellComponent } from '../shared/cheapest-supplier/cheapest-supplier-cell.component';
+import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
 
 // No `price` column since issue #792 (A2 of #786): a product carries no selling price, and no
 // `status` column since issue #790 (D of #786): the list holds only active products, so a column
@@ -56,7 +64,7 @@ type PurchaseCostState = 'idle' | 'loading' | 'loaded' | 'unavailable';
 @Component({
   selector: 'app-product-needs-ordering',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, CheapestSuppliersComponent, CheapestSupplierCellComponent],
   templateUrl: './product-needs-ordering.component.html',
   styles: [
     `
@@ -158,8 +166,20 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
   private purchaseCosts = new Map<number, ProductPurchaseCostSummary>();
 
-  /** The ids the displayed list is made of, which is what Retry asks about again. */
-  private listedProductIds: readonly number[] = [];
+  /**
+   * The ids the displayed list is made of, which is what Retry asks about again - and what the
+   * Cheapest supplier column's own read is given (issue #930). It is a fresh array on every load,
+   * so that component's `ngOnChanges` sees a new product set rather than a mutated one.
+   */
+  listedProductIds: readonly number[] = [];
+
+  /**
+   * Where the Cheapest supplier column's one read stands, as
+   * {@link CheapestSuppliersComponent} publishes it (issue #930). The page lays the answers out in
+   * its own cells and decides nothing about them: the component owns the request, the batching,
+   * the failure message and Retry.
+   */
+  cheapestSuppliers: CheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
 
   private readonly purchaseCostRequest$ = new Subject<readonly number[]>();
   private readonly search$ = new Subject<string>();
@@ -312,6 +332,15 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
    */
   purchaseCost(product: Product): ProductPurchaseCostSummary | undefined {
     return this.purchaseCostState === 'loaded' ? this.purchaseCosts.get(product.id) : undefined;
+  }
+
+  /**
+   * This product's cheapest-supplier answer, or `undefined` while the read has not established one
+   * (issue #930). The cell tells the states apart from the read's own state, never from this being
+   * absent.
+   */
+  cheapestSupplier(product: Product): CheapestSupplierProduct | undefined {
+    return cheapestSupplierFor(this.cheapestSuppliers, product.id);
   }
 
   /**

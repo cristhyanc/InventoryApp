@@ -1504,6 +1504,10 @@ video {
   margin: 1rem;
 }
 
+.m-auto {
+  margin: auto;
+}
+
 .-mx-2 {
   margin-left: -0.5rem;
   margin-right: -0.5rem;
@@ -1822,6 +1826,10 @@ video {
 
 .w-\[14rem\] {
   width: 14rem;
+}
+
+.w-\[calc\(100\%-2rem\)\] {
+  width: calc(100% - 2rem);
 }
 
 .w-auto {
@@ -3030,6 +3038,10 @@ img {
     text-align: left;
     font-size: 0.875rem;
   }
+}
+
+.backdrop\:bg-md-gray-800\/50::backdrop {
+  background-color: rgb(38 38 38 / 0.5);
 }
 
 .first\:border-t-0:first-child {
