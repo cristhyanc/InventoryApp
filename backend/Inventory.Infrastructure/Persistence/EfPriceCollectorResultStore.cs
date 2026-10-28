@@ -6,6 +6,12 @@ using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
+// How one supplier listing is named while a batch is being decided: the supplier master record and
+// that supplier's own product id, which is the unique pair the catalogue keys a listing by. It is
+// deliberately not the listing's database id - a listing a batch has just created has none until
+// the batch is saved, and two rows of one batch can reach it.
+using ListingKey = (int SupplierPresetId, string SupplierProductId);
+
 namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
@@ -28,6 +34,16 @@ namespace Inventory.Infrastructure.Persistence;
 /// was free; here they cannot, and the unique index on
 /// <c>(run, work item, supplier product id)</c> is the backstop underneath that if they somehow
 /// did.</para>
+///
+/// <para><strong>What a listing currently costs is chronological, and so is the reading it holds.</strong>
+/// The collector decides how it splits its searches into batches and in which order it sends them,
+/// and two work items of one run - one issued for a master product, one for a waiting key since
+/// matched to it - can report the same supplier listing. So the order rows arrive in says nothing
+/// about the order they were read in: a listing's latest accepted observation, its last successful
+/// check, its last price change and the one reading it is holding pending are replaced only by a
+/// <em>later</em> reading (<see cref="SupplierListingPriceStatePolicy.ReplacesCurrentReading"/>),
+/// and the price band is the band of whatever that current reading is. An earlier reading is still
+/// kept and still answered; what it does not do is move any of them backwards.</para>
 ///
 /// <para><strong>Every rule is the Domain's, and this class is the sequence.</strong>
 /// <see cref="PriceCollectorResultPolicy"/> decides what becomes of a row,
@@ -75,34 +91,35 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         var context = await LoadAsync(run, batch, cancellationToken).ConfigureAwait(false);
 
         List<DecidedRow> decided = [];
-        List<(SupplierListing Listing, SupplierPriceObservation Observation, DateTime ObservedAtUtc,
-            decimal? PreviousPrice)> accepted = [];
 
         foreach (var submission in batch.Rows)
         {
-            decided.Add(Decide(run, submission, context, asOfUtc, accepted));
+            decided.Add(Decide(run, submission, context, asOfUtc));
         }
 
         // One save for every listing, pending reading, observation, suggestion and recorded row the
         // batch produced, so the keys the second save needs are assigned together.
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        foreach (var (listing, observation, observedAtUtc, previousPrice) in accepted)
+        // The current-price state the batch's accepted readings left each listing in, written once
+        // per listing now that the observations have their keys. Which reading that is was decided
+        // chronologically while the rows were being decided, never by whichever row came last.
+        foreach (var state in context.CurrentPriceState.Values)
         {
-            listing.LatestObservationId = observation.Id;
-            listing.LastCheckedAtUtc = observedAtUtc;
+            state.Listing.LatestObservationId = state.Observation.Id;
+            state.Listing.LastCheckedAtUtc = state.ObservedAtUtc;
 
             // A re-read that finds the same price moves the check instant and leaves the change
             // instant alone - the two answer different questions (SupplierListingPriceStatePolicy).
-            if (previousPrice != observation.PackPrice)
+            if (state.PriceChangeAtUtc is { } priceChangeAtUtc)
             {
-                listing.LastPriceChangeAtUtc = observedAtUtc;
+                state.Listing.LastPriceChangeAtUtc = priceChangeAtUtc;
             }
 
             SupplierListingPriceStatePolicy.RequireConsistentState(
-                listing.LatestObservationId,
-                listing.LastCheckedAtUtc,
-                listing.LastPriceChangeAtUtc);
+                state.Listing.LatestObservationId,
+                state.Listing.LastCheckedAtUtc,
+                state.Listing.LastPriceChangeAtUtc);
         }
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -393,9 +410,10 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
     /// <summary>
     /// Everything one batch needs, read once: the run's cited work items (and any work item of
     /// another run it cited, so that can be said rather than guessed), the outcomes already
-    /// recorded for those keys, the listings those supplier product ids name, the last accepted
-    /// price of each, the pending readings they hold, the supplier master records involved and the
-    /// master product each waiting key has been matched to.
+    /// recorded for those keys, the listings those supplier product ids name, the accepted reading
+    /// each currently holds as its price and when that was read, the pending readings they hold,
+    /// the supplier master records involved and the master product each waiting key has been
+    /// matched to.
     /// </summary>
     private async Task<SubmissionContext> LoadAsync(
         PriceCollectorRun run,
@@ -435,12 +453,36 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             .Distinct()
             .ToList();
 
-        var lastAcceptedPrices = await _db.SupplierPriceObservations
+        var latestObservations = await _db.SupplierPriceObservations
             .AsNoTracking()
             .Where(observation => latestObservationIds.Contains(observation.Id))
-            .Select(observation => new { observation.Id, observation.PackPrice })
-            .ToDictionaryAsync(entry => entry.Id, entry => entry.PackPrice, cancellationToken)
+            .Select(observation => new
+            {
+                observation.Id,
+                observation.PackPrice,
+                observation.ObservedAtUtc,
+            })
+            .ToDictionaryAsync(entry => entry.Id, entry => entry, cancellationToken)
             .ConfigureAwait(false);
+
+        // Keyed by the listing rather than by the observation, because what every row needs is
+        // "what does this listing currently cost, and when was that read" - and because the key is
+        // the supplier and its own product id, a listing this batch is about to create answers it
+        // too, which a database id cannot do before the batch is saved.
+        Dictionary<ListingKey, AcceptedReading> currentAccepted = [];
+        Dictionary<long, ListingKey> listingKeys = [];
+
+        foreach (var listing in listings)
+        {
+            listingKeys[listing.Id] = (listing.SupplierPresetId, listing.SupplierProductId);
+
+            if (listing.LatestObservationId is { } latest
+                && latestObservations.TryGetValue(latest, out var observation))
+            {
+                currentAccepted[listingKeys[listing.Id]] =
+                    new AcceptedReading(observation.ObservedAtUtc, observation.PackPrice);
+            }
+        }
 
         var listingIds = listings.ConvertAll(listing => listing.Id);
 
@@ -483,8 +525,8 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
                 row => (row.PriceCollectorWorkItemId, row.SupplierProductId),
                 row => row),
             listings.ToDictionary(listing => (listing.SupplierPresetId, listing.SupplierProductId)),
-            lastAcceptedPrices,
-            pending.ToDictionary(reading => reading.SupplierListingId),
+            currentAccepted,
+            pending.ToDictionary(reading => listingKeys[reading.SupplierListingId]),
             suppliers.ToDictionary(supplier => supplier.SupplierPresetId),
             resolvedKeys,
             [.. existingSuggestionPairs.Select(pair => (pair.WaitingKey, pair.MasterProductId!.Value))]);
@@ -503,8 +545,7 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         PriceCollectorRun run,
         PriceCollectorResultRowSubmission submission,
         SubmissionContext context,
-        DateTime asOfUtc,
-        List<(SupplierListing, SupplierPriceObservation, DateTime, decimal?)> accepted)
+        DateTime asOfUtc)
     {
         string supplierProductId;
 
@@ -542,8 +583,7 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             supplierProductId,
             validated.Observed!,
             context,
-            asOfUtc,
-            accepted);
+            asOfUtc);
     }
 
     /// <summary>
@@ -708,8 +748,7 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         string supplierProductId,
         ObservedRow observed,
         SubmissionContext context,
-        DateTime asOfUtc,
-        List<(SupplierListing, SupplierPriceObservation, DateTime, decimal?)> accepted)
+        DateTime asOfUtc)
     {
         var resolvedMasterProductId = workItem.MasterProductId
             ?? (workItem.WaitingKey is { } ownKey ? context.ResolvedWaitingKeys[ownKey] : null);
@@ -747,13 +786,18 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             supplierProductId,
             observed,
             context,
-            accepted,
             asOfUtc);
     }
 
     /// <summary>
     /// What the Domain's decision for one validated row implies: the listing it creates or updates,
     /// the observation it accepts or the pending reading it holds instead, and the row's own outcome.
+    ///
+    /// <para><strong>The band is the band of what the listing currently costs</strong>, which is the
+    /// latest reading <em>observed</em> and not the last one delivered: a batch that has already
+    /// accepted a newer reading of this listing is what the next row of it is compared against, so
+    /// two searches of one listing cannot make the band depend on which of them was processed
+    /// first.</para>
     /// </summary>
     private DecidedRow ApplyDecision(
         PriceCollectorRun run,
@@ -763,13 +807,10 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         string supplierProductId,
         ObservedRow observed,
         SubmissionContext context,
-        List<(SupplierListing, SupplierPriceObservation, DateTime, decimal?)> accepted,
         DateTime asOfUtc)
     {
-        var previousPrice = listing?.LatestObservationId is { } latest
-            && context.LastAcceptedPrices.TryGetValue(latest, out var price)
-                ? price
-                : (decimal?)null;
+        var listingKey = (workItem.SupplierPresetId, supplierProductId);
+        var current = context.CurrentAccepted.GetValueOrDefault(listingKey);
 
         var decision = listing is null
             ? PriceCollectorResultPolicy.DecideForNewListing()
@@ -778,13 +819,13 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
                 IdentityOf(listing),
                 observed.Identity,
                 observed.PackPrice,
-                previousPrice);
+                current?.PackPrice);
 
         if (listing is null)
         {
             listing = NewListing(workItem, resolvedMasterProductId, supplierProductId, observed, asOfUtc);
             _db.SupplierListings.Add(listing);
-            context.Listings[(workItem.SupplierPresetId, supplierProductId)] = listing;
+            context.Listings[listingKey] = listing;
         }
         else
         {
@@ -796,41 +837,13 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             listing.MatchStatus = newStatus;
         }
 
-        SupplierPriceObservation? observation = null;
-
-        if (decision.RecordsAcceptedObservation)
-        {
-            observation = new SupplierPriceObservation
-            {
-                SupplierListing = listing,
-                PriceCollectorRunId = run.Id,
-                PackPrice = observed.PackPrice,
-                RegularPackPrice = observed.RegularPackPrice,
-                Currency = observed.Currency,
-                PriceBasis = observed.PriceBasis,
-                SupplierGstRate = observed.SupplierGstRate,
-                IsPromotion = observed.IsPromotion,
-                PromotionEndsAtUtc = observed.PromotionEndsAtUtc,
-                StockStatus = observed.StockStatus,
-                ObservedAtUtc = observed.ObservedAtUtc,
-                SourceReference = observed.SourceReference,
-                SourceUrl = observed.SourceUrl,
-                CreatedAtUtc = asOfUtc,
-            };
-
-            _db.SupplierPriceObservations.Add(observation);
-            accepted.Add((listing, observation, observed.ObservedAtUtc, previousPrice));
-
-            // An accepted price settles whatever disagreement was waiting on this listing.
-            if (context.Pending.Remove(listing.Id, out var resolved))
-            {
-                _db.SupplierListingPendingObservations.Remove(resolved);
-            }
-        }
+        var observation = decision.RecordsAcceptedObservation
+            ? AcceptObservation(context, listingKey, listing, run, observed, current, asOfUtc)
+            : null;
 
         if (decision.StoresPendingObservation)
         {
-            StorePending(context, listing, workItem, run, observed, decision.Reason!, asOfUtc);
+            StorePending(context, listingKey, listing, workItem, run, observed, decision.Reason!, asOfUtc);
         }
 
         return Record(
@@ -841,6 +854,77 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             listing,
             observation,
             asOfUtc);
+    }
+
+    /// <summary>
+    /// Stores one accepted reading as the append-only price it is, and says what it leaves the
+    /// listing currently costing.
+    ///
+    /// <para><strong>An accepted reading is always kept, and becomes the listing's current price
+    /// only when it is the latest one observed</strong>
+    /// (<see cref="SupplierListingPriceStatePolicy.ReplacesCurrentReading"/>). Otherwise the current
+    /// price, the last successful check and the last price change would move backwards whenever a
+    /// batch delivered an older reading after a newer one - two work items of one run can report the
+    /// same listing - which is the one thing that policy says may never happen. The state itself is
+    /// written after the save, because the observation has no key until then.</para>
+    /// </summary>
+    private SupplierPriceObservation AcceptObservation(
+        SubmissionContext context,
+        ListingKey listingKey,
+        SupplierListing listing,
+        PriceCollectorRun run,
+        ObservedRow observed,
+        AcceptedReading? current,
+        DateTime asOfUtc)
+    {
+        var observation = new SupplierPriceObservation
+        {
+            SupplierListing = listing,
+            PriceCollectorRunId = run.Id,
+            PackPrice = observed.PackPrice,
+            RegularPackPrice = observed.RegularPackPrice,
+            Currency = observed.Currency,
+            PriceBasis = observed.PriceBasis,
+            SupplierGstRate = observed.SupplierGstRate,
+            IsPromotion = observed.IsPromotion,
+            PromotionEndsAtUtc = observed.PromotionEndsAtUtc,
+            StockStatus = observed.StockStatus,
+            ObservedAtUtc = observed.ObservedAtUtc,
+            SourceReference = observed.SourceReference,
+            SourceUrl = observed.SourceUrl,
+            CreatedAtUtc = asOfUtc,
+        };
+
+        _db.SupplierPriceObservations.Add(observation);
+
+        if (SupplierListingPriceStatePolicy.ReplacesCurrentReading(
+            current?.ObservedAtUtc,
+            observed.ObservedAtUtc))
+        {
+            context.CurrentAccepted[listingKey] =
+                new AcceptedReading(observed.ObservedAtUtc, observed.PackPrice);
+
+            // The price change is carried from reading to reading rather than recomputed from the
+            // price the batch started with: a batch that moved the price and then re-read it
+            // unchanged did change the price, and at the first of the two instants.
+            var carried = context.CurrentPriceState.GetValueOrDefault(listingKey);
+
+            context.CurrentPriceState[listingKey] = new CurrentPriceState(
+                listing,
+                observation,
+                observed.ObservedAtUtc,
+                current is null || current.PackPrice != observed.PackPrice
+                    ? observed.ObservedAtUtc
+                    : carried?.PriceChangeAtUtc);
+        }
+
+        // An accepted price settles whatever disagreement was waiting on this listing.
+        if (context.Pending.Remove(listingKey, out var resolved))
+        {
+            _db.SupplierListingPendingObservations.Remove(resolved);
+        }
+
+        return observation;
     }
 
     /// <summary>The outcome of <see cref="ResolveWorkItem"/>: a work item to continue with, or a decided refusal.</summary>
@@ -945,9 +1029,26 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
     /// <summary>
     /// Keeps the reading as this listing's pending observation, replacing whatever was pending for
     /// it. One row per listing, which the unique index holds.
+    ///
+    /// <para><strong>The reading is found by the listing's own key - its supplier and that
+    /// supplier's product id - and never by its database id</strong>, which a listing this batch
+    /// has just created does not have until the batch is saved. Two searches of one run can reach
+    /// one listing: a work item issued for a master product and one issued for a waiting key since
+    /// matched to that product can report the same supplier product id in a single batch. Keyed by
+    /// the database id, the second row would have added a second reading against the same unsaved
+    /// listing, the unique index would have refused the save, and the whole batch - every unrelated
+    /// row in it included - would have been rolled back.</para>
+    ///
+    /// <para><strong>And only a later reading replaces the one being held</strong>
+    /// (<see cref="SupplierListingPriceStatePolicy.ReplacesCurrentReading"/>), for the same reason
+    /// an accepted price is chronological: the reading #928's reviewer is shown must be the latest
+    /// one read, not the last one delivered. The row is still answered and still recorded either
+    /// way, and the listing has already been flagged by the caller - what an earlier reading does
+    /// not do is overwrite a later one.</para>
     /// </summary>
     private void StorePending(
         SubmissionContext context,
+        ListingKey listingKey,
         SupplierListing listing,
         PriceCollectorWorkItem workItem,
         PriceCollectorRun run,
@@ -955,25 +1056,20 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         string reason,
         DateTime asOfUtc)
     {
-        SupplierListingPendingObservation? reading = null;
-
-        // A listing this batch has just created has no key yet, and no pending reading either -
-        // there is nothing to replace, so it always gets a new row.
-        if (listing.Id != 0)
-        {
-            context.Pending.TryGetValue(listing.Id, out reading);
-        }
+        context.Pending.TryGetValue(listingKey, out var reading);
 
         if (reading is null)
         {
             reading = new SupplierListingPendingObservation { SupplierListing = listing };
 
             _db.SupplierListingPendingObservations.Add(reading);
-
-            if (listing.Id != 0)
-            {
-                context.Pending[listing.Id] = reading;
-            }
+            context.Pending[listingKey] = reading;
+        }
+        else if (!SupplierListingPriceStatePolicy.ReplacesCurrentReading(
+            reading.ObservedAtUtc,
+            observed.ObservedAtUtc))
+        {
+            return;
         }
 
         reading.PriceCollectorRunId = run.Id;
@@ -1201,13 +1297,36 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         }
     }
 
+    /// <summary>
+    /// The reading one listing currently holds as its price: what it costs, and when that was read.
+    ///
+    /// <para>The instant is here because it is what decides whether the next reading replaces this
+    /// one, and the price is here because it is the band the next reading is judged against. Both
+    /// answers have to be the <em>same</em> reading's, which is why they are one value.</para>
+    /// </summary>
+    private sealed record AcceptedReading(DateTime ObservedAtUtc, decimal PackPrice);
+
+    /// <summary>
+    /// The current-price state one listing's accepted readings in this batch leave it in, held until
+    /// the save that gives the observation its key.
+    ///
+    /// <para><see cref="PriceChangeAtUtc"/> is <see langword="null"/> when this batch found the price
+    /// the listing already had, which leaves the listing's own last change where it was - a re-read
+    /// that finds the same price moves the check instant and nothing else.</para>
+    /// </summary>
+    private sealed record CurrentPriceState(
+        SupplierListing Listing,
+        SupplierPriceObservation Observation,
+        DateTime ObservedAtUtc,
+        DateTime? PriceChangeAtUtc);
+
     /// <summary>Everything one batch is decided against, read once before any of it is decided.</summary>
     private sealed record SubmissionContext(
         Dictionary<long, PriceCollectorWorkItem> WorkItems,
         Dictionary<(long WorkItemId, string SupplierProductId), PriceCollectorResultRow> AlreadyRecorded,
-        Dictionary<(int SupplierPresetId, string SupplierProductId), SupplierListing> Listings,
-        Dictionary<long, decimal> LastAcceptedPrices,
-        Dictionary<long, SupplierListingPendingObservation> Pending,
+        Dictionary<ListingKey, SupplierListing> Listings,
+        Dictionary<ListingKey, AcceptedReading> CurrentAccepted,
+        Dictionary<ListingKey, SupplierListingPendingObservation> Pending,
         Dictionary<int, SupplierFacts> Suppliers,
         Dictionary<string, long?> ResolvedWaitingKeys,
         HashSet<(string WaitingKey, long MasterProductId)> SuggestionPairs)
@@ -1218,5 +1337,11 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         /// refused rather than letting ordering decide which of the two was stored.
         /// </summary>
         public HashSet<(long WorkItemId, string SupplierProductId)> ClaimedInThisBatch { get; } = [];
+
+        /// <summary>
+        /// What each listing's accepted readings in this batch leave it currently costing, one entry
+        /// per listing however many of its readings arrived, written after the save.
+        /// </summary>
+        public Dictionary<ListingKey, CurrentPriceState> CurrentPriceState { get; } = [];
     }
 }

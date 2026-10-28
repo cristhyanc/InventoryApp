@@ -61,6 +61,39 @@ public static class SupplierListingPriceStatePolicy
         return latestObservationId is not null || lastPriceChangeAtUtc is null;
     }
 
+    /// <summary>
+    /// Whether a reading observed at <paramref name="candidateObservedAtUtc"/> replaces the state a
+    /// reading observed at <paramref name="currentObservedAtUtc"/> left behind - the listing's
+    /// latest accepted observation, its last successful check and its last price change, or the one
+    /// reading it is holding pending.
+    ///
+    /// <para><strong>Current means latest observed, not latest delivered.</strong> The collector
+    /// decides for itself how it splits its searches into batches and in which order it sends them,
+    /// and two searches of one run can report the same supplier listing; so the order readings
+    /// arrive in says nothing about the order they were read in. A listing's price, its freshness
+    /// and its last change may only ever move forwards, which is the same sentence this policy's
+    /// summary already states about an absence: a listing's price is replaced only by a
+    /// <em>later</em> accepted observation. A reading that was read earlier than the one already
+    /// recorded is kept - it is history, and an accepted one is still an accepted price in
+    /// <c>SupplierPriceObservations</c> - but it is not what this listing currently costs.</para>
+    ///
+    /// <para><strong>Equal instants keep what is already recorded</strong>, deliberately and by one
+    /// stated rule rather than by whichever row happened to be processed last: two readings of one
+    /// listing bearing the same observed instant are the same check as far as this catalogue can
+    /// tell, so the first one recorded stands and the second changes nothing. That makes a
+    /// resubmitted batch, and a batch whose rows were reordered in transit, leave exactly the same
+    /// state.</para>
+    /// </summary>
+    /// <param name="currentObservedAtUtc">
+    /// When the reading this listing currently holds was observed, or <see langword="null"/> while
+    /// it holds none - in which case the candidate is the first and replaces nothing.
+    /// </param>
+    /// <param name="candidateObservedAtUtc">When the reading being considered was observed.</param>
+    public static bool ReplacesCurrentReading(
+        DateTime? currentObservedAtUtc,
+        DateTime candidateObservedAtUtc) =>
+        currentObservedAtUtc is not { } current || candidateObservedAtUtc > current;
+
     /// <summary>Refuses a listing whose three price-check facts do not describe one coherent state.</summary>
     /// <exception cref="DomainValidationException">
     /// The observation and the check instant disagree, or a price change is recorded with no

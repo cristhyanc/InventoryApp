@@ -64,6 +64,42 @@ public class SupplierListingPriceStatePolicyTests
             refusal.Message);
     }
 
+    /// <summary>
+    /// The chronological rule (issue #937's repair): a listing holding no reading at all takes the
+    /// first one, a later reading replaces what is recorded, and an earlier one does not - the
+    /// order readings are delivered in says nothing about the order they were read in.
+    /// </summary>
+    [Theory]
+    [InlineData(null, 0, true)]
+    [InlineData(0, 1, true)]
+    [InlineData(0, -1, false)]
+    public void Only_a_later_reading_replaces_the_one_a_listing_holds(
+        int? currentOffsetMinutes,
+        int candidateOffsetMinutes,
+        bool replaces)
+    {
+        var current = currentOffsetMinutes is { } offset
+            ? Checked.AddMinutes(offset)
+            : (DateTime?)null;
+
+        Assert.Equal(
+            replaces,
+            SupplierListingPriceStatePolicy.ReplacesCurrentReading(
+                current,
+                Checked.AddMinutes(candidateOffsetMinutes)));
+    }
+
+    /// <summary>
+    /// And two readings bearing the same observed instant are the same check as far as this
+    /// catalogue can tell, so the one already recorded stands: equal is not later, stated once here
+    /// rather than decided by whichever row was processed last.
+    /// </summary>
+    [Fact]
+    public void A_reading_observed_at_the_same_instant_does_not_replace_the_recorded_one()
+    {
+        Assert.False(SupplierListingPriceStatePolicy.ReplacesCurrentReading(Checked, Checked));
+    }
+
     /// <summary>A price that was never observed cannot have changed.</summary>
     [Fact]
     public void A_price_change_with_no_observation_is_refused()

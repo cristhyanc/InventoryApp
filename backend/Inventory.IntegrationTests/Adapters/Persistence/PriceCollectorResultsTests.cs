@@ -602,7 +602,15 @@ public class PriceCollectorResultsTests
         Assert.True((await fixture.AllPendingObservationsAsync()).Count <= 1);
     }
 
-    /// <summary>A second held reading replaces the first rather than being appended beside it.</summary>
+    /// <summary>
+    /// A second held reading replaces the first rather than being appended beside it.
+    ///
+    /// <para>The two readings carry the instants they were read at, an hour apart, because
+    /// "replacing the previous pending one" is chronological: the reading a listing holds is the
+    /// latest one <em>observed</em> (<see cref="SupplierListingPriceStatePolicy.ReplacesCurrentReading"/>,
+    /// whose equal-instant rule is stated in <c>SupplierListingPriceStatePolicyTests</c>), and
+    /// <c>The_reading_a_listing_holds_is_the_latest_one_observed</c> is the other direction.</para>
+    /// </summary>
     [Fact]
     public async Task A_pending_observation_is_replaced_rather_than_appended()
     {
@@ -620,7 +628,12 @@ public class PriceCollectorResultsTests
         await SubmitAsync(
             fixture,
             firstRunId,
-            Row(firstWorkItemId, fixture.SupplierPresetId, "SKU-30", packPrice: 30m));
+            Row(
+                firstWorkItemId,
+                fixture.SupplierPresetId,
+                "SKU-30",
+                packPrice: 30m,
+                observedAtUtc: Observed.AddHours(-1)));
 
         var secondRunId = await fixture.SeedRunAsync(RunStarted, Expires);
         var secondWorkItemId = await fixture.SeedWorkItemAsync(secondRunId, cola, waitingKey: null);
@@ -632,6 +645,225 @@ public class PriceCollectorResultsTests
         var pending = Assert.Single(await fixture.AllPendingObservationsAsync());
         Assert.Equal(31m, pending.PackPrice);
         Assert.Equal(secondRunId, pending.PriceCollectorRunId);
+    }
+
+    #endregion
+
+    #region Two searches of one listing, and the order they were read in
+
+    /// <summary>
+    /// Two work items of one run can reach the same supplier listing: one issued for a master
+    /// product, one issued for a waiting key that has since been matched to that very product. When
+    /// both report the same **new** supplier product id in one batch, that is one listing and one
+    /// held reading - the unique index says so - and <strong>both rows are still answered</strong>,
+    /// because a batch is reported per row and a collector that found one pack twice must not lose
+    /// the other hundred and ninety-nine.
+    /// </summary>
+    [Fact]
+    public async Task Two_work_items_reporting_one_new_sku_in_one_batch_hold_one_listing_and_one_reading()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var (runId, masterWorkItemId, keyWorkItemId, cola) = await SeedTwoSearchesOfOneProductAsync(
+            fixture);
+
+        var receipt = await SubmitAsync(
+            fixture,
+            runId,
+            Row(masterWorkItemId, fixture.SupplierPresetId, "SKU-NEW"),
+            Row(keyWorkItemId, fixture.SupplierPresetId, "SKU-NEW"));
+
+        // Two receipts, both held: a newly discovered pack is never a price.
+        Assert.Equal(2, receipt!.Pending.Count);
+        Assert.Empty(receipt.Rejected);
+
+        var listing = Assert.Single(await fixture.AllListingsAsync());
+        Assert.Equal(cola, listing.MasterProductId);
+        Assert.All(receipt.Pending, row => Assert.Equal(listing.Id, row.ListingId));
+
+        // One listing, one held reading - and both rows recorded, so a repeat of either is answered
+        // with this outcome rather than decided again.
+        var reading = Assert.Single(await fixture.AllPendingObservationsAsync());
+        Assert.Equal(listing.Id, reading.SupplierListingId);
+        Assert.Equal(2, (await fixture.AllResultRowsAsync()).Count);
+        Assert.Empty(await fixture.AllObservationsAsync());
+    }
+
+    /// <summary>
+    /// A reading that was read <em>earlier</em> but delivered in a later batch is kept as the
+    /// accepted price it is, and does not move the listing's current price, its freshness or its
+    /// last change backwards.
+    ///
+    /// <para>Its band is the band of the price the listing currently holds - the latest reading
+    /// observed, which is the one the first batch accepted - and not of the price that reading
+    /// replaced.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_earlier_reading_delivered_in_a_later_batch_does_not_move_the_current_price()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var (runId, masterWorkItemId, keyWorkItemId, cola) = await SeedTwoSearchesOfOneProductAsync(
+            fixture);
+
+        var listingId = await fixture.SeedIdentifiedListingAsync(
+            cola,
+            waitingKey: null,
+            "SKU-30",
+            SupplierListingMatchStatus.Confirmed);
+
+        var earlierRunId = await fixture.SeedRunAsync(RunStarted.AddDays(-1), null);
+        await fixture.SeedAcceptedPriceAsync(
+            listingId,
+            earlierRunId,
+            30m,
+            RunStarted.AddDays(-1),
+            SupplierPriceBasis.ExclusiveOfGst);
+
+        await SubmitAsync(
+            fixture,
+            runId,
+            Row(masterWorkItemId, fixture.SupplierPresetId, "SKU-30", packPrice: 33m));
+
+        var current = Assert.Single(
+            (await fixture.AllObservationsAsync()).Where(row => row.PackPrice == 33m));
+
+        // 64 is inside the band of the 33 this run accepted (ceiling 66) and outside the band of
+        // the 30 it replaced (ceiling 60), so accepting it is what proves the band followed the
+        // listing's current accepted price rather than a stale one.
+        var receipt = await SubmitAsync(
+            fixture,
+            runId,
+            Row(
+                keyWorkItemId,
+                fixture.SupplierPresetId,
+                "SKU-30",
+                packPrice: 64m,
+                observedAtUtc: Observed.AddHours(-1)));
+
+        var accepted = Assert.Single(receipt!.Accepted);
+        Assert.Equal(64m, (await fixture.AllObservationsAsync())
+            .Single(row => row.Id == accepted.ObservationId)
+            .PackPrice);
+
+        // Kept as history, and not as the price: the listing still holds the latest reading that
+        // was *observed*, with its instant and its change exactly where they were.
+        var listing = await fixture.ListingAsync(listingId);
+        Assert.Equal(current.Id, listing.LatestObservationId);
+        Assert.Equal(Observed, listing.LastCheckedAtUtc);
+        Assert.Equal(Observed, listing.LastPriceChangeAtUtc);
+        Assert.Equal(3, (await fixture.AllObservationsAsync()).Count);
+    }
+
+    /// <summary>And the same inside one batch, where the rows arrive in the reverse of their order.</summary>
+    [Fact]
+    public async Task Rows_reversed_inside_one_batch_leave_the_latest_observed_price_current()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var (runId, masterWorkItemId, keyWorkItemId, cola) = await SeedTwoSearchesOfOneProductAsync(
+            fixture);
+
+        var listingId = await fixture.SeedIdentifiedListingAsync(
+            cola,
+            waitingKey: null,
+            "SKU-30",
+            SupplierListingMatchStatus.Confirmed);
+
+        var earlierRunId = await fixture.SeedRunAsync(RunStarted.AddDays(-1), null);
+        await fixture.SeedAcceptedPriceAsync(
+            listingId,
+            earlierRunId,
+            30m,
+            RunStarted.AddDays(-1),
+            SupplierPriceBasis.ExclusiveOfGst);
+
+        var receipt = await SubmitAsync(
+            fixture,
+            runId,
+            Row(masterWorkItemId, fixture.SupplierPresetId, "SKU-30", packPrice: 33m),
+            Row(
+                keyWorkItemId,
+                fixture.SupplierPresetId,
+                "SKU-30",
+                packPrice: 64m,
+                observedAtUtc: Observed.AddHours(-1)));
+
+        // Both are accepted prices, and both are stored.
+        Assert.Equal(2, receipt!.Accepted.Count);
+
+        var listing = await fixture.ListingAsync(listingId);
+        var current = (await fixture.AllObservationsAsync()).Single(row => row.PackPrice == 33m);
+        Assert.Equal(current.Id, listing.LatestObservationId);
+        Assert.Equal(Observed, listing.LastCheckedAtUtc);
+        Assert.Equal(Observed, listing.LastPriceChangeAtUtc);
+    }
+
+    /// <summary>
+    /// A held reading obeys the same chronology: the one reading a listing holds is the latest one
+    /// observed, whichever batch it arrived in and wherever it sat in that batch.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_reading_a_listing_holds_is_the_latest_one_observed(bool oneBatch)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var (runId, masterWorkItemId, keyWorkItemId, cola) = await SeedTwoSearchesOfOneProductAsync(
+            fixture);
+
+        await fixture.SeedIdentifiedListingAsync(
+            cola,
+            waitingKey: null,
+            "SKU-30",
+            SupplierListingMatchStatus.Proposed);
+
+        var later = Row(masterWorkItemId, fixture.SupplierPresetId, "SKU-30", packPrice: 31m);
+        var earlier = Row(
+            keyWorkItemId,
+            fixture.SupplierPresetId,
+            "SKU-30",
+            packPrice: 29m,
+            observedAtUtc: Observed.AddHours(-1));
+
+        if (oneBatch)
+        {
+            await SubmitAsync(fixture, runId, later, earlier);
+        }
+        else
+        {
+            await SubmitAsync(fixture, runId, later);
+            await SubmitAsync(fixture, runId, earlier);
+        }
+
+        var reading = Assert.Single(await fixture.AllPendingObservationsAsync());
+        Assert.Equal(31m, reading.PackPrice);
+        Assert.Equal(Observed, reading.ObservedAtUtc);
+        Assert.Equal(masterWorkItemId, reading.PriceCollectorWorkItemId);
+        Assert.Empty(await fixture.AllObservationsAsync());
+    }
+
+    /// <summary>
+    /// One run, one product, two searches of it: a work item issued for the master product and one
+    /// issued for a waiting key that has since been matched to it. Both resolve to the same product,
+    /// so both can reach the same supplier listing - which is the shape every test in this region
+    /// is about.
+    /// </summary>
+    private static async Task<(long RunId, long MasterWorkItemId, long KeyWorkItemId, long MasterProductId)>
+        SeedTwoSearchesOfOneProductAsync(PriceCatalogueFixture fixture)
+    {
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var waitingKey = PriceCatalogueWaitingKey.For(WaitingName, WaitingUnit);
+
+        var runId = await fixture.SeedRunAsync(RunStarted, Expires);
+        var masterWorkItemId = await fixture.SeedWorkItemAsync(runId, cola, waitingKey: null);
+        var keyWorkItemId = await fixture.SeedWorkItemAsync(runId, masterProductId: null, waitingKey);
+
+        // The match #941 would have applied earlier in the same run, arranged directly because that
+        // issue lands later.
+        await fixture.SeedMatchSuggestionAsync(
+            waitingKey,
+            cola,
+            ProductMatchSuggestionStatus.AutoApplied);
+
+        return (runId, masterWorkItemId, keyWorkItemId, cola);
     }
 
     #endregion
