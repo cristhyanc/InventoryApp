@@ -193,6 +193,18 @@ describe('SignInComponent (issue #711)', () => {
       expect(signIn).toHaveBeenCalledWith('externalId');
     });
 
+    /**
+     * The workforce authority is `common` and accepts personal Microsoft accounts as well as work
+     * and school ones, so the action says "Microsoft account" rather than "work account".
+     */
+    it('labels the workforce action for any Microsoft account', () => {
+      const { fixture } = createHarness();
+      fixture.detectChanges();
+
+      expect(button(fixture, 'sign-in-workforce')!.textContent?.trim()).toBe('Sign in with a Microsoft account');
+      expect(fixture.nativeElement.textContent).not.toContain('work account');
+    });
+
     it('keeps the Microsoft work account action signing in against the workforce authority', () => {
       const { fixture, signIn } = createHarness();
       fixture.detectChanges();

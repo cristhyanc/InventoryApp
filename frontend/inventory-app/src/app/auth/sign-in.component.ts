@@ -41,7 +41,7 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
  *
  * **Both actions are offered only when they exist.** The customer identity action is rendered only
  * while this build has a complete customer identity configuration; with the shipped empty
- * configuration this page offers the one Microsoft work account action and nothing else, says
+ * configuration this page offers the one Microsoft account action and nothing else, says
  * nothing about passwords or recovery, and no visitor is ever routed here in the first place
  * (`selected-authority.ts`, `needsAuthorityChoice`).
  *
@@ -51,6 +51,11 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
  * the redirect each action starts, the return destination and the failure handling did not. The
  * longer verification and password-reset help sits in a native disclosure, while the warning that
  * each sign-in method is a separate account stays visible.
+ *
+ * **"Microsoft account", not "work account" (follow-up to issue #957).** The workforce action uses
+ * the `common` authority, and both of its app registrations accept personal Microsoft accounts
+ * (outlook.com, hotmail.com, live.com) as well as work and school accounts, so the label names
+ * neither kind.
  *
  * **It never redirects by itself.** A cancelled or failed hosted sign-in comes back here with an
  * explanation and the same two choices, and waits for the person to press one. Retrying
@@ -139,7 +144,7 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
                 [attr.aria-busy]="startingAuthority === 'workforce'"
                 (click)="continueWithMicrosoftWorkAccount()"
               >
-                {{ startingAuthority === 'workforce' ? 'Taking you to sign in…' : 'Sign in with a Microsoft work account' }}
+                {{ startingAuthority === 'workforce' ? 'Taking you to sign in…' : 'Sign in with a Microsoft account' }}
               </button>
             </div>
 
