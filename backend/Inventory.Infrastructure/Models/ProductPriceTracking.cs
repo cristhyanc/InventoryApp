@@ -29,6 +29,16 @@ namespace Inventory.Infrastructure.Models;
 /// searches be read without reaching into anybody's catalogue. <see cref="WaitingKey"/> is those two
 /// values folded, which is how five businesses' five rows become one search.</para>
 ///
+/// <para><strong>Issue #938 is what creates and removes one.</strong> The business turns the
+/// "Track supplier prices" switch on for one of its own products, which captures that product's name
+/// and unit label here and sets <see cref="Status"/> to
+/// <see cref="ProductPriceTrackingStatus.Requested"/>; turning it off removes this row and nothing
+/// else. Editing the product's name or unit label afterwards refreshes the captured text while the
+/// mapping is still waiting, and a change of the unit label returns a matched mapping to waiting -
+/// <c>TrackedProductSearchTextRefresh</c>, inside the product update's own transaction. Which master
+/// product a product <em>is</em> is still never written by a business: that is the matcher's (#941)
+/// and the Super Admin review's (#928) work.</para>
+///
 /// <para><strong>It changes nothing about the product.</strong> <see cref="Product"/> is referenced,
 /// never altered: no column, contract, cost, quantity or price of a product is touched by this issue,
 /// and the reference cascades on delete because a mapping is a statement about a product and has no
@@ -97,9 +107,16 @@ public class ProductPriceTracking : IBusinessOwned
 
     /// <summary>
     /// The product's own unit label (<c>Product.Unit</c>) as it was when tracking was turned on,
-    /// trimmed, and the <strong>empty string</strong> when the product has none - because the waiting
-    /// key is built from both parts and "no unit label" must have exactly one spelling, or one product
-    /// becomes two searches.
+    /// trimmed. The column's default and its "no unit label" spelling is the <strong>empty
+    /// string</strong> rather than <see langword="null"/> - because the waiting key is built from both
+    /// parts and "no unit label" must have exactly one spelling, or one product becomes two searches.
+    ///
+    /// <para>Since issue #938 no stored row reaches that state: the switch that creates a mapping
+    /// refuses a product whose label is blank or the generic default <c>"unit"</c>, because a product
+    /// that does not say what size it comes in cannot be looked for on a supplier's shelf. The
+    /// empty-string spelling is still the rule
+    /// <c>ProductPriceTrackingPolicy.NormaliseUnitLabel</c> applies, and is what keeps a future writer
+    /// from inventing a second one.</para>
     /// </summary>
     public string UnitLabel { get; set; } = string.Empty;
 

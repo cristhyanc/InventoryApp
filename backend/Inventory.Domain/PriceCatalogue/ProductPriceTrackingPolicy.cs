@@ -105,6 +105,12 @@ public static class PriceCatalogueWaitingKey
 /// <para><strong>Nothing here reads or writes a price, a cost or a quantity.</strong> A mapping says
 /// what a product <em>is</em>; what it costs at a supplier is #925's subject, and what the business
 /// paid for it is its own purchase history, which this issue does not touch.</para>
+///
+/// <para><strong>Since issue #938 this policy also holds the switch's own rules</strong>: which unit
+/// labels a product may be tracked under at all, and what an edit of the product's name or unit label
+/// does to a mapping that already exists. Both are here rather than in a use case or an adapter for
+/// the reason the consistency rules are: a second place that decided which products may be tracked,
+/// or what a rename means, would be a second answer.</para>
 /// </summary>
 public static class ProductPriceTrackingPolicy
 {
@@ -130,6 +136,26 @@ public static class ProductPriceTrackingPolicy
     /// <summary>What a caller whose unit label is longer than the limit is told.</summary>
     public const string UnitLabelTooLongMessage =
         "A tracked product's unit label must be 100 characters or fewer.";
+
+    /// <summary>
+    /// The generic unit label every product the provider catalogue import creates carries, because
+    /// <c>Product.Unit</c> defaults to it. It is a placeholder rather than a size, which is why
+    /// <see cref="IsTrackableUnitLabel"/> treats it as no label at all.
+    /// </summary>
+    public const string GenericUnitLabel = "unit";
+
+    /// <summary>
+    /// What a caller whose product has no usable unit label is told - blank, or the generic default
+    /// (issue #938).
+    ///
+    /// <para>One sentence for both cases, because they are one problem: the product does not say what
+    /// size it comes in, so there is nothing to search a supplier's shelf for. "Coca-Cola Classic
+    /// unit" matches nothing, and a mapping created from it would wait on a search that could never
+    /// succeed - which is worse than refusing, because waiting looks like progress.</para>
+    /// </summary>
+    public const string UnitLabelNotSpecificMessage =
+        "Supplier prices are searched for by the product's name and unit label, so this product needs "
+            + "a real unit label such as \"375mL\" before tracking can be turned on.";
 
     /// <summary>
     /// What a caller is told when the status and the master product disagree: a matched mapping with
@@ -247,4 +273,211 @@ public static class ProductPriceTrackingPolicy
             throw new DomainValidationException(MatchSourceMismatchMessage);
         }
     }
+
+    /// <summary>
+    /// Whether <paramref name="productUnit"/> says what size the product comes in, which is what
+    /// decides whether it may be tracked at all (issue #938).
+    ///
+    /// <para>Two labels are refused and they are refused for one reason. A blank label says nothing,
+    /// and <see cref="GenericUnitLabel"/> - the default every catalogue-imported product carries - says
+    /// nothing either: it is a placeholder a person never chose. Everything else is accepted as typed,
+    /// including <c>"can"</c> and <c>"units"</c>, because this rule is not in the business of deciding
+    /// which real labels are good ones.</para>
+    ///
+    /// <para>The generic label is compared case-insensitively on the trimmed value, because
+    /// <c>"Unit"</c> and <c>"  unit  "</c> are the same placeholder. The comparison is ordinal-ignore-case
+    /// rather than culture-dependent, for the reason the key fold is invariant: the same label must mean
+    /// the same thing on every machine that reads one.</para>
+    /// </summary>
+    public static bool IsTrackableUnitLabel(string? productUnit)
+    {
+        if (string.IsNullOrWhiteSpace(productUnit))
+        {
+            return false;
+        }
+
+        return !string.Equals(
+            productUnit.Trim(),
+            GenericUnitLabel,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Why this product may not be tracked, or <see langword="null"/> when it may (issue #938).
+    ///
+    /// <para>It is the one place the switch's eligibility is decided, so the sentence a refusal
+    /// carries, the sentence the switch shows beside itself, and whether <see cref="Capture"/> accepts
+    /// the product are all the same answer. The order is deliberate: a product with no name is told
+    /// about its name, because "give it a unit label" is the wrong instruction for a product that has
+    /// no name at all.</para>
+    /// </summary>
+    public static string? TrackingRefusal(string? productName, string? productUnit)
+    {
+        if (string.IsNullOrWhiteSpace(productName))
+        {
+            return SearchNameRequiredMessage;
+        }
+
+        if (productName.Trim().Length > MaxSearchNameLength)
+        {
+            return SearchNameTooLongMessage;
+        }
+
+        if (!IsTrackableUnitLabel(productUnit))
+        {
+            return UnitLabelNotSpecificMessage;
+        }
+
+        return productUnit!.Trim().Length > MaxUnitLabelLength ? UnitLabelTooLongMessage : null;
+    }
+
+    /// <summary>
+    /// The search text and waiting key to store for one product: its own name and unit label,
+    /// trimmed, with the key they fold to (issue #938, under the owner's decision of 27 October 2026).
+    ///
+    /// <para>This is the one way a mapping's text is built, which is what makes "the stored key is the
+    /// fold of the stored text" true by construction rather than by every call site remembering to do
+    /// it. A mapping whose key did not match its text would be searched for as one product and grouped
+    /// as another.</para>
+    /// </summary>
+    /// <exception cref="DomainValidationException">
+    /// <see cref="TrackingRefusal"/> refuses the product, with that refusal's own sentence. Nothing is
+    /// captured, so no path can store a mapping the switch itself would not have created.
+    /// </exception>
+    public static ProductPriceTrackingText Capture(string? productName, string? productUnit)
+    {
+        if (TrackingRefusal(productName, productUnit) is { } refusal)
+        {
+            throw new DomainValidationException(refusal);
+        }
+
+        var searchName = NormaliseSearchName(productName);
+        var unitLabel = NormaliseUnitLabel(productUnit);
+
+        return new ProductPriceTrackingText(
+            searchName,
+            unitLabel,
+            PriceCatalogueWaitingKey.For(searchName, unitLabel));
+    }
+
+    /// <summary>
+    /// <see cref="Capture"/> as an answer rather than an exception, for the one caller that has no
+    /// refusal to report: the product edit, which refreshes a mapping as a side effect of a write it
+    /// does not own (see <see cref="RefreshFor"/>).
+    /// </summary>
+    public static bool TryCapture(
+        string? productName,
+        string? productUnit,
+        out ProductPriceTrackingText? text)
+    {
+        if (TrackingRefusal(productName, productUnit) is not null)
+        {
+            text = null;
+            return false;
+        }
+
+        text = Capture(productName, productUnit);
+        return true;
+    }
+
+    /// <summary>
+    /// What an edit of a product's name or unit label does to the mapping it already has, or
+    /// <see langword="null"/> when it does nothing at all (issue #938).
+    ///
+    /// <para><strong>Three answers, one per state, and each is the issue's own criterion.</strong> A
+    /// mapping still <see cref="ProductPriceTrackingStatus.Requested"/> follows the product: the
+    /// search text and the waiting key both move, because the key is the fold of the text and a
+    /// collector must look for what the business now calls the product. A
+    /// <see cref="ProductPriceTrackingStatus.AutoMatched"/> or
+    /// <see cref="ProductPriceTrackingStatus.Matched"/> mapping is returned to awaiting a match
+    /// <em>only</em> by a change of the unit label, because the size the match rests on may no longer
+    /// agree - a 375 ml can renamed is the same can, a 375 ml can that became a 1.25 l bottle is not.
+    /// A name-only edit therefore keeps the match, and keeps the text the match was made from, which
+    /// is what a reviewer of a wrong match needs.</para>
+    ///
+    /// <para><strong><see cref="ProductPriceTrackingStatus.NotFound"/> is left exactly as it is.</strong>
+    /// It is a recorded answer rather than a gap (issue #923), and issue #938's criteria name only the
+    /// awaiting and the matched states; re-running a search that already came back empty is precisely
+    /// what recording that answer prevents.</para>
+    ///
+    /// <para><strong>Text this policy cannot capture refreshes nothing.</strong> A product renamed to
+    /// something longer than <see cref="MaxSearchNameLength"/>, or edited to a blank or generic unit
+    /// label, leaves the mapping with the text it already has rather than refusing the product edit:
+    /// changing a product's own fields and their rules is issue #895's subject and explicitly outside
+    /// this issue, and a mapping keeping valid text is strictly better than failing an unrelated
+    /// catalogue edit.</para>
+    /// </summary>
+    /// <param name="status">The mapping's current status.</param>
+    /// <param name="storedSearchName">The search name it currently holds.</param>
+    /// <param name="storedUnitLabel">The unit label it currently holds.</param>
+    /// <param name="productName">The product's name as the edit is storing it.</param>
+    /// <param name="productUnit">The product's unit label as the edit is storing it.</param>
+    public static ProductPriceTrackingRefresh? RefreshFor(
+        ProductPriceTrackingStatus status,
+        string storedSearchName,
+        string storedUnitLabel,
+        string? productName,
+        string? productUnit)
+    {
+        if (status == ProductPriceTrackingStatus.NotFound)
+        {
+            return null;
+        }
+
+        if (!TryCapture(productName, productUnit, out var captured))
+        {
+            return null;
+        }
+
+        var unitLabelChanged = !string.Equals(
+            captured!.UnitLabel,
+            storedUnitLabel,
+            StringComparison.Ordinal);
+        var searchNameChanged = !string.Equals(
+            captured.SearchName,
+            storedSearchName,
+            StringComparison.Ordinal);
+
+        if (IsMatched(status))
+        {
+            // A name-only edit keeps the match, and with it the text the match was decided from.
+            return unitLabelChanged
+                ? new ProductPriceTrackingRefresh(ProductPriceTrackingStatus.Requested, captured)
+                : null;
+        }
+
+        return unitLabelChanged || searchNameChanged
+            ? new ProductPriceTrackingRefresh(status, captured)
+            : null;
+    }
 }
+
+/// <summary>
+/// The text one mapping is searched for by, and the key it folds to (issue #938): the product's own
+/// name and unit label as they are to be stored, with
+/// <c>PriceCatalogueWaitingKey.For</c> of exactly those two values.
+///
+/// <para>The three travel together so the stored key cannot disagree with the stored text. It is
+/// produced only by <see cref="ProductPriceTrackingPolicy.Capture"/>, which is why there is no
+/// construction path that could build one from a key somebody else computed.</para>
+/// </summary>
+/// <param name="SearchName">The validated, trimmed search name.</param>
+/// <param name="UnitLabel">The validated, trimmed unit label.</param>
+/// <param name="WaitingKey">The fold of the two values above.</param>
+public sealed record ProductPriceTrackingText(string SearchName, string UnitLabel, string WaitingKey);
+
+/// <summary>
+/// What a product edit changes on the mapping it already has (issue #938): the status the mapping
+/// ends in, and the text it ends with.
+///
+/// <para>A mapping that is returned to awaiting a match carries
+/// <see cref="ProductPriceTrackingStatus.Requested"/> here, and the master product and match source
+/// it named are cleared by whoever applies this - which
+/// <c>ProductPriceTrackingPolicy.RequireConsistentMatch</c> then checks, so an applier that forgot
+/// cannot store a waiting mapping still pointing at a master product.</para>
+/// </summary>
+/// <param name="Status">The status to store.</param>
+/// <param name="Text">The search text and waiting key to store.</param>
+public sealed record ProductPriceTrackingRefresh(
+    ProductPriceTrackingStatus Status,
+    ProductPriceTrackingText Text);

@@ -136,6 +136,13 @@ public sealed class EfProductStore : IProductStore
     /// and the write are one operation inside this transaction, and a product that gains a label
     /// between a separate read and this write cannot have it blanked. The rule itself is
     /// <see cref="ProductCataloguePolicy.UnitChangeRefusal"/> and is not restated here.</para>
+    ///
+    /// <para>Since issue #938 the same transaction also refreshes the product's price-tracking
+    /// mapping, if it has one: a mapping still awaiting a match follows the product's name and unit
+    /// label, and a change of the unit label returns a matched mapping to awaiting a match with the
+    /// new text. It is decided here for the same reason - the comparison is against stored text - and
+    /// it refuses nothing, so an edit of an untracked product is byte for byte what it always was. See
+    /// <see cref="TrackedProductSearchTextRefresh"/>.</para>
     /// </summary>
     public async Task<ProductWriteAttempt> UpdateAsync(
         long id, ProductUpdateFields fields, CancellationToken cancellationToken)
@@ -171,6 +178,8 @@ public sealed class EfProductStore : IProductStore
             && !await CategoryIsOwnedAsync(fields.CategoryId, cancellationToken))
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.UnknownCategoryMessage);
 
+        var updatedAt = DateTime.UtcNow;
+
         product.Name = name;
         product.Sku = fields.Sku;
         product.Description = fields.Description;
@@ -182,7 +191,16 @@ public sealed class EfProductStore : IProductStore
         // has rather than being rewritten or backfilled (issue #895).
         product.Unit = ProductCataloguePolicy.NormalizeUnit(fields.Unit) ?? product.Unit;
         product.CategoryId = fields.CategoryId;
-        product.UpdatedAt = DateTime.UtcNow;
+        product.UpdatedAt = updatedAt;
+
+        // The fifth thing decided here, and the one that writes another table (issue #938): the
+        // price-tracking mapping this product may have follows its name and unit label. It is in
+        // this transaction for the same reason the four refusals above are - the rule compares the
+        // mapping's stored text with the text being written, so the read, the comparison and the
+        // write are one operation. It creates and removes nothing, and leaves an untracked product
+        // untouched; the rule is TrackedProductSearchTextRefresh's and is not restated here.
+        await TrackedProductSearchTextRefresh.ApplyAsync(
+            _db, product.Id, product.Name, product.Unit, updatedAt, cancellationToken);
 
         await _db.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
