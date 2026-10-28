@@ -7,7 +7,8 @@ import { ProviderAvailabilityService } from '../../../provider/provider-availabi
 
 /**
  * The shared "Nayax isn't fully connected" banner (issue #539), composed into every screen that
- * depends on a live Nayax read: Machines, Sites, Pick List and the Sync Restock workflow.
+ * depends on a live Nayax read: Machines, Sites and the Sync Restock workflow. The Pick List no
+ * longer shows it; it states its own unavailability when Nayax refuses it.
  *
  * It shows nothing while the connection is `Ready` or while its status could not be read at all - a
  * page's own data load already reports its own failure, and a banner built on a probe nobody could

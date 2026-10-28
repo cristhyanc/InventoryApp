@@ -1053,16 +1053,11 @@ describe('PickListComponent rendered structure', () => {
     expect(host.querySelector('table')).toBeNull();
   });
 
-  it('shows the Nayax status banner when the connection is not Ready (issue #539)', async () => {
-    const { host } = await render(undefined, undefined, undefined, 'NotConfigured');
-
-    expect(host.querySelector('[data-testid="nayax-status-banner"]')).not.toBeNull();
-  });
-
-  it('hides the Nayax status banner once the connection is Ready (issue #539)', async () => {
-    const { host } = await render(undefined, undefined, undefined, 'Ready');
+  it('does not show the Nayax status banner, even when the connection is not Ready', async () => {
+    const { host } = await render(undefined, undefined, undefined, 'PendingPermissions');
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+    expect(host.textContent).not.toContain("Nayax isn't fully connected");
   });
 
   it('does not make the Storage Qty header sortable', async () => {

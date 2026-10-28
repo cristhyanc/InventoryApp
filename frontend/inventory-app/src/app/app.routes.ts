@@ -55,8 +55,10 @@ export const routes: Routes = [
     // a redirect, so it cannot itself be behind an authentication guard, and it starts no redirect
     // of its own. `signInPageGuard` only sends a person who is already signed in on to the home
     // page, rather than showing them the chooser again after a successful sign-in.
+    // Since issue #957 it is drawn in the public layout, like the homepage it is reached from.
     path: SIGN_IN_ROUTE,
     canActivate: [signInPageGuard],
+    data: PUBLIC_LAYOUT_DATA,
     component: SignInComponent
   },
   {
