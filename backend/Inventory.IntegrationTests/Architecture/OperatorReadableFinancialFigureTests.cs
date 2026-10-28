@@ -237,6 +237,14 @@ public class OperatorReadableFinancialFigureTests
         "PUT api/Categories/{id:long}",
         "PUT api/Products/{id:long}",
         "PUT api/Products/{id:long}/gst-rule",
+        // The "Track supplier prices" switch of issue #938 answers a status code, or a refusal
+        // sentence saying the product needs a real unit label. It carries no figure of any kind:
+        // what it decides is whether this business's product is sent to the price collector, and
+        // nothing on this path reads a price, a cost or a valuation at all. Its two *reads* are
+        // deliberately not here - they declare their response payload, so the scan above inspects
+        // them like any other read, and a matched mapping's master product publishes only that
+        // product's name and size.
+        "PUT api/Products/{id:long}/price-tracking",
         "PUT api/Suppliers/{id:int}",
         // The "Not used" switch of issue #934 answers a status code, or a refusal sentence saying
         // that only a supplier from the platform's list can be marked "Not used". It carries no

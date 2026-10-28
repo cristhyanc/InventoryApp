@@ -187,7 +187,11 @@ public interface IPriceCatalogueWorkListStore
     /// <para>"Waiting" is <see cref="ProductPriceTrackingStatus.Requested"/> and nothing else. A
     /// mapping that was looked for and <see cref="ProductPriceTrackingStatus.NotFound"/> is a recorded
     /// answer rather than a gap, and re-sending it every run is exactly what recording that answer
-    /// prevents; the two matched states have a master product and belong to the other read.</para>
+    /// prevents; the two matched states have a master product and belong to the other read; and a
+    /// mapping suspended into <see cref="ProductPriceTrackingStatus.AwaitingProductDetails"/> (issue
+    /// #938, repaired on review) is waiting on its own product's name and unit label rather than on
+    /// the catalogue, so the text it still holds - the size that product no longer has - is
+    /// deliberately not sent to anybody.</para>
     /// </summary>
     Task<IReadOnlyList<ProductAwaitingMatch>> ListProductsAwaitingMatchAsync(
         CancellationToken cancellationToken);

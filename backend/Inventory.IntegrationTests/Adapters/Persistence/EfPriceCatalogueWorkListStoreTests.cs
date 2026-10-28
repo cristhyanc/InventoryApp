@@ -37,21 +37,9 @@ public class EfPriceCatalogueWorkListStoreTests
     public async Task Awaiting_match_pairs_deduplicate_across_businesses_ignoring_case_and_spacing()
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
-        await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
-        await fixture.TrackAsync(
-            fixture.SecondBusinessId,
-            fixture.SecondBusinessColaId,
-            "coca-cola  classic",
-            "375 ML");
-        await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessPepsiId,
-            "Pepsi Max",
-            "375mL");
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessPepsiId);
 
         var waiting = await fixture.DeniedWorkListStore()
             .ListProductsAwaitingMatchAsync(CancellationToken.None);
@@ -85,8 +73,14 @@ public class EfPriceCatalogueWorkListStoreTests
     public async Task Search_texts_differing_only_at_a_part_boundary_are_two_searches()
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
-        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Cola|", "375mL");
-        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessPepsiId, "Cola", "|375mL");
+
+        // Two products of this business whose own names and labels straddle the part boundary. The
+        // search text is the product's since issue #938, so the case is expressed by seeding the
+        // products that hold it rather than by passing text to the write.
+        var trailing = await fixture.SeedProductAsync(fixture.FirstBusinessId, "Cola|", "375mL");
+        var leading = await fixture.SeedProductAsync(fixture.FirstBusinessId, "Cola", "|375mL");
+        await fixture.TrackAsync(fixture.FirstBusinessId, trailing);
+        await fixture.TrackAsync(fixture.FirstBusinessId, leading);
 
         var waiting = await fixture.DeniedWorkListStore()
             .ListProductsAwaitingMatchAsync(CancellationToken.None);
@@ -125,11 +119,7 @@ public class EfPriceCatalogueWorkListStoreTests
     public async Task A_mapping_that_was_looked_for_and_not_found_is_not_sent_again()
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
-        var mapping = await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MarkNotFoundAsync(mapping.Id);
 
         Assert.Empty(
@@ -143,11 +133,7 @@ public class EfPriceCatalogueWorkListStoreTests
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
         var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var mapping = await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(mapping.Id, master);
 
         Assert.Empty(
@@ -164,11 +150,7 @@ public class EfPriceCatalogueWorkListStoreTests
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
         var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var mapping = await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(
             mapping.Id,
             master,
@@ -178,6 +160,34 @@ public class EfPriceCatalogueWorkListStoreTests
         Assert.Empty(
             await fixture.DeniedWorkListStore()
                 .ListProductsAwaitingMatchAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// And nor is a mapping that was <strong>suspended</strong> because its product's unit label was
+    /// replaced by the generic one (issue #938, repaired on review): it still holds the text it was
+    /// matched or waiting under - the size the product no longer has - and sending that would be
+    /// asking the collector to price a product the business does not have. It is waiting on its own
+    /// product's details, not on the catalogue.
+    ///
+    /// <para>The suspension is arranged through the <strong>real</strong> product store, because that
+    /// is where it happens: writing the status directly would prove only that this query filters on
+    /// it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_suspended_mapping_is_sent_to_neither_collector_read()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        await fixture.SeedListingAsync(master, "SKU-SUSPENDED");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(mapping.Id, master);
+
+        await fixture.UpdateProductAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "unit");
+
+        var store = fixture.UnscopedWorkListStore();
+        Assert.Empty(await store.ListProductsAwaitingMatchAsync(CancellationToken.None));
+        Assert.Empty(await store.ListTrackedMasterProductsAsync(CancellationToken.None));
     }
 
     #endregion
@@ -197,16 +207,8 @@ public class EfPriceCatalogueWorkListStoreTests
         var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
         await fixture.SeedListingAsync(master, "SKU-1", unitsPerPack: 30, barcode: "0012345678905", barcodeScope: BarcodeScope.Carton);
 
-        var mine = await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
-        var theirs = await fixture.TrackAsync(
-            fixture.SecondBusinessId,
-            fixture.SecondBusinessColaId,
-            "coca-cola  classic",
-            "375 ML");
+        var mine = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var theirs = await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
         await fixture.MatchAsync(mine.Id, master);
         await fixture.MatchAsync(theirs.Id, master);
 
@@ -243,11 +245,7 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.SeedListingAsync(master, "SKU-1", supplierPresetId: otherSupplier);
         await fixture.SeedListingAsync(master, "SKU-2");
 
-        var mapping = await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(mapping.Id, master);
 
         var tracked = Assert.Single(
@@ -290,11 +288,7 @@ public class EfPriceCatalogueWorkListStoreTests
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
         var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var mapping = await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(mapping.Id, master);
 
         var tracked = Assert.Single(
@@ -313,11 +307,7 @@ public class EfPriceCatalogueWorkListStoreTests
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
         var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var mapping = await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(mapping.Id, master);
         await fixture.SeedWaitingListingAsync(mapping.WaitingKey, "SKU-WAITING");
 
@@ -370,22 +360,10 @@ public class EfPriceCatalogueWorkListStoreTests
 
         // One waiting product in each business, spelled differently, and one matched product in the
         // second - so an answer that respected the filters could only ever be a subset of this.
-        await fixture.TrackAsync(
-            fixture.FirstBusinessId,
-            fixture.FirstBusinessColaId,
-            "Coca-Cola Classic",
-            "375mL");
-        await fixture.TrackAsync(
-            fixture.SecondBusinessId,
-            fixture.SecondBusinessColaId,
-            "coca-cola  classic",
-            "375 ML");
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
         var theirPepsi = await fixture.SeedProductAsync(fixture.SecondBusinessId, "Pepsi Max", "375mL");
-        var theirMapping = await fixture.TrackAsync(
-            fixture.SecondBusinessId,
-            theirPepsi,
-            "Pepsi Max",
-            "375mL");
+        var theirMapping = await fixture.TrackAsync(fixture.SecondBusinessId, theirPepsi);
         await fixture.MatchAsync(theirMapping.Id, theirMaster);
 
         var denied = fixture.DeniedWorkListStore();
@@ -421,11 +399,7 @@ public class EfPriceCatalogueWorkListStoreTests
     public async Task The_work_list_is_the_same_whatever_scope_the_context_carries()
     {
         await using var fixture = await PriceCatalogueFixture.CreateAsync();
-        await fixture.TrackAsync(
-            fixture.SecondBusinessId,
-            fixture.SecondBusinessColaId,
-            "coca-cola  classic",
-            "375 ML");
+        await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
 
         var theirs = fixture.WorkListStoreFor(fixture.SecondBusinessId);
         var someoneElses = fixture.WorkListStoreFor(fixture.FirstBusinessId);

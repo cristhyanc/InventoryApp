@@ -3,11 +3,13 @@ using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
 using Inventory.Application.Access;
 using Inventory.Application.Nayax;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Domain.Gst;
+using Inventory.Infrastructure.Clock;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Models;
@@ -51,6 +53,7 @@ public class ProductsControllerTests
         var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
         var getProductPriceComparison = new GetProductPriceComparison(new EfProductPurchasePriceHistoryProvider(db));
         var store = productStore ?? new EfProductStore(db, TestCostingUseCases.Rebuild(db));
+        var trackingStore = new EfProductPriceTrackingStore(db);
         var catalog = new EfProductCatalogStore(db);
         var listLowStockProducts = new ListLowStockProducts(catalog, calculateReorderNeeds);
         return new ProductsController(
@@ -64,6 +67,13 @@ public class ProductsControllerTests
             getProductPriceComparison,
             new GetProductGstRule(store),
             new SetProductGstRule(store),
+            // The "Track supplier prices" switch (issue #938). Its own behaviour is relational and
+            // is asserted over the real pipeline in ProductPriceTrackingApiTests and over the real
+            // migration history in EfProductPriceTrackingStoreTests; these tests construct it only
+            // because the controller needs it.
+            new GetProductPriceTracking(trackingStore),
+            new SetProductPriceTracking(trackingStore, new SystemClock()),
+            new ListTrackedProducts(trackingStore),
             // An Owner, so the catalogue actions answer the full response; the role-dependent shape
             // itself is MachineAndProductFinancialRedactionApiTests, through the real pipeline.
             new CurrentCapabilities(

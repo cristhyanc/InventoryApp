@@ -16,12 +16,15 @@ namespace Inventory.UnitTests.Domain.PriceCatalogue;
 public class ProductPriceTrackingPolicyTests
 {
     /// <summary>
-    /// The two waiting states are the collector work list of #924, and the two matched states are not.
-    /// Asserted per state so a fifth status cannot quietly join one group.
+    /// Exactly the two matched states are matched; the three unmatched ones - including
+    /// <c>AwaitingProductDetails</c>, the suspension of issue #938's repair - are not. Asserted per
+    /// state so a later status cannot quietly join the matched group, which is what decides whether a
+    /// mapping may name a master product at all.
     /// </summary>
     [Theory]
     [InlineData(ProductPriceTrackingStatus.Requested, false)]
     [InlineData(ProductPriceTrackingStatus.NotFound, false)]
+    [InlineData(ProductPriceTrackingStatus.AwaitingProductDetails, false)]
     [InlineData(ProductPriceTrackingStatus.AutoMatched, true)]
     [InlineData(ProductPriceTrackingStatus.Matched, true)]
     public void A_mapping_is_matched_in_exactly_the_two_matched_states(
@@ -32,6 +35,7 @@ public class ProductPriceTrackingPolicyTests
     [Theory]
     [InlineData(ProductPriceTrackingStatus.Requested, null, null)]
     [InlineData(ProductPriceTrackingStatus.NotFound, null, null)]
+    [InlineData(ProductPriceTrackingStatus.AwaitingProductDetails, null, null)]
     [InlineData(ProductPriceTrackingStatus.AutoMatched, 7L, ProductPriceTrackingMatchSource.CollectorAutomaticMatch)]
     [InlineData(ProductPriceTrackingStatus.Matched, 7L, ProductPriceTrackingMatchSource.SuperAdmin)]
     [InlineData(ProductPriceTrackingStatus.Matched, 7L, ProductPriceTrackingMatchSource.CollectorAutomaticMatch)]
@@ -72,6 +76,24 @@ public class ProductPriceTrackingPolicyTests
                 ProductPriceTrackingStatus.Requested,
                 masterProductId: 7L,
                 ProductPriceTrackingMatchSource.SuperAdmin));
+
+        Assert.Equal(ProductPriceTrackingPolicy.MasterProductStatusMismatchMessage, refusal.Message);
+    }
+
+    /// <summary>
+    /// And so is a <strong>suspended</strong> mapping that still names one (issue #938, repaired on
+    /// review): a mapping whose product can no longer be searched for is matched to nothing, and this
+    /// is the rule that stops an applier which forgot to clear the match from storing one that would
+    /// still supply prices for the product's previous size.
+    /// </summary>
+    [Fact]
+    public void A_suspended_mapping_that_names_a_master_product_is_refused()
+    {
+        var refusal = Assert.Throws<DomainValidationException>(
+            () => ProductPriceTrackingPolicy.RequireConsistentMatch(
+                ProductPriceTrackingStatus.AwaitingProductDetails,
+                masterProductId: 7L,
+                ProductPriceTrackingMatchSource.CollectorAutomaticMatch));
 
         Assert.Equal(ProductPriceTrackingPolicy.MasterProductStatusMismatchMessage, refusal.Message);
     }

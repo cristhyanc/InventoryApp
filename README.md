@@ -253,7 +253,7 @@ Open <http://localhost:4200>. The `start` script builds the Tailwind stylesheet 
 
 ### 4. Sign in
 
-The application requires a Microsoft Entra sign-in. Click **Sign in** in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
+Opening the application signed out shows the public Restockroo landing page at `/` (see [The public landing page](#the-public-landing-page) below); everything else requires a Microsoft Entra sign-in. Click **Sign in** on the landing page or in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route except the landing page requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
 
 A deployment that has a customer identity tenant configured offers a choice first, on the public `/sign-in` page: **Continue with Google or an email address** or **Sign in with a Microsoft work account** — see [Signing in with Google](#signing-in-with-google-issue-711) and [Signing in with an email address and password](#signing-in-with-an-email-address-and-password-issue-712) below. With no such tenant configured, which is the state in source control, nothing changes: **Sign in** redirects straight to the workforce authority with no extra page and no extra click.
 
@@ -379,6 +379,28 @@ Who may apply: an account with **no active membership anywhere** — never a mem
 **The flag is `false` in source control and must stay off in production until a human has verified the release gate** — see [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541). With it off, the endpoint answers `404` and `onboardingEnabled` is `false`.
 
 The journey a second live business needs is now complete end to end. The application form exists (issue #543, `/apply`, above), and the approval **user interface** of issue #510 does too: the Super Admin's own Businesses page (issue #547, see [Super Admin businesses API](#super-admin-businesses-api) above) approves, rejects, deactivates and reactivates a business and releases a member of a deactivated one. The Nayax credential is no longer a blocker either: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). An Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and drives it from the connection wizard on Admin → Integrations (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners of issue #539 are on the screens that depend on Nayax — the machine list and machine detail, Sync Restock, the site list and a site's products, and the pick list — so a member who cannot reach that wizard still sees why those screens have no Nayax data. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+
+## The public landing page
+
+A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
+application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
+integration, a three-step workflow and FAQs. It makes no request to the API at all, so opening or
+refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+
+- **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
+  is configured, otherwise a redirect straight to Microsoft that returns to `/`.
+- **Get started** opens the business application at `/apply` (see
+  [Starting a business](#starting-a-business-self-service-onboarding)), taking the visitor through
+  sign-in first. While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome
+  page instead, exactly as before.
+- **Signed in**, `/` is still the dashboard. The landing page stays reachable at `/home`, where the
+  **Open app** button returns to `/`.
+
+Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
+the page presents Nayax only as an optional connection for supported sales data and the reports
+built on it. The page has **no Privacy Policy, Terms of Service or Contact link**, because none of
+those pages exists yet; add them to its footer once they do. The approved design and every wording
+change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
 
 ## Roles and capabilities
 
@@ -1197,7 +1219,10 @@ does not manage.
   list's **Deactivate** and **Reactivate** (which send the whole product back) keep working for
   those older products. Imported products are unaffected: the catalogue import gives a product it
   creates the `unit` default and leaves a linked product's own label alone, and no label is
-  backfilled anywhere.
+  backfilled anywhere. **One feature does require a real label**: supplier price tracking cannot be
+  switched on for a product whose label is blank or is still that `unit` default, because the label
+  is half of what is searched for at a supplier — see
+  [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **New Product is read down in titled sections** (issue #892). **Products → New Product** groups
   its fields under **Product details** — Name beside SKU, Category beside Unit Label, Description
   across the row below them, and then the compact **Active product** checkbox — **Opening
@@ -1314,7 +1339,9 @@ does not manage.
   are unaffected by this change. The **Status** column itself is shown only under **All**: under
   **Only active**, every row would say "Active" anyway, so the column (and a sort on it) is hidden
   instead, and switching back to **Only active** clears a Status sort rather than leaving it pointed
-  at a hidden column (issue #828).
+  at a hidden column (issue #828). A **Tracked** column shows which products have supplier prices
+  tracked and where each one has got to — see
+  [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase
@@ -1367,6 +1394,67 @@ does not manage.
   take Nayax's), the SKU, the **unit/volume**, the low-stock threshold, the restock
   target, the active flag and all of your stock, costing and history. Nayax publishes no unit or
   volume label at all, so the review never proposes one.
+
+## Track supplier prices on a product
+
+You choose which of your products should have their prices checked at the suppliers in the shared
+price catalogue, and you can see whether each one has been matched yet. Nothing is checked for a
+product you have not switched on.
+
+- **Products → edit a product → Track supplier prices.** One switch. Turning it on asks for this
+  product's prices; turning it off withdraws the request. It saves on its own, separately from the
+  rest of the product form, because it is not a catalogue field — the same way the **GST rule**
+  panel beside it saves.
+- **A product is searched for by its own name and unit label** — "Coca-Cola Classic" and "375mL".
+  Those two values are copied when you switch tracking on, so what is searched for is what you were
+  shown rather than something that changes under you later.
+- **A real unit label is required** (see **Unit Label is required** under
+  [Products and categories](#products-and-categories)). A product whose label is blank, or is still
+  the generic `unit` every imported product starts with, cannot be switched on: the switch is
+  unavailable and says so — *"Supplier prices are searched for by the product's name and unit label,
+  so this product needs a real unit label such as "375mL" before tracking can be turned on."*
+  Give the product its real label on the same form, save, and the switch becomes available. This
+  changes nothing about what a product may be saved with; it is only a condition for tracking it.
+- **What the status means.** Under the switch, a tracked product shows one of five states, and each
+  is an answer rather than a stage:
+  - **Awaiting match** — the request is recorded and nothing has matched it yet.
+  - **Matched automatically, awaiting check** — the matcher chose a catalogue product and nobody has
+    reviewed that choice. The product it chose is named beside it, with its size.
+  - **Matched** — the match is settled. The catalogue product's name and size are named beside it.
+  - **Not found** — it was looked for and nothing in the catalogue describes it. A real answer, which
+    is why it is not searched for again every run.
+  - **Paused - this product cannot be searched for** — the product's own name or unit label can no
+    longer be searched for, usually because the unit label was replaced by the generic `unit`.
+    Nothing is searched for it, it is matched to nothing, and the same sentence about a real unit
+    label is shown under it saying how to resume. Give the product a real unit label again and it
+    goes back to **awaiting match**.
+  Only the catalogue product's **name and size** are ever shown — nothing about which suppliers
+  stock it, what it costs, or any other business.
+- **Renaming or relabelling the product.** While a product is still **awaiting a match**, editing its
+  name or unit label updates what is searched for. For a product that is already **matched**,
+  changing its **unit label** puts it back to **awaiting a match** with the new text — a 375 ml can
+  that became a 1.25 l bottle is not the same product — while a **name-only** change keeps the match.
+  A **not found** product is left as it is.
+- **Taking a product's unit label away pauses its tracking; it never prices the old size.** If you
+  replace a tracked product's unit label with the generic `unit`, the edit is still saved — tracking
+  never stops you editing a product — but its tracking goes to **Paused**: any match it had is
+  dropped, so no supplier's price for the old size is shown as this product's, and nothing is
+  searched for it in the meantime. Giving it a real unit label again starts it off from the product's
+  current name and label; it waits for a match afresh rather than returning to the match it had,
+  because that match was made on the size you changed.
+- **Turning it off removes only your request.** The shared catalogue of products, supplier listings
+  and prices is untouched, and so is every other business's. You can switch it back on at any time.
+- **Nobody sees anybody else's choices.** A business cannot see which products another business
+  tracks, and the shared catalogue records no business at all — a product is looked up once for
+  everybody, which is the whole point of sharing it.
+- **Products → All Products** has a **Tracked** column showing which of your products are tracked and
+  where each one has got to. It is read-only: the switch itself is on each product's own page, and
+  there is no way to switch many products on at once.
+- **New Product** has no switch — there is no product yet to track. The form says so, and the switch
+  is on that product's **Edit** page once it exists.
+- **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
+  permission is involved. It is unavailable while you are looking at a business in read-only support
+  view, and while a Super Admin is previewing a role, like every other write in those states.
 
 ## A supplier's website
 

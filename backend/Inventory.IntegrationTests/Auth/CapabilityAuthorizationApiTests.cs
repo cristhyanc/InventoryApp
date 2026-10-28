@@ -86,6 +86,15 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Inventory.Operate", "GET", "/api/stock-history", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/products/1/stock", "Operator,Manager,Owner" },
         { "Inventory.Operate", "POST", "/api/products/1/inventory-count/apply", "Operator,Manager,Owner" },
+        // Issue #938. The "Track supplier prices" switch declares no capability of its own: the
+        // controller's existing Inventory.Operate is the product-edit capability the issue names,
+        // because deciding which of its products a business wants priced is the same day-to-day
+        // catalogue work as the rest of that controller. All three rows are safe to call in both
+        // directions - the two reads change nothing, and the write names a product that does not
+        // exist, so every role that holds the capability is answered 404 and writes nothing.
+        { "Inventory.Operate", "GET", "/api/products/price-tracking", "Operator,Manager,Owner" },
+        { "Inventory.Operate", "GET", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
+        { "Inventory.Operate", "PUT", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/purchases", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers/1/gst-defaults", "Operator,Manager,Owner" },

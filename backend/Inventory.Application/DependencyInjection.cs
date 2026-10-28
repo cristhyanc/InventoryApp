@@ -325,6 +325,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<DeleteProduct>();
         services.AddScoped<GetProductGstRule>();
         services.AddScoped<SetProductGstRule>();
+        // The "Track supplier prices" switch (issue #938, fourth task of #817). Scoped like every
+        // other tenant-scoped use case: each answer belongs to one caller's resolved business.
+        services.AddScoped<GetProductPriceTracking>();
+        services.AddScoped<SetProductPriceTracking>();
+        services.AddScoped<ListTrackedProducts>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
         // The pick list's batch refill (issue #743): one request, one write-locked transaction, all

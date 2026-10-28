@@ -32,10 +32,23 @@ describe('ICON_PATHS', () => {
     'attach_money',
     'trending_up',
     'trending_down',
-    'inventory_2'
+    'inventory_2',
+    // The public landing page (issue #954).
+    'arrow_forward',
+    'check_circle',
+    'lock',
+    'widgets',
+    'swap_horiz',
+    'receipt',
+    'storefront',
+    'analytics',
+    'local_shipping',
+    'account_balance_wallet',
+    'sync_alt',
+    'domain'
   ];
 
-  it('bundles exactly the icons the #409 series needs so far', () => {
+  it('bundles exactly the icons the #409 series and the landing page need so far', () => {
     expect(Object.keys(ICON_PATHS).sort()).toEqual([...expectedNames].sort());
   });
 

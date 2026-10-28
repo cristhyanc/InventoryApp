@@ -42,10 +42,8 @@ public class PriceCollectorWorkListTests
         var firstListing = await fixture.SeedListingAsync(cola, "SKU-1", unitsPerPack: 30);
         var secondListing = await fixture.SeedListingAsync(cola, "SKU-2", unitsPerPack: 24);
 
-        var mine = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
-        var theirs = await fixture.TrackAsync(
-            fixture.SecondBusinessId, fixture.SecondBusinessColaId, "coca-cola  classic", "375 ML");
+        var mine = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var theirs = await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
         await fixture.MatchAsync(mine.Id, cola);
         await fixture.MatchAsync(theirs.Id, cola);
 
@@ -86,10 +84,8 @@ public class PriceCollectorWorkListTests
         await fixture.SeedMatchSuggestionAsync(waitingKey, undone, ProductMatchSuggestionStatus.Undone);
         await fixture.SeedMatchSuggestionAsync(waitingKey, accepted, ProductMatchSuggestionStatus.Tentative);
 
-        await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
-        await fixture.TrackAsync(
-            fixture.SecondBusinessId, fixture.SecondBusinessColaId, "coca-cola  classic", "375 ML");
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
 
         var workList = await IssueAsync(fixture);
 
@@ -121,8 +117,7 @@ public class PriceCollectorWorkListTests
         await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.Kmart);
 
         var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var matched = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(matched.Id, cola);
 
         // Nothing is waiting: one matched product, and no vocabulary to match anything against.
@@ -131,8 +126,7 @@ public class PriceCollectorWorkListTests
         Assert.Empty(withNothingWaiting.MasterProductsForMatching);
 
         // Now one product is waiting, and the master products arrive with it - description only.
-        await fixture.TrackAsync(
-            fixture.SecondBusinessId, fixture.SecondBusinessColaId, "coca-cola  classic", "375 ML");
+        await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
 
         var withSomethingWaiting = await IssueAsync(fixture);
 
@@ -158,8 +152,7 @@ public class PriceCollectorWorkListTests
         await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
 
         var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var matched = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(matched.Id, cola);
 
         var workList = await IssueAsync(fixture);
@@ -188,8 +181,7 @@ public class PriceCollectorWorkListTests
             jbMetro, SupplierPriceConnector.JbMetro, url: "https://beta.example.test/");
 
         var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var matched = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(matched.Id, cola);
 
         var workList = await IssueAsync(fixture);
@@ -226,11 +218,10 @@ public class PriceCollectorWorkListTests
         await fixture.SetSupplierCollectionAsync(second, SupplierPriceConnector.BigW);
 
         var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var matched = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(matched.Id, cola);
-        await fixture.TrackAsync(
-            fixture.SecondBusinessId, fixture.SecondBusinessColaId, "Pepsi Max", "375mL");
+        var theirPepsi = await fixture.SeedProductAsync(fixture.SecondBusinessId, "Pepsi Max", "375mL");
+        await fixture.TrackAsync(fixture.SecondBusinessId, theirPepsi);
 
         var workList = await IssueAsync(fixture);
 
@@ -272,8 +263,7 @@ public class PriceCollectorWorkListTests
         await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.Kmart);
 
         var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
-        var matched = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(matched.Id, cola);
 
         var clock = new FakeClock(IssuedAt);
@@ -340,11 +330,9 @@ public class PriceCollectorWorkListTests
 
         var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
         await fixture.SeedListingAsync(cola, "SKU-1", unitsPerPack: 30);
-        var mine = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var mine = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
         await fixture.MatchAsync(mine.Id, cola);
-        await fixture.TrackAsync(
-            fixture.SecondBusinessId, fixture.SecondBusinessColaId, "coca-cola  classic", "375 ML");
+        await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
 
         var workList = await IssueAsync(fixture);
         var serialized = System.Text.Json.JsonSerializer.Serialize(
@@ -445,7 +433,7 @@ public class PriceCollectorWorkListTests
         {
             var product = await fixture.SeedProductAsync(
                 fixture.FirstBusinessId, $"Product {index}", "375mL");
-            await fixture.TrackAsync(fixture.FirstBusinessId, product, $"Product {index}", "375mL");
+            await fixture.TrackAsync(fixture.FirstBusinessId, product);
         }
 
         var workList = await IssueAsync(fixture, budget: Budget);
