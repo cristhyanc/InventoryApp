@@ -142,22 +142,23 @@
       a collapsed border between <thead> and <tbody> would scroll away with the body, and #410
       defines no shadow token for that rule.
 
-      The table sizes to its columns (w-auto) instead of filling the card, so spare width is not
-      handed to the widest content: Product, MDB Code, Storage Qty and Total to Pick stay as narrow as
-      their content, with compact padding, and the product name wraps inside a bounded block.
+      The table fills the card. Product, MDB Code, Storage Qty and Total to Pick are pinned narrow
+      (w-px shrinks a column to its content, whitespace-nowrap keeps the short headers on one line)
+      with compact padding, and the product name wraps inside a fixed-width block, so all spare
+      width goes to the machine columns, which share it.
     -->
     <div data-testid="pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
-      <table class="table w-auto">
+      <table class="table">
         <thead>
           <tr>
-            <th scope="col" class="table-cell sm:px-3 sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('name')">
+            <th scope="col" class="table-cell sm:px-3 w-px sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('name')">
               <button type="button" class="hover:underline" (click)="sortBy('name')">{{ sortLabel('Product', 'name') }}</button>
             </th>
-            <th scope="col" class="table-cell sm:px-3 sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
+            <th scope="col" class="table-cell sm:px-3 w-px whitespace-nowrap sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
               <button type="button" class="hover:underline" (click)="sortBy('mdbCode')">{{ sortLabel('MDB Code', 'mdbCode') }}</button>
             </th>
-            <th scope="col" class="table-cell sm:px-3 table-num sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Storage Qty</th>
-            <th scope="col" class="table-cell sm:px-3 sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
+            <th scope="col" class="table-cell sm:px-3 table-num w-px whitespace-nowrap sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Storage Qty</th>
+            <th scope="col" class="table-cell sm:px-3 w-px whitespace-nowrap sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
             @for (machineId of appliedMachineIds; track machineId) {
               <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
             }
@@ -167,7 +168,7 @@
           @for (product of visibleProducts(); track product.productId) {
             <tr class="table-row">
               <td class="table-cell sm:px-3">
-                <div data-testid="pick-list-product-name" class="min-w-[8rem] max-w-[14rem]">
+                <div data-testid="pick-list-product-name" class="w-[14rem]">
                   {{ product.productName }}
                   @if (product.storageShortageQuantity > 0) {
                     <span data-testid="storage-shortage-badge" class="badge badge-danger mt-1 block w-fit">
