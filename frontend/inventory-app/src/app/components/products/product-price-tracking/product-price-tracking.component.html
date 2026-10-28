@@ -1,0 +1,54 @@
+<section class="mt-6 border-t border-slate-200 pt-6" data-testid="product-price-tracking">
+  <h2 class="mb-1 text-lg font-semibold text-slate-800">Track supplier prices</h2>
+  <p class="mb-4 text-sm text-slate-600">
+    Asks for this product's prices to be collected from the suppliers in the price catalogue. It is
+    searched for by its own name and unit label, and turning it off removes only this business's
+    request - nothing shared is changed either way.
+  </p>
+
+  @if (loading) {
+    <p class="mb-3 text-sm text-slate-600">Loading supplier price tracking...</p>
+  }
+  @if (error) {
+    <p class="mb-3 text-sm text-red-600" data-testid="price-tracking-error">{{ error }}</p>
+  }
+
+  <div class="space-y-3">
+    <label class="flex items-center gap-2">
+      <input
+        type="checkbox"
+        name="productPriceTracking"
+        data-testid="price-tracking-switch"
+        class="h-4 w-4 border-md-gray-300 text-md-dark"
+        [checked]="tracked"
+        [disabled]="switchDisabled"
+        (change)="toggle($event)"
+      />
+      <span class="field-label">{{ saving ? 'Saving...' : 'Track supplier prices' }}</span>
+    </label>
+
+    <!-- The server's own reason, verbatim: a blank or generic unit label is a rule this page must
+         not word a second time (issue #938). Shown only while tracking is off, because it is a
+         reason not to start. -->
+    @if (refusal) {
+      <p class="text-sm text-amber-700" data-testid="price-tracking-refusal">{{ refusal }}</p>
+    }
+
+    @if (statusLabel) {
+      <p class="text-sm text-slate-700" data-testid="price-tracking-status">
+        Status: {{ statusLabel }}
+        <!-- The matched master product's name and size, which is the whole of what the API publishes
+             about the shared catalogue. -->
+        @if (matchedDescription) {
+          <span data-testid="price-tracking-match"> — {{ matchedDescription }}</span>
+        }
+      </p>
+    }
+
+    @if (searchText) {
+      <p class="text-xs text-slate-500" data-testid="price-tracking-search-text">
+        Searched for as "{{ searchText }}".
+      </p>
+    }
+  </div>
+</section>

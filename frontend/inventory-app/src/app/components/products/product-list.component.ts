@@ -6,7 +6,7 @@ import { EMPTY, Subject, Subscription, combineLatest } from 'rxjs';
 import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { Product, Category } from '../../models/models';
+import { Product, Category, ProductPriceTrackingStatus } from '../../models/models';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
 import { ListLoadState } from '../shared/list-load-state';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
@@ -128,6 +128,23 @@ export class ProductListComponent implements OnInit, OnDestroy {
    */
   purchaseCosts: ProductPurchaseCosts = PURCHASE_COSTS_NOT_READ_YET;
 
+  /**
+   * The status of each tracked product, by product id (issue #938), for the Tracked column. Empty
+   * until the one read behind it succeeds, and left as it is when that read fails: the column then
+   * simply shows nothing, because "we could not read it" must not render as "not tracked".
+   *
+   * It is a plain projection rather than a feature component - no action, no retry, no error text of
+   * its own - which is what keeps it inside this page's remit (issue #191). Turning tracking on and
+   * off is the product's own Edit page, where the switch and its rules live.
+   */
+  trackedStatuses = new Map<number, ProductPriceTrackingStatus>();
+
+  /**
+   * Whether the column has an answer to show at all. False until the read succeeds, so the header
+   * does not appear above a column of empty cells.
+   */
+  trackingRead = false;
+
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
   private readonly destroy$ = new Subject<void>();
@@ -169,7 +186,38 @@ export class ProductListComponent implements OnInit, OnDestroy {
       )
       .subscribe();
 
+    // One read for the whole page (issue #938): the business's tracked products are a short list of
+    // its own decisions, so the column needs no per-row request and no filter. A failure leaves the
+    // column out rather than reporting an error over the catalogue - the switch itself is on each
+    // product's Edit page, which is where a failure to read it matters.
+    this.productService
+      .getTrackedProducts()
+      .pipe(
+        catchError(() => EMPTY),
+        takeUntil(this.destroy$)
+      )
+      .subscribe((tracked) => {
+        this.trackedStatuses = new Map(tracked.map((entry) => [entry.productId, entry.status]));
+        this.trackingRead = true;
+      });
+
     this.applyFilters();
+  }
+
+  /** The Tracked cell's text, or `null` for a product this business has not asked prices for. */
+  trackingLabel(product: Product): string | null {
+    switch (this.trackedStatuses.get(product.id)) {
+      case ProductPriceTrackingStatus.Requested:
+        return 'Awaiting match';
+      case ProductPriceTrackingStatus.AutoMatched:
+        return 'Matched automatically';
+      case ProductPriceTrackingStatus.Matched:
+        return 'Matched';
+      case ProductPriceTrackingStatus.NotFound:
+        return 'Not found';
+      default:
+        return null;
+    }
   }
 
   ngOnDestroy(): void {

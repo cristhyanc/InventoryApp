@@ -6,7 +6,7 @@ import { ProductListComponent } from './product-list.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { ToastService } from '../../services/toast.service';
-import { Product } from '../../models/models';
+import { Product, ProductPriceTrackingStatus, TrackedProduct } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { AccessService } from '../../access/access.service';
 import { Capability } from '../../access/capabilities';
@@ -36,6 +36,13 @@ function accessServiceStubPerCapability(answers: Partial<Record<Capability, bool
  * changes; the Import products describe block below overrides it per test.
  */
 const NOT_CONNECTED = provideNayaxConnectionStatus('NotConfigured');
+
+/**
+ * `ProductService.getTrackedProducts`'s answer for every describe block that is not about the Tracked
+ * column (issue #938): this business has asked for no supplier prices, so the column reports nothing
+ * and no other block's assertions change. The Tracked column's own block stubs it per test.
+ */
+const noTrackedProducts = () => of([] as TrackedProduct[]);
 
 /** A stub matching `ProductPurchaseCostService.getSummaries`, defaulting to no purchase history for anything asked. */
 function purchaseCostServiceStub(getSummaries: jest.Mock = jest.fn(() => of([]))): Pick<ProductPurchaseCostService, 'getSummaries'> {
@@ -90,7 +97,7 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of(products) } },
+        { provide: ProductService, useValue: { getAll: () => of(products), getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
@@ -196,7 +203,7 @@ describe('ProductListComponent Actions fixed slots (issue #876)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of(products) } },
+        { provide: ProductService, useValue: { getAll: () => of(products), getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
@@ -277,7 +284,10 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of(products), update: () => of(undefined) } },
+        {
+          provide: ProductService,
+          useValue: { getAll: () => of(products), update: () => of(undefined), getTrackedProducts: noTrackedProducts }
+        },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
@@ -480,7 +490,7 @@ describe('ProductListComponent write controls during a support session (issue #5
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of(products), update } },
+        { provide: ProductService, useValue: { getAll: () => of(products), update, getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
@@ -571,7 +581,10 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of(products), delete: deleteFn } },
+        {
+          provide: ProductService,
+          useValue: { getAll: () => of(products), delete: deleteFn, getTrackedProducts: noTrackedProducts }
+        },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: toastService },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -789,7 +802,7 @@ describe('ProductListComponent Status filter (issue #791)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll } },
+        { provide: ProductService, useValue: { getAll, getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -859,7 +872,9 @@ describe('ProductListComponent Status filter (issue #791)', () => {
    * The Price column and its sort went the same way in issue #792 (A2): a product carries no
    * selling price either. Issue #791 (E of #786) then added the Average cost, Last purchase and
    * Cheapest purchase columns, so the header row is exactly these seven columns and the Actions
-   * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it.
+   * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it. Issue #938
+   * then added Tracked, which is present because the tracked-products read answered - with an empty
+   * list, which is what the empty cells below say.
    */
   it('offers no supplier or price filter, column or sort', async () => {
     const { fixture, host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
@@ -868,7 +883,16 @@ describe('ProductListComponent Status filter (issue #791)', () => {
     // Status is excluded here: under "Only active" (the default) it is hidden entirely (issue #828).
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
-    ).toEqual(['Name', 'Category', 'Stock', 'Average cost', 'Last purchase', 'Cheapest purchase', '']);
+    ).toEqual([
+      'Name',
+      'Category',
+      'Stock',
+      'Average cost',
+      'Last purchase',
+      'Cheapest purchase',
+      'Tracked',
+      ''
+    ]);
 
     statusSelect(host).value = 'all';
     statusSelect(host).dispatchEvent(new Event('change'));
@@ -876,7 +900,17 @@ describe('ProductListComponent Status filter (issue #791)', () => {
 
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
-    ).toEqual(['Name', 'Category', 'Stock', 'Status', 'Average cost', 'Last purchase', 'Cheapest purchase', '']);
+    ).toEqual([
+      'Name',
+      'Category',
+      'Stock',
+      'Status',
+      'Average cost',
+      'Last purchase',
+      'Cheapest purchase',
+      'Tracked',
+      ''
+    ]);
   });
 });
 
@@ -892,7 +926,7 @@ describe('ProductListComponent Stock column rendering (issue #893)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of(products) } },
+        { provide: ProductService, useValue: { getAll: () => of(products), getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -1014,7 +1048,7 @@ describe('ProductListComponent Status column visibility (issue #828)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll } },
+        { provide: ProductService, useValue: { getAll, getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -1145,7 +1179,7 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of(products) } },
+        { provide: ProductService, useValue: { getAll: () => of(products), getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -1299,7 +1333,7 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll } },
+        { provide: ProductService, useValue: { getAll, getTrackedProducts: noTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -1396,7 +1430,10 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of([product({ id: 1, name: 'Widget' })]) } },
+        {
+          provide: ProductService,
+          useValue: { getAll: () => of([product({ id: 1, name: 'Widget' })]), getTrackedProducts: noTrackedProducts }
+        },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
@@ -1472,7 +1509,15 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll, update, delete: jest.fn(() => of(undefined)) } },
+        {
+          provide: ProductService,
+          useValue: {
+            getAll,
+            update,
+            delete: jest.fn(() => of(undefined)),
+            getTrackedProducts: noTrackedProducts
+          }
+        },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: toastService },
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
@@ -1690,7 +1735,15 @@ describe('ProductListComponent Reactivate (issue #900)', () => {
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll, update, delete: jest.fn(() => of(undefined)) } },
+        {
+          provide: ProductService,
+          useValue: {
+            getAll,
+            update,
+            delete: jest.fn(() => of(undefined)),
+            getTrackedProducts: noTrackedProducts
+          }
+        },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: toastService },
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
@@ -1850,7 +1903,10 @@ describe('ProductListComponent Import products in the toolbar (issue #875)', () 
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of([product({ id: 1, name: 'Widget' })]) } },
+        {
+          provide: ProductService,
+          useValue: { getAll: () => of([product({ id: 1, name: 'Widget' })]), getTrackedProducts: noTrackedProducts }
+        },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
@@ -1953,5 +2009,98 @@ describe('ProductListComponent Import products in the toolbar (issue #875)', () 
     const { host } = await render({ status: 'Ready' });
 
     expect(importLink(host)!.getAttribute('href')).toBe('/products/import');
+  });
+});
+
+/**
+ * The Tracked column (issue #938, fifth criterion): which of the business's products have supplier
+ * prices tracked, and where each one has got to. It is a read-only projection of one request - the
+ * switch itself is on each product's Edit page - so the column has no action, no retry and no error
+ * text of its own.
+ */
+describe('ProductListComponent Tracked column (issue #938)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(
+    products: Product[],
+    getTrackedProducts: jest.Mock = jest.fn(() => of([] as TrackedProduct[]))
+  ) {
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        { provide: ProductService, useValue: { getAll: () => of(products), getTrackedProducts } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        provideRouter([])
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+
+    const header = () => host.querySelector('[data-testid="tracked-column-header"]');
+    const cells = () =>
+      Array.from(host.querySelectorAll<HTMLElement>('[data-testid="tracked-cell"]')).map(
+        (cell) => cell.textContent?.trim() ?? ''
+      );
+
+    return { fixture, host, header, cells, getTrackedProducts };
+  }
+
+  const twoProducts = [
+    product({ id: 1, name: 'Tracked Cola' }),
+    product({ id: 2, name: 'Untracked Bar' })
+  ];
+
+  it('reads the tracked products once, with no filter', async () => {
+    const { getTrackedProducts } = await render(twoProducts);
+
+    expect(getTrackedProducts).toHaveBeenCalledTimes(1);
+    expect(getTrackedProducts).toHaveBeenCalledWith();
+  });
+
+  it('shows each status for a tracked product and nothing for one that is not tracked', async () => {
+    const { header, cells } = await render(
+      twoProducts,
+      jest.fn(() => of([{ productId: 1, status: ProductPriceTrackingStatus.Requested }]))
+    );
+
+    expect(header()?.textContent?.trim()).toBe('Tracked');
+    expect(cells()).toEqual(['Awaiting match', '']);
+  });
+
+  it.each([
+    [ProductPriceTrackingStatus.Requested, 'Awaiting match'],
+    [ProductPriceTrackingStatus.AutoMatched, 'Matched automatically'],
+    [ProductPriceTrackingStatus.Matched, 'Matched'],
+    [ProductPriceTrackingStatus.NotFound, 'Not found']
+  ])('reads status %s as "%s"', async (status, label) => {
+    const { cells } = await render(
+      [product({ id: 1, name: 'Tracked Cola' })],
+      jest.fn(() => of([{ productId: 1, status }]))
+    );
+
+    expect(cells()).toEqual([label]);
+  });
+
+  /**
+   * A failed read leaves the column out entirely rather than rendering every product as untracked:
+   * "we could not read it" must never present as "this product is not tracked". The catalogue itself
+   * still loads, because the column is not what the page is for.
+   */
+  it('leaves the column out when the read fails, and still lists the products', async () => {
+    const { header, cells, host } = await render(
+      twoProducts,
+      jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })))
+    );
+
+    expect(header()).toBeNull();
+    expect(cells()).toEqual([]);
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
   });
 });
