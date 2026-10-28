@@ -326,9 +326,9 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
   /** The `<nav>` panel's layout classes: the wide sidebar or rail, or the More sheet's body. */
   get panelClasses(): string {
     if (this.drawer) {
-      return 'min-h-0 w-full pb-[max(1rem,env(safe-area-inset-bottom))]';
+      return 'min-h-0 flex-1 w-full pb-[max(1rem,env(safe-area-inset-bottom))]';
     }
-    return `border-r border-rr-line p-3 ${this.expanded ? 'w-64' : 'w-16'}`;
+    return `shrink-0 border-r border-rr-line p-3 ${this.expanded ? 'w-64' : 'w-16'}`;
   }
 
   isLinkActive(link: NavLink): boolean {

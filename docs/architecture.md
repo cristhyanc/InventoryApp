@@ -4288,6 +4288,7 @@ and they are the first realized part of the target `layout/` folder described be
 | `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute`, `activeNavLink` and `activeNavGroup`, plus `navLockOf` (issue #729) |
 | `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
 | `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
+| `layout/bottom-nav.component.ts` | The narrow layout's bottom bar (issue #972): shortcuts picked out of `navigationFor` by `shortcutsOf`, and the More control that opens the sidebar as a sheet |
 | `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, the MSAL identity it passes to the user menu, and whether the sidebar offers the ordinary business navigation at all (issue #676) |
 
 `primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Expenses`, and the
@@ -6580,9 +6581,11 @@ the user's request issue #868 removed that section: `primaryNavigation` is now `
 `Admin`, with `Sites` immediately above `Machines` and `Site Commissions` back among the reports.
 What a destination needs from the provider is declared on the destination — its `lockedWithout` —
 and nothing in the menu is grouped by it. The `NavSectionHeading` type and the sidebar's rendering
-of it are kept (like `NavPlaceholder`) for the next menu that needs a heading, and `navigationFor`
+of it were kept (like `NavPlaceholder`) for the next menu that needs a heading, and `navigationFor`
 still drops a heading when every entry under it was left out, because a heading over nothing claims
-a section this member does not have; nothing declares one today.
+a section this member does not have. Issue #972 is that next menu: its four headings group the same
+order by purpose, not by provider — see [Restockroo dashboard and authenticated
+navigation](#restockroo-dashboard-and-authenticated-navigation-issue-972).
 
 **`Machines` came off that signal in issue #740.** A business keeps
 [its own machine records](#local-machines-and-external-machine-ids-issue-740) now, so the
@@ -7181,7 +7184,9 @@ and `Meta` services while shown and restores when left. The header and its narro
 chosen link closes it) and the example dashboard are child components. Its styles are Tailwind
 utilities over a separate `rr` colour scale and `font-rr` (Hanken Grotesk, bundled through
 `@fontsource/hanken-grotesk`) in `tailwind.config.js`, plus the `rr-button-*` classes in
-`styles.scss`; nothing an authenticated screen uses changed. The approved design export and every
+`styles.scss`; nothing an authenticated screen used changed. Issue #972 later applied the same `rr`
+tokens to the authenticated shell and the Dashboard only — see [Restockroo dashboard and
+authenticated navigation](#restockroo-dashboard-and-authenticated-navigation-issue-972). The approved design export and every
 intentional copy change are recorded in [docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md).
 The application is client-rendered, so the title and description are set in the browser; nothing
 here adds server rendering or promises search-engine indexing.
@@ -8661,7 +8666,8 @@ shared `money`).
    workflow.
 4. **Inventory** (`summary.inventory`) shows `inventoryValueAtCost` as the primary value -
    "Unavailable", never a real `$0.00`, whenever `isInventoryValueComplete` is `false` - with
-   `productCount` and `unitsInStorage` as explicitly scoped footer detail ("excludes machines"), so
+   `productCount` and `unitsInStorage` as explicitly scoped footer detail ("excludes machines"; since
+   issue #972 a separate note, "Storage units exclude stock in machines."), so
    storage/home stock is never read as a whole-business count. This card replaces the former
    dedicated "Inventory Value" tile described above. Links to `/products`
    (`ProductListComponent`), the existing Products/inventory list.
@@ -8678,6 +8684,72 @@ no new interaction styling was added.
 The existing Sites/Machines detail sections, their report meanings, the Reorder Alerts product
 table and the available profit detail are unchanged by this issue; no profit headline was added, and
 no unknown profit/cost figure was turned into a zero.
+
+#### Restockroo dashboard and authenticated navigation (issue #972)
+
+Issue #972 restyles the home Dashboard and the authenticated shell in the approved Restockroo
+design. It is a presentation change: no endpoint, DTO, calculation, capability, guard, route or
+provider lock was added or changed, and the page still never turns `null` into `0`.
+
+**Dashboard composition.** `DashboardComponent` keeps one data flow — the summary, the coordinated
+sales sync (#187), the Sites, Machines and reorder-alert reads, and the purchase-cost read — and
+renders it as five parts:
+
+1. **Four summary cards**, the #460 cards relabelled (Sales this week, Machines needing refill,
+   Products needing ordering, Business-owned inventory at cost) with the same `stat-card` hooks,
+   links and `aria-label`s. The inventory card's storage-unit scope is the separate
+   `storageUnitsNote`.
+2. **Needs attention**, `attentionAlerts`: empty selections and machines needing refill (only while
+   the live fleet is shown, #727), products needing ordering, and the existing
+   `MachineRestockSyncReminderComponent` (#891), rendered inside the same grid (`host` class
+   `contents`). `attentionCount` counts the alerts actually rendered plus the reminder when it shows
+   pending work or a failed read, so the badge can never disagree with the tiles. The reminder's
+   14-day window and its `restockFrom` link to the oldest pending date (#948/#949) are unchanged.
+   The only actions are the existing Pick List and Needs Ordering routes.
+3. **Site performance** and 4. **Machine performance**, as two separate lists: `GET /api/machines`
+   carries no site, so machines cannot be grouped under sites without a contract change, which is
+   out of scope here (follow-up). Every period stays; the machine list shows all of them in a table
+   on a wide screen and one chosen period (`machinePeriod`) on a narrow one. A part-week comparison
+   is labelled "vs same time last week". A period total is shown only when every machine returned that
+period's figure, and otherwise says "Unavailable". One pre-existing inconsistency is reported, not
+changed (calculations are out of scope): the fleet total's week comparison falls back to a machine's
+full `lastWeekGrossRevenue` when its `previousComparableWeekGrossRevenue` is `null`, mixing a full
+week into a part-week comparison.
+5. **Reorder priorities**: `reorderPriorities` is the first `REORDER_PRIORITY_LIMIT` (5) rows of the
+   authoritative low-stock list in its own order, and `reorderViewAllLabel` names the list's real
+   length. The purchase-cost read (#788/#789) is requested only for those rows and still only with
+   `Dashboard.ViewFinancials`. Last and Cheapest purchase remain labelled as historical costs from
+   this business's own purchases. The observed-supplier-price component of #930/#939 is not reused
+   yet because it has not landed; the column is added when it does, beside — never in place of — the
+   historical columns.
+
+Financial gating (`canViewFinancials`), provider-optional rendering (`isLiveFleetShown`,
+`isProviderUsable`), the support-session behaviour and the business-timezone date rules (#499) are
+the existing ones, untouched.
+
+**Navigation rendering and visibility.** `primaryNavigation` now carries four `NavSectionHeading`s —
+Operations (Dashboard, Pick List, Sites, Machines), Inventory & purchasing (Inventory, Purchases),
+Finance & reports (Expenses, Reports) and Settings (Admin) — over the unchanged order of #868.
+`navigationFor` appends `superAdminNavSection` ("Super admin") with `superAdminNavGroup` only when
+the platform-diagnostics probe grants access (#335/#605). Capability filtering (#528), the business
+navigation withholding (#676) and provider locks (#729) apply before headings are considered, and
+`withOccupiedSections` drops a heading unless an entry follows it, so a role never sees a heading
+over nothing. The sidebar renders an expanded heading as a visible `h2`, and a collapsed rail as an
+`sr-only` `h2` plus a divider.
+
+**Narrow layout.** Below the wide breakpoint `AppComponent` renders `BottomNavComponent`, whose
+shortcuts are `shortcutsOf(navigationFor(...))` — Dashboard, Pick List, Sites and the Inventory
+group's first page — so the bar can only offer an entry the member's own menu offers, with the same
+lock summary. Its More control opens the existing sidebar drawer as a bottom sheet
+(`role="dialog"`, `aria-modal`): a sticky Close header, a scrolling body, safe-area padding, Tab
+contained in the sheet, Escape closing it, and focus returned to the control that opened it
+(`openSidebarFrom`). Groups start open in the sheet so its whole menu can be scrolled.
+
+**Styles.** The shell and the Dashboard use the `rr` tokens and `font-rr` of issue #954 through
+Tailwind utilities in their own templates. No global class changed meaning and no other
+authenticated page changed; `design-tokens.contrast.spec.ts` covers the new text/background pairs.
+Visual evidence at 360, 390, 768 and 1440px, with a no-horizontal-overflow assertion, is
+`e2e/visual/dashboard-redesign.visual.ts`, written to `docs/screenshots/issue-972/`.
 
 #### Home dashboard coordinated Sites/Machines sales sync (issue #187)
 

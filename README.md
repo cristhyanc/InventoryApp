@@ -404,6 +404,43 @@ built on it. The page has **no Privacy Policy, Terms of Service or Contact link*
 those pages exists yet; add them to its footer once they do. The approved design and every wording
 change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
 
+## The dashboard and the menu
+
+Signed in, `/` is the **Dashboard** in the Restockroo design (issue #972). It changes how the page
+and the menu look, not what any figure means: no calculation, endpoint, permission or lock rule
+changed, and every "Unavailable" still means unavailable, never zero.
+
+- **Four summary cards**: Sales this week, Machines needing refill, Products needing ordering and
+  Business-owned inventory at cost. The inventory card says separately that its storage-unit count
+  excludes stock in machines.
+- **Needs attention** collects what is waiting for you: empty selections, machines needing refill,
+  products needing ordering and the [restock sync reminder](#machine-restock-sync-reminder)
+  ("Recorded refills haven't been synced yet."). Its count is the number of alerts actually shown,
+  and the panel is hidden when there is none. It is two columns on a wide screen and one on a phone,
+  and it offers only the two existing actions, **Open pick list** and **View needs ordering**. The
+  reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
+- **Site performance** and **Machine performance** are two separate lists, because a machine's site
+  is not part of the machine list today. Every period is kept (Today, This week, Last week, Month to
+  date and the comparisons); a part-week comparison is labelled "vs same time last week". On a phone
+  the machines show one period at a time, chosen with the period buttons.
+- **Reorder priorities** shows the first five products of the reorder list, in the list's own order,
+  and a link naming how many there really are ("View all 7 products needing ordering") to Products →
+  Needs Ordering. Its columns are product, storage stock, machine need, need to order, and the last
+  and cheapest purchase. Those two are **historical costs from your own purchases**, and the section
+  says so; current supplier prices are not shown on the dashboard yet.
+
+**The menu** is grouped under four headings: **Operations** (Dashboard, Pick List, Sites,
+Machines), **Inventory & purchasing** (Inventory, Purchases), **Finance & reports** (Expenses,
+Reports) and **Settings** (Admin). A heading appears only when you have something under it. A
+platform administrator also sees a separate **Super admin** heading over Platform Diagnostics,
+Businesses and Supplier Presets; nobody else does. Locked entries are shown exactly as before (see
+[The menu without a usable provider](#the-menu-without-a-usable-provider)).
+
+**On a phone** a bottom bar offers Dashboard, Pick List, Sites and Inventory — only those your role
+already has in its menu — and **More**, which opens the whole menu as a sheet from the bottom. The
+sheet scrolls to its last entry, keeps a **Close** button at the top, keeps clear of the phone's
+home indicator, keeps keyboard focus inside itself, closes with Escape, and returns focus to More.
+
 ## Roles and capabilities
 
 Ownership decides *whose* data a member sees; their **role** decides what they may do with it. Every `BusinessMembership` carries one of three roles (issue #521):
@@ -1619,6 +1656,9 @@ it is in, on the Machines pages.
 
 ## What you paid, on the dashboard's Reorder Alerts
 
+Since issue #972 this table is the dashboard's **Reorder priorities** (its first five products, with
+a link to all of them on Needs Ordering), and its two cost columns are unchanged.
+
 Where the Reorder Alerts table used to carry a selling price, it now carries what you actually paid:
 a **Last purchase** column and a **Cheapest purchase** column, each showing the supplier and the unit
 cost — for example `Acme · $1.25`. Both come from your recorded purchase history, so you can see
@@ -2228,7 +2268,9 @@ out.
   **Sites**, **Machines** (since issue #740 — see [Machines](#machines) below), **Inventory** (the
   group that used to be called Products — the Products page inside it, its URL and its breadcrumb
   are unchanged), Purchases, Expenses, Reports and Admin, and what an entry needs from Nayax is
-  shown on the entry itself rather than by where it sits. **Site Commissions is back under
+  shown on the entry itself rather than by where it sits. Issue #972 put that same order under the
+  headings Operations, Inventory & purchasing, Finance & reports and Settings (see [The dashboard
+  and the menu](#the-dashboard-and-the-menu)); none of them is about Nayax. **Site Commissions is back under
   Reports**, after Products and before GST.
 - **A locked entry is still visible, still clickable.** Without the Nayax connection it needs, an
   entry is shown **locked**, and opening it — or typing its URL — reaches a "needs a provider" page
