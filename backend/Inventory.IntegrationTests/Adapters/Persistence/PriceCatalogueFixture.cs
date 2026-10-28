@@ -148,6 +148,240 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     public IPriceCollectorRunStore DeniedRunStore() =>
         new EfPriceCollectorRunStore(Track(TestAppDbContext.Denied(_options)));
 
+    /// <summary>
+    /// The collector results store as a collector request reaches it (issue #937): the real adapter
+    /// on a context whose caller has no business at all, which is the scope
+    /// <c>POST api/price-collector/results</c> actually has.
+    ///
+    /// <para>A new context each time, deliberately: every call the collector makes is its own
+    /// request, and a test that reused one change tracker would be asserting against entities the
+    /// previous call left behind rather than against what was stored.</para>
+    /// </summary>
+    public IPriceCollectorResultStore DeniedResultStore() =>
+        new EfPriceCollectorResultStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>
+    /// One listing with the identity issue #937 checks a submitted row against, in whatever match
+    /// status the test is about. Written directly, because the only writer of a confirmed or
+    /// refused listing is #928 and that is out of scope here.
+    /// </summary>
+    public async Task<long> SeedIdentifiedListingAsync(
+        long? masterProductId,
+        string? waitingKey,
+        string supplierProductId,
+        SupplierListingMatchStatus matchStatus,
+        string? variant = "Classic",
+        decimal? sizeValue = 375m,
+        MasterProductSizeUnit? sizeUnit = MasterProductSizeUnit.Millilitre,
+        string? barcode = "0012345678905",
+        BarcodeScope? barcodeScope = BarcodeScope.Unit,
+        int? unitsPerPack = 30,
+        int? supplierPresetId = null)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var listing = new SupplierListing
+        {
+            SupplierPresetId = supplierPresetId ?? SupplierPresetId,
+            MasterProductId = masterProductId,
+            WaitingKey = waitingKey,
+            OriginWaitingKey = waitingKey,
+            SupplierProductId = supplierProductId,
+            Variant = variant,
+            SizeValue = sizeValue,
+            SizeUnit = sizeUnit,
+            Barcode = barcode,
+            BarcodeScope = barcodeScope,
+            UnitsPerPack = unitsPerPack,
+            MatchStatus = matchStatus,
+            CreatedAtUtc = CreatedAt,
+            UpdatedAtUtc = CreatedAt,
+        };
+
+        db.SupplierListings.Add(listing);
+        await db.SaveChangesAsync();
+
+        return listing.Id;
+    }
+
+    /// <summary>
+    /// Gives one listing a last accepted price, so the band of issue #937 has something to be a
+    /// band around. Written directly for the same reason: the only writer is the endpoint under
+    /// test, and a test about the band must not depend on it to arrange the state.
+    /// </summary>
+    public async Task SeedAcceptedPriceAsync(
+        long supplierListingId,
+        long priceCollectorRunId,
+        decimal packPrice,
+        DateTime observedAtUtc,
+        SupplierPriceBasis priceBasis = SupplierPriceBasis.InclusiveOfGst)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var observation = new SupplierPriceObservation
+        {
+            SupplierListingId = supplierListingId,
+            PriceCollectorRunId = priceCollectorRunId,
+            PackPrice = packPrice,
+            Currency = SupplierPriceObservationPolicy.Currency,
+            PriceBasis = priceBasis,
+            StockStatus = SupplierStockStatus.InStock,
+            ObservedAtUtc = observedAtUtc,
+            CreatedAtUtc = observedAtUtc,
+        };
+
+        db.SupplierPriceObservations.Add(observation);
+        await db.SaveChangesAsync();
+
+        var listing = await db.SupplierListings.SingleAsync(row => row.Id == supplierListingId);
+        listing.LatestObservationId = observation.Id;
+        listing.LastCheckedAtUtc = observedAtUtc;
+        listing.LastPriceChangeAtUtc = observedAtUtc;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>One work item inserted directly, answering the id a result row must cite.</summary>
+    public async Task<long> SeedWorkItemAsync(
+        long priceCollectorRunId,
+        long? masterProductId,
+        string? waitingKey,
+        int? supplierPresetId = null)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var workItem = new PriceCollectorWorkItem
+        {
+            PriceCollectorRunId = priceCollectorRunId,
+            SupplierPresetId = supplierPresetId ?? SupplierPresetId,
+            MasterProductId = masterProductId,
+            WaitingKey = waitingKey,
+            IssuedAtUtc = CreatedAt,
+        };
+
+        db.PriceCollectorWorkItems.Add(workItem);
+        await db.SaveChangesAsync();
+
+        return workItem.Id;
+    }
+
+    /// <summary>One open run with an expiry the test chooses, for the expiry behaviour of #937.</summary>
+    public async Task<long> SeedRunAsync(DateTime startedAtUtc, DateTime? expiresAtUtc)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var run = new PriceCollectorRun
+        {
+            StartedAtUtc = startedAtUtc,
+            ExpiresAtUtc = expiresAtUtc,
+            Status = PriceCollectorRunStatus.Running,
+        };
+
+        db.PriceCollectorRuns.Add(run);
+        await db.SaveChangesAsync();
+
+        return run.Id;
+    }
+
+    /// <summary>Every supplier listing, from outside the boundary, for verifying a write.</summary>
+    public async Task<IReadOnlyList<SupplierListing>> AllListingsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.SupplierListings.AsNoTracking().OrderBy(row => row.Id).ToListAsync();
+    }
+
+    /// <summary>One supplier listing by its key, on the same terms.</summary>
+    public async Task<SupplierListing> ListingAsync(long supplierListingId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.SupplierListings.AsNoTracking().SingleAsync(row => row.Id == supplierListingId);
+    }
+
+    /// <summary>Every accepted observation, on the same terms.</summary>
+    public async Task<IReadOnlyList<SupplierPriceObservation>> AllObservationsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.SupplierPriceObservations.AsNoTracking().OrderBy(row => row.Id).ToListAsync();
+    }
+
+    /// <summary>Every held reading, on the same terms.</summary>
+    public async Task<IReadOnlyList<SupplierListingPendingObservation>> AllPendingObservationsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.SupplierListingPendingObservations
+            .AsNoTracking()
+            .OrderBy(row => row.Id)
+            .ToListAsync();
+    }
+
+    /// <summary>Every recorded result row, on the same terms.</summary>
+    public async Task<IReadOnlyList<PriceCollectorResultRow>> AllResultRowsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.PriceCollectorResultRows.AsNoTracking().OrderBy(row => row.Id).ToListAsync();
+    }
+
+    /// <summary>Every match suggestion, on the same terms.</summary>
+    public async Task<IReadOnlyList<ProductMatchSuggestion>> AllSuggestionsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.ProductMatchSuggestions.AsNoTracking().OrderBy(row => row.Id).ToListAsync();
+    }
+
+    /// <summary>
+    /// A fingerprint of everything either business owns that a price could plausibly touch, so a
+    /// test can state that a collector submission wrote none of it. Products, purchases, purchase
+    /// lines, suppliers, stock adjustments and the businesses themselves, counted and summed.
+    /// </summary>
+    public async Task<string> TenantOwnedFingerprintAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var products = await db.Products
+            .AsNoTracking()
+            .OrderBy(product => product.Id)
+            .Select(product => new
+            {
+                product.Id,
+                product.BusinessId,
+                product.Name,
+                product.Unit,
+                product.QuantityInStock,
+                product.AverageUnitCost,
+                product.InventoryValue,
+                product.MachinePrice,
+            })
+            .ToListAsync();
+
+        var purchases = await db.Receipts.AsNoTracking().CountAsync();
+        var purchaseItems = await db.ReceiptItems.AsNoTracking().CountAsync();
+        var suppliers = await db.Suppliers.AsNoTracking().CountAsync();
+        var adjustments = await db.StockAdjustments.AsNoTracking().CountAsync();
+        var trackings = await db.ProductPriceTrackings
+            .AsNoTracking()
+            .OrderBy(tracking => tracking.Id)
+            .Select(tracking => new
+            {
+                tracking.Id,
+                tracking.BusinessId,
+                tracking.ProductId,
+                tracking.Status,
+                tracking.MasterProductId,
+                tracking.WaitingKey,
+                tracking.UpdatedAtUtc,
+            })
+            .ToListAsync();
+
+        return System.Text.Json.JsonSerializer.Serialize(
+            new { products, purchases, purchaseItems, suppliers, adjustments, trackings });
+    }
+
     public async Task<int> SeedBusinessAsync(string name)
     {
         await using var db = TestAppDbContext.Unrestricted(_options);

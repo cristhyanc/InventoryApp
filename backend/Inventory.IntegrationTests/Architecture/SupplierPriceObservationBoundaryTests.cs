@@ -101,11 +101,15 @@ public class SupplierPriceObservationBoundaryTests
     /// </summary>
     private static readonly string[] FilesThatMayNameThem =
     [
+        "Inventory.Application/PriceCatalogue/CompletePriceCollectorRun.cs",
         "Inventory.Application/PriceCatalogue/IPriceCatalogueWorkListStore.cs",
+        "Inventory.Application/PriceCatalogue/IPriceCollectorResultStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunSettings.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunStore.cs",
         "Inventory.Application/PriceCatalogue/IssuePriceCollectorWorkList.cs",
+        "Inventory.Application/PriceCatalogue/PriceCollectorResultContracts.cs",
         "Inventory.Domain/PriceCatalogue/CheapestUnitOfferPolicy.cs",
+        "Inventory.Domain/PriceCatalogue/PriceCollectorResultPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorRunPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorWorkItemPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorWorkListPolicy.cs",
@@ -113,15 +117,20 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Domain/PriceCatalogue/SupplierPriceFreshnessPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierPriceObservationPolicy.cs",
         "Inventory.Infrastructure/Data/AppDbContext.cs",
+        "Inventory.Infrastructure/Models/PriceCollectorResultRow.cs",
         "Inventory.Infrastructure/Models/PriceCollectorRun.cs",
         "Inventory.Infrastructure/Models/PriceCollectorWorkItem.cs",
         "Inventory.Infrastructure/Models/SupplierListing.cs",
+        "Inventory.Infrastructure/Models/SupplierListingPendingObservation.cs",
         "Inventory.Infrastructure/Models/SupplierPreset.cs",
         "Inventory.Infrastructure/Models/SupplierPriceObservation.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCatalogueWorkListStore.cs",
+        "Inventory.Infrastructure/Persistence/EfPriceCollectorResultStore.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCollectorRunStore.cs",
+        "Inventory.Infrastructure/Persistence/PriceCollectorRunClosure.cs",
         "InventoryApi/Adapters/PriceCatalogue/ConfiguredPriceCollectorRunSettings.cs",
         "InventoryApi/Auth/PriceCollector/PriceCollectorOptions.cs",
+        "InventoryApi/DTOs/PriceCollectorResultDtos.cs",
     ];
 
     private static readonly string[] ProductionProjects =
