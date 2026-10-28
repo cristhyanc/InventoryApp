@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import {
   CheapestSupplierOffer,
   CheapestSupplierProduct,
@@ -113,11 +114,48 @@ describe('cheapestSupplierDisplay (issue #930)', () => {
   });
 });
 
-describe('CheapestSupplierCellComponent (issue #930)', () => {
-  afterEach(() => TestBed.resetTestingModule());
+/**
+ * The prototype `<dialog>`'s methods live on, taken from an element rather than from the global so
+ * the spec works whichever interface jsdom maps `dialog` to. `setup-jest.ts` supplies the
+ * open/close state machine jsdom 20 is missing; what is spied on here is which of the two opening
+ * calls the component makes, because `showModal()` is the one that makes the page behind the panel
+ * inert and `show()` is the one that does not.
+ */
+const dialogPrototype = Object.getPrototypeOf(document.createElement('dialog')) as HTMLDialogElement;
 
-  async function render(overrides: Partial<CheapestSupplierProduct> | null = {}, state: CheapestSuppliersState = 'loaded') {
+/** A Tab, Shift+Tab or Escape press on whatever currently has focus, as the browser reports one. */
+function press(key: string, shiftKey = false): void {
+  (document.activeElement ?? document.body).dispatchEvent(
+    new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true })
+  );
+}
+
+describe('CheapestSupplierCellComponent (issue #930)', () => {
+  let showModal: jest.SpyInstance;
+  let show: jest.SpyInstance;
+
+  beforeEach(() => {
+    showModal = jest.spyOn(dialogPrototype, 'showModal');
+    show = jest.spyOn(dialogPrototype, 'show');
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    TestBed.resetTestingModule();
+  });
+
+  async function render(
+    overrides: Partial<CheapestSupplierProduct> | null = {},
+    state: CheapestSuppliersState = 'loaded',
+    timeZoneId?: string
+  ) {
     await TestBed.configureTestingModule({ imports: [CheapestSupplierCellComponent] }).compileComponents();
+
+    // The business's own zone, as `GET /api/business/current` publishes it. Left unpublished it
+    // stays "not known yet", which is the state the popup must render no instant at all in.
+    if (timeZoneId !== undefined) {
+      TestBed.inject(BusinessTimeZoneService).publish(timeZoneId);
+    }
 
     const fixture: ComponentFixture<CheapestSupplierCellComponent> = TestBed.createComponent(CheapestSupplierCellComponent);
     fixture.componentRef.setInput('product', overrides === null ? undefined : product(overrides));
@@ -132,12 +170,27 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
       fixture,
       host,
       cell: () => host.querySelector('[data-testid="cheapest-supplier-cell"]') as HTMLElement,
-      popup: () => host.querySelector('[data-testid="cheapest-supplier-popup"]') as HTMLElement | null,
-      rows: () => Array.from(host.querySelectorAll('[data-testid="cheapest-supplier-row"]'))
+      popup: () => host.querySelector('[data-testid="cheapest-supplier-popup"]') as HTMLDialogElement | null,
+      rows: () => Array.from(host.querySelectorAll('[data-testid="cheapest-supplier-row"]')),
+      lastChecked: () =>
+        Array.from(host.querySelectorAll('[data-testid="cheapest-supplier-last-checked"]')).map(
+          (cell) => cell.textContent?.trim() ?? ''
+        ),
+      open: () => {
+        (host.querySelector('[data-testid="cheapest-supplier-cell"]') as HTMLButtonElement).click();
+        fixture.detectChanges();
+        return host.querySelector('[data-testid="cheapest-supplier-popup"]') as HTMLDialogElement;
+      },
+      tabStops: () =>
+        Array.from(
+          (host.querySelector('[data-testid="cheapest-supplier-popup"]') as HTMLElement).querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled])'
+          )
+        )
     };
   }
 
-  it('opens an accessible, labelled dialog from the cell and focuses it', async () => {
+  it('opens a labelled native modal dialog from the cell and focuses it', async () => {
     const { fixture, cell, popup } = await render();
 
     const trigger = cell() as HTMLButtonElement;
@@ -149,8 +202,13 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
     fixture.detectChanges();
 
     const dialog = popup()!;
-    expect(dialog.getAttribute('role')).toBe('dialog');
-    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    // A native `<dialog>` opened with `showModal()`, which is what maps it to the modal-dialog role
+    // and makes the rest of the page inert; `role="dialog"`/`aria-modal="true"` on a plain div
+    // claimed that without it, which is the finding this replaces.
+    expect(dialog.tagName).toBe('DIALOG');
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(show).not.toHaveBeenCalled();
+    expect(dialog.hasAttribute('open')).toBe(true);
     const labelledBy = dialog.getAttribute('aria-labelledby')!;
     expect(dialog.querySelector(`#${labelledBy}`)?.textContent).toContain('Coca-Cola Classic');
     expect(document.activeElement).toBe(dialog);
@@ -158,15 +216,27 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
   });
 
   it('closes on Escape and gives focus back to the cell that opened it', async () => {
-    const { fixture, cell, popup } = await render();
+    const { fixture, cell, popup, open } = await render();
 
-    (cell() as HTMLButtonElement).click();
-    fixture.detectChanges();
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    open();
+    press('Escape');
     fixture.detectChanges();
 
     expect(popup()).toBeNull();
     expect(document.activeElement).toBe(cell());
+    expect((cell() as HTMLButtonElement).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('closes on the browser\'s own close request and leaves the cell reporting itself closed', async () => {
+    const { fixture, cell, popup, open } = await render();
+
+    const dialog = open();
+    dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+    fixture.detectChanges();
+
+    expect(popup()).toBeNull();
+    expect(document.activeElement).toBe(cell());
+    expect((cell() as HTMLButtonElement).getAttribute('aria-expanded')).toBe('false');
   });
 
   it('lists every supplier in the order the server published them, with the cheapest marked', async () => {
@@ -287,5 +357,183 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
 
     expect(cell().tagName).toBe('SPAN');
     expect(cell().textContent?.trim()).toBe('Loading');
+  });
+
+  /**
+   * The popup says it is modal, so the keyboard has to stay inside it and the page behind it has
+   * to be out of reach. The review finding these cover is that the panel declared `aria-modal`
+   * while Tab walked straight out of it into the page underneath.
+   *
+   * Two halves prove it, and only one of them belongs to this component. The platform's half - the
+   * top layer, the inert page, the `::backdrop` - is `showModal()`, asserted above as the call the
+   * component makes; jsdom implements none of it, so asserting it here would only be asserting
+   * `setup-jest.ts`'s stub. This component's own half is the Tab cycle, and that is exercised for
+   * real below: real `keydown` events, real `focus()` calls and `document.activeElement` read back
+   * each time, with a live control on the page behind the popup that the cycle must never reach.
+   */
+  describe('keeps focus inside the open popup', () => {
+    let background: HTMLButtonElement;
+
+    beforeEach(() => {
+      background = document.createElement('button');
+      background.textContent = 'A control on the page behind the popup';
+      document.body.appendChild(background);
+    });
+
+    afterEach(() => background.remove());
+
+    it('moves Tab from the panel itself to its first control, not into the page behind it', async () => {
+      const { open, tabStops } = await render();
+
+      open();
+      expect(document.activeElement).not.toBe(background);
+
+      press('Tab');
+
+      expect(document.activeElement).toBe(tabStops()[0]);
+    });
+
+    it('wraps Tab from the last control back to the first', async () => {
+      const { open, tabStops } = await render();
+
+      const dialog = open();
+      const stops = tabStops();
+      expect(stops.length).toBeGreaterThan(1);
+      stops[stops.length - 1].focus();
+
+      press('Tab');
+
+      expect(document.activeElement).toBe(stops[0]);
+      expect(dialog.contains(document.activeElement)).toBe(true);
+    });
+
+    it('wraps Shift+Tab from the first control back to the last, and from the panel to the last', async () => {
+      const { open, tabStops } = await render();
+
+      open();
+      const stops = tabStops();
+      const last = stops[stops.length - 1];
+
+      // From the panel itself, backwards is the end of its own cycle, never the page behind it.
+      press('Tab', true);
+      expect(document.activeElement).toBe(last);
+
+      stops[0].focus();
+      press('Tab', true);
+      expect(document.activeElement).toBe(last);
+    });
+
+    it('never lands on a control outside the popup, Tab or Shift+Tab, however long it is held', async () => {
+      const { open, tabStops } = await render();
+
+      const dialog = open();
+      const stops = tabStops();
+      const visited: HTMLElement[] = [];
+
+      for (let step = 0; step < stops.length * 2 + 1; step += 1) {
+        press('Tab');
+        expect(document.activeElement).not.toBe(background);
+        expect(dialog.contains(document.activeElement)).toBe(true);
+        visited.push(document.activeElement as HTMLElement);
+      }
+
+      // Forward cycling visits every one of the popup's controls and nothing else.
+      expect(new Set(visited)).toEqual(new Set(stops));
+
+      for (let step = 0; step < stops.length * 2 + 1; step += 1) {
+        press('Tab', true);
+        expect(document.activeElement).not.toBe(background);
+        expect(dialog.contains(document.activeElement)).toBe(true);
+      }
+    });
+
+    it('closes on a click beside the panel and not on one inside it, returning focus either way', async () => {
+      const { fixture, cell, popup, open } = await render();
+
+      const dialog = open();
+      // A click on the content is not a dismissal: the `::backdrop` click is the one reported with
+      // the dialog itself as its target.
+      dialog.querySelector('table')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      fixture.detectChanges();
+      expect(popup()).not.toBeNull();
+
+      dialog.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      fixture.detectChanges();
+
+      expect(popup()).toBeNull();
+      expect(document.activeElement).toBe(cell());
+    });
+
+    it('closes from its own Close button and returns focus to the cell', async () => {
+      const { fixture, cell, popup, open } = await render();
+
+      const dialog = open();
+      Array.from(dialog.querySelectorAll('button'))
+        .find((button) => button.textContent?.trim() === 'Close')!
+        .click();
+      fixture.detectChanges();
+
+      expect(popup()).toBeNull();
+      expect(document.activeElement).toBe(cell());
+    });
+  });
+
+  /**
+   * "Last checked" is a true instant, so it follows the business's own configured zone and not the
+   * zone the operator's browser happens to be in (AGENTS.md § Reporting dates and filters). Each
+   * case asserts an exact wall-clock reading in a named zone, and the two zones are far enough
+   * apart that no single browser zone can satisfy both - which is what makes these cases evidence
+   * that the business's zone is read rather than the host's. Both zones' daylight-saving
+   * transitions are included: one instant either side of each, where an hour of UTC does not move
+   * the business clock by an hour.
+   */
+  describe('shows Last checked in the business time zone', () => {
+    it.each([
+      // Australian Eastern Daylight Time, UTC+11.
+      ['Australia/Sydney', '2026-10-28T04:00:00Z', '28/10/2026, 03:00 pm'],
+      // The same instant for a business in New York: UTC-4, and the day before.
+      ['America/New_York', '2026-10-28T04:00:00Z', '28/10/2026, 12:00 am'],
+      // Sydney's daylight saving ends 3:00 am AEDT on 5 April 2026, so the clock goes back to
+      // 2:00 am AEST and one UTC minute moves it back 59.
+      ['Australia/Sydney', '2026-04-04T15:59:00Z', '05/04/2026, 02:59 am'],
+      ['Australia/Sydney', '2026-04-04T16:00:00Z', '05/04/2026, 02:00 am'],
+      // It starts 2:00 am AEST on 4 October 2026, so the clock jumps to 3:00 am AEDT.
+      ['Australia/Sydney', '2026-10-03T15:59:00Z', '04/10/2026, 01:59 am'],
+      ['Australia/Sydney', '2026-10-03T16:00:00Z', '04/10/2026, 03:00 am'],
+      // New York's ends 2:00 am EDT on 1 November 2026, back to 1:00 am EST.
+      ['America/New_York', '2026-11-01T05:59:00Z', '01/11/2026, 01:59 am'],
+      ['America/New_York', '2026-11-01T06:00:00Z', '01/11/2026, 01:00 am'],
+      // ...and starts 2:00 am EST on 8 March 2026, jumping to 3:00 am EDT.
+      ['America/New_York', '2026-03-08T06:59:00Z', '08/03/2026, 01:59 am'],
+      ['America/New_York', '2026-03-08T07:00:00Z', '08/03/2026, 03:00 am']
+    ])('renders %s\'s own wall clock for %s', async (timeZoneId, lastCheckedAtUtc, expected) => {
+      const { open, lastChecked } = await render({ suppliers: [offer({ lastCheckedAtUtc })] }, 'loaded', timeZoneId);
+
+      open();
+
+      expect(lastChecked()).toEqual([expected]);
+    });
+
+    it('renders no instant at all while the business time zone is unknown, rather than the browser\'s', async () => {
+      const { open, lastChecked } = await render({ suppliers: [offer()] });
+
+      open();
+
+      // Blank, and in particular not the browser-local rendering of the instant and not "Never",
+      // which is the answer for a listing nobody has checked.
+      expect(lastChecked()).toEqual(['']);
+    });
+
+    it('still says Never for a listing nobody has checked, in a known zone', async () => {
+      const { open, lastChecked } = await render(
+        { suppliers: [offer({ lastCheckedAtUtc: null })] },
+        'loaded',
+        'Australia/Sydney'
+      );
+
+      open();
+
+      expect(lastChecked()).toEqual(['Never']);
+    });
   });
 });

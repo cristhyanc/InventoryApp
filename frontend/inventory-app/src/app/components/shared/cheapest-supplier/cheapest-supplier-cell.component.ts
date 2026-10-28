@@ -1,5 +1,5 @@
-import { CommonModule } from '@angular/common';
-import { Component, ElementRef, HostListener, Input, ViewChild } from '@angular/core';
+import { Component, ElementRef, Input, Renderer2, ViewChild } from '@angular/core';
+import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import {
   CheapestSupplierOffer,
   CheapestSupplierProduct,
@@ -9,6 +9,20 @@ import {
 } from '../../../models/cheapest-supplier';
 import { ProductPriceTrackingStatus } from '../../../models/models';
 import { CheapestSuppliersState } from './cheapest-suppliers.component';
+
+/**
+ * What counts as a tab stop inside the popup. Its content is the two Close controls and one
+ * supplier link per row, so this is the whole of the popup's keyboard order; `tabindex="-1"` is
+ * excluded because the panel itself carries it to be focusable without being tabbable.
+ */
+const POPUP_TAB_STOPS = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',');
 
 /** The note every popup carries: these are prices somebody observed, not costs this business paid. */
 export const OBSERVED_PRICES_NOTE =
@@ -138,13 +152,20 @@ export function cheapestSupplierDisplay(
  * **The popup lists every one of the business's linked, not-hidden suppliers**, cheapest first,
  * with each one's pack size, pack price, unit price on both bases, special, stock, last check and a
  * link to the supplier's own page - and the suppliers with no match or no check yet, each saying
- * so. It is a modal dialog: labelled, focused on open, closed by Escape, the backdrop or its own
- * Close button, and it returns focus to the cell that opened it.
+ * so. Each last-check instant is shown in the business's own configured time zone through
+ * `BusinessDateTimePipe`, never in the operator's accidental browser zone.
+ *
+ * **It is a real modal, not a panel that says it is one.** The popup is a native `<dialog>` opened
+ * with `showModal()`, so the browser puts it in the top layer and makes the rest of the page
+ * inert: the page behind it cannot be clicked, tabbed into or read by assistive technology while
+ * it is open. The Tab cycle below is that same contract written down rather than inferred, which
+ * is what the regression tests can hold it to; Escape, the backdrop and the Close controls all
+ * close it, and focus returns to the cell that opened it.
  */
 @Component({
   selector: 'app-cheapest-supplier-cell',
   standalone: true,
-  imports: [CommonModule],
+  imports: [BusinessDateTimePipe],
   templateUrl: './cheapest-supplier-cell.component.html'
 })
 export class CheapestSupplierCellComponent {
@@ -175,9 +196,19 @@ export class CheapestSupplierCellComponent {
 
   @ViewChild('trigger') private readonly trigger?: ElementRef<HTMLButtonElement>;
 
+  /** The open panel, while there is one, so closing it can leave the top layer before focus moves. */
+  private panel?: HTMLDialogElement;
+
+  /** The listeners bound for one opening, undone when it closes with the element it belongs to. */
+  private readonly panelListeners: (() => void)[] = [];
+
+  constructor(private readonly renderer: Renderer2) {}
+
   @ViewChild('dialogPanel')
-  private set dialogPanel(panel: ElementRef<HTMLElement> | undefined) {
-    panel?.nativeElement.focus();
+  private set dialogPanel(panel: ElementRef<HTMLDialogElement> | undefined) {
+    if (panel !== undefined) {
+      this.openAsModal(panel.nativeElement);
+    }
   }
 
   /** The cell's own text: a cheapest supplier and its unit price, or the state that explains why not. */
@@ -214,12 +245,82 @@ export class CheapestSupplierCellComponent {
     }
 
     this.open = false;
+    for (const unlisten of this.panelListeners) {
+      unlisten();
+    }
+    this.panelListeners.length = 0;
+
+    // Closing the dialog before moving focus is the order that matters: while it is open the rest
+    // of the page is inert, so the cell underneath cannot take focus yet.
+    const panel = this.panel;
+    this.panel = undefined;
+    panel?.close();
+
     this.trigger?.nativeElement.focus();
   }
 
-  @HostListener('document:keydown.escape')
-  onEscape(): void {
-    this.closePopup();
+  /**
+   * Hands the panel to the browser as a modal: the top layer, the inert page behind it and the
+   * `::backdrop` are the platform's, and these three listeners are the popup's own behaviour over
+   * them. They are bound here rather than in the template because each one is a decision about the
+   * event rather than a handler on an element - which click counts as "outside", which key moves
+   * focus and where - and because a mouse handler on the panel markup would be exactly the
+   * mouse-only control the panel is not.
+   */
+  private openAsModal(panel: HTMLDialogElement): void {
+    this.panel = panel;
+    panel.showModal();
+    panel.focus();
+
+    this.panelListeners.push(
+      this.renderer.listen(panel, 'keydown', (event: KeyboardEvent) => this.onPanelKeydown(panel, event)),
+      // `::backdrop` is the panel's own pseudo-element, so a click beside the panel is reported
+      // with the panel as its target; a click on anything inside it never is.
+      this.renderer.listen(panel, 'click', (event: MouseEvent) => {
+        if (event.target === panel) {
+          this.closePopup();
+        }
+      }),
+      // The browser's own close request. It must leave this component in the state Close leaves it
+      // in, never a closed dialog the cell still reports as expanded.
+      this.renderer.listen(panel, 'cancel', (event: Event) => {
+        event.preventDefault();
+        this.closePopup();
+      })
+    );
+  }
+
+  /**
+   * Escape closes; Tab and Shift+Tab stay inside. Every Tab is answered here rather than left to
+   * the browser so the cycle is one definition in one place: from the panel itself forward to its
+   * first control and backward to its last, and from either end around to the other. Nothing in
+   * this cycle is outside the panel, which is the half of modality the page behind it cannot be
+   * trusted to enforce on its own.
+   */
+  private onPanelKeydown(panel: HTMLDialogElement, event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.closePopup();
+      return;
+    }
+
+    if (event.key !== 'Tab') {
+      return;
+    }
+
+    event.preventDefault();
+    const stops = Array.from(panel.querySelectorAll<HTMLElement>(POPUP_TAB_STOPS));
+    if (stops.length === 0) {
+      panel.focus();
+      return;
+    }
+
+    const current = stops.indexOf(document.activeElement as HTMLElement);
+    const next = event.shiftKey
+      ? stops[current <= 0 ? stops.length - 1 : current - 1]
+      : stops[current === -1 || current === stops.length - 1 ? 0 : current + 1];
+
+    next.focus();
   }
 
   basisOf(basis: SupplierPriceBasis | null): string {

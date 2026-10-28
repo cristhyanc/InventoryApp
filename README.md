@@ -1443,8 +1443,13 @@ them.
   example `JB Metro $0.95/unit (24 pack $22.70, special) · Coles $1.27/unit · Woolworths: no match`.
   Each row shows the pack size and pack price, the unit price **on both GST bases**, whether it is a
   special, what the supplier said about stock, when it was last checked, and a link that opens that
-  supplier's own page for the product in a new tab. The popup is a dialog: it can be closed with
-  **Escape**, the backdrop or **Close**, and the keyboard goes back to the cell you opened it from.
+  supplier's own page for the product in a new tab. **Last checked** is shown on your business's own
+  clock, in the time zone set in Admin → Business settings, not in whatever zone the computer you
+  are using happens to be in; a listing nobody has checked yet says **Never**.
+- **The popup is a real dialog, so the page behind it waits.** While it is open, the rest of the page
+  cannot be clicked or tabbed into: **Tab** and **Shift+Tab** cycle through the popup's own links and
+  buttons and stay there. **Escape**, clicking outside the panel and **Close** all close it, and the
+  keyboard goes back to the cell you opened it from.
 - **The price you are compared on follows your GST registration.** A GST-registered business is
   shown and compared on **ex-GST** prices, because that is what it really pays for a can; a business
   that is not registered is shown the price it hands over, **inc-GST**. Both figures are in the

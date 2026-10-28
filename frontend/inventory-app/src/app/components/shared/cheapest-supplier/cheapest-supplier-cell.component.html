@@ -22,127 +22,143 @@
 }
 
 @if (open) {
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-md-gray-800/50 p-4" (click)="closePopup()">
-    <div
-      #dialogPanel
-      role="dialog"
-      aria-modal="true"
-      [attr.aria-labelledby]="titleId"
-      tabindex="-1"
-      class="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col rounded-md-dialog bg-white text-left shadow-md-lg outline-none"
-      (click)="$event.stopPropagation()"
-      data-testid="cheapest-supplier-popup"
-    >
-      <div class="flex items-start justify-between gap-4 border-b border-md-gray-200 px-6 py-4">
-        <div>
-          <h2 [id]="titleId" class="card-title">{{ dialogTitle }}</h2>
-          <p class="value-muted">{{ observedPricesNote }}</p>
-          @if (isAutomaticMatch) {
-            <p class="mt-1 text-md-body value-muted" data-testid="cheapest-supplier-auto-match">{{ automaticMatchNote }}</p>
-          }
-        </div>
-        <button
-          type="button"
-          aria-label="Close supplier prices"
-          class="rounded-md-control px-2 py-1 text-md-gray-600 hover:bg-md-gray-100"
-          (click)="closePopup()"
-        >✕</button>
+  <!--
+    A native modal `<dialog>`, not a `role="dialog"` div inside a backdrop div. `showModal()` is
+    what makes this panel actually modal: the browser moves it into the top layer, makes the rest
+    of the page inert and paints the backdrop as this element's own `::backdrop`, so the page
+    behind it cannot be clicked, tabbed into or reached by assistive technology. That is the
+    behaviour `aria-modal="true"` used to *claim* on a plain div while the page behind stayed
+    reachable, and it is why neither `role` nor `aria-modal` is written here: the platform maps a
+    modal `<dialog>` to exactly those, and repeating them is how the two drift apart.
+    Dismissal (Escape, the backdrop, Close), the Tab cycle and the return of focus to the cell are
+    bound in the component - `::backdrop` is this element's own pseudo-element, so an outside click
+    arrives on the dialog itself and has to be told apart from a click on the content by its target.
+  -->
+  <dialog
+    #dialogPanel
+    tabindex="-1"
+    [attr.aria-labelledby]="titleId"
+    class="m-auto flex max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-3xl flex-col overflow-hidden rounded-md-dialog border-0 bg-white p-0 text-left text-md-gray-800 shadow-md-lg outline-none backdrop:bg-md-gray-800/50"
+    data-testid="cheapest-supplier-popup"
+  >
+    <div class="flex items-start justify-between gap-4 border-b border-md-gray-200 px-6 py-4">
+      <div>
+        <h2 [id]="titleId" class="card-title">{{ dialogTitle }}</h2>
+        <p class="value-muted">{{ observedPricesNote }}</p>
+        @if (isAutomaticMatch) {
+          <p class="mt-1 text-md-body value-muted" data-testid="cheapest-supplier-auto-match">{{ automaticMatchNote }}</p>
+        }
       </div>
-
-      <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <table class="table">
-          <thead class="table-head">
-            <tr>
-              <th scope="col" class="table-cell">Supplier</th>
-              <th scope="col" class="table-cell table-num">Unit price</th>
-              <th scope="col" class="table-cell">Pack</th>
-              <th scope="col" class="table-cell">Stock</th>
-              <th scope="col" class="table-cell">Last checked</th>
-              <th scope="col" class="table-cell"></th>
-            </tr>
-          </thead>
-          <tbody>
-            <!--
-              Cheapest first, in the server's own order: comparable offers by unit price, then the
-              ones it could not compare, then the listings nobody has checked, then the suppliers
-              that do not list the product. Re-ordering them here would be a second opinion about
-              which supplier to look at first.
-            -->
-            @for (offer of suppliers; track offer.supplierId + ':' + (offer.packQuantity ?? 0) + ':' + (offer.productUrl ?? '')) {
-              <tr class="table-row" data-testid="cheapest-supplier-row">
-                <td class="table-cell">
-                  <span class="font-semibold">{{ offer.supplierName }}</span>
-                  @if (offer.isCheapest) {
-                    <span class="badge badge-success ml-2">Cheapest</span>
-                  }
-                  @if (statusOf(offer); as status) {
-                    <span class="block text-md-body value-muted">{{ status }}</span>
-                  }
-                </td>
-                <td class="table-cell table-num">
-                  <!--
-                    Both bases, always, with the one this business is compared on first: a price
-                    that is not knowable is left blank rather than written as a zero, which is a
-                    price (AGENTS.md § Frontend rules).
-                  -->
-                  @if (priceOf(offer.unitPrice); as unitPrice) {
-                    <span class="font-semibold">{{ unitPrice }} {{ basisOf(displayBasis) }}</span>
-                  } @else {
-                    <span class="value-muted">—</span>
-                  }
-                  @if (priceOf(offer.unitPriceExGst); as exGst) {
-                    <span class="block text-md-body value-muted">{{ exGst }} ex GST</span>
-                  }
-                  @if (priceOf(offer.unitPriceIncGst); as incGst) {
-                    <span class="block text-md-body value-muted">{{ incGst }} inc GST</span>
-                  }
-                </td>
-                <td class="table-cell">
-                  @if (offer.packQuantity !== null && priceOf(offer.packPrice); as packPrice) {
-                    <span>{{ offer.packQuantity }} pack {{ packPrice }} {{ basisOf(offer.packPriceBasis) }}</span>
-                  } @else if (offer.packQuantity !== null) {
-                    <span>{{ offer.packQuantity }} pack</span>
-                  } @else {
-                    <span class="value-muted">—</span>
-                  }
-                  @if (offer.isSpecial) {
-                    <span class="block text-md-body value-positive">Special</span>
-                  }
-                </td>
-                <td class="table-cell">
-                  @if (stockOf(offer); as stock) {
-                    <span>{{ stock }}</span>
-                  } @else {
-                    <span class="value-muted">—</span>
-                  }
-                </td>
-                <td class="table-cell whitespace-nowrap">
-                  @if (offer.lastCheckedAtUtc) {
-                    <span>{{ offer.lastCheckedAtUtc | date:'medium' }}</span>
-                  } @else {
-                    <span class="value-muted">Never</span>
-                  }
-                </td>
-                <td class="table-cell">
-                  @if (offer.productUrl) {
-                    <a
-                      class="text-md-primary hover:underline"
-                      [href]="offer.productUrl"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      [attr.aria-label]="'Open ' + offer.supplierName + ' product page for ' + productName"
-                    >View</a>
-                  }
-                </td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-
-      <div class="flex justify-end border-t border-md-gray-200 px-6 py-4">
-        <button type="button" class="btn btn-secondary" (click)="closePopup()">Close</button>
-      </div>
+      <button
+        type="button"
+        aria-label="Close supplier prices"
+        class="rounded-md-control px-2 py-1 text-md-gray-600 hover:bg-md-gray-100"
+        (click)="closePopup()"
+      >✕</button>
     </div>
-  </div>
+
+    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <table class="table">
+        <thead class="table-head">
+          <tr>
+            <th scope="col" class="table-cell">Supplier</th>
+            <th scope="col" class="table-cell table-num">Unit price</th>
+            <th scope="col" class="table-cell">Pack</th>
+            <th scope="col" class="table-cell">Stock</th>
+            <th scope="col" class="table-cell">Last checked</th>
+            <th scope="col" class="table-cell"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <!--
+            Cheapest first, in the server's own order: comparable offers by unit price, then the
+            ones it could not compare, then the listings nobody has checked, then the suppliers
+            that do not list the product. Re-ordering them here would be a second opinion about
+            which supplier to look at first.
+          -->
+          @for (offer of suppliers; track offer.supplierId + ':' + (offer.packQuantity ?? 0) + ':' + (offer.productUrl ?? '')) {
+            <tr class="table-row" data-testid="cheapest-supplier-row">
+              <td class="table-cell">
+                <span class="font-semibold">{{ offer.supplierName }}</span>
+                @if (offer.isCheapest) {
+                  <span class="badge badge-success ml-2">Cheapest</span>
+                }
+                @if (statusOf(offer); as status) {
+                  <span class="block text-md-body value-muted">{{ status }}</span>
+                }
+              </td>
+              <td class="table-cell table-num">
+                <!--
+                  Both bases, always, with the one this business is compared on first: a price
+                  that is not knowable is left blank rather than written as a zero, which is a
+                  price (AGENTS.md § Frontend rules).
+                -->
+                @if (priceOf(offer.unitPrice); as unitPrice) {
+                  <span class="font-semibold">{{ unitPrice }} {{ basisOf(displayBasis) }}</span>
+                } @else {
+                  <span class="value-muted">—</span>
+                }
+                @if (priceOf(offer.unitPriceExGst); as exGst) {
+                  <span class="block text-md-body value-muted">{{ exGst }} ex GST</span>
+                }
+                @if (priceOf(offer.unitPriceIncGst); as incGst) {
+                  <span class="block text-md-body value-muted">{{ incGst }} inc GST</span>
+                }
+              </td>
+              <td class="table-cell">
+                @if (offer.packQuantity !== null && priceOf(offer.packPrice); as packPrice) {
+                  <span>{{ offer.packQuantity }} pack {{ packPrice }} {{ basisOf(offer.packPriceBasis) }}</span>
+                } @else if (offer.packQuantity !== null) {
+                  <span>{{ offer.packQuantity }} pack</span>
+                } @else {
+                  <span class="value-muted">—</span>
+                }
+                @if (offer.isSpecial) {
+                  <span class="block text-md-body value-positive">Special</span>
+                }
+              </td>
+              <td class="table-cell">
+                @if (stockOf(offer); as stock) {
+                  <span>{{ stock }}</span>
+                } @else {
+                  <span class="value-muted">—</span>
+                }
+              </td>
+              <td class="table-cell whitespace-nowrap">
+                <!--
+                  A true instant, so it is rendered in the business's own configured IANA zone
+                  through the one pipe that does that (AGENTS.md § Reporting dates and filters).
+                  Angular's `date` pipe would show it in whatever zone the operator's browser
+                  happens to be in, which for a supplier check made at 4am UTC is a different day
+                  in Sydney than in New York; and a zone that is not known yet renders nothing
+                  rather than a confidently wrong time. Blank is not "Never": that answer belongs
+                  to a listing nobody has checked, which is the branch below.
+                -->
+                @if (offer.lastCheckedAtUtc) {
+                  <span data-testid="cheapest-supplier-last-checked">{{ offer.lastCheckedAtUtc | businessDateTime }}</span>
+                } @else {
+                  <span class="value-muted" data-testid="cheapest-supplier-last-checked">Never</span>
+                }
+              </td>
+              <td class="table-cell">
+                @if (offer.productUrl) {
+                  <a
+                    class="text-md-primary hover:underline"
+                    [href]="offer.productUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    [attr.aria-label]="'Open ' + offer.supplierName + ' product page for ' + productName"
+                  >View</a>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="flex justify-end border-t border-md-gray-200 px-6 py-4">
+      <button type="button" class="btn btn-secondary" (click)="closePopup()">Close</button>
+    </div>
+  </dialog>
 }
