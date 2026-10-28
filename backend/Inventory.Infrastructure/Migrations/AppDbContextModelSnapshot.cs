@@ -1571,6 +1571,40 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("PlatformOptionVisibility");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorRun", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("FailureCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ListingsCheckedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ObservationsRecordedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StartedAtUtc");
+
+                    b.ToTable("PriceCollectorRuns", t =>
+                        {
+                            t.HasCheckConstraint("CK_PriceCollectorRuns_CountsNotNegative", "\"ListingsCheckedCount\" >= 0 AND \"ObservationsRecordedCount\" >= 0 AND \"FailureCount\" >= 0");
+                        });
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
                 {
                     b.Property<long>("Id")
@@ -2266,6 +2300,15 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("LastCheckedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastPriceChangeAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("LatestObservationId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long?>("MasterProductId")
                         .HasColumnType("INTEGER");
 
@@ -2304,6 +2347,8 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("LatestObservationId");
+
                     b.HasIndex("MasterProductId");
 
                     b.HasIndex("WaitingKey");
@@ -2316,6 +2361,8 @@ namespace Inventory.Infrastructure.Migrations
                             t.HasCheckConstraint("CK_SupplierListings_BarcodeAndScopeTogether", "(\"Barcode\" IS NULL AND \"BarcodeScope\" IS NULL) OR (\"Barcode\" IS NOT NULL AND \"BarcodeScope\" IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_SupplierListings_OneOwner", "(\"MasterProductId\" IS NOT NULL AND \"WaitingKey\" IS NULL) OR (\"MasterProductId\" IS NULL AND \"WaitingKey\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_SupplierListings_PriceStateConsistent", "((\"LatestObservationId\" IS NULL AND \"LastCheckedAtUtc\" IS NULL AND \"LastPriceChangeAtUtc\" IS NULL) OR (\"LatestObservationId\" IS NOT NULL AND \"LastCheckedAtUtc\" IS NOT NULL))");
 
                             t.HasCheckConstraint("CK_SupplierListings_UnitsPerPackPositive", "\"UnitsPerPack\" IS NULL OR \"UnitsPerPack\" > 0");
                         });
@@ -2455,6 +2502,11 @@ namespace Inventory.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("PriceCheckFreshnessHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(30);
+
                     b.Property<int?>("PriceConnector")
                         .HasColumnType("INTEGER");
 
@@ -2485,7 +2537,82 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("NormalisedName")
                         .IsUnique();
 
-                    b.ToTable("SupplierPresets");
+                    b.ToTable("SupplierPresets", t =>
+                        {
+                            t.HasCheckConstraint("CK_SupplierPresets_PriceCheckFreshnessHoursInRange", "\"PriceCheckFreshnessHours\" > 0 AND \"PriceCheckFreshnessHours\" <= 720");
+                        });
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierPriceObservation", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsPromotion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ObservedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PackPrice")
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("PriceBasis")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("PriceCollectorRunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("PromotionEndsAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("RegularPackPrice")
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("SourceReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("StockStatus")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal?>("SupplierGstRate")
+                        .HasColumnType("decimal(5,4)");
+
+                    b.Property<long>("SupplierListingId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PriceCollectorRunId");
+
+                    b.HasIndex("SupplierListingId", "ObservedAtUtc");
+
+                    b.ToTable("SupplierPriceObservations", t =>
+                        {
+                            t.HasCheckConstraint("CK_SupplierPriceObservations_CurrencyIsAud", "\"Currency\" = 'AUD'");
+
+                            t.HasCheckConstraint("CK_SupplierPriceObservations_GstRateIsAProportion", "\"SupplierGstRate\" IS NULL OR (\"SupplierGstRate\" >= 0 AND \"SupplierGstRate\" <= 1)");
+
+                            t.HasCheckConstraint("CK_SupplierPriceObservations_PackPricePositive", "\"PackPrice\" > 0");
+
+                            t.HasCheckConstraint("CK_SupplierPriceObservations_PromotionEndNeedsPromotion", "\"PromotionEndsAtUtc\" IS NULL OR \"IsPromotion\" = 1");
+
+                            t.HasCheckConstraint("CK_SupplierPriceObservations_RegularPackPricePositive", "\"RegularPackPrice\" IS NULL OR \"RegularPackPrice\" > 0");
+                        });
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupportSession", b =>
@@ -2888,6 +3015,11 @@ namespace Inventory.Infrastructure.Migrations
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierListing", b =>
                 {
+                    b.HasOne("Inventory.Infrastructure.Models.SupplierPriceObservation", null)
+                        .WithMany()
+                        .HasForeignKey("LatestObservationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Inventory.Infrastructure.Models.MasterProduct", "MasterProduct")
                         .WithMany()
                         .HasForeignKey("MasterProductId")
@@ -2950,6 +3082,25 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("ReceiptItem");
 
                     b.Navigation("SupplierOrderLine");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierPriceObservation", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.PriceCollectorRun", "PriceCollectorRun")
+                        .WithMany()
+                        .HasForeignKey("PriceCollectorRunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.SupplierListing", "SupplierListing")
+                        .WithMany()
+                        .HasForeignKey("SupplierListingId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("PriceCollectorRun");
+
+                    b.Navigation("SupplierListing");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Business", b =>

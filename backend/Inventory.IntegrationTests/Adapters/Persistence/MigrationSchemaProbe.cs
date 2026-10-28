@@ -72,6 +72,22 @@ internal static class MigrationSchemaProbe
         return value is null or DBNull ? null : (string)value;
     }
 
+    /// <summary>
+    /// How many rows <paramref name="table"/> holds, read over the connection rather than through
+    /// the EF model.
+    ///
+    /// Asked by an upgrade test whose database deliberately stops short of the latest migration: the
+    /// model describes the schema <em>after</em> every migration, so a <c>DbSet</c> read against an
+    /// earlier schema fails on a column that does not exist yet - while "this table arrived empty"
+    /// is a claim about the rows and not about the columns.
+    /// </summary>
+    public static async Task<long> RowCountAsync(SqliteConnection connection, string table)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table};";
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
     private static async Task<List<string>> QueryNamesAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();
