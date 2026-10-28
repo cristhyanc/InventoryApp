@@ -102,6 +102,13 @@ public class SupplierPriceObservationBoundaryTests
     private static readonly string[] FilesThatMayNameThem =
     [
         "Inventory.Application/PriceCatalogue/CompletePriceCollectorRun.cs",
+        // Issue #930's cheapest-supplier summary: the port and the use case that hand stored facts
+        // to the comparison, the adapter that reads the listings and their latest observations, and
+        // the HTTP boundary that publishes the answer. Each one is here on purpose - this list is
+        // where a new reader of an observed price is declared, which is what makes the next one a
+        // decision rather than a discovery.
+        "Inventory.Application/PriceCatalogue/CheapestSupplierSummary.cs",
+        "Inventory.Application/PriceCatalogue/ICheapestSupplierSummaryStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCatalogueWorkListStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorResultStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunSettings.cs",
@@ -124,6 +131,9 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Infrastructure/Models/SupplierListingPendingObservation.cs",
         "Inventory.Infrastructure/Models/SupplierPreset.cs",
         "Inventory.Infrastructure/Models/SupplierPriceObservation.cs",
+        "Inventory.Infrastructure/Persistence/EfCheapestSupplierSummaryStore.cs",
+        "InventoryApi/Controllers/CheapestSuppliersController.cs",
+        "InventoryApi/DTOs/CheapestSupplierDtos.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCatalogueWorkListStore.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCollectorResultStore.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCollectorRunStore.cs",

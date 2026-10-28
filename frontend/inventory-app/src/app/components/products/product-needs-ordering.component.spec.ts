@@ -10,8 +10,16 @@ import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { ToastService } from '../../services/toast.service';
 import { Product, Supplier } from '../../models/models';
+import { CheapestSupplierSummary, SupplierPriceBasis } from '../../models/cheapest-supplier';
+
+/** What the shared Cheapest supplier read answers in the specs that are not about it. */
+const noCheapestSuppliers: CheapestSupplierSummary = {
+  displayBasis: SupplierPriceBasis.InclusiveOfGst,
+  products: []
+};
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -86,6 +94,10 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
         // granted and answered with "no product has been bought", so the row and sort behaviour
         // these specs are about is unaffected by them.
         { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+        // The Cheapest supplier column (issue #930) has its own spec files; here it is answered
+        // with "no product is tracked", so the row, sort and dialog behaviour these specs are
+        // about is unaffected by it.
+        { provide: CheapestSupplierService, useValue: { getSummary: () => of(noCheapestSuppliers) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
         { provide: AccessService, useValue: { allows: () => of(true) } }
@@ -357,9 +369,11 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
   /**
    * The Status column used to be sorted here. Issue #790 removed it, so what the page offers is
    * now asserted as a whole: the Price column left with issue #792, the Status column with #790,
-   * and the two purchase-cost columns arrived immediately after "Need to Order".
+   * the two purchase-cost columns arrived immediately after "Need to Order", and the observed
+   * Cheapest supplier column of issue #930 after those - last before the row's own action, and
+   * deliberately not sortable, because sorting by price is outside that issue.
    */
-  it('offers exactly the columns issue #790 leaves, with no Price and no Status among them', async () => {
+  it('offers exactly the columns issue #790 leaves plus the Cheapest supplier column, with no Price and no Status among them', async () => {
     const { host } = await render([product({ id: 1, name: 'A' })]);
 
     expect(Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.trim())).toEqual([
@@ -374,6 +388,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       'Need to Order',
       'Last purchase',
       'Cheapest purchase',
+      'Cheapest supplier',
       ''
     ]);
   });
@@ -1244,6 +1259,10 @@ describe('ProductNeedsOrderingComponent Mark as ordered in the toolbar (issue #8
         { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: SupplierOrderService, useValue: { create: jest.fn() } },
         { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+        // The Cheapest supplier column (issue #930) has its own spec files; here it is answered
+        // with "no product is tracked", so the row, sort and dialog behaviour these specs are
+        // about is unaffected by it.
+        { provide: CheapestSupplierService, useValue: { getSummary: () => of(noCheapestSuppliers) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: { allows: () => of(true) } }

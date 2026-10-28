@@ -906,6 +906,129 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// The cheapest-supplier summary store as a request would reach it (issue #930): the real
+    /// adapter on a context scoped to one business, which is the only way the tenant filters are
+    /// under test at all.
+    /// </summary>
+    public ICheapestSupplierSummaryStore SummaryStoreFor(int businessId) =>
+        new EfCheapestSupplierSummaryStore(Track(TestAppDbContext.For(_options, businessId)));
+
+    /// <summary>The same store for a caller whose business could not be resolved.</summary>
+    public ICheapestSupplierSummaryStore DeniedSummaryStore() =>
+        new EfCheapestSupplierSummaryStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>Records whether a business is registered for GST, which decides its price basis.</summary>
+    public async Task SetGstRegisteredAsync(int businessId, bool? gstRegistered)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var business = await db.Businesses.SingleAsync(candidate => candidate.Id == businessId);
+        business.GstRegistered = gstRegistered;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// One of a business's own suppliers, optionally a linked copy of a platform record (issue
+    /// #934) and optionally switched out of use. Written directly because what is under test is
+    /// which of them the summary reads, not how a copy is made.
+    /// </summary>
+    public async Task<int> SeedSupplierAsync(
+        int businessId,
+        string name,
+        int? supplierPresetId = null,
+        bool hidden = false)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var supplier = new Supplier
+        {
+            BusinessId = businessId,
+            Name = name,
+            SupplierPresetId = supplierPresetId,
+            IsHidden = hidden,
+        };
+
+        db.Suppliers.Add(supplier);
+        await db.SaveChangesAsync();
+
+        return supplier.Id;
+    }
+
+    /// <summary>A collector run to hang observations from, because provenance is required.</summary>
+    public async Task<long> SeedCollectorRunAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var run = new PriceCollectorRun
+        {
+            StartedAtUtc = CreatedAt,
+            CompletedAtUtc = CreatedAt,
+            Status = PriceCollectorRunStatus.Succeeded,
+        };
+
+        db.PriceCollectorRuns.Add(run);
+        await db.SaveChangesAsync();
+
+        return run.Id;
+    }
+
+    /// <summary>
+    /// Records one observed price for a listing and points the listing at it, which is what
+    /// <c>SupplierListingPriceStatePolicy</c> requires of a successful check: the cursor, the check
+    /// instant and the price move together.
+    /// </summary>
+    public async Task<long> SeedObservationAsync(
+        long listingId,
+        long collectorRunId,
+        decimal packPrice,
+        SupplierPriceBasis basis = SupplierPriceBasis.InclusiveOfGst,
+        decimal? supplierGstRate = 0.1000m,
+        SupplierStockStatus stockStatus = SupplierStockStatus.InStock,
+        DateTime? observedAtUtc = null,
+        bool pointListingAtIt = true)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var observation = new SupplierPriceObservation
+        {
+            SupplierListingId = listingId,
+            PriceCollectorRunId = collectorRunId,
+            PackPrice = packPrice,
+            PriceBasis = basis,
+            SupplierGstRate = supplierGstRate,
+            StockStatus = stockStatus,
+            ObservedAtUtc = observedAtUtc ?? CreatedAt,
+            CreatedAtUtc = CreatedAt,
+        };
+
+        db.SupplierPriceObservations.Add(observation);
+        await db.SaveChangesAsync();
+
+        if (pointListingAtIt)
+        {
+            var listing = await db.SupplierListings.SingleAsync(candidate => candidate.Id == listingId);
+            listing.LatestObservationId = observation.Id;
+            listing.LastCheckedAtUtc = observation.ObservedAtUtc;
+            listing.LastPriceChangeAtUtc = observation.ObservedAtUtc;
+            await db.SaveChangesAsync();
+        }
+
+        return observation.Id;
+    }
+
+    /// <summary>Confirms a listing's match, which is what lets its price be compared at all.</summary>
+    public async Task ConfirmListingAsync(long listingId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var listing = await db.SupplierListings.SingleAsync(candidate => candidate.Id == listingId);
+        listing.MatchStatus = SupplierListingMatchStatus.Confirmed;
+
+        await db.SaveChangesAsync();
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var context in _contexts)

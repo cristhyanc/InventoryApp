@@ -337,6 +337,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetProductPriceTracking>();
         services.AddScoped<SetProductPriceTracking>();
         services.AddScoped<ListTrackedProducts>();
+        // The cheapest-supplier summary the three product screens share (issue #930, fifth task of
+        // #817). One use case, called with a page's product ids, so the Dashboard's Reorder Alerts,
+        // Needs Ordering and Products cannot answer "which supplier is cheapest" differently.
+        services.AddScoped<GetCheapestSupplierSummary>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
         // The pick list's batch refill (issue #743): one request, one write-locked transaction, all

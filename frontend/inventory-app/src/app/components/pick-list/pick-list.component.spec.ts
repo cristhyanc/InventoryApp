@@ -894,7 +894,7 @@ describe('PickListComponent rendered structure', () => {
     }
   });
 
-  it('sizes the Product, MDB Code, Storage Qty and Total to Pick columns to their content instead of stretching them across the card', async () => {
+  it('keeps the Product, MDB Code, Storage Qty and Total to Pick columns narrow and gives the spare width to the machine columns', async () => {
     const pickList = jest.fn(() => of(pickListResult({
       products: [{
         productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 1, totalQuantityToPick: 4, storageShortageQuantity: 3,
@@ -906,9 +906,9 @@ describe('PickListComponent rendered structure', () => {
     checkOption('Machine A');
     applyFilters();
 
-    // The shared .table fills its container, which hands spare width to the widest content. This
-    // table sizes to its columns instead, so leftover width stays empty to the right.
-    expect(Array.from(requireElement('table').classList)).toEqual(expect.arrayContaining(['table', 'w-auto']));
+    // The table fills the card (no w-auto), so there is no empty area to the right of the last machine.
+    expect(Array.from(requireElement('table').classList)).toContain('table');
+    expect(Array.from(requireElement('table').classList)).not.toContain('w-auto');
 
     // The four fixed columns keep the compact padding at every breakpoint; machine columns do not.
     const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
@@ -917,12 +917,22 @@ describe('PickListComponent rendered structure', () => {
       expect(Array.from(cell.classList)).toContain('sm:px-3');
     }
     expect(Array.from(headers[4].classList)).not.toContain('sm:px-3');
+
+    // The four fixed columns are pinned to their content (w-px); the machine columns carry no width,
+    // so the spare width is shared between them.
+    for (const header of headers.slice(0, 4)) {
+      expect(Array.from(header.classList)).toContain('w-px');
+    }
+    for (const header of headers.slice(1, 4)) {
+      expect(Array.from(header.classList)).toContain('whitespace-nowrap');
+    }
+    expect(Array.from(headers[4].classList)).not.toContain('w-px');
     expect(Array.from(cells[4].classList)).not.toContain('sm:px-3');
 
-    // The product name wraps inside a bounded block, with the shortage badge on its own line below it.
+    // The product name wraps inside a fixed-width block, with the shortage badge on its own line below it.
     const nameBlock = requireElement('[data-testid="pick-list-product-name"]');
     expect(cells[0].contains(nameBlock)).toBe(true);
-    expect(Array.from(nameBlock.classList)).toEqual(expect.arrayContaining(['min-w-[8rem]', 'max-w-[14rem]']));
+    expect(Array.from(nameBlock.classList)).toEqual(expect.arrayContaining(['w-[14rem]']));
     expect(nameBlock.textContent).toContain('Coke');
     const badge = requireElement('[data-testid="storage-shortage-badge"]');
     expect(nameBlock.contains(badge)).toBe(true);

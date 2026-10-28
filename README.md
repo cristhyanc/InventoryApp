@@ -1454,11 +1454,62 @@ product you have not switched on.
 - **Products → All Products** has a **Tracked** column showing which of your products are tracked and
   where each one has got to. It is read-only: the switch itself is on each product's own page, and
   there is no way to switch many products on at once.
+- **What the prices look like once a product is matched** is on **Products → Needs Ordering**, in
+  the **Cheapest supplier** column — see
+  [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
 - **New Product** has no switch — there is no product yet to track. The form says so, and the switch
   is on that product's **Edit** page once it exists.
 - **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
   permission is involved. It is unavailable while you are looking at a business in read-only support
   view, and while a Super Admin is previewing a role, like every other write in those states.
+
+## The cheapest supplier, on Needs Ordering
+
+Once a product's prices are being tracked and the catalogue has matched it, **Products → Needs
+Ordering** shows what your own suppliers charge for it. The column is called **Cheapest supplier**,
+it sits after the purchase-cost columns, and a row reads like `JB Metro $0.95/unit inc GST
+(special)`. These are prices observed on suppliers' own pages as purchasing guidance — they are
+**not** costs you have paid, they never change a purchase, a cost, an inventory value or any report,
+and what you actually paid stays in the **Last purchase** and **Cheapest purchase** columns beside
+them.
+
+- **Clicking the cell opens a popup listing every one of your suppliers**, cheapest first — for
+  example `JB Metro $0.95/unit (24 pack $22.70, special) · Coles $1.27/unit · Woolworths: no match`.
+  Each row shows the pack size and pack price, the unit price **on both GST bases**, whether it is a
+  special, what the supplier said about stock, when it was last checked, and a link that opens that
+  supplier's own page for the product in a new tab. **Last checked** is shown on your business's own
+  clock, in the time zone set in Admin → Business settings, not in whatever zone the computer you
+  are using happens to be in; a listing nobody has checked yet says **Never**.
+- **The popup is a real dialog, so the page behind it waits.** While it is open, the rest of the page
+  cannot be clicked or tabbed into: **Tab** and **Shift+Tab** cycle through the popup's own links and
+  buttons and stay there. **Escape**, clicking outside the panel and **Close** all close it, and the
+  keyboard goes back to the cell you opened it from.
+- **The price you are compared on follows your GST registration.** A GST-registered business is
+  shown and compared on **ex-GST** prices, because that is what it really pays for a can; a business
+  that is not registered is shown the price it hands over, **inc-GST**. Both figures are in the
+  popup either way, and the cheapest supplier is always the smallest number you are shown.
+- **Which suppliers take part.** Your own suppliers that came from the platform's supplier list and
+  that you have not marked **Not used** (see [Suppliers from the platform
+  list](#suppliers-from-the-platform-list)). A supplier you typed in yourself has no catalogue
+  listings to compare, and a **Not used** supplier is one you have said you do not buy from.
+- **A supplier that is listed with no price is still listed, and says why.** "No match" is a
+  supplier that does not list the product at all, "Not checked yet" is a listing nobody has read a
+  price from, and an offer that cannot be compared says the one reason — out of stock, the special
+  has ended, the pack size is not published, the match is not confirmed, the GST rate is unknown, or
+  the last check is too old. A price that is not known is never shown as `$0.00`.
+- **The cell itself is an answer, not a blank.** It says **Not tracked** for a product you have not
+  switched on, **Awaiting match** while nothing has matched it, **No match found** when it was
+  looked for and nothing described it, **No eligible price** when no offer could be compared,
+  **Loading** while the prices are being read, and **Unavailable** if that read fails — the rest of
+  the page still works, and a Retry sits above the table. When the match was made automatically and
+  nobody has checked it, the popup says **Matched automatically**.
+- **Who may see it.** The same permission that opens the dashboard (`Dashboard.View`), which every
+  role holds — these are suppliers' published prices rather than your own financial figures. The
+  column reads as **Unavailable** while a Super Admin is looking at your business in read-only
+  support view, which is read-only and asks for nothing.
+- **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
+  the Dashboard's Reorder Alerts and All Products cannot ever disagree with Needs Ordering about
+  which supplier is cheapest. Those two pages get the column in their own tasks.
 
 ## A supplier's website
 
