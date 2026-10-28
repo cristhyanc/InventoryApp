@@ -223,6 +223,11 @@ public static class InfrastructureServiceCollectionExtensions
         // The collector work list's one write (issue #924): a run and its work items, both platform
         // tables, in one transaction on the request's own denied-scope context.
         services.AddScoped<IPriceCollectorRunStore, EfPriceCollectorRunStore>();
+        // The cheapest-supplier summary (issue #930): the read behind the Cheapest supplier column.
+        // It reaches the platform catalogue only through the caller's own matched mappings and the
+        // supplier records the caller holds a copy of, on the request's own scoped context like the
+        // adapters above.
+        services.AddScoped<ICheapestSupplierSummaryStore, EfCheapestSupplierSummaryStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
