@@ -137,7 +137,7 @@ const STATUSES = ['success', 'warning', 'danger', 'info'] as const;
 // ---- Token definitions --------------------------------------------------------------------
 
 describe('design tokens', () => {
-  it('defines exactly the colour tokens of the #410 visual specification', () => {
+  it('defines exactly the colour tokens of the #410 visual specification and the landing page', () => {
     expect(Object.keys(colors).sort()).toEqual(
       [
         'md-danger',
@@ -152,6 +152,8 @@ describe('design tokens', () => {
         'md-success-text',
         'md-warning',
         'md-warning-text',
+        // The public landing page's own scale (issue #954), asserted below.
+        'rr',
       ].sort(),
     );
   });
@@ -421,5 +423,55 @@ describe('styles.scss', () => {
     expect(applied).toContain('rounded-md-control');
     expect(applied).toContain('border-md-input-border');
     expect(applied).toContain('focus:border-md-info');
+  });
+});
+
+// ---- Public landing page (issue #954) -------------------------------------------------------
+
+/**
+ * The landing page's `rr` scale, from the owner-approved Restockroo design. Only
+ * `public/landing/` and the `rr-` button classes use it; these are the text pairs they render.
+ */
+describe('landing page tokens (issue #954)', () => {
+  function rr(name: string): string {
+    const scale = colors['rr'];
+    if (typeof scale !== 'object' || typeof scale[name] !== 'string') {
+      throw new Error(`Colour token rr-${name} is not defined`);
+    }
+    return scale[name];
+  }
+
+  it('puts Hanken Grotesk in front of the application font stack for font-rr', () => {
+    expect(extend.fontFamily['rr']).toEqual([
+      "'Hanken Grotesk'",
+      'Inter',
+      "'Segoe UI'",
+      'Roboto',
+      'Helvetica',
+      'Arial',
+      'sans-serif',
+    ]);
+  });
+
+  const pairs: Array<[string, () => string, () => string]> = [
+    ['headings on the canvas', () => rr('navy'), () => rr('canvas')],
+    ['body copy on the canvas', () => rr('muted'), () => rr('canvas')],
+    ['body copy on white', () => rr('muted'), () => WHITE],
+    ['body copy on the integration panel', () => rr('muted'), () => rr('surface')],
+    ['captions on white', () => rr('caption'), () => WHITE],
+    ['eyebrow labels on white', () => rr('teal'), () => WHITE],
+    ['eyebrow labels on the canvas', () => rr('teal'), () => rr('canvas')],
+    ['eyebrow labels on the integration panel', () => rr('teal'), () => rr('surface')],
+    ['chips on the teal tint', () => rr('teal'), () => rr('teal-tint')],
+    ['the primary button label', () => WHITE, () => rr('teal')],
+    ['the hovered primary button label', () => WHITE, () => rr('teal-hover')],
+    ['the dashboard window bar label', () => rr('muted'), () => WHITE],
+    ['low-stock figures on white', () => rr('danger-text'), () => WHITE],
+    ['in-stock figures on white', () => rr('ok-text'), () => WHITE],
+    ['the low-stock metric icon on white', () => rr('warn-text'), () => WHITE],
+  ];
+
+  it.each(pairs)('%s reach WCAG AA 4.5:1', (_label, foreground, background) => {
+    expect(contrastRatio(foreground(), background())).toBeGreaterThanOrEqual(4.5);
   });
 });

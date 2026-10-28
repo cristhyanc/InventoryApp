@@ -413,6 +413,29 @@
   .value-muted {
     color: var(--md-muted-text, theme('colors.md-gray.500'));
   }
+
+  /* ---- Public landing page (issue #954) ----------------------------------------------- */
+
+  /*
+   * The landing page's buttons, from the approved Restockroo design: teal primary, white
+   * secondary, and a borderless ghost. Only `public/landing/` uses the `rr-` classes, so no
+   * authenticated screen changes; each is at least 44px tall for touch.
+   */
+  .rr-button {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-semibold no-underline motion-safe:transition-colors;
+  }
+
+  .rr-button-primary {
+    @apply rr-button bg-rr-teal text-white hover:bg-rr-teal-hover active:bg-rr-teal-active;
+  }
+
+  .rr-button-secondary {
+    @apply rr-button border border-rr-line bg-white text-rr-navy hover:border-rr-line-strong hover:bg-rr-canvas;
+  }
+
+  .rr-button-ghost {
+    @apply rr-button text-rr-navy hover:bg-rr-teal-tint hover:text-rr-teal;
+  }
 }
 
 * { box-sizing: border-box; }
