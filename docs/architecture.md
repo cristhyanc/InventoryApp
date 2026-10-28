@@ -7150,7 +7150,8 @@ authenticated page is exactly as it was when a person returns to it.
 layout, with the homepage's `rr` tokens, font and buttons: a Restockroo header linked to `/home`, a
 **Back to home** link and one centred card ("Sign in to Restockroo"). With a customer identity
 authority configured the card offers **Continue with Google or email** (primary) and **Sign in with a
-Microsoft work account** (secondary), keeps the separate-accounts warning visible, and folds the
+Microsoft account** (secondary; "work" was dropped because the `common` workforce authority's app
+registrations also accept personal Microsoft accounts), keeps the separate-accounts warning visible, and folds the
 verification and password-reset help into a native `<details>` disclosure; without one, the work
 account action is the only, primary action. Provider and authentication semantics are unchanged:
 the route keeps `signInPageGuard` and no authentication guard, each action calls the same
