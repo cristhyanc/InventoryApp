@@ -1521,8 +1521,9 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
 
 - **A machine is listed for either of two reasons.** Its last fully successful restock sync is three
   or more business days old — counted as calendar days in your own business time zone, so a
-  daylight-saving change never moves the line — or it still has imported restock events nobody has
-  resolved. Either one alone is enough, and both are shown: a recent sync clears only the first.
+  daylight-saving change never moves the line — or it still has imported restock events from the
+  last 14 business days nobody has resolved. Either one alone is enough, and both are shown: a
+  recent sync clears only the first.
 - **"No recorded sync" means exactly that, not "never synced".** A successful sync has been recorded
   since this feature was added; machines you were already syncing before then start with nothing
   recorded, and nothing guesses a date for them from an event, a sales sync or a stock count. The
@@ -1531,14 +1532,18 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
   of what it read, records nothing at all — and one that succeeded and found no new alert counts as
   a success, because an empty answer is an answer. A successful sync is never a promise that all of
   your history has been fetched: Nayax's last-alerts list is a rolling window of recent events.
-- **Pending counts are what has been imported.** They include events needing review, events you have
-  not got enough storage stock for, and possible duplicates you have not resolved; they exclude ones
-  you have applied or marked as already recorded manually. A count of zero means nothing imported is
-  outstanding — it cannot promise that Nayax is holding no alert nobody has fetched yet, which is why
-  the overdue-sync warning is reported separately.
-- **Old work never disappears quietly.** The Sync Restock dialog opens on the last three days by
-  default, so when a machine has pending events older than that, the reminder says so and tells you
-  to clear the From date or move it back to the oldest pending date.
+- **Pending counts are what has been imported in the last 14 days.** They include events needing
+  review, events you have not got enough storage stock for, and possible duplicates you have not
+  resolved; they exclude ones you have applied or marked as already recorded manually, and events
+  reporting a zero or negative quantity — those are machine discrepancies, never restocks, and Sync
+  Restock never applies them. Events older than 14 days are not counted, but nothing is deleted:
+  clear or move back the From date in Sync Restock and they are still there to resolve. A count of
+  zero means nothing imported in that window is outstanding — it cannot promise that Nayax is holding
+  no alert nobody has fetched yet, which is why the overdue-sync warning is reported separately.
+- **The link opens Sync Restock far enough back.** The Sync Restock dialog opens on the last three
+  days by default. A machine's link on the reminder carries the date of its oldest counted pending
+  event (`?restockFrom=yyyy-MM-dd`), and when that date is earlier, the dialog opens from it instead,
+  so every event the reminder counted is on screen. You can still change or clear the date.
 - **It reminds, and does nothing else.** Each row links to the machine and names the **Sync Restock**
   action there. Opening the dashboard, following a link or opening a preview applies nothing,
   resolves no duplicate, changes no inventory and does not mark anything as seen — after you apply or

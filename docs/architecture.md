@@ -13803,13 +13803,25 @@ machine quietly presented as fresh.
 outstanding: an imported event that is still `Unprocessed` and not explicitly reconciled as already
 recorded manually. A needs-review event, an insufficient-storage event and an unresolved
 possible-duplicate event therefore all count — each is work an operator still has to do — while an
-applied event and one reconciled as already recorded manually do not. **There is no date bound**: an
-event that ages out of the three-day window is still unresolved work, and letting the window clear it
-is the silent disappearance this reminder exists to prevent. Because that is also wider than the
-dialog's default From date, a machine with pending work older than that date is flagged
-`hasPendingWorkBeforeDefaultFrom`, and the banner tells the operator to clear the From date or move
-it back to the oldest pending date — otherwise the work would stay hidden inside the dialog they
-were just sent to. The counts describe **persisted** facts only: a zero says nothing about alerts
+applied event and one reconciled as already recorded manually do not. **Two bounds apply (issue
+#948, by the owner's decision of 28 October 2026).** Only events dated on or after
+`MachineRestockSyncReminderPolicy.PendingFromBusinessDate` — `PendingLookbackDays` (14) business
+calendar days before today, inclusive — are counted; the use case turns that date into the start of
+that business day in UTC through `IBusinessCalendar.StartOfBusinessDayUtc` and the store compares
+`EventDateTimeGmt` against it, the same comparison the dialog's own From date makes. And an event
+whose parsed quantity is zero or negative is never counted: it is a machine discrepancy, which
+`NayaxMachineStockApplyPolicy` never applies, not a restock (an unparsed event has no quantity and
+still counts, because it needs review). Before #948 there was no bound at all, and months of stale
+discrepancies buried the restocks that needed attention. Nothing outside the bounds is changed or
+deleted — it is only not counted, and Sync Restock still lists and resolves it once its From date
+is moved back. The window is still wider than the dialog's default From date, so a machine with
+counted work older than that date is flagged `hasPendingWorkBeforeDefaultFrom`, and every row
+publishes `oldestKnownPendingEventBusinessDate`. The banner's machine link carries that date as
+`?restockFrom=yyyy-MM-dd`; `MachineDetailComponent` passes the query parameter to
+`MachineRestockSyncComponent` as `pendingFromDate`, and the dialog opens from it when it is a real
+date earlier than its three-day default — otherwise the default stands — so the work is not hidden
+inside the dialog the operator was just sent to. The reminder also publishes `pendingLookbackDays`
+and `pendingFromBusinessDate` so the banner never restates the window. The counts describe **persisted** facts only: a zero says nothing about alerts
 Nayax holds that nobody has fetched, which is why an overdue fetch and pending events are reported as
 two separate conditions and either one alone puts a machine on the banner.
 

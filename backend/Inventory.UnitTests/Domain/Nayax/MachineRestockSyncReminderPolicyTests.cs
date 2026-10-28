@@ -83,6 +83,30 @@ public class MachineRestockSyncReminderPolicyTests
             new DateTime(2026, 10, 22), MachineRestockSyncReminderPolicy.DefaultFromBusinessDate(BusinessToday));
     }
 
+    /// <summary>
+    /// The pending window (issue #948): the first counted date is fourteen calendar days before
+    /// today, inclusive, and the day before it is outside.
+    /// </summary>
+    [Fact]
+    public void The_pending_window_starts_fourteen_calendar_days_before_today()
+    {
+        Assert.Equal(14, MachineRestockSyncReminderPolicy.PendingLookbackDays);
+        Assert.Equal(
+            new DateTime(2026, 10, 11), MachineRestockSyncReminderPolicy.PendingFromBusinessDate(BusinessToday));
+    }
+
+    /// <summary>
+    /// A date difference, not 14 x 24 hours: the window over Sydney's 2026 daylight-saving start
+    /// (4 October) still starts on a calendar date, whatever time of day "today" was taken at.
+    /// </summary>
+    [Fact]
+    public void The_pending_window_is_a_date_difference_rather_than_elapsed_hours()
+    {
+        Assert.Equal(
+            new DateTime(2026, 9, 26),
+            MachineRestockSyncReminderPolicy.PendingFromBusinessDate(new DateTime(2026, 10, 10, 23, 30, 0)));
+    }
+
     [Fact]
     public void Pending_work_older_than_the_default_from_date_is_flagged()
     {
@@ -96,9 +120,8 @@ public class MachineRestockSyncReminderPolicyTests
     }
 
     /// <summary>
-    /// Either condition alone is a reminder: an overdue fetch, or pending events of any age. The
-    /// pending half deliberately has no date bound - work that ages out of the three-day window
-    /// must not silently clear.
+    /// Either condition alone is a reminder: an overdue fetch, or any known pending event inside
+    /// the pending window (the count is bounded before it arrives here, issue #948).
     /// </summary>
     [Theory]
     [InlineData(false, 0, false)]
