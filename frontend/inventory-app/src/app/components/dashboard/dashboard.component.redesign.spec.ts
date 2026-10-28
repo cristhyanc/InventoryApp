@@ -258,7 +258,7 @@ describe('Dashboard narrow-screen site and machine cards (issue #972)', () => {
     const { fixture, host } = await render();
     const cards = () => host.querySelector('[data-testid="machine-cards"]') as HTMLElement;
     const periodButton = (label: string) =>
-      Array.from(cards().querySelectorAll<HTMLButtonElement>('[role="group"] button')).find(
+      Array.from(cards().querySelectorAll<HTMLButtonElement>('[data-testid="machine-period"] button')).find(
         (button) => button.textContent?.trim() === label
       ) as HTMLButtonElement;
 
@@ -284,7 +284,7 @@ describe('Dashboard narrow-screen site and machine cards (issue #972)', () => {
     const { host } = await render({ canViewFinancials: false });
     const cards = host.querySelector('[data-testid="machine-cards"]') as HTMLElement;
 
-    expect(cards.querySelector('[role="group"]')).toBeNull();
+    expect(cards.querySelector('[data-testid="machine-period"]')).toBeNull();
     expect(cards.textContent).not.toContain('$');
     expect(host.querySelector('[data-testid="machine-totals-card"]')).toBeNull();
     expect(host.querySelector('[data-testid="site-cards"]')?.textContent).not.toContain('$');

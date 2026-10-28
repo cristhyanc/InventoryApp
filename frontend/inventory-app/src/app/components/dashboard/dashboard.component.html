@@ -491,7 +491,8 @@
         -->
         <div class="md:hidden" data-testid="machine-cards">
           @if (canViewFinancials) {
-            <div class="flex gap-1 overflow-x-auto p-3 pb-0" role="group" aria-label="Sales period">
+            <fieldset class="m-0 flex min-w-0 gap-1 overflow-x-auto border-0 p-3 pb-0" data-testid="machine-period">
+              <legend class="sr-only">Sales period</legend>
               @for (period of machinePeriods; track period.id) {
                 <button
                   type="button"
@@ -504,7 +505,7 @@
                   (click)="machinePeriod = period.id"
                 >{{ period.label }}</button>
               }
-            </div>
+            </fieldset>
           }
           <ul class="m-0 flex list-none flex-col gap-3 p-3">
             @for (machine of machines; track machine.machineID) {

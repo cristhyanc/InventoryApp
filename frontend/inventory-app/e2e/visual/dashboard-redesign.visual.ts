@@ -237,6 +237,25 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(overflow).toBeLessThanOrEqual(0);
 }
 
+/** Opens the More sheet at 390px from the given control and checks focus starts on Close. */
+async function openSheet(page: Page, openerOf: (page: Page) => Locator): Promise<{ control: Locator; sheet: Locator }> {
+  await openDashboard(page, 390);
+  // Tag the control first: the top-bar button's accessible name changes once the sheet opens.
+  await openerOf(page).evaluate((element) => {
+    (element as HTMLElement).dataset['e2eOpener'] = '';
+  });
+  const control = page.locator('[data-e2e-opener]');
+  await control.click();
+  const sheet = page.getByTestId('more-sheet');
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('button', { name: 'Close navigation menu' })).toBeFocused();
+  return { control, sheet };
+}
+
+function focusIsInSheet(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.querySelector('[data-testid="more-sheet"]')?.contains(document.activeElement) ?? false);
+}
+
 test.describe('Restockroo dashboard and navigation visual evidence (issue #972)', () => {
   test.beforeEach(() => {
     test.skip(test.info().project.name !== 'desktop-1440', 'Each width is set inside the test.');
@@ -287,23 +306,8 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
 
   for (const opener of openers) {
     test.describe(`More sheet modality, opened from ${opener.name}`, () => {
-      async function openSheet(page: Page): Promise<{ control: Locator; sheet: Locator }> {
-        await openDashboard(page, 390);
-        // Tag the control first: the top-bar button's accessible name changes once the sheet opens.
-        await opener.open(page).evaluate((element) => element.setAttribute('data-e2e-opener', ''));
-        const control = page.locator('[data-e2e-opener]');
-        await control.click();
-        const sheet = page.getByTestId('more-sheet');
-        await expect(sheet).toBeVisible();
-        await expect(sheet.getByRole('button', { name: 'Close navigation menu' })).toBeFocused();
-        return { control, sheet };
-      }
-
-      const focusIsInSheet = (page: Page) =>
-        page.evaluate(() => document.querySelector('[data-testid="more-sheet"]')?.contains(document.activeElement) ?? false);
-
       test('keeps focus inside through repeated Tab and Shift+Tab', async ({ page }) => {
-        await openSheet(page);
+        await openSheet(page, opener.open);
         const stops = await page.getByTestId('more-sheet').locator('a[href], button:not([disabled])').count();
 
         for (let press = 0; press < stops + 3; press++) {
@@ -317,7 +321,7 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       });
 
       test('lets nothing behind it take focus or be activated', async ({ page }) => {
-        const { sheet } = await openSheet(page);
+        const { sheet } = await openSheet(page, opener.open);
 
         // Programmatic focus on background controls is refused while the page is inert.
         const backgroundFocus = await page.evaluate(() => {
@@ -346,7 +350,7 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       });
 
       test('returns focus to its opener on Escape', async ({ page }) => {
-        const { control, sheet } = await openSheet(page);
+        const { control, sheet } = await openSheet(page, opener.open);
 
         await page.keyboard.press('Escape');
 
@@ -358,7 +362,7 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       });
 
       test('returns focus to its opener from Close', async ({ page }) => {
-        const { control, sheet } = await openSheet(page);
+        const { control, sheet } = await openSheet(page, opener.open);
 
         await sheet.getByRole('button', { name: 'Close navigation menu' }).click();
 
