@@ -29,6 +29,10 @@
               "@fontsource/inter/500.css",
               "@fontsource/inter/600.css",
               "@fontsource/inter/700.css",
+              "@fontsource/hanken-grotesk/400.css",
+              "@fontsource/hanken-grotesk/500.css",
+              "@fontsource/hanken-grotesk/600.css",
+              "@fontsource/hanken-grotesk/700.css",
               "src/styles.css"
             ],
             "scripts": []

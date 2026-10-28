@@ -253,7 +253,7 @@ Open <http://localhost:4200>. The `start` script builds the Tailwind stylesheet 
 
 ### 4. Sign in
 
-The application requires a Microsoft Entra sign-in. Click **Sign in** in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
+Opening the application signed out shows the public Restockroo landing page at `/` (see [The public landing page](#the-public-landing-page) below); everything else requires a Microsoft Entra sign-in. Click **Sign in** on the landing page or in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route except the landing page requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
 
 A deployment that has a customer identity tenant configured offers a choice first, on the public `/sign-in` page: **Continue with Google or an email address** or **Sign in with a Microsoft work account** — see [Signing in with Google](#signing-in-with-google-issue-711) and [Signing in with an email address and password](#signing-in-with-an-email-address-and-password-issue-712) below. With no such tenant configured, which is the state in source control, nothing changes: **Sign in** redirects straight to the workforce authority with no extra page and no extra click.
 
@@ -379,6 +379,28 @@ Who may apply: an account with **no active membership anywhere** — never a mem
 **The flag is `false` in source control and must stay off in production until a human has verified the release gate** — see [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541). With it off, the endpoint answers `404` and `onboardingEnabled` is `false`.
 
 The journey a second live business needs is now complete end to end. The application form exists (issue #543, `/apply`, above), and the approval **user interface** of issue #510 does too: the Super Admin's own Businesses page (issue #547, see [Super Admin businesses API](#super-admin-businesses-api) above) approves, rejects, deactivates and reactivates a business and releases a member of a deactivated one. The Nayax credential is no longer a blocker either: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). An Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and drives it from the connection wizard on Admin → Integrations (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners of issue #539 are on the screens that depend on Nayax — the machine list and machine detail, Sync Restock, the site list and a site's products, and the pick list — so a member who cannot reach that wizard still sees why those screens have no Nayax data. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+
+## The public landing page
+
+A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
+application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
+integration, a three-step workflow and FAQs. It makes no request to the API at all, so opening or
+refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+
+- **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
+  is configured, otherwise a redirect straight to Microsoft that returns to `/`.
+- **Get started** opens the business application at `/apply` (see
+  [Starting a business](#starting-a-business-self-service-onboarding)), taking the visitor through
+  sign-in first. While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome
+  page instead, exactly as before.
+- **Signed in**, `/` is still the dashboard. The landing page stays reachable at `/home`, where the
+  **Open app** button returns to `/`.
+
+Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
+the page presents Nayax only as an optional connection for supported sales data and the reports
+built on it. The page has **no Privacy Policy, Terms of Service or Contact link**, because none of
+those pages exists yet; add them to its footer once they do. The approved design and every wording
+change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
 
 ## Roles and capabilities
 
