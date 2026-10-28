@@ -1,4 +1,5 @@
-import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
+import { NgClass, NgTemplateOutlet } from '@angular/common';
+import { AfterViewInit, Component, ElementRef, EventEmitter, Input, OnDestroy, OnInit, Output, ViewChild } from '@angular/core';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import {
   BehaviorSubject,
@@ -81,11 +82,11 @@ export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
 @Component({
   selector: 'app-sidebar-nav',
   standalone: true,
-  imports: [RouterLink, IconComponent],
+  imports: [RouterLink, IconComponent, NgClass, NgTemplateOutlet],
   host: { class: 'contents' },
   templateUrl: './sidebar-nav.component.html'
 })
-export class SidebarNavComponent implements OnInit, OnDestroy {
+export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Wide screens collapse to a compact icon rail; a narrow drawer is always expanded. */
   @Input() expanded = true;
 
@@ -152,7 +153,33 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
    */
   pendingBusinessCount: number | null = null;
 
+  private sheet?: HTMLDialogElement;
+
+  /**
+   * The More sheet is a native `<dialog>` opened with `showModal()` (issue #972), so the browser
+   * itself makes everything behind it inert: no click, programmatic focus or assistive-technology
+   * navigation reaches the page while the sheet is open. It is opened the moment it is rendered,
+   * which is whenever the shell shows the menu on a narrow layout.
+   */
+  @ViewChild('sheet')
+  private set sheetElement(ref: ElementRef<HTMLDialogElement> | undefined) {
+    this.stopListeningToSheet();
+    this.sheet = ref?.nativeElement;
+    if (this.sheet !== undefined && !this.sheet.open) {
+      // Listened for here rather than bound in the template: the dialog is not itself a control.
+      // A click matters only on its backdrop, and a key only to keep Tab inside it.
+      this.sheet.addEventListener('click', this.onSheetClick);
+      this.sheet.addEventListener('keydown', this.onSheetKeydown);
+      openModal(this.sheet);
+    }
+  }
+
+  @ViewChild('closeControl') private readonly closeControl?: ElementRef<HTMLButtonElement>;
+
   private readonly openGroups = new Set<string>();
+
+  /** The groups the More sheet has opened once already, so one the operator closes stays closed. */
+  private readonly sheetGroupsOpened = new Set<string>();
   private readonly destroying$ = new Subject<void>();
   private hasSuperAdminAccess = false;
 
@@ -273,9 +300,87 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
       .subscribe((event) => this.applyActiveRoute(event.urlAfterRedirects));
   }
 
+  /**
+   * The More sheet takes focus as it opens (issue #972): it is a modal dialog over the page, so the
+   * keyboard starts inside it, on the Close control at its top. The shell returns focus to whatever
+   * opened it when it closes.
+   */
+  ngAfterViewInit(): void {
+    if (this.drawer) {
+      this.closeControl?.nativeElement.focus();
+    }
+  }
+
   ngOnDestroy(): void {
+    // Leave the top layer before the element goes, so the page is interactive again at once.
+    this.stopListeningToSheet();
+    if (this.sheet?.open) {
+      closeModal(this.sheet);
+    }
     this.destroying$.next();
     this.destroying$.complete();
+  }
+
+  /**
+   * The dialog's own close request (Escape, or a platform back gesture). The browser would close
+   * the dialog by itself, behind the shell's back; it is cancelled and reported instead, so the
+   * shell closes the menu and returns focus to the control that opened it.
+   */
+  onSheetCancel(event: Event): void {
+    event.preventDefault();
+    this.dismissed.emit();
+  }
+
+  /**
+   * A click whose target is the dialog element itself landed on its `::backdrop` - the dimmed page
+   * above the sheet - because the sheet's content fills the dialog box. That dismisses the sheet.
+   */
+  private readonly onSheetClick = (event: MouseEvent): void => {
+    if (event.target === this.sheet) {
+      this.dismissed.emit();
+    }
+  };
+
+  private readonly onSheetKeydown = (event: KeyboardEvent): void => this.containFocus(event);
+
+  private stopListeningToSheet(): void {
+    this.sheet?.removeEventListener('click', this.onSheetClick);
+    this.sheet?.removeEventListener('keydown', this.onSheetKeydown);
+  }
+
+  /**
+   * Keeps Tab and Shift+Tab cycling inside the open More sheet (issue #972), wrapping from its last
+   * focusable element to its first and back. The modal dialog already makes the page inert; this
+   * only stops Tab leaving the sheet for the browser's own controls.
+   */
+  containFocus(event: KeyboardEvent): void {
+    const sheet = this.sheet;
+    if (event.key !== 'Tab' || sheet === undefined) {
+      return;
+    }
+
+    const focusable = Array.from(sheet.querySelectorAll<HTMLElement>('a[href], button:not([disabled])'));
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  /** The `<nav>` panel's layout classes: the wide sidebar or rail, or the More sheet's body. */
+  get panelClasses(): string {
+    if (this.drawer) {
+      return 'min-h-0 flex-1 w-full pb-[max(1rem,env(safe-area-inset-bottom))]';
+    }
+    return `shrink-0 border-r border-rr-line p-3 ${this.expanded ? 'w-64' : 'w-16'}`;
   }
 
   isLinkActive(link: NavLink): boolean {
@@ -395,6 +500,17 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
       this.provider,
       inputs.options
     );
+    // The More sheet opens every group (issue #972): the whole permitted menu is reachable by
+    // scrolling alone, which is what a narrow screen offers instead of a rail. A group can still be
+    // closed from its heading.
+    if (this.drawer) {
+      for (const item of this.navigation) {
+        if (item.kind === 'group' && !this.sheetGroupsOpened.has(item.label)) {
+          this.sheetGroupsOpened.add(item.label);
+          this.openGroups.add(item.label);
+        }
+      }
+    }
     // A page opened by URL before the answers arrived becomes the active entry once its link
     // exists, so the owning group reflects where the operator actually is.
     this.applyActiveRoute(this.router.url);
@@ -436,7 +552,7 @@ const NO_CAPABILITIES: CapabilitySet = new Set();
  * answer travels with the capabilities, and a menu must not take an entry away over a read that
  * never answered.
  */
-function renderedOptionVisibility(state: MemberAccessState): OptionVisibility | undefined {
+export function renderedOptionVisibility(state: MemberAccessState): OptionVisibility | undefined {
   return state.status === 'granted' ? state.access.optionVisibility : undefined;
 }
 
@@ -451,10 +567,31 @@ function renderedOptionVisibility(state: MemberAccessState): OptionVisibility | 
  *   known, the API refuses what the role may not do regardless, and an empty menu would strand a
  *   member whose capability read happened to fail (see `AccessService`).
  */
-function renderedCapabilities(state: MemberAccessState): CapabilitySet | undefined {
+export function renderedCapabilities(state: MemberAccessState): CapabilitySet | undefined {
   if (state.status === 'granted') {
     return state.access.capabilities;
   }
 
   return state.status === 'unread' ? NO_CAPABILITIES : undefined;
+}
+
+/**
+ * Opens the sheet as a modal dialog. A host without `showModal()` (the unit-test DOM) still gets an
+ * open dialog, so the sheet renders and can be tested; every browser the app supports has it, and
+ * the browser run in `e2e/visual/dashboard-redesign.visual.ts` is what proves the page is inert.
+ */
+function openModal(dialog: HTMLDialogElement): void {
+  if (typeof dialog.showModal === 'function') {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute('open', '');
+  }
+}
+
+function closeModal(dialog: HTMLDialogElement): void {
+  if (typeof dialog.close === 'function') {
+    dialog.close();
+  } else {
+    dialog.removeAttribute('open');
+  }
 }

@@ -1,51 +1,84 @@
+<!--
+  On a narrow layout the menu is the "More" sheet (issue #972): a native <dialog> opened with
+  showModal(), so the page behind it is inert, rising from the bottom of the screen with the whole
+  permitted menu scrolling under a sticky heading and Close control. Its ::backdrop dims the page
+  and a click there dismisses it. On a wide layout it is the sidebar, exactly as before. Both
+  render the same `<nav>` below, so the two can never offer different destinations.
+
+  The UA dialog box (centred, padded, bordered, width-capped) is reset so it sits flush along the
+  bottom edge; it is display:none until open, then a column whose body scrolls.
+-->
+@if (drawer) {
+  <dialog
+    #sheet
+    aria-label="Menu"
+    class="fixed inset-x-0 bottom-0 top-auto m-0 hidden max-h-[85vh] w-full max-w-none flex-col overflow-hidden rounded-t-2xl border-0 bg-white p-0 font-rr text-rr-navy shadow-md-lg backdrop:bg-md-dark/40 open:flex"
+    data-testid="more-sheet"
+    (cancel)="onSheetCancel($event)"
+  >
+    <ng-container *ngTemplateOutlet="navigationPanel" />
+  </dialog>
+} @else {
+  <ng-container *ngTemplateOutlet="navigationPanel" />
+}
+
+<ng-template #navigationPanel>
 <nav
   [id]="navId"
   aria-label="Primary"
-  class="flex shrink-0 flex-col overflow-y-auto bg-white p-3 text-md-body shadow-md"
-  [class.fixed]="drawer"
-  [class.inset-y-0]="drawer"
-  [class.left-0]="drawer"
-  [class.z-40]="drawer"
-  [class.rounded-md-card]="!drawer"
-  [class.m-4]="!drawer"
-  [class.w-72]="drawer"
-  [class.w-64]="!drawer && expanded"
-  [class.w-16]="!drawer && !expanded"
+  class="flex flex-col overflow-y-auto bg-white font-rr text-md-body text-rr-navy"
+  [ngClass]="panelClasses"
 >
   <!--
-    The header row owns the app title and, on a wide layout, the collapse control that used to
+    The header row owns the app name and, on a wide layout, the collapse control that used to
     float above the menu in the shell's top bar (issue #456). Collapsed to the rail there is no
-    title to sit beside, so the row holds the expand control alone and centres it: the panel's
+    name to sit beside, so the row holds the expand control alone and centres it: the panel's
     `w-16` rail leaves a 40px content box inside its `p-3`, narrower than the 44x44 CSS-pixel
     minimum touch target, and `-mx-2` widens the row to 56px inside the panel's 64px padding box
     so the control reaches that size without overflowing the panel or overlapping anything.
+
+    In the More sheet the row is sticky, so Close stays reachable however far the menu scrolls.
   -->
   <div
-    class="mb-2 flex items-center border-b border-md-gray-200 pb-3"
+    class="flex items-center"
+    [class.mb-2]="!drawer"
+    [class.pb-3]="!drawer"
+    [class.border-b]="true"
+    [class.border-rr-line]="true"
     [class.gap-2]="drawer || expanded"
-    [class.px-1]="drawer || expanded"
+    [class.px-1]="!drawer && expanded"
     [class.-mx-2]="!drawer && !expanded"
     [class.justify-center]="!drawer && !expanded"
+    [class.sticky]="drawer"
+    [class.top-0]="drawer"
+    [class.z-10]="drawer"
+    [class.bg-white]="drawer"
+    [class.px-4]="drawer"
+    [class.py-3]="drawer"
   >
     @if (drawer || expanded) {
-      <div class="flex min-w-0 flex-1 items-center gap-2 truncate font-semibold text-md-gray-800">
-        <span aria-hidden="true" class="text-base">🧃</span>
-        <span class="truncate">Inventory Manager</span>
+      <div class="flex min-w-0 flex-1 items-center gap-2 truncate">
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
+          <app-icon name="inventory_2" variant="outlined" [size]="18" />
+        </span>
+        <span class="truncate text-base font-bold text-rr-navy">Restockroo</span>
       </div>
     }
     @if (drawer) {
       <button
+        #closeControl
         type="button"
         aria-label="Close navigation menu"
-        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-md-control text-md-gray-600 transition hover:bg-md-gray-100 hover:text-md-gray-800"
+        class="flex h-11 shrink-0 items-center justify-center gap-1 rounded-lg border border-rr-line px-3 text-sm font-semibold text-rr-navy hover:bg-rr-surface motion-safe:transition-colors"
         (click)="dismissed.emit()"
       >
         <app-icon name="close" variant="outlined" [size]="20" />
+        <span aria-hidden="true">Close</span>
       </button>
     } @else {
       <button
         type="button"
-        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-md-control text-md-gray-600 transition hover:bg-md-gray-100 hover:text-md-gray-800"
+        class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-rr-muted hover:bg-rr-surface hover:text-rr-navy motion-safe:transition-colors"
         [attr.aria-label]="collapseToggleLabel"
         [attr.aria-expanded]="expanded"
         [attr.aria-controls]="navId"
@@ -56,32 +89,34 @@
     }
   </div>
 
-  <ul class="flex flex-col gap-1">
+  <ul class="m-0 flex list-none flex-col gap-1 p-0" [class.px-3]="drawer" [class.pt-2]="drawer">
     @for (item of navigation; track item.label) {
       <li>
         @if (isSectionHeading(item)) {
           <!--
-            The live provider section's heading (issue #729). It is a heading, not a control: it
-            toggles nothing, links nowhere, and is announced as the heading of the entries after it.
-            Collapsed to the icon rail there is no room for its label or its sentence, so a rule
-            stands in for it visually while the heading itself stays in the accessibility tree.
+            A group heading (issues #729 and #972). It is a heading, not a control: it toggles
+            nothing, links nowhere, and is announced as the heading of the entries after it.
+            Collapsed to the icon rail there is no room for its label, so a rule stands in for it
+            visually while the heading itself stays in the accessibility tree.
           -->
           @if (expanded || drawer) {
-            <h2 class="mt-3 border-t border-md-gray-200 px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-md-gray-500">
+            <h2 class="m-0 px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wider text-rr-caption">
               {{ item.label }}
-              <span class="block text-xs font-normal normal-case tracking-normal text-md-gray-500">{{
-                item.description
-              }}</span>
+              @if (item.description) {
+                <span class="block text-xs font-normal normal-case tracking-normal text-rr-caption">{{
+                  item.description
+                }}</span>
+              }
             </h2>
           } @else {
-            <h2 class="sr-only">{{ item.label }}: {{ item.description }}</h2>
-            <div aria-hidden="true" class="my-2 border-t border-md-gray-200"></div>
+            <h2 class="sr-only">{{ item.label }}{{ item.description ? ': ' + item.description : '' }}</h2>
+            <div aria-hidden="true" class="my-2 border-t border-rr-line"></div>
           }
         } @else if (item.kind === 'group') {
           <button
             type="button"
-            class="flex w-full items-center gap-3 rounded-md-control px-3 py-2 font-medium text-md-gray-800 transition hover:bg-md-gray-100"
-            [class.bg-md-gray-100]="isGroupActive(item)"
+            class="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 py-2 font-medium text-rr-navy hover:bg-rr-surface motion-safe:transition-colors"
+            [class.bg-rr-surface]="isGroupActive(item)"
             [class.font-semibold]="isGroupActive(item)"
             [attr.aria-expanded]="expanded && isGroupOpen(item)"
             [attr.aria-controls]="expanded && isGroupOpen(item) ? groupPanelId(item) : null"
@@ -94,23 +129,28 @@
               <span class="badge badge-warning" [class.sr-only]="!expanded">{{ pendingBusinessCount }}</span>
             }
             @if (expanded) {
-              <span aria-hidden="true" class="ml-auto text-xs text-md-gray-500">{{ isGroupOpen(item) ? '▴' : '▾' }}</span>
+              <span aria-hidden="true" class="ml-auto text-xs text-rr-caption">{{ isGroupOpen(item) ? '▴' : '▾' }}</span>
             }
           </button>
 
           @if (expanded && isGroupOpen(item)) {
-            <ul [id]="groupPanelId(item)" class="ml-5 mt-1 flex flex-col gap-1 border-l border-md-gray-200 pl-3">
+            <ul
+              [id]="groupPanelId(item)"
+              class="m-0 ml-5 mt-1 flex list-none flex-col gap-1 border-l border-rr-line p-0 pl-3"
+              [ngClass]="{ 'sm:grid': drawer, 'sm:grid-cols-2': drawer }"
+            >
               @for (child of item.children; track child.label) {
                 <li>
                   @if (child.kind === 'link') {
                     <a
                       [routerLink]="child.route"
-                      class="flex items-center gap-2 truncate rounded-md-control px-3 py-1.5 transition hover:bg-md-gray-100"
-                      [class.bg-md-dark-gradient]="isLinkActive(child)"
+                      class="flex min-h-10 items-center gap-2 truncate rounded-lg px-3 py-1.5 no-underline motion-safe:transition-colors"
+                      [class.bg-rr-teal]="isLinkActive(child)"
                       [class.text-white]="isLinkActive(child)"
                       [class.font-semibold]="isLinkActive(child)"
-                      [class.text-md-gray-800]="!isLinkActive(child) && !isLinkLocked(child)"
-                      [class.text-md-gray-400]="!isLinkActive(child) && isLinkLocked(child)"
+                      [ngClass]="{ 'hover:bg-rr-surface': !isLinkActive(child) }"
+                      [class.text-rr-muted]="!isLinkActive(child) && !isLinkLocked(child)"
+                      [class.text-rr-caption]="!isLinkActive(child) && isLinkLocked(child)"
                       [attr.aria-current]="isLinkActive(child) ? 'page' : null"
                       [attr.title]="isLinkLocked(child) ? lockSummary(child) : null"
                       (click)="navigated.emit()"
@@ -137,7 +177,7 @@
                       }
                     </a>
                   } @else {
-                    <span class="block truncate rounded-md-control px-3 py-1.5 text-md-gray-400" aria-disabled="true">{{
+                    <span class="block truncate rounded-lg px-3 py-1.5 text-rr-caption" aria-disabled="true">{{
                       child.label
                     }}</span>
                   }
@@ -148,11 +188,12 @@
         } @else {
           <a
             [routerLink]="item.route"
-            class="flex items-center gap-3 rounded-md-control px-3 py-2 font-medium transition hover:bg-md-gray-100"
-            [class.bg-md-dark-gradient]="isLinkActive(item)"
+            class="flex min-h-11 items-center gap-3 rounded-lg px-3 py-2 font-medium no-underline motion-safe:transition-colors"
+            [class.bg-rr-teal]="isLinkActive(item)"
             [class.text-white]="isLinkActive(item)"
-            [class.text-md-gray-800]="!isLinkActive(item) && !isLinkLocked(item)"
-            [class.text-md-gray-400]="!isLinkActive(item) && isLinkLocked(item)"
+            [ngClass]="{ 'hover:bg-rr-surface': !isLinkActive(item) }"
+            [class.text-rr-navy]="!isLinkActive(item) && !isLinkLocked(item)"
+            [class.text-rr-caption]="!isLinkActive(item) && isLinkLocked(item)"
             [attr.aria-current]="isLinkActive(item) ? 'page' : null"
             [attr.title]="linkTitle(item)"
             (click)="navigated.emit()"
@@ -175,3 +216,4 @@
     }
   </ul>
 </nav>
+</ng-template>

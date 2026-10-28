@@ -1285,8 +1285,9 @@ video {
 
 /*
    * The landing page's buttons, from the approved Restockroo design: teal primary, white
-   * secondary, and a borderless ghost. Only `public/landing/` uses the `rr-` classes, so no
-   * authenticated screen changes; each is at least 44px tall for touch. Each class carries the
+   * secondary, and a borderless ghost. The public landing page uses the `rr-` classes and, since
+   * issue #972, so do the Dashboard's own actions; no other authenticated page does. Each is at
+   * least 44px tall for touch. Each class carries the
    * whole shared base itself, so the generated stylesheet declares every selector once.
    */
 
@@ -1447,13 +1448,13 @@ video {
   inset: 0px;
 }
 
-.inset-y-0 {
-  top: 0px;
-  bottom: 0px;
+.inset-x-0 {
+  left: 0px;
+  right: 0px;
 }
 
-.left-0 {
-  left: 0px;
+.bottom-0 {
+  bottom: 0px;
 }
 
 .right-0 {
@@ -1462,6 +1463,10 @@ video {
 
 .top-0 {
   top: 0px;
+}
+
+.top-auto {
+  top: auto;
 }
 
 .z-10 {
@@ -1482,10 +1487,6 @@ video {
 
 .z-50 {
   z-index: 50;
-}
-
-.z-\[35\] {
-  z-index: 35;
 }
 
 .col-span-2 {
@@ -1511,6 +1512,11 @@ video {
 .-mx-2 {
   margin-left: -0.5rem;
   margin-right: -0.5rem;
+}
+
+.mx-3 {
+  margin-left: 0.75rem;
+  margin-right: 0.75rem;
 }
 
 .mx-auto {
@@ -1586,6 +1592,10 @@ video {
 
 .mr-2 {
   margin-right: 0.5rem;
+}
+
+.mt-0\.5 {
+  margin-top: 0.125rem;
 }
 
 .mt-1 {
@@ -1708,6 +1718,18 @@ video {
   height: 2rem;
 }
 
+.h-9 {
+  height: 2.25rem;
+}
+
+.h-\[calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] {
+  height: calc(4.5rem + env(safe-area-inset-bottom));
+}
+
+.h-full {
+  height: 100%;
+}
+
 .max-h-56 {
   max-height: 14rem;
 }
@@ -1724,6 +1746,10 @@ video {
   max-height: 70vh;
 }
 
+.max-h-\[85vh\] {
+  max-height: 85vh;
+}
+
 .max-h-\[calc\(100vh-2rem\)\] {
   max-height: calc(100vh - 2rem);
 }
@@ -1732,8 +1758,16 @@ video {
   min-height: 0px;
 }
 
+.min-h-10 {
+  min-height: 2.5rem;
+}
+
 .min-h-11 {
   min-height: 2.75rem;
+}
+
+.min-h-14 {
+  min-height: 3.5rem;
 }
 
 .min-h-\[44px\] {
@@ -1766,6 +1800,10 @@ video {
 
 .w-16 {
   width: 4rem;
+}
+
+.w-2 {
+  width: 0.5rem;
 }
 
 .w-2\.5 {
@@ -1816,12 +1854,12 @@ video {
   width: 1.75rem;
 }
 
-.w-72 {
-  width: 18rem;
-}
-
 .w-8 {
   width: 2rem;
+}
+
+.w-9 {
+  width: 2.25rem;
 }
 
 .w-\[14rem\] {
@@ -1923,6 +1961,14 @@ video {
 
 .max-w-\[480px\] {
   max-width: 480px;
+}
+
+.max-w-full {
+  max-width: 100%;
+}
+
+.max-w-none {
+  max-width: none;
 }
 
 .max-w-sm {
@@ -2058,6 +2104,14 @@ video {
 
 .justify-between {
   justify-content: space-between;
+}
+
+.justify-around {
+  justify-content: space-around;
+}
+
+.gap-0\.5 {
+  gap: 0.125rem;
 }
 
 .gap-1 {
@@ -2216,6 +2270,11 @@ video {
   border-radius: 0.75rem;
 }
 
+.rounded-t-2xl {
+  border-top-left-radius: 1rem;
+  border-top-right-radius: 1rem;
+}
+
 .border {
   border-width: 1px;
 }
@@ -2243,6 +2302,10 @@ video {
 
 .border-l-4 {
   border-left-width: 4px;
+}
+
+.border-r {
+  border-right-width: 1px;
 }
 
 .border-t {
@@ -2309,10 +2372,6 @@ video {
   background-color: rgb(38 38 38 / var(--tw-bg-opacity, 1));
 }
 
-.bg-md-dark\/40 {
-  background-color: rgb(38 38 38 / 0.4);
-}
-
 .bg-md-gray-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(245 245 245 / var(--tw-bg-opacity, 1));
@@ -2354,9 +2413,19 @@ video {
   background-color: rgb(254 226 226 / var(--tw-bg-opacity, 1));
 }
 
+.bg-rr-danger-text {
+  --tw-bg-opacity: 1;
+  background-color: rgb(185 28 28 / var(--tw-bg-opacity, 1));
+}
+
 .bg-rr-line-strong {
   --tw-bg-opacity: 1;
   background-color: rgb(203 213 225 / var(--tw-bg-opacity, 1));
+}
+
+.bg-rr-ok-text {
+  --tw-bg-opacity: 1;
+  background-color: rgb(21 128 61 / var(--tw-bg-opacity, 1));
 }
 
 .bg-rr-surface {
@@ -2382,6 +2451,11 @@ video {
 .bg-rr-warn-bg {
   --tw-bg-opacity: 1;
   background-color: rgb(254 243 199 / var(--tw-bg-opacity, 1));
+}
+
+.bg-rr-warn-text {
+  --tw-bg-opacity: 1;
+  background-color: rgb(180 83 9 / var(--tw-bg-opacity, 1));
 }
 
 .bg-white {
@@ -2515,6 +2589,10 @@ video {
   padding-bottom: 2rem;
 }
 
+.pb-0 {
+  padding-bottom: 0px;
+}
+
 .pb-1 {
   padding-bottom: 0.25rem;
 }
@@ -2537,6 +2615,14 @@ video {
 
 .pb-56 {
   padding-bottom: 14rem;
+}
+
+.pb-\[env\(safe-area-inset-bottom\)\] {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pb-\[max\(1rem\2c env\(safe-area-inset-bottom\)\)\] {
+  padding-bottom: max(1rem,env(safe-area-inset-bottom));
 }
 
 .pl-1 {
@@ -2783,6 +2869,11 @@ video {
   color: rgb(220 38 38 / var(--tw-text-opacity, 1));
 }
 
+.text-rr-caption {
+  --tw-text-opacity: 1;
+  color: rgb(100 116 139 / var(--tw-text-opacity, 1));
+}
+
 .text-rr-danger-text {
   --tw-text-opacity: 1;
   color: rgb(185 28 28 / var(--tw-text-opacity, 1));
@@ -2858,6 +2949,12 @@ video {
   box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
 }
 
+.shadow-md-card {
+  --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+}
+
 .shadow-md-lg {
   --tw-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   --tw-shadow-colored: 0 10px 15px -3px var(--tw-shadow-color), 0 4px 6px -2px var(--tw-shadow-color);
@@ -2907,12 +3004,6 @@ video {
 
 .transition {
   transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter;
-  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 150ms;
-}
-
-.transition-colors {
-  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   transition-duration: 150ms;
 }
@@ -3040,6 +3131,10 @@ img {
   }
 }
 
+.backdrop\:bg-md-dark\/40::backdrop {
+  background-color: rgb(38 38 38 / 0.4);
+}
+
 .backdrop\:bg-md-gray-800\/50::backdrop {
   background-color: rgb(38 38 38 / 0.5);
 }
@@ -3048,14 +3143,18 @@ img {
   border-top-width: 0px;
 }
 
-.hover\:border-md-gray-300:hover {
-  --tw-border-opacity: 1;
-  border-color: rgb(212 212 212 / var(--tw-border-opacity, 1));
+.open\:flex[open] {
+  display: flex;
 }
 
 .hover\:border-md-info:hover {
   --tw-border-opacity: 1;
   border-color: rgb(26 115 232 / var(--tw-border-opacity, 1));
+}
+
+.hover\:border-rr-line-strong:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(203 213 225 / var(--tw-border-opacity, 1));
 }
 
 .hover\:bg-blue-700:hover {
@@ -3073,6 +3172,11 @@ img {
   background-color: rgb(250 248 255 / var(--tw-bg-opacity, 1));
 }
 
+.hover\:bg-rr-surface:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(242 243 255 / var(--tw-bg-opacity, 1));
+}
+
 .hover\:bg-rr-teal-tint:hover {
   --tw-bg-opacity: 1;
   background-color: rgb(240 253 250 / var(--tw-bg-opacity, 1));
@@ -3081,11 +3185,6 @@ img {
 .hover\:text-md-danger-text:hover {
   --tw-text-opacity: 1;
   color: rgb(183 28 28 / var(--tw-text-opacity, 1));
-}
-
-.hover\:text-md-gray-800:hover {
-  --tw-text-opacity: 1;
-  color: rgb(38 38 38 / var(--tw-text-opacity, 1));
 }
 
 .hover\:text-rr-navy:hover {
@@ -3149,6 +3248,14 @@ img {
   opacity: 0.6;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .motion-safe\:transition-colors {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+}
+
 @media (min-width: 640px) {
   .sm\:col-span-2 {
     grid-column: span 2 / span 2;
@@ -3169,6 +3276,14 @@ img {
 
   .sm\:flex {
     display: flex;
+  }
+
+  .sm\:inline-flex {
+    display: inline-flex;
+  }
+
+  .sm\:grid {
+    display: grid;
   }
 
   .sm\:w-auto {
@@ -3203,12 +3318,24 @@ img {
     flex-direction: row;
   }
 
+  .sm\:flex-wrap {
+    flex-wrap: wrap;
+  }
+
+  .sm\:items-start {
+    align-items: flex-start;
+  }
+
   .sm\:items-center {
     align-items: center;
   }
 
   .sm\:justify-center {
     justify-content: center;
+  }
+
+  .sm\:justify-between {
+    justify-content: space-between;
   }
 
   .sm\:p-10 {
@@ -3382,6 +3509,10 @@ img {
 
   .lg\:grid-cols-7 {
     grid-template-columns: repeat(7, minmax(0, 1fr));
+  }
+
+  .lg\:gap-4 {
+    gap: 1rem;
   }
 }
 

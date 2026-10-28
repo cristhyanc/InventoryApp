@@ -47,8 +47,9 @@ module.exports = {
         'md-input-border': '#D2D6DA', // form field borders
 
         // The public Restockroo landing page (issue #954), from the owner-approved Stitch export
-        // ("Field & Ledger"). Only `public/landing/` uses this scale, so no authenticated screen
-        // changes appearance; the text pairs it is used in are asserted in
+        // ("Field & Ledger"). `public/landing/` uses this scale and, since issue #972, so do the
+        // Dashboard and the authenticated shell's navigation (sidebar, mobile bottom bar and More
+        // sheet); no other authenticated page does. The text pairs it is used in are asserted in
         // `design-tokens.contrast.spec.ts`.
         rr: {
           navy: '#0F172A', // headings, values

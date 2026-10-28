@@ -254,14 +254,14 @@ describe('SidebarNavComponent active route (issue #391)', () => {
     expect(link(host, '/admin/avco-transition')?.getAttribute('aria-current')).toBe('page');
   });
 
-  it('gives the active item the Material dark-gradient styling hook and its parent heading a visible active hook', async () => {
+  it('gives the active item the Restockroo teal styling hook and its parent heading a visible active hook (issue #972)', async () => {
     const { host } = await render({ url: '/admin/avco-transition' });
 
-    expect(link(host, '/admin/avco-transition')?.classList.contains('bg-md-dark-gradient')).toBe(true);
+    expect(link(host, '/admin/avco-transition')?.classList.contains('bg-rr-teal')).toBe(true);
     expect(link(host, '/admin/avco-transition')?.classList.contains('text-white')).toBe(true);
-    expect(link(host, '/admin/historical-cost-recovery')?.classList.contains('bg-md-dark-gradient')).toBe(false);
-    expect(groupToggle(host, 'Admin').classList.contains('bg-md-gray-100')).toBe(true);
-    expect(groupToggle(host, 'Reports').classList.contains('bg-md-gray-100')).toBe(false);
+    expect(link(host, '/admin/historical-cost-recovery')?.classList.contains('bg-rr-teal')).toBe(false);
+    expect(groupToggle(host, 'Admin').classList.contains('bg-rr-surface')).toBe(true);
+    expect(groupToggle(host, 'Reports').classList.contains('bg-rr-surface')).toBe(false);
   });
 
   it('marks a top-level link active from a detail URL without activating any group', async () => {
@@ -269,8 +269,8 @@ describe('SidebarNavComponent active route (issue #391)', () => {
 
     expect(link(host, '/machines')?.getAttribute('aria-current')).toBe('page');
     expect(groupToggle(host, 'Inventory').getAttribute('aria-expanded')).toBe('false');
-    expect(link(host, '/machines')?.classList.contains('bg-md-dark-gradient')).toBe(true);
-    expect(link(host, '/')?.classList.contains('bg-md-dark-gradient')).toBe(false);
+    expect(link(host, '/machines')?.classList.contains('bg-rr-teal')).toBe(true);
+    expect(link(host, '/')?.classList.contains('bg-rr-teal')).toBe(false);
   });
 
   it('follows navigation that happens after the sidebar is rendered', async () => {
@@ -381,6 +381,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
 
     expect(component.navigation.map((entry) => entry.label)).toEqual([
       ...primaryNavigation.map((entry) => entry.label),
+      'Super admin',
       'Super Admin'
     ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
@@ -410,10 +411,12 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
     });
 
     expect(component.navigation.map((entry) => entry.label)).toEqual([
+      'Operations',
       'Dashboard',
       'Pick List',
       'Sites',
       'Machines',
+      'Inventory & purchasing',
       'Inventory',
       'Purchases'
     ]);
@@ -944,7 +947,7 @@ describe('SidebarNavComponent outlined icons (issue #456)', () => {
     // every one of them is a destination or a group, and the rail has nothing else to draw.
     const iconBearing = primaryNavigation.filter((item) => item.kind !== 'section');
     const declaredIcons = iconBearing.flatMap((item) => (item.icon === undefined ? [] : [item.icon]));
-    expect(iconBearing).toHaveLength(primaryNavigation.length);
+    expect(iconBearing).toHaveLength(primaryNavigation.filter((item) => item.kind !== 'section').length);
     expect(declaredIcons).toHaveLength(iconBearing.length);
 
     for (const icon of declaredIcons) {
@@ -1002,8 +1005,8 @@ describe('SidebarNavComponent header collapse control (issue #456)', () => {
 
     // Same header row as the title, with the title before it: the row is the toggle's parent.
     const row = toggle?.parentElement as HTMLElement;
-    expect(row.textContent).toContain('Inventory Manager');
-    expect(row.firstElementChild?.textContent).toContain('Inventory Manager');
+    expect(row.textContent).toContain('Restockroo');
+    expect(row.firstElementChild?.textContent).toContain('Restockroo');
   });
 
   it('reports the collapse intent instead of changing its own expanded state', async () => {
@@ -1101,6 +1104,77 @@ describe('SidebarNavComponent drawer behaviour (issue #391)', () => {
     expect(dismissed).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * The More sheet (issue #972): a modal dialog with a sticky Close control that takes focus as it
+   * opens, keeps Tab inside itself, and opens every group so the whole menu scrolls.
+   */
+  it('renders the narrow menu as a labelled modal sheet that focuses Close and opens every group', async () => {
+    const { host } = await render({ drawer: true });
+    const sheet = host.querySelector<HTMLElement>('[data-testid="more-sheet"]');
+
+    expect(sheet?.tagName).toBe('DIALOG');
+    expect((sheet as HTMLDialogElement).open).toBe(true);
+    expect(sheet?.getAttribute('aria-label')).toBe('Menu');
+    expect(sheet?.querySelector('nav[aria-label="Primary"]')).not.toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('button[aria-label="Close navigation menu"]'));
+    for (const group of ['Inventory', 'Purchases', 'Reports', 'Admin']) {
+      expect(groupToggle(host, group).getAttribute('aria-expanded')).toBe('true');
+    }
+    expect(link(host, '/admin/business-settings')).not.toBeNull();
+  });
+
+  it('keeps Tab and Shift+Tab inside the open sheet', async () => {
+    const { host } = await render({ drawer: true });
+    const sheet = host.querySelector<HTMLElement>('[data-testid="more-sheet"]') as HTMLElement;
+    const focusable = Array.from(sheet.querySelectorAll<HTMLElement>('a[href], button:not([disabled])'));
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    last.focus();
+    sheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    sheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(last);
+  });
+
+  /**
+   * The dialog's own close request (Escape, or a back gesture) is cancelled and reported, so the
+   * shell - not the browser - closes the menu and returns focus to the opener.
+   */
+  it('reports the dialog close request instead of letting the browser close it', async () => {
+    const { component, host } = await render({ drawer: true });
+    const dismissed = jest.fn();
+    component.dismissed.subscribe(dismissed);
+    const cancel = new Event('cancel', { cancelable: true });
+
+    host.querySelector('[data-testid="more-sheet"]')?.dispatchEvent(cancel);
+
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(dismissed).toHaveBeenCalledTimes(1);
+  });
+
+  it('dismisses on a click on the backdrop, and not on a click inside the sheet', async () => {
+    const { component, host } = await render({ drawer: true });
+    const dismissed = jest.fn();
+    component.dismissed.subscribe(dismissed);
+    const sheet = host.querySelector<HTMLElement>('[data-testid="more-sheet"]') as HTMLElement;
+
+    sheet.querySelector('nav')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(dismissed).not.toHaveBeenCalled();
+
+    sheet.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(dismissed).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders no sheet or dialog on a wide layout', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="more-sheet"]')).toBeNull();
+    expect(host.querySelector('dialog')).toBeNull();
+  });
+
   it('reports every navigation so the shell can dismiss a narrow drawer', async () => {
     const { fixture, component, host } = await render({ drawer: true });
     const navigated = jest.fn();
@@ -1110,8 +1184,7 @@ describe('SidebarNavComponent drawer behaviour (issue #391)', () => {
     fixture.detectChanges();
     expect(navigated).toHaveBeenCalledTimes(1);
 
-    groupToggle(host, 'Inventory').click();
-    fixture.detectChanges();
+    // The More sheet opens every group (issue #972), so a child is one press away.
     link(host, '/categories')?.click();
 
     expect(navigated).toHaveBeenCalledTimes(2);
@@ -1244,11 +1317,12 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
    */
   it('renders no provider section heading, with Sites immediately above Machines', async () => {
     const { host, component } = await render();
-    const headings = Array.from(host.querySelectorAll('nav[aria-label="Primary"] h2')).map(
-      (entry) => entry.textContent ?? ''
+    const headings = Array.from(host.querySelectorAll('nav[aria-label="Primary"] h2')).map((entry) =>
+      (entry.textContent ?? '').trim()
     );
 
-    expect(headings).toEqual([]);
+    // Only the Restockroo group headings of issue #972, none of which is about the provider.
+    expect(headings).toEqual(['Operations', 'Inventory & purchasing', 'Finance & reports', 'Settings']);
     expect(host.textContent).not.toContain('Needs Nayax');
     expect(link(host, '/sites')).not.toBeNull();
     expect(link(host, '/machines')).not.toBeNull();
@@ -1270,13 +1344,29 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
 
   /**
    * The order every role is shown, which is the same order for all of them: what each one is
-   * offered differs only by capability, never by where an entry sits.
+   * offered differs only by capability, never by where an entry sits. Issue #972's group headings
+   * are part of it, and go with the entries under them.
    */
+  const OWNER_ORDER = [
+    'Operations',
+    'Dashboard',
+    'Pick List',
+    'Sites',
+    'Machines',
+    'Inventory & purchasing',
+    'Inventory',
+    'Purchases',
+    'Finance & reports',
+    'Expenses',
+    'Reports',
+    'Settings',
+    'Admin'
+  ];
   it.each([
     {
       role: 'an Owner',
       capabilities: CAPABILITIES,
-      expected: ['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases', 'Expenses', 'Reports', 'Admin']
+      expected: OWNER_ORDER
     },
     {
       role: 'a Manager',
@@ -1292,9 +1382,13 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
         'Imports.Run',
         'SiteCommissions.Manage'
       ] as readonly Capability[],
-      expected: ['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases', 'Expenses', 'Reports', 'Admin']
+      expected: OWNER_ORDER
     },
-    { role: 'a Reports-only role', capabilities: ['Reports.View'] as readonly Capability[], expected: ['Reports'] }
+    {
+      role: 'a Reports-only role',
+      capabilities: ['Reports.View'] as readonly Capability[],
+      expected: ['Finance & reports', 'Reports']
+    }
   ])('renders the menu in one order for $role', async ({ capabilities, expected }) => {
     const { component } = await render({ access: of(granted(capabilities)), providerStatus: 'NotConfigured' });
 

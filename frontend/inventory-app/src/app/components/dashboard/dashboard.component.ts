@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -73,6 +73,28 @@ export type DashboardProviderAvailability =
  */
 export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
 
+/**
+ * The four sales periods every machine already carries (issue #972). The desktop table shows all
+ * four side by side; a narrow screen shows one at a time and switches between them, so no period
+ * is lost to the smaller layout.
+ */
+export type MachinePeriod = 'today' | 'week' | 'lastWeek' | 'monthToDate';
+
+/**
+ * One alert in the Needs attention panel (issue #972), built only from figures the summary already
+ * published. The panel renders one of these per alert that actually applies, never a fixed set.
+ */
+export interface AttentionAlert {
+  readonly id: 'empty-selections' | 'machines-need-refill' | 'products-need-ordering';
+  readonly title: string;
+  readonly detail: string;
+  readonly icon: string;
+  readonly iconClass: string;
+}
+
+/** How many products the Reorder priorities overview shows before linking to the full list. */
+export const REORDER_PRIORITY_LIMIT = 5;
+
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -87,6 +109,30 @@ export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
   templateUrl: './dashboard.component.html'
 })
 export class DashboardComponent implements OnInit, OnDestroy {
+  /**
+   * The restock-sync reminder (issue #891), which the Needs attention panel holds (issue #972). It
+   * is always mounted, so it is read statically: whether it currently has something to say decides
+   * whether the panel is shown, and how many alerts it counts.
+   */
+  @ViewChild(MachineRestockSyncReminderComponent, { static: true })
+  private readonly restockSyncReminder?: MachineRestockSyncReminderComponent;
+
+  /** The period a narrow screen shows machine sales for (issue #972); the table shows all four. */
+  machinePeriod: MachinePeriod = 'week';
+
+  readonly machinePeriods: readonly { readonly id: MachinePeriod; readonly label: string }[] = [
+    { id: 'today', label: 'Today' },
+    { id: 'week', label: 'This week' },
+    { id: 'lastWeek', label: 'Last week' },
+    { id: 'monthToDate', label: 'Month to date' }
+  ];
+
+  /**
+   * Said beside the inventory card's unit count (issue #972): the card's value is every unit the
+   * business owns, but the unit count is storage only, so the two are never read as one figure.
+   */
+  readonly storageUnitsNote = 'Storage units exclude stock in machines.';
+
   lowStock: Product[] = [];
   machines: Machine[] = [];
   sites: Site[] = [];
@@ -426,7 +472,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.purchaseCosts = new Map();
     this.purchaseCostState = 'idle';
 
-    const productIds = this.lowStock.map((product) => product.id);
+    // Only the products the overview actually shows (issue #972): the full list is a page of its own.
+    const productIds = this.reorderPriorities.map((product) => product.id);
     if (!this.arePurchaseCostColumnsShown || !this.isFinancialsAccessAnswered || productIds.length === 0) return;
 
     this.purchaseCostState = 'loading';
@@ -680,8 +727,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Whether the Reorder Alerts table carries the "Last purchase" and "Cheapest purchase" columns at
-   * all (issue #789). They are supplier purchasing figures, so they belong to
+   * Whether the Reorder priorities overview carries the "Last purchase" and "Cheapest purchase"
+   * columns at all (issue #789) - both historical recorded costs, never current supplier prices. They are supplier purchasing figures, so they belong to
    * `Dashboard.ViewFinancials` exactly as the endpoint behind them does: a role without it is shown
    * no column rather than a column of refusals, and nothing is requested on its behalf.
    */
@@ -760,9 +807,167 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return `${inventory.productsWithUnknownCost} of ${inventory.productCount} products missing cost data`;
   }
 
-  /** Makes explicit that storage quantity is home/storage stock only, not a whole-business count. */
+  /**
+   * The products and storage units behind the card. That the unit count leaves out machine stock is
+   * said by {@link storageUnitsNote} beside it, not folded into this line (issue #972).
+   */
   inventoryScopeText(inventory: DashboardInventorySummary): string {
-    return `${inventory.productCount} products · ${inventory.unitsInStorage} units in storage (excludes machines)`;
+    return `${inventory.productCount} products · ${inventory.unitsInStorage} units in storage`;
+  }
+
+  /**
+   * The Needs attention alerts (issue #972), from the summary's own refill and ordering sections and
+   * nothing else. A withheld or unavailable section raises no alert - its card already says it is
+   * unavailable - and a zero raises none either, so the panel lists only what actually applies.
+   */
+  get attentionAlerts(): readonly AttentionAlert[] {
+    const alerts: AttentionAlert[] = [];
+    const refill = this.summary?.needsRefill;
+    if (this.isLiveFleetShown && refill !== undefined && !isDashboardSectionUnavailable(refill)) {
+      if (refill.emptySelectionCount > 0) {
+        alerts.push({
+          id: 'empty-selections',
+          title: plural(refill.emptySelectionCount, 'empty selection'),
+          detail: `Across ${plural(refill.machinesWithEmptySelections, 'machine')}`,
+          icon: 'error',
+          iconClass: 'text-rr-danger-text'
+        });
+      }
+      if (refill.machinesNeedingRefill > 0) {
+        alerts.push({
+          id: 'machines-need-refill',
+          title: `${plural(refill.machinesNeedingRefill, 'machine')} ${refill.machinesNeedingRefill === 1 ? 'needs' : 'need'} refill`,
+          detail: `${refill.lowSelectionCount} low · ${refill.emptySelectionCount} empty selections across ${refill.machinesEvaluated} machines evaluated`,
+          icon: 'assignment',
+          iconClass: 'text-rr-warn-text'
+        });
+      }
+    }
+
+    const ordering = this.summary?.needsOrdering;
+    if (ordering !== undefined && !isDashboardSectionUnavailable(ordering) && ordering.productsNeedingOrdering > 0) {
+      alerts.push({
+        id: 'products-need-ordering',
+        title: `${plural(ordering.productsNeedingOrdering, 'product')} ${ordering.productsNeedingOrdering === 1 ? 'needs' : 'need'} ordering`,
+        detail: this.orderingModeNote ?? `Of ${ordering.productsEvaluated} products in the catalogue`,
+        icon: 'local_shipping',
+        iconClass: 'text-rr-teal'
+      });
+    }
+    return alerts;
+  }
+
+  /** Whether the restock-sync reminder has something to show: pending work, or a failed read. */
+  private get isRestockSyncReminderShown(): boolean {
+    const reminder = this.restockSyncReminder;
+    return reminder !== undefined && (reminder.isShown || reminder.state === 'failed');
+  }
+
+  /** The number of alerts the panel renders, counted from them rather than assumed. */
+  get attentionCount(): number {
+    return this.attentionAlerts.length + (this.isRestockSyncReminderShown ? 1 : 0);
+  }
+
+  get attentionCountLabel(): string {
+    return plural(this.attentionCount, 'item');
+  }
+
+  /** The panel is shown only while at least one alert applies. */
+  get hasAttention(): boolean {
+    return this.attentionCount > 0;
+  }
+
+  /**
+   * The first {@link REORDER_PRIORITY_LIMIT} products of the reorder list, in the order the
+   * backend's reorder calculation published them: nothing here re-ranks the list.
+   */
+  get reorderPriorities(): readonly Product[] {
+    return this.lowStock.slice(0, REORDER_PRIORITY_LIMIT);
+  }
+
+  /** The link to the full list, naming its real length once the list has been read. */
+  get reorderViewAllLabel(): string {
+    if (this.isLoadingLowStock || this.reorderAlertsError !== null || this.lowStock.length === 0) {
+      return 'View needs ordering';
+    }
+    return `View all ${plural(this.lowStock.length, 'product')} needing ordering`;
+  }
+
+  /** A storage figure of zero is the most urgent state, and says so by more than its colour. */
+  storageStockClass(product: Product): string {
+    return product.quantityInStock <= 0 ? 'badge-danger' : 'badge-warning';
+  }
+
+  machineCountLabel(count: number): string {
+    return plural(count, 'machine');
+  }
+
+  get machinePeriodLabel(): string {
+    return this.machinePeriods.find((period) => period.id === this.machinePeriod)?.label ?? '';
+  }
+
+  /** One machine's sales for a period, or `Unavailable` for a figure that is withheld or unknown. */
+  periodSalesText(machine: Machine, period: MachinePeriod): string {
+    const { sales } = machinePeriodFigures(machine, period);
+    return sales == null ? 'Unavailable' : `${money(sales)} sales`;
+  }
+
+  /** One machine's direct profit and direct margin for a period, never a `0` for an unknown one. */
+  periodProfitText(machine: Machine, period: MachinePeriod): string {
+    const { sales, profit } = machinePeriodFigures(machine, period);
+    if (sales == null || profit == null) return 'Profit unavailable';
+    return `${money(profit)} direct profit · ${this.margin(profit, sales).toFixed(1)}% direct margin`;
+  }
+
+  /** The fleet's sales for a period, only while every machine's figure for it is known. */
+  totalSalesText(period: MachinePeriod): string {
+    const totals = this.periodTotals(period);
+    return totals.isRevenueComplete ? `${money(totals.sales)} sales` : 'Unavailable';
+  }
+
+  totalProfitText(period: MachinePeriod): string {
+    const totals = this.periodTotals(period);
+    if (!totals.isRevenueComplete || !totals.isProfitComplete) return 'Profit unavailable';
+    return `${money(totals.profit)} direct profit · ${this.margin(totals.profit, totals.sales).toFixed(1)}% direct margin`;
+  }
+
+  /** The existing per-period totals and completeness flags below, by period. */
+  private periodTotals(period: MachinePeriod): {
+    sales: number;
+    profit: number;
+    isRevenueComplete: boolean;
+    isProfitComplete: boolean;
+  } {
+    switch (period) {
+      case 'today':
+        return {
+          sales: this.totalTodaySales,
+          profit: this.totalTodayDirectProfit,
+          isRevenueComplete: this.isTodayRevenueComplete,
+          isProfitComplete: this.isTodayProfitComplete
+        };
+      case 'week':
+        return {
+          sales: this.totalCurrentWeekSales,
+          profit: this.totalCurrentWeekDirectProfit,
+          isRevenueComplete: this.isCurrentWeekRevenueComplete,
+          isProfitComplete: this.isCurrentWeekProfitComplete
+        };
+      case 'lastWeek':
+        return {
+          sales: this.totalLastWeekSales,
+          profit: this.totalLastWeekDirectProfit,
+          isRevenueComplete: this.isLastWeekRevenueComplete,
+          isProfitComplete: this.isLastWeekProfitComplete
+        };
+      case 'monthToDate':
+        return {
+          sales: this.totalMonthToDateSales,
+          profit: this.totalMonthToDateDirectProfit,
+          isRevenueComplete: this.isMonthToDateRevenueComplete,
+          isProfitComplete: this.isMonthToDateProfitComplete
+        };
+    }
   }
 
   trendLabel(current: number | null | undefined, previous: number | null | undefined): string {
@@ -771,10 +976,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   trendClass(current: number | null | undefined, previous: number | null | undefined): string {
     return trendClass(current, previous);
-  }
-
-  directMargin(directProfit: number, sales: number): number {
-    return this.margin(directProfit, sales);
   }
 
   get totalTodaySales(): number {
@@ -851,16 +1052,29 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.machines.every(m => m.monthToDateDirectProfit != null);
   }
 
-  get totalDirectMargin(): number {
-    return this.margin(this.totalCurrentWeekDirectProfit, this.totalCurrentWeekSales);
-  }
-
   private margin(profit: number, sales: number): number {
     return sales === 0 ? 0 : (profit / sales) * 100;
   }
 
   siteStockClass(site: Site): string {
     return siteStockClass(site);
+  }
+
+  /** The stock bar's fill, on the same thresholds as {@link siteStockClass}'s badge beside it. */
+  siteStockBarClass(site: Site): string {
+    switch (siteStockClass(site)) {
+      case 'badge-danger':
+        return 'bg-rr-danger-text';
+      case 'badge-warning':
+        return 'bg-rr-warn-text';
+      default:
+        return 'bg-rr-ok-text';
+    }
+  }
+
+  /** The bar's width, held to 0-100 so a stray figure can never overflow its track. */
+  stockBarWidth(site: Site): number {
+    return Math.min(100, Math.max(0, site.totalStockPercentage));
   }
 
   /**
@@ -885,6 +1099,28 @@ export class DashboardComponent implements OnInit, OnDestroy {
     if (ownControl || browserHandlesIt) return;
 
     (event.currentTarget as Element).querySelector<HTMLAnchorElement>('a.table-row-anchor')?.click();
+  }
+}
+
+/** `1 machine`, `3 machines`: a count with its noun, for the Dashboard's sentences. */
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/** One machine's published sales and direct profit for a period, exactly as the API sent them. */
+function machinePeriodFigures(
+  machine: Machine,
+  period: MachinePeriod
+): { sales: number | null | undefined; profit: number | null | undefined } {
+  switch (period) {
+    case 'today':
+      return { sales: machine.todayGrossRevenue, profit: machine.todayDirectProfit };
+    case 'week':
+      return { sales: machine.currentWeekGrossRevenue, profit: machine.currentWeekDirectProfit };
+    case 'lastWeek':
+      return { sales: machine.lastWeekGrossRevenue, profit: machine.lastWeekDirectProfit };
+    case 'monthToDate':
+      return { sales: machine.monthToDateGrossRevenue, profit: machine.monthToDateDirectProfit };
   }
 }
 

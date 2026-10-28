@@ -1,32 +1,39 @@
-<div class="page">
-  <header class="page-header">
-    <div>
-      <h1 class="page-title">Dashboard</h1>
+<!--
+  The Dashboard in the owner-approved Restockroo design (issue #972). Every figure, state and rule
+  below is the one this page already had: the redesign changes presentation and composition only.
+  Its `rr` styles are scoped to this template and the shell's navigation.
+-->
+<div class="page font-rr text-rr-navy">
+  <header class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div class="min-w-0">
+      <h1 class="m-0 text-2xl font-bold tracking-tight text-rr-navy sm:text-3xl">Dashboard</h1>
+      <p class="m-0 mt-1 text-sm text-rr-muted">Overview of sales, restocking needs and inventory.</p>
     </div>
     <!--
       How current the sales below are, and the control that reads them again (issue #843). The
       relative age is what an operator actually acts on; the exact instant is on the `title`, in the
       business's own timezone, because a wall-clock time in the browser's accidental zone would be
       confidently wrong. The label is absent - rather than saying "unknown" - whenever this page was
-      given no answer about freshness; the notices above say what happened in those cases.
+      given no answer about freshness; the notices below say what happened in those cases.
     -->
-    <div class="flex items-center gap-3">
+    <div class="flex flex-wrap items-center gap-2">
       @if (salesSyncedLabel) {
         <p
-          class="text-md-body value-muted"
+          class="m-0 inline-flex items-center gap-2 rounded-full border border-rr-line bg-white px-3 py-1.5 text-sm text-rr-muted"
           data-testid="sales-synced-at"
           [title]="salesSyncedAtUtc | businessDateTime"
-        >{{ salesSyncedLabel }}</p>
+        ><span class="h-2 w-2 shrink-0 rounded-full bg-rr-ok-text" aria-hidden="true"></span>{{ salesSyncedLabel }}</p>
       }
       @if (isSalesRefreshShown) {
         <button
           type="button"
-          class="btn btn-sm btn-secondary"
+          class="rr-button-secondary"
           data-testid="refresh-sales"
           [attr.aria-label]="(isRefreshingSales ? 'Refreshing…' : 'Refresh') + ' the latest Nayax sales'"
           [disabled]="isRefreshingSales"
           (click)="refreshSales()"
         >
+          <app-icon name="refresh" [size]="18" />
           {{ isRefreshingSales ? 'Refreshing…' : 'Refresh' }}
         </button>
       }
@@ -34,13 +41,6 @@
   </header>
 
   <app-legacy-business-settings-prompt></app-legacy-business-settings-prompt>
-
-  <!--
-    The machine restock-sync reminder (issue #891). It owns its own capability decision, request
-    and lifecycle, so this page only places it: a failure inside it leaves every local section
-    below usable, which is the whole reason it is not part of the summary read.
-  -->
-  <app-machine-restock-sync-reminder></app-machine-restock-sync-reminder>
 
   <!--
     Two different statements, never both (issue #661): in a support view the synchronization is
@@ -61,38 +61,39 @@
 
   @if (isSummaryFailed) {
     <div class="alert alert-warning">
-      <p class="alert-title">The Dashboard summary could not be loaded. Sales, Needs refill, Needs ordering and Inventory below are unavailable, not zero.</p>
+      <p class="alert-title">The Dashboard summary could not be loaded. Sales, machines needing refill, products needing ordering and inventory below are unavailable, not zero.</p>
     </div>
   }
 
   <!--
-    The two money cards are rendered only for a role the API sends the figures to (issues #527 and
-    #528). A role without Dashboard.ViewFinancials receives a summary with no `salesThisWeek` and
-    no `inventory.inventoryValueAtCost` at all, and gets the two non-financial cards alone.
+    The four summary cards. The two money cards are rendered only for a role the API sends the
+    figures to (issues #527 and #528): a role without Dashboard.ViewFinancials receives a summary
+    with no `salesThisWeek` and no `inventory.inventoryValueAtCost` at all, and gets the two
+    non-financial cards alone.
   -->
-  <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+  <section aria-label="Summary" class="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
     @if (isSalesCardShown) {
       <a
         routerLink="/reports/bookkeeping"
-        class="stat-card block transition-colors hover:border-md-gray-300"
+        class="stat-card block rounded-xl border border-rr-line bg-white p-4 no-underline shadow-md-card hover:border-rr-line-strong motion-safe:transition-colors"
         aria-label="Sales this week. View Bookkeeping."
       >
         <div class="stat-card-head">
           <div class="stat-card-content">
-            <p class="stat-card-label">Sales this week</p>
+            <p class="stat-card-label text-xs font-semibold uppercase tracking-wider text-rr-muted">Sales this week</p>
             @if (isLoadingSummary) {
-              <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
+              <div class="h-8 w-28 animate-pulse rounded bg-rr-surface"></div>
             } @else if (summary) {
-              <p class="stat-card-value">{{ salesValueDisplay }}</p>
+              <p class="stat-card-value text-2xl font-bold text-rr-navy sm:text-3xl">{{ salesValueDisplay }}</p>
             } @else {
               <p class="stat-card-value value-muted">Unavailable</p>
             }
           </div>
-          <span class="icon-tile icon-tile-dark">
-            <app-icon name="attach_money" />
+          <span class="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rr-teal-tint text-rr-teal sm:flex" aria-hidden="true">
+            <app-icon name="trending_up" [size]="20" />
           </span>
         </div>
-        <p class="stat-card-footer">
+        <p class="stat-card-footer text-sm">
           @if (isLoadingSummary) {
             <span class="value-muted">Loading…</span>
           } @else if (summary) {
@@ -101,6 +102,7 @@
             <span class="value-muted">Comparison unavailable</span>
           }
         </p>
+        <span class="mt-2 hidden items-center gap-1 text-sm font-semibold text-rr-teal sm:inline-flex" aria-hidden="true">View sales report <app-icon name="arrow_forward" [size]="16" /></span>
       </a>
     }
 
@@ -111,25 +113,25 @@
     @if (isLiveFleetShown) {
       <a
         routerLink="/pick-list"
-        class="stat-card block transition-colors hover:border-md-gray-300"
-        aria-label="Needs refill. Open the Pick List."
+        class="stat-card block rounded-xl border border-rr-line bg-white p-4 no-underline shadow-md-card hover:border-rr-line-strong motion-safe:transition-colors"
+        aria-label="Machines needing refill. Open the Pick List."
       >
         <div class="stat-card-head">
           <div class="stat-card-content">
-            <p class="stat-card-label">Needs refill</p>
+            <p class="stat-card-label text-xs font-semibold uppercase tracking-wider text-rr-muted">Machines needing refill</p>
             @if (isLoadingSummary) {
-              <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
+              <div class="h-8 w-16 animate-pulse rounded bg-rr-surface"></div>
             } @else if (summary) {
-              <p class="stat-card-value" [ngClass]="refillValueClass(summary.needsRefill)">{{ refillValueDisplay(summary.needsRefill) }}</p>
+              <p class="stat-card-value text-2xl font-bold text-rr-navy sm:text-3xl" [ngClass]="refillValueClass(summary.needsRefill)">{{ refillValueDisplay(summary.needsRefill) }}</p>
             } @else {
               <p class="stat-card-value value-muted">Unavailable</p>
             }
           </div>
-          <span class="icon-tile icon-tile-warning">
-            <app-icon name="assignment" />
+          <span class="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rr-warn-bg text-rr-warn-text sm:flex" aria-hidden="true">
+            <app-icon name="assignment" [size]="20" />
           </span>
         </div>
-        <p class="stat-card-footer">
+        <p class="stat-card-footer text-sm">
           @if (isLoadingSummary) {
             <span class="value-muted">Loading…</span>
           } @else if (summary) {
@@ -138,30 +140,31 @@
             <span class="value-muted">Refill status unavailable</span>
           }
         </p>
+        <span class="mt-2 hidden items-center gap-1 text-sm font-semibold text-rr-teal sm:inline-flex" aria-hidden="true">Open pick list <app-icon name="arrow_forward" [size]="16" /></span>
       </a>
     }
 
     <a
       routerLink="/products/needs-ordering"
-      class="stat-card block transition-colors hover:border-md-gray-300"
-      aria-label="Needs ordering. View products that need ordering."
+      class="stat-card block rounded-xl border border-rr-line bg-white p-4 no-underline shadow-md-card hover:border-rr-line-strong motion-safe:transition-colors"
+      aria-label="Products needing ordering. View products that need ordering."
     >
       <div class="stat-card-head">
         <div class="stat-card-content">
-          <p class="stat-card-label">Needs ordering</p>
+          <p class="stat-card-label text-xs font-semibold uppercase tracking-wider text-rr-muted">Products needing ordering</p>
           @if (isLoadingSummary) {
-            <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
+            <div class="h-8 w-16 animate-pulse rounded bg-rr-surface"></div>
           } @else if (summary) {
-            <p class="stat-card-value" [ngClass]="orderingValueClass(summary.needsOrdering)">{{ orderingValueDisplay(summary.needsOrdering) }}</p>
+            <p class="stat-card-value text-2xl font-bold text-rr-navy sm:text-3xl" [ngClass]="orderingValueClass(summary.needsOrdering)">{{ orderingValueDisplay(summary.needsOrdering) }}</p>
           } @else {
             <p class="stat-card-value value-muted">Unavailable</p>
           }
         </div>
-        <span class="icon-tile icon-tile-info">
-          <app-icon name="download" />
+        <span class="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rr-teal-tint text-rr-teal sm:flex" aria-hidden="true">
+          <app-icon name="local_shipping" [size]="20" />
         </span>
       </div>
-      <p class="stat-card-footer">
+      <p class="stat-card-footer text-sm">
         @if (isLoadingSummary) {
           <span class="value-muted">Loading…</span>
         } @else if (summary) {
@@ -174,59 +177,119 @@
           <span class="value-muted">Ordering status unavailable</span>
         }
       </p>
+      <span class="mt-2 hidden items-center gap-1 text-sm font-semibold text-rr-teal sm:inline-flex" aria-hidden="true">View ordering list <app-icon name="arrow_forward" [size]="16" /></span>
     </a>
 
     @if (isInventoryCardShown) {
       <a
         routerLink="/products"
-        class="stat-card block transition-colors hover:border-md-gray-300"
-        aria-label="Inventory. View Products."
+        class="stat-card block rounded-xl border border-rr-line bg-white p-4 no-underline shadow-md-card hover:border-rr-line-strong motion-safe:transition-colors"
+        aria-label="Business-owned inventory at cost. View Products."
       >
         <div class="stat-card-head">
           <div class="stat-card-content">
-            <p class="stat-card-label">Inventory</p>
+            <p class="stat-card-label text-xs font-semibold uppercase tracking-wider text-rr-muted">Business-owned inventory at cost</p>
             @if (isLoadingSummary) {
-              <div class="h-8 w-28 animate-pulse rounded bg-md-gray-100"></div>
+              <div class="h-8 w-28 animate-pulse rounded bg-rr-surface"></div>
             } @else if (summary) {
-              <p class="stat-card-value">{{ inventoryValueDisplay(summary.inventory) }}</p>
+              <p class="stat-card-value text-2xl font-bold text-rr-navy sm:text-3xl">{{ inventoryValueDisplay(summary.inventory) }}</p>
             } @else {
               <p class="stat-card-value value-muted">Unavailable</p>
             }
           </div>
-          <span class="icon-tile icon-tile-dark">
-            <app-icon name="inventory_2" />
+          <span class="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rr-teal-tint text-rr-teal sm:flex" aria-hidden="true">
+            <app-icon name="inventory_2" [size]="20" />
           </span>
         </div>
-        <p class="stat-card-footer">
+        <p class="stat-card-footer text-sm">
           @if (isLoadingSummary) {
             <span class="value-muted">Loading…</span>
           } @else if (summary) {
             <span class="block value-muted">{{ inventoryValueHelpText(summary.inventory) }}</span>
             <span class="block value-muted">{{ inventoryScopeText(summary.inventory) }}</span>
+            <!--
+              Said separately (issue #972): the value above is all business-owned inventory, the
+              unit count is storage only, and the two must never be read as one storage figure.
+            -->
+            <span class="block text-xs value-muted" data-testid="inventory-storage-note">{{ storageUnitsNote }}</span>
           } @else {
             <span class="value-muted">Inventory figures unavailable</span>
           }
         </p>
+        <span class="mt-2 hidden items-center gap-1 text-sm font-semibold text-rr-teal sm:inline-flex" aria-hidden="true">Manage inventory <app-icon name="arrow_forward" [size]="16" /></span>
       </a>
     }
   </section>
 
   <!--
+    Needs attention (issue #972): the alerts this page already knows about, in one place - empty
+    selections, machines needing refill, products needing ordering, and the machine restock-sync
+    reminder of issue #891. Only alerts that actually apply are rendered, and the count is the
+    number rendered. The reminder owns its own request and lifecycle, so it is always mounted and
+    the panel is merely hidden while nothing in it applies.
+  -->
+  <section
+    aria-labelledby="needs-attention-title"
+    class="rounded-xl border border-rr-line bg-rr-warn-bg p-4 sm:p-5"
+    data-testid="needs-attention"
+    [hidden]="!hasAttention"
+  >
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-rr-warn-text" aria-hidden="true">
+        <app-icon name="warning" [size]="20" />
+      </span>
+      <h2 id="needs-attention-title" class="m-0 text-lg font-semibold text-rr-navy">Needs attention</h2>
+      <span class="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-rr-warn-text" data-testid="needs-attention-count">{{ attentionCountLabel }}</span>
+    </div>
+
+    <div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+      @for (alert of attentionAlerts; track alert.id) {
+        <div class="flex items-start gap-3 rounded-lg border border-rr-line bg-white p-3" [attr.data-testid]="'attention-' + alert.id">
+          <span class="mt-0.5 shrink-0" [ngClass]="alert.iconClass" aria-hidden="true">
+            <app-icon [name]="alert.icon" [size]="20" />
+          </span>
+          <div class="min-w-0">
+            <p class="m-0 text-sm font-semibold text-rr-navy">{{ alert.title }}</p>
+            <p class="m-0 text-sm text-rr-muted">{{ alert.detail }}</p>
+          </div>
+        </div>
+      }
+      <app-machine-restock-sync-reminder></app-machine-restock-sync-reminder>
+    </div>
+
+    <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+      @if (isLiveFleetShown) {
+        <a routerLink="/pick-list" class="rr-button-primary" data-testid="attention-open-pick-list">
+          <app-icon name="assignment" [size]="18" /> Open pick list
+        </a>
+      }
+      <a routerLink="/products/needs-ordering" class="rr-button-secondary" data-testid="attention-view-needs-ordering">
+        <app-icon name="local_shipping" [size]="18" /> View needs ordering
+      </a>
+    </div>
+  </section>
+
+  <!--
     The two live-fleet sections (issue #727). Both are read from Nayax, so a business with no usable
     provider is shown neither - not an empty one, which would say the business has no sites or
-    machines, and not an unavailable one, because the page is about what it does have. The reorder
-    alerts below are then the page's main section.
+    machines, and not an unavailable one, because the page is about what it does have.
+
+    Issue #972 asks for machines grouped under their sites, but a machine read here carries no site
+    at all, so they stay two lists rather than a grouping this page would have to invent (the owner's
+    decision of 28 October 2026; the site on each machine is a separate follow-up).
   -->
   @if (isLiveFleetShown) {
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">📍 Sites</h2>
+  <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="site-performance-title">
+    <div class="card-header flex-wrap gap-2">
+      <div>
+        <h2 id="site-performance-title" class="card-title text-lg font-semibold text-rr-navy">Site performance</h2>
+        <p class="m-0 text-sm text-rr-muted">Sites, their stock levels and sales</p>
+      </div>
     </div>
     <div class="card-body p-0">
       @if (isLoadingSites) {
         <div class="space-y-3 p-4">
           <div class="h-4 w-32 animate-pulse rounded bg-md-gray-200"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
         </div>
@@ -236,7 +299,7 @@
       } @else if (sites.length === 0) {
         <p class="p-4 text-md-body value-muted">No sites available yet.</p>
       } @else {
-        <div class="overflow-x-auto">
+        <div class="hidden overflow-x-auto md:block">
           <table class="table">
             <thead class="table-head">
               <tr>
@@ -246,7 +309,7 @@
                 @if (canViewFinancials) {
                   <th scope="col" class="table-cell table-num">Today</th>
                   <th scope="col" class="table-cell table-num">This Week</th>
-                  <th scope="col" class="table-cell table-num">vs Last Week</th>
+                  <th scope="col" class="table-cell table-num">vs same time last week</th>
                 }
                 <th scope="col" class="table-cell table-num">Products</th>
               </tr>
@@ -254,9 +317,17 @@
             <tbody>
               @for (site of sites; track site.siteId) {
                 <tr class="table-row">
-                  <td class="table-cell">{{ site.siteName }}</td>
                   <td class="table-cell">
-                    <span class="badge" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}%</span>
+                    <span class="font-semibold text-rr-navy">{{ site.siteName }}</span>
+                    <span class="block text-xs text-rr-caption">{{ machineCountLabel(site.machineCount) }}</span>
+                  </td>
+                  <td class="table-cell">
+                    <span class="flex items-center gap-2">
+                      <span class="h-2 w-20 overflow-hidden rounded-full bg-rr-surface" aria-hidden="true">
+                        <span class="block h-full rounded-full" [ngClass]="siteStockBarClass(site)" [style.width.%]="stockBarWidth(site)"></span>
+                      </span>
+                      <span class="badge" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}%</span>
+                    </span>
                   </td>
                   <td class="table-cell">
                     <a [routerLink]="['/sites', site.siteId, 'products']" class="hover:underline">
@@ -271,26 +342,65 @@
                     </td>
                   }
                   <td class="table-cell table-num">
-                    <a [routerLink]="['/sites', site.siteId, 'products']" class="btn btn-sm btn-primary">Products</a>
+                    <a [routerLink]="['/sites', site.siteId, 'products']" class="btn btn-sm btn-secondary">Products</a>
                   </td>
                 </tr>
               }
             </tbody>
           </table>
         </div>
+
+        <!-- Narrow screens: one card per site with the same figures, never a squeezed table. -->
+        <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="site-cards">
+          @for (site of sites; track site.siteId) {
+            <li class="rounded-lg border border-rr-line bg-white p-3">
+              <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                  <p class="m-0 break-words font-semibold text-rr-navy">{{ site.siteName }}</p>
+                  <p class="m-0 text-xs text-rr-caption">{{ machineCountLabel(site.machineCount) }}</p>
+                </div>
+                <span class="badge shrink-0" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}% stock</span>
+              </div>
+              <dl class="m-0 mt-3 grid grid-cols-2 gap-2 rounded-lg bg-rr-surface p-2 text-sm">
+                @if (canViewFinancials) {
+                  <div>
+                    <dt class="text-xs text-rr-muted">Sales this week</dt>
+                    <dd class="m-0 font-semibold">{{ site.currentWeekRevenue == null ? 'Unavailable' : ('$' + site.currentWeekRevenue.toFixed(2)) }}</dd>
+                    <dd class="m-0 text-xs" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">{{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }} vs same time last week</dd>
+                  </div>
+                }
+                <div>
+                  <dt class="text-xs text-rr-muted">Selections</dt>
+                  <dd class="m-0 font-semibold">{{ site.lowProductCount }} low · {{ site.emptyProductCount }} empty</dd>
+                </div>
+                @if (canViewFinancials) {
+                  <div>
+                    <dt class="text-xs text-rr-muted">Today</dt>
+                    <dd class="m-0">{{ site.todayRevenue == null ? 'Unavailable' : ('$' + site.todayRevenue.toFixed(2)) }}</dd>
+                  </div>
+                }
+              </dl>
+              <a [routerLink]="['/sites', site.siteId, 'products']" class="mt-2 inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-rr-teal">
+                View site products <app-icon name="arrow_forward" [size]="16" />
+              </a>
+            </li>
+          }
+        </ul>
       }
     </div>
   </section>
 
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">🛠️ Machines</h2>
+  <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="machine-performance-title">
+    <div class="card-header flex-wrap gap-2">
+      <div>
+        <h2 id="machine-performance-title" class="card-title text-lg font-semibold text-rr-navy">Machine performance</h2>
+        <p class="m-0 text-sm text-rr-muted">Machines, their sales and direct profit</p>
+      </div>
     </div>
     <div class="card-body p-0">
       @if (isLoadingMachines) {
         <div class="space-y-3 p-4">
           <div class="h-4 w-36 animate-pulse rounded bg-md-gray-200"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
         </div>
@@ -299,7 +409,7 @@
       } @else if (machines.length === 0) {
         <p class="p-4 text-md-body value-muted">No machines available yet.</p>
       } @else {
-        <div class="overflow-x-auto">
+        <div class="hidden overflow-x-auto md:block">
           <table class="table">
             <thead class="table-head">
               <tr>
@@ -308,7 +418,7 @@
                   <th scope="col" class="table-cell table-num">Today</th>
                   <th scope="col" class="table-cell table-num">This Week</th>
                   <th scope="col" class="table-cell table-num">Last Week</th>
-                  <th scope="col" class="table-cell table-num">vs Last Week</th>
+                  <th scope="col" class="table-cell table-num">vs same time last week</th>
                   <th scope="col" class="table-cell table-num">Month to Date</th>
                 }
               </tr>
@@ -324,65 +434,124 @@
                   </td>
                   @if (canViewFinancials) {
                     <td class="table-cell table-num">
-                      <div>{{ machine.todayGrossRevenue == null ? 'Unavailable' : ('$' + machine.todayGrossRevenue.toFixed(2) + ' sales') }}</div>
-                      <div class="text-xs value-muted">{{ machine.todayDirectProfit == null || machine.todayGrossRevenue == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.todayDirectProfit, machine.todayGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                      <div>{{ periodSalesText(machine, 'today') }}</div>
+                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'today') }}</div>
                     </td>
                     <td class="table-cell table-num">
-                      <div>{{ machine.currentWeekGrossRevenue == null ? 'Unavailable' : ('$' + machine.currentWeekGrossRevenue.toFixed(2) + ' sales') }}</div>
-                      <div class="text-xs value-muted">{{ machine.currentWeekDirectProfit == null || machine.currentWeekGrossRevenue == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.currentWeekDirectProfit, machine.currentWeekGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                      <div>{{ periodSalesText(machine, 'week') }}</div>
+                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'week') }}</div>
                     </td>
                     <td class="table-cell table-num">
-                      <div>{{ machine.lastWeekGrossRevenue == null ? 'Unavailable' : ('$' + machine.lastWeekGrossRevenue.toFixed(2) + ' sales') }}</div>
-                      <div class="text-xs value-muted">{{ machine.lastWeekDirectProfit == null || machine.lastWeekGrossRevenue == null ? 'Profit unavailable' : ('$' + machine.lastWeekDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.lastWeekDirectProfit, machine.lastWeekGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                      <div>{{ periodSalesText(machine, 'lastWeek') }}</div>
+                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'lastWeek') }}</div>
                     </td>
                     <td class="table-cell table-num" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
                       {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }}
                     </td>
                     <td class="table-cell table-num">
-                      <div>{{ machine.monthToDateGrossRevenue == null ? 'Unavailable' : ('$' + machine.monthToDateGrossRevenue.toFixed(2) + ' sales') }}</div>
-                      <div class="text-xs value-muted">{{ machine.monthToDateDirectProfit == null || machine.monthToDateGrossRevenue == null ? 'Profit unavailable' : ('$' + machine.monthToDateDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(machine.monthToDateDirectProfit, machine.monthToDateGrossRevenue).toFixed(1) + '% direct margin') }}</div>
+                      <div>{{ periodSalesText(machine, 'monthToDate') }}</div>
+                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'monthToDate') }}</div>
                     </td>
                   }
                 </tr>
               }
             </tbody>
             @if (canViewFinancials) {
-              <tfoot class="bg-md-gray-100 font-semibold">
+              <tfoot class="bg-rr-surface font-semibold">
                 <tr>
-                  <td class="table-cell">Totals</td>
+                  <td class="table-cell">Totals ({{ machineCountLabel(machines.length) }})</td>
                   <td class="table-cell table-num">
-                    <div>{{ isTodayRevenueComplete ? ('$' + totalTodaySales.toFixed(2) + ' sales') : 'Unavailable' }}</div>
-                    <div class="text-xs value-muted">{{ isTodayRevenueComplete && isTodayProfitComplete ? ('$' + totalTodayDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(totalTodayDirectProfit, totalTodaySales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+                    <div>{{ totalSalesText('today') }}</div>
+                    <div class="text-xs value-muted">{{ totalProfitText('today') }}</div>
                   </td>
                   <td class="table-cell table-num">
-                    <div>{{ isCurrentWeekRevenueComplete ? ('$' + totalCurrentWeekSales.toFixed(2) + ' sales') : 'Unavailable' }}</div>
-                    <div class="text-xs value-muted">{{ isCurrentWeekRevenueComplete && isCurrentWeekProfitComplete ? ('$' + totalCurrentWeekDirectProfit.toFixed(2) + ' direct profit · ' + totalDirectMargin.toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+                    <div>{{ totalSalesText('week') }}</div>
+                    <div class="text-xs value-muted">{{ totalProfitText('week') }}</div>
                   </td>
                   <td class="table-cell table-num">
-                    <div>{{ isLastWeekRevenueComplete ? ('$' + totalLastWeekSales.toFixed(2) + ' sales') : 'Unavailable' }}</div>
-                    <div class="text-xs value-muted">{{ isLastWeekRevenueComplete && isLastWeekProfitComplete ? ('$' + totalLastWeekDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(totalLastWeekDirectProfit, totalLastWeekSales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+                    <div>{{ totalSalesText('lastWeek') }}</div>
+                    <div class="text-xs value-muted">{{ totalProfitText('lastWeek') }}</div>
                   </td>
                   <td class="table-cell table-num" [ngClass]="trendClass(totalCurrentWeekSales, totalPreviousComparableWeekSales)">
                     {{ trendLabel(totalCurrentWeekSales, totalPreviousComparableWeekSales) }}
                   </td>
                   <td class="table-cell table-num">
-                    <div>{{ isMonthToDateRevenueComplete ? ('$' + totalMonthToDateSales.toFixed(2) + ' sales') : 'Unavailable' }}</div>
-                    <div class="text-xs value-muted">{{ isMonthToDateRevenueComplete && isMonthToDateProfitComplete ? ('$' + totalMonthToDateDirectProfit.toFixed(2) + ' direct profit · ' + directMargin(totalMonthToDateDirectProfit, totalMonthToDateSales).toFixed(1) + '% direct margin') : 'Profit unavailable' }}</div>
+                    <div>{{ totalSalesText('monthToDate') }}</div>
+                    <div class="text-xs value-muted">{{ totalProfitText('monthToDate') }}</div>
                   </td>
                 </tr>
               </tfoot>
             }
           </table>
         </div>
+
+        <!--
+          Narrow screens: one card per machine for the period chosen here, then the fleet total for
+          the same period. Every period the table shows is one press away.
+        -->
+        <div class="md:hidden" data-testid="machine-cards">
+          @if (canViewFinancials) {
+            <fieldset class="m-0 flex min-w-0 gap-1 overflow-x-auto border-0 p-3 pb-0" data-testid="machine-period">
+              <legend class="sr-only">Sales period</legend>
+              @for (period of machinePeriods; track period.id) {
+                <button
+                  type="button"
+                  class="min-h-11 shrink-0 rounded-lg px-3 text-sm font-semibold"
+                  [class.bg-rr-teal]="machinePeriod === period.id"
+                  [class.text-white]="machinePeriod === period.id"
+                  [class.bg-rr-surface]="machinePeriod !== period.id"
+                  [class.text-rr-navy]="machinePeriod !== period.id"
+                  [attr.aria-pressed]="machinePeriod === period.id"
+                  (click)="machinePeriod = period.id"
+                >{{ period.label }}</button>
+              }
+            </fieldset>
+          }
+          <ul class="m-0 flex list-none flex-col gap-3 p-3">
+            @for (machine of machines; track machine.machineID) {
+              <li class="rounded-lg border border-rr-line bg-white p-3">
+                @if (machine.localMachineId != null) {
+                  <a [routerLink]="['/machines', machine.localMachineId]" class="break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</a>
+                } @else {
+                  <p class="m-0 break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</p>
+                }
+                @if (canViewFinancials) {
+                  <p class="m-0 mt-2 text-sm font-semibold">{{ periodSalesText(machine, machinePeriod) }}</p>
+                  <p class="m-0 text-xs text-rr-muted">{{ periodProfitText(machine, machinePeriod) }}</p>
+                  @if (machinePeriod === 'week') {
+                    <p class="m-0 text-xs" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
+                      {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }} vs same time last week
+                    </p>
+                  }
+                }
+              </li>
+            }
+          </ul>
+          @if (canViewFinancials) {
+            <div class="mx-3 mb-3 rounded-lg bg-rr-surface p-3 text-sm" data-testid="machine-totals-card">
+              <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-muted">Fleet total · {{ machinePeriodLabel }}</p>
+              <p class="m-0 mt-1 font-semibold">{{ totalSalesText(machinePeriod) }}</p>
+              <p class="m-0 text-xs text-rr-muted">{{ totalProfitText(machinePeriod) }}</p>
+              @if (machinePeriod === 'week') {
+                <p class="m-0 text-xs" [ngClass]="trendClass(totalCurrentWeekSales, totalPreviousComparableWeekSales)">
+                  {{ trendLabel(totalCurrentWeekSales, totalPreviousComparableWeekSales) }} vs same time last week
+                </p>
+              }
+            </div>
+          }
+        </div>
       }
     </div>
   </section>
   }
 
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">⚠️ Reorder Alerts</h2>
-      <a routerLink="/products/needs-ordering" class="btn btn-sm btn-secondary">View reorder alerts</a>
+  <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="reorder-priorities-title">
+    <div class="card-header flex-wrap gap-2">
+      <div>
+        <h2 id="reorder-priorities-title" class="card-title text-lg font-semibold text-rr-navy">Reorder priorities</h2>
+        <p class="m-0 text-sm text-rr-muted">The first products on the reorder list</p>
+      </div>
+      <a routerLink="/products/needs-ordering" class="rr-button-secondary" data-testid="reorder-view-all">{{ reorderViewAllLabel }} <app-icon name="arrow_forward" [size]="16" /></a>
     </div>
     <div class="card-body p-0">
       <!--
@@ -397,7 +566,6 @@
           <div class="h-4 w-40 animate-pulse rounded bg-md-gray-200"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
         </div>
       } @else if (reorderAlertsError) {
         <!-- Never "Everything looks good" for a list nobody answered (issue #727). -->
@@ -405,6 +573,12 @@
       } @else if (lowStock.length === 0) {
         <p class="p-4 text-md-body value-muted">No reorder alerts. Everything looks good! ✅</p>
       } @else {
+        @if (arePurchaseCostColumnsShown) {
+          <p class="m-0 flex items-start gap-2 border-b border-md-gray-200 px-4 py-3 text-sm text-rr-muted" data-testid="purchase-cost-note">
+            <span class="shrink-0" aria-hidden="true"><app-icon name="info" [size]="16" /></span>
+            Last and cheapest purchase are unit costs recorded on this business's past purchases - historical costs, not current supplier prices.
+          </p>
+        }
         <!--
           The purchase costs failed on their own, so the table around them still renders (issue
           #789): the reorder figures are local data and were never part of that request.
@@ -415,18 +589,15 @@
             <button type="button" class="btn btn-sm btn-secondary" (click)="refreshPurchaseCosts()">Retry</button>
           </div>
         }
-        <div class="overflow-x-auto">
+        <div class="hidden overflow-x-auto md:block">
           <table class="table">
             <thead class="table-head">
               <tr>
                 <th scope="col" class="table-cell">Product</th>
-                <th scope="col" class="table-cell">Stock</th>
-                <th scope="col" class="table-cell">Low Stock Threshold</th>
+                <th scope="col" class="table-cell">Storage stock</th>
                 @if (isMachineNeedShownInReorderAlerts) {
                   <th scope="col" class="table-cell">Machine need</th>
                 }
-                <th scope="col" class="table-cell">Restock To</th>
-                <th scope="col" class="table-cell">On order</th>
                 <th scope="col" class="table-cell">Need to Order</th>
                 @if (arePurchaseCostColumnsShown) {
                   <th scope="col" class="table-cell">Last purchase</th>
@@ -435,17 +606,19 @@
               </tr>
             </thead>
             <tbody>
-              @for (p of lowStock; track p.id) {
+              @for (p of reorderPriorities; track p.id) {
                 <tr class="table-row">
-                  <td class="table-cell">{{ p.name }}</td>
-                  <td class="table-cell"><span class="badge badge-danger">{{ p.quantityInStock }}</span></td>
-                  <td class="table-cell">{{ p.lowStockThreshold }}</td>
+                  <td class="table-cell font-semibold text-rr-navy">{{ p.name }}</td>
+                  <td class="table-cell"><span class="badge" [ngClass]="storageStockClass(p)">{{ p.quantityInStock }}</span></td>
                   @if (isMachineNeedShownInReorderAlerts) {
                     <td class="table-cell">{{ p.machineReplenishmentNeed }}</td>
                   }
-                  <td class="table-cell">{{ p.restockTo }}</td>
-                  <td class="table-cell">{{ p.onOrderQuantity }}</td>
-                  <td class="table-cell value-negative font-semibold">{{ p.needToOrder }}</td>
+                  <td class="table-cell">
+                    <span class="value-negative font-semibold">{{ p.needToOrder }}</span>
+                    @if (p.onOrderQuantity > 0) {
+                      <span class="block text-xs value-muted">{{ p.onOrderQuantity }} on order</span>
+                    }
+                  </td>
                   @if (arePurchaseCostColumnsShown) {
                     <td class="table-cell" [ngClass]="purchaseCostCellClass(p)">{{ lastPurchaseDisplay(p) }}</td>
                     <td class="table-cell" [ngClass]="purchaseCostCellClass(p)">{{ cheapestPurchaseDisplay(p) }}</td>
@@ -455,6 +628,44 @@
             </tbody>
           </table>
         </div>
+
+        <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="reorder-cards">
+          @for (p of reorderPriorities; track p.id) {
+            <li class="rounded-lg border border-rr-line bg-white p-3">
+              <div class="flex items-start justify-between gap-3">
+                <p class="m-0 min-w-0 break-words font-semibold text-rr-navy">{{ p.name }}</p>
+                <div class="shrink-0 text-right">
+                  <p class="m-0 text-xs text-rr-muted">Need to order</p>
+                  <p class="m-0 text-xl font-bold value-negative">{{ p.needToOrder }}</p>
+                </div>
+              </div>
+              <dl class="m-0 mt-2 grid grid-cols-2 gap-2 rounded-lg bg-rr-surface p-2 text-sm">
+                <div>
+                  <dt class="text-xs text-rr-muted">Storage stock</dt>
+                  <dd class="m-0 font-semibold">{{ p.quantityInStock }} units</dd>
+                </div>
+                @if (isMachineNeedShownInReorderAlerts) {
+                  <div>
+                    <dt class="text-xs text-rr-muted">Machine need</dt>
+                    <dd class="m-0 font-semibold">{{ p.machineReplenishmentNeed }} units</dd>
+                  </div>
+                }
+                @if (p.onOrderQuantity > 0) {
+                  <div>
+                    <dt class="text-xs text-rr-muted">On order</dt>
+                    <dd class="m-0">{{ p.onOrderQuantity }} units</dd>
+                  </div>
+                }
+              </dl>
+              @if (arePurchaseCostColumnsShown) {
+                <dl class="m-0 mt-2 flex flex-col gap-1 text-sm" [ngClass]="purchaseCostCellClass(p)">
+                  <div class="break-words"><dt class="inline text-rr-muted">Last purchase:</dt> <dd class="m-0 inline">{{ lastPurchaseDisplay(p) }}</dd></div>
+                  <div class="break-words"><dt class="inline text-rr-muted">Cheapest purchase:</dt> <dd class="m-0 inline">{{ cheapestPurchaseDisplay(p) }}</dd></div>
+                </dl>
+              }
+            </li>
+          }
+        </ul>
       }
     </div>
   </section>

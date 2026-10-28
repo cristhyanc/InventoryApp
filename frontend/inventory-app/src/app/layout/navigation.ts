@@ -57,6 +57,13 @@ import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/
  * deliberately declares nothing and is never locked (the user's decision of 24 October 2026): it
  * makes no Nayax call at all, reading the Nayax cost already stored on imported sales, so a
  * disconnected business with imported history can still recover those costs.
+ *
+ * Issue #972 brings section headings back, as the owner-approved Restockroo design's four groups:
+ * **Operations** (Dashboard, Pick List, Sites, Machines), **Inventory & purchasing** (the Inventory
+ * and Purchases groups), **Finance & reports** (Expenses and Reports) and **Settings** (the Admin
+ * group). They only label what follows them: every destination, its route, its capability, its
+ * provider dependency and its order are exactly what they were, and the Super Admin group keeps its
+ * own **Super admin** heading, appended with it only for the platform administrator.
  */
 
 /**
@@ -93,18 +100,20 @@ export interface NavLink {
 }
 
 /**
- * A heading over the entries that follow it, with no page and no action of its own (issue #729).
- * It held the live provider destinations together as one "Needs Nayax" section until issue #868
- * removed that section, so nothing declares one today; the type and the sidebar's rendering of it
- * are kept, like {@link NavPlaceholder}, for the next menu that needs a heading. `navigationFor`
- * drops a heading when every entry under it was left out - a heading over nothing says a section
- * exists that this member does not have.
+ * A heading over the entries that follow it, up to the next heading, with no page and no action of
+ * its own (issue #729). It held the live provider destinations together as one "Needs Nayax"
+ * section until issue #868 removed that section; issue #972 uses it for the Restockroo design's
+ * group headings. `navigationFor` drops a heading when every entry under it was left out - a
+ * heading over nothing says a section exists that this member does not have.
  */
 export interface NavSectionHeading {
   readonly kind: 'section';
   readonly label: string;
-  /** The one sentence the heading carries, so the section explains why its entries may be locked. */
-  readonly description: string;
+  /**
+   * An optional sentence under the heading. The issue #972 group headings carry none: their label
+   * is the whole statement, and none of them explains a lock.
+   */
+  readonly description?: string;
 }
 
 /**
@@ -155,6 +164,10 @@ export interface NavGroup {
 }
 
 export type NavItem = NavLink | NavGroup | NavSectionHeading;
+
+function section(label: string): NavSectionHeading {
+  return { kind: 'section', label };
+}
 
 function link(label: string, route: string, capability: Capability): NavLink {
   return { kind: 'link', label, route, capability };
@@ -219,6 +232,7 @@ export const adminNavGroup: NavGroup = {
 };
 
 export const primaryNavigation: readonly NavItem[] = [
+  section('Operations'),
   { kind: 'link', label: 'Dashboard', route: '/', icon: 'home', capability: 'Dashboard.View' },
   { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment', capability: 'PickList.View' },
   {
@@ -244,6 +258,7 @@ export const primaryNavigation: readonly NavItem[] = [
     icon: 'refresh',
     capability: 'Inventory.Operate'
   },
+  section('Inventory & purchasing'),
   {
     // "Inventory" rather than "Products" since issue #729 (decision P11): the group holds the whole
     // of the business's own stock keeping, all of which works with no provider at all. The Products
@@ -272,6 +287,7 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Suppliers', '/suppliers', 'Purchasing.Operate')
     ]
   },
+  section('Finance & reports'),
   { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money', capability: 'Expenses.Manage' },
   {
     // Every report is here again since issue #868, which brought the site commission report back
@@ -305,6 +321,7 @@ export const primaryNavigation: readonly NavItem[] = [
       link('GST', '/reports/gst', 'Reports.View')
     ]
   },
+  section('Settings'),
   adminNavGroup
 ];
 
@@ -362,6 +379,12 @@ export const superAdminNavGroup: NavGroup = {
 };
 
 /**
+ * The heading over the Super Admin group (issue #972). It is appended with the group and only with
+ * it, so a member who is not the platform administrator is never shown a heading for it either.
+ */
+export const superAdminNavSection: NavSectionHeading = section('Super admin');
+
+/**
  * The navigation to render for a member, from the capabilities `GET /api/me/access` reported for
  * them and the diagnostics API's separate answer about platform-admin access.
  *
@@ -415,7 +438,7 @@ export function navigationFor(
   options?: OptionVisibility
 ): readonly NavItem[] {
   const business: readonly NavItem[] = businessNavigation === 'offered' ? primaryNavigation : [];
-  const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavGroup] : business;
+  const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavSection, superAdminNavGroup] : business;
 
   // A Super Admin is exempt from the switch, so nothing is withheld for them; neither is anything
   // withheld while the capability set itself is unknown, where the whole pass is skipped below.
@@ -483,11 +506,17 @@ function withProviderTools(items: readonly NavItem[], provider: ProviderAvailabi
   });
 }
 
-/** The same navigation without a section heading that has nothing left under it (issue #729). */
+/**
+ * The same navigation without a section heading that has nothing left under it (issue #729): no
+ * entry between it and the next heading, or the end of the menu (issue #972).
+ */
 function withOccupiedSections(items: readonly NavItem[]): readonly NavItem[] {
-  return items.filter(
-    (item, index) => item.kind !== 'section' || items.slice(index + 1).some((next) => next.kind !== 'section')
-  );
+  return items.filter((item, index) => item.kind !== 'section' || isOccupied(items, index));
+}
+
+function isOccupied(items: readonly NavItem[], headingIndex: number): boolean {
+  const next = items[headingIndex + 1];
+  return next !== undefined && next.kind !== 'section';
 }
 
 /**

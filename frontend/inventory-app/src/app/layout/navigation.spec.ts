@@ -11,6 +11,7 @@ import {
   NavGroup,
   NavItem,
   NavLink,
+  NavSectionHeading,
   activeNavGroup,
   activeNavLink,
   activeNavRoute,
@@ -22,6 +23,7 @@ import {
   platformDiagnosticsNavLink,
   primaryNavigation,
   superAdminNavGroup,
+  superAdminNavSection,
   supplierPresetsNavLink,
   switchableOptionRoute
 } from './navigation';
@@ -137,19 +139,26 @@ describe('primary navigation (issue #391)', () => {
    * `Reports`. A destination's provider dependency is now carried by the entry itself - its
    * `lockedWithout` - rather than by where it sits in the menu.
    */
-  it('declares the target navigation in order, with no provider section heading', () => {
+  it('declares the target navigation in order, under the Restockroo group headings (issue #972)', () => {
     expect(primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`)).toEqual([
+      'section:Operations',
       'link:Dashboard',
       'link:Pick List',
       'link:Sites',
       'link:Machines',
+      'section:Inventory & purchasing',
       'group:Inventory',
       'group:Purchases',
+      'section:Finance & reports',
       'link:Expenses',
       'group:Reports',
+      'section:Settings',
       'group:Admin'
     ]);
-    expect(primaryNavigation.some((entry) => entry.kind === 'section')).toBe(false);
+    // A heading only labels: there is no provider section heading and no heading sentence.
+    expect(
+      primaryNavigation.filter((entry): entry is NavSectionHeading => entry.kind === 'section').map((entry) => entry.description)
+    ).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   /**
@@ -332,8 +341,9 @@ describe('primary navigation (issue #391)', () => {
   });
 
   it('adds no Settings, profile or audit destination', () => {
+    // "Settings" is a group heading since issue #972 (over the existing Admin group), never a page.
     const labels = [
-      ...primaryNavigation.map((entry) => entry.label),
+      ...primaryNavigation.filter((entry) => entry.kind !== 'section').map((entry) => entry.label),
       ...navLinks(primaryNavigation).map((link) => link.label)
     ];
 
@@ -379,6 +389,7 @@ describe('navigationFor (issue #546)', () => {
   it('changes nothing else: the same groups in the same order, with Super Admin appended last', () => {
     expect(ownerNavigation(true).map((entry) => `${entry.kind}:${entry.label}`)).toEqual([
       ...primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`),
+      'section:Super admin',
       'group:Super Admin'
     ]);
     expect(childRoutes('Admin', ownerNavigation(true))).toEqual(adminChildRoutes);
@@ -397,14 +408,18 @@ describe('navigationFor (issue #546)', () => {
 
     expect(childRoutes('Admin')).toEqual(adminChildRoutes);
     expect(primaryNavigation.map((entry) => entry.label)).toEqual([
+      'Operations',
       'Dashboard',
       'Pick List',
       'Sites',
       'Machines',
+      'Inventory & purchasing',
       'Inventory',
       'Purchases',
+      'Finance & reports',
       'Expenses',
       'Reports',
+      'Settings',
       'Admin'
     ]);
   });
@@ -476,8 +491,9 @@ describe('navigationFor (issue #546)', () => {
  * than protecting one.
  */
 describe('navigationFor capabilities (issue #528)', () => {
+  /** The destinations and groups, without the issue #972 headings over them. */
   function labels(items: readonly NavItem[]): string[] {
-    return items.map((entry) => entry.label);
+    return items.filter((entry) => entry.kind !== 'section').map((entry) => entry.label);
   }
 
   it('declares the capability its own page needs on every destination', () => {
@@ -631,7 +647,7 @@ describe('navigationFor with the business navigation withheld (issue #676)', () 
   });
 
   it('keeps the separately authorized Super Admin group, and only it', () => {
-    expect(navigationFor(undefined, true, 'withheld')).toEqual([superAdminNavGroup]);
+    expect(navigationFor(undefined, true, 'withheld')).toEqual([superAdminNavSection, superAdminNavGroup]);
     expect(navLinks(navigationFor(OWNER, true, 'withheld'))).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
@@ -705,8 +721,9 @@ describe('activeNavGroup', () => {
  * does with it.
  */
 describe('navigationFor with the provider answer (issue #729)', () => {
+  /** The destinations and groups, without the issue #972 headings over them. */
   function labels(items: readonly NavItem[]): string[] {
-    return items.map((entry) => entry.label);
+    return items.filter((entry) => entry.kind !== 'section').map((entry) => entry.label);
   }
 
   /**
@@ -1138,5 +1155,53 @@ describe('switchable Admin option visibility (issue #873)', () => {
   it('names the one switchable destination', () => {
     expect(switchableOptionRoute).toBe(entry.route);
     expect(childRoutes('Admin')).toContainEqual(entry);
+  });
+});
+
+/**
+ * The Restockroo group headings (issue #972) only label the entries under them, so they follow the
+ * same capability, provider and platform-admin rules as those entries: a heading whose entries were
+ * all left out is left out with them, and the Super admin heading exists only with its group.
+ */
+describe('navigation group headings (issue #972)', () => {
+  function headings(items: readonly NavItem[]): string[] {
+    return items.filter((entry) => entry.kind === 'section').map((entry) => entry.label);
+  }
+
+  it('gives an Owner every business heading and no Super admin heading', () => {
+    expect(headings(ownerNavigation())).toEqual(['Operations', 'Inventory & purchasing', 'Finance & reports', 'Settings']);
+  });
+
+  it('drops the headings an Operator has nothing under', () => {
+    expect(headings(navigationFor(OPERATOR, false, 'offered'))).toEqual(['Operations', 'Inventory & purchasing']);
+  });
+
+  it('keeps a heading for the one entry a capability set leaves under it', () => {
+    expect(headings(navigationFor(capabilitySet(['SiteCommissions.Manage']), false, 'offered'))).toEqual([
+      'Finance & reports',
+      'Settings'
+    ]);
+  });
+
+  it('appends the Super admin heading directly above its group, only for the platform administrator', () => {
+    const navigation = ownerNavigation(true);
+    expect(navigation.slice(-2)).toEqual([superAdminNavSection, superAdminNavGroup]);
+    expect(headings(navigationFor(OPERATOR, false, 'offered'))).not.toContain('Super admin');
+  });
+
+  it('never leaves a heading directly above another heading or at the end of the menu', () => {
+    for (const navigation of [
+      ownerNavigation(),
+      ownerNavigation(true),
+      navigationFor(OPERATOR, false, 'offered'),
+      navigationFor(capabilitySet(['Reports.View']), false, 'offered'),
+      navigationFor(OWNER, false, 'offered', availability('NotConfigured'))
+    ]) {
+      navigation.forEach((entry, index) => {
+        if (entry.kind === 'section') {
+          expect(navigation[index + 1]?.kind ?? 'end').not.toMatch(/section|end/);
+        }
+      });
+    }
   });
 });

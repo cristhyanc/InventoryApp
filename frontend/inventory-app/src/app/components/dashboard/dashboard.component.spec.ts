@@ -338,7 +338,9 @@ describe('DashboardComponent inventory card', () => {
 
     expect(component.inventoryValueDisplay(SUMMARY.inventory)).toBe('$1,234.56');
     expect(component.inventoryValueHelpText(SUMMARY.inventory)).toBe('Business-owned inventory at cost');
-    expect(component.inventoryScopeText(SUMMARY.inventory)).toBe('50 products · 320 units in storage (excludes machines)');
+    expect(component.inventoryScopeText(SUMMARY.inventory)).toBe('50 products · 320 units in storage');
+    // Said beside the count rather than folded into it (issue #972), and never as a storage-only value.
+    expect(component.storageUnitsNote).toBe('Storage units exclude stock in machines.');
   });
 
   it('shows unavailable, not $0.00, when any product has unknown cost', () => {
@@ -523,11 +525,24 @@ describe('DashboardComponent template rendering', () => {
     expect(host.textContent).not.toContain('Admin tools');
   });
 
-  it('renders exactly four headline cards in order: Sales this week, Needs refill, Needs ordering, Inventory', async () => {
+  it('renders exactly four headline cards in order, with the issue #972 names', async () => {
     const host = await renderDashboard();
 
     const labels = Array.from(host.querySelectorAll('.stat-card-label')).map((el) => el.textContent?.trim());
-    expect(labels).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
+    expect(labels).toEqual([
+      'Sales this week',
+      'Machines needing refill',
+      'Products needing ordering',
+      'Business-owned inventory at cost'
+    ]);
+  });
+
+  it('says beside the inventory card that its unit count excludes machines', async () => {
+    const host = await renderDashboard();
+
+    expect(host.querySelector('[data-testid="inventory-storage-note"]')?.textContent?.trim()).toBe(
+      'Storage units exclude stock in machines.'
+    );
   });
 
   it('renders the label/value content before the icon tile in every summary stat card, so the icon sits at the right', async () => {
@@ -538,7 +553,8 @@ describe('DashboardComponent template rendering', () => {
     for (const head of heads) {
       const children = Array.from(head.children);
       expect(children[0].classList.contains('stat-card-content')).toBe(true);
-      expect(children[children.length - 1].classList.contains('icon-tile')).toBe(true);
+      // The decorative icon (issue #972's Restockroo tile) is the head's last child.
+      expect(children[children.length - 1].getAttribute('aria-hidden')).toBe('true');
     }
   });
 
@@ -580,7 +596,7 @@ describe('DashboardComponent template rendering', () => {
     const host = await renderDashboard({ summary$: of(REDACTED_SUMMARY) });
 
     const labels = Array.from(host.querySelectorAll('.stat-card-label')).map((el) => el.textContent?.trim());
-    expect(labels).toEqual(['Needs refill', 'Needs ordering']);
+    expect(labels).toEqual(['Machines needing refill', 'Products needing ordering']);
   });
 
   it('renders no sales or inventory figure at all in a redacted summary', async () => {
@@ -844,11 +860,11 @@ describe('DashboardComponent Sites/Machines financial figures gated on Dashboard
     const host = await renderDashboard({ machines: [MACHINE], sites: [SITE], canViewFinancials: true });
 
     const sitesHeaders = Array.from(sitesTable(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
-    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Today', 'This Week', 'vs Last Week', 'Products']);
+    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Today', 'This Week', 'vs same time last week', 'Products']);
     expect(sitesTable(host).textContent).toContain('$12.00');
 
     const machinesHeaders = Array.from(machinesTableEl(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
-    expect(machinesHeaders).toEqual(['Machine', 'Today', 'This Week', 'Last Week', 'vs Last Week', 'Month to Date']);
+    expect(machinesHeaders).toEqual(['Machine', 'Today', 'This Week', 'Last Week', 'vs same time last week', 'Month to Date']);
     expect(machinesTableEl(host).textContent).toContain('$12.00 sales');
     expect(machinesTableEl(host).querySelector('tfoot')).not.toBeNull();
   });

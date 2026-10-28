@@ -428,7 +428,7 @@ describe('AppComponent sidebar toggle placement (issue #456)', () => {
     expect(collapsed).not.toBeNull();
     expect(collapsed?.getAttribute('aria-expanded')).toBe('false');
     expect(collapsed?.getAttribute('aria-label')).toBe('Expand navigation');
-    expect(sidebar(host)?.querySelector('.sr-only')?.textContent?.trim()).toBe('Dashboard');
+    expect(sidebar(host)?.querySelector('a[href="/"] .sr-only')?.textContent?.trim()).toBe('Dashboard');
 
     collapsed?.click();
     fixture.detectChanges();
@@ -502,7 +502,7 @@ describe('AppComponent wide layout (issue #391)', () => {
 
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(sidebar(host)).not.toBeNull();
-    expect(sidebar(host)?.querySelector('.sr-only')?.textContent?.trim()).toBe('Dashboard');
+    expect(sidebar(host)?.querySelector('a[href="/"] .sr-only')?.textContent?.trim()).toBe('Dashboard');
 
     toggle.click();
     fixture.detectChanges();
@@ -524,6 +524,12 @@ describe('AppComponent wide layout (issue #391)', () => {
 
     expect(sidebarToggle(host).getAttribute('aria-expanded')).toBe('true');
     expect(host.querySelector('a[href="/reports/gst"]')).not.toBeNull();
+  });
+
+  it('renders no bottom navigation on a wide layout (issue #972)', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('app-bottom-nav')).toBeNull();
   });
 
   it('keeps the sidebar open after navigating, and shows no dismiss control or backdrop', async () => {
@@ -587,6 +593,24 @@ describe('AppComponent narrow layout (issue #391)', () => {
     fixture.detectChanges();
 
     expect(sidebar(host)).toBeNull();
+  });
+
+  /** The bottom navigation and its More sheet (issue #972). */
+  it('shows the bottom navigation, whose More opens the menu sheet and gets focus back on Escape', async () => {
+    const { fixture, host } = await render();
+    const more = host.querySelector<HTMLButtonElement>('[data-testid="bottom-nav-more"]');
+    expect(more).not.toBeNull();
+
+    more?.click();
+    fixture.detectChanges();
+    expect(sidebar(host)).not.toBeNull();
+    expect(host.querySelector('[data-testid="more-sheet"]')).not.toBeNull();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    fixture.detectChanges();
+
+    expect(sidebar(host)).toBeNull();
+    expect(document.activeElement).toBe(more);
   });
 
   it('dismisses an open drawer when the viewport narrows past the wide breakpoint', async () => {

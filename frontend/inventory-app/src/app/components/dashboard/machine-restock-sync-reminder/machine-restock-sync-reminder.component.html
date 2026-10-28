@@ -12,59 +12,72 @@
   an explicit `role="status"` attribute.
 -->
 @if (state === 'failed') {
-  <output class="alert alert-warning mb-4" data-testid="restock-sync-reminder-unavailable">
-    <p class="alert-title">Machine restock sync status is unavailable.</p>
-    <p class="mt-1">{{ unavailableMessage }}</p>
+  <output class="flex items-start gap-3 rounded-lg border border-rr-line bg-white p-3 font-rr" data-testid="restock-sync-reminder-unavailable">
+    <span class="mt-0.5 shrink-0 text-rr-warn-text" aria-hidden="true"><app-icon name="sync_alt" [size]="20" /></span>
+    <span class="min-w-0">
+      <span class="block text-sm font-semibold text-rr-navy">Machine restock sync status is unavailable.</span>
+      <span class="block text-sm text-rr-muted">{{ unavailableMessage }}</span>
+    </span>
   </output>
 } @else if (isShown && reminder) {
-  <output class="alert alert-warning mb-4" data-testid="restock-sync-reminder">
-    <p class="alert-title">Machine restock sync needs attention.</p>
-    <p class="mt-1">
-      Review restocks to keep storage inventory accurate. A machine is listed here when its last
-      successful restock sync is {{ reminder.overdueAfterDays }} or more days old, or when restock
-      events from the last {{ reminder.pendingLookbackDays }} days are still waiting for you.
-    </p>
+  <output class="flex items-start gap-3 rounded-lg border border-rr-line bg-white p-3 font-rr" data-testid="restock-sync-reminder">
+    <span class="mt-0.5 shrink-0 text-rr-warn-text" aria-hidden="true"><app-icon name="sync_alt" [size]="20" /></span>
+    <span class="block min-w-0">
+      <span class="block text-sm font-semibold text-rr-navy">Restock sync pending</span>
+      <span class="block text-sm text-rr-muted">
+        Recorded refills haven't been synced yet. Review restocks to keep storage inventory accurate.
+        A machine is listed here when its last successful
+        restock sync is {{ reminder.overdueAfterDays }} or more days old, or when restock events from
+        the last {{ reminder.pendingLookbackDays }} days are still waiting for you.
+      </span>
 
-    @if (isSyncAvailabilityUnconfirmed) {
-      <p class="mt-1" data-testid="restock-sync-reminder-availability">
-        This business's Nayax connection has not been confirmed for machine restock alerts, so Sync
-        Restock may be unavailable until it is.
-        @if (canManageIntegration) {
-          <a
-            routerLink="/admin/nayax-settings"
-            class="btn-link"
-            data-testid="restock-sync-reminder-availability-link"
-          >Check the Nayax connection</a>
-        } @else {
-          <span>Ask a business Owner to check the Nayax connection.</span>
-        }
-      </p>
-    }
-
-    <ul class="mt-2" data-testid="restock-sync-reminder-machines">
-      @for (machine of reminder.machines; track machine.localMachineId) {
-        <li class="mt-1" [attr.data-testid]="'restock-sync-reminder-machine-' + machine.localMachineId">
-          <a
-            [routerLink]="['/machines', machine.localMachineId]"
-            [queryParams]="restockLinkQueryParams(machine)"
-            class="btn-link"
-            [attr.data-testid]="'restock-sync-reminder-link-' + machine.localMachineId"
-          >{{ machine.machineName }}</a>:
-          <span
-            [attr.title]="machine.lastSuccessfulSyncAtUtc ? (machine.lastSuccessfulSyncAtUtc | businessDateTime) : null"
-          >{{ lastSyncedLabel(machine) }}</span>,
-          <span
-            [attr.title]="machine.oldestKnownPendingEventAtUtc ? ('Oldest: ' + (machine.oldestKnownPendingEventAtUtc | businessDateTime)) : null"
-          >{{ pendingLabel(machine) }}</span>.
-          Open the machine and use <strong>Sync Restock</strong> to review them.
-          @if (machine.hasPendingWorkBeforeDefaultFrom && machine.oldestKnownPendingEventBusinessDate) {
-            <span [attr.data-testid]="'restock-sync-reminder-older-than-default-' + machine.localMachineId">
-              Following this link opens Sync Restock from
-              {{ machine.oldestKnownPendingEventBusinessDate | date: 'd MMM yyyy' }}, the oldest of them.
-            </span>
+      @if (isSyncAvailabilityUnconfirmed) {
+        <span class="mt-1 block text-sm text-rr-muted" data-testid="restock-sync-reminder-availability">
+          This business's Nayax connection has not been confirmed for machine restock alerts, so Sync
+          Restock may be unavailable until it is.
+          @if (canManageIntegration) {
+            <a
+              routerLink="/admin/nayax-settings"
+              class="btn-link"
+              data-testid="restock-sync-reminder-availability-link"
+            >Check the Nayax connection</a>
+          } @else {
+            <span>Ask a business Owner to check the Nayax connection.</span>
           }
-        </li>
+        </span>
       }
-    </ul>
+
+      <ul class="m-0 mt-2 list-none p-0 text-sm text-rr-muted" data-testid="restock-sync-reminder-machines">
+        @for (machine of reminder.machines; track machine.localMachineId) {
+          <li class="mt-2" [attr.data-testid]="'restock-sync-reminder-machine-' + machine.localMachineId">
+            <span class="font-semibold text-rr-navy">{{ machine.machineName }}</span>:
+            <span
+              [attr.title]="machine.lastSuccessfulSyncAtUtc ? (machine.lastSuccessfulSyncAtUtc | businessDateTime) : null"
+            >{{ lastSyncedLabel(machine) }}</span>,
+            <span
+              [attr.title]="machine.oldestKnownPendingEventAtUtc ? ('Oldest: ' + (machine.oldestKnownPendingEventAtUtc | businessDateTime)) : null"
+            >{{ pendingLabel(machine) }}</span>.
+            @if (machine.hasPendingWorkBeforeDefaultFrom && machine.oldestKnownPendingEventBusinessDate) {
+              <span [attr.data-testid]="'restock-sync-reminder-older-than-default-' + machine.localMachineId">
+                Following this link opens Sync Restock from
+                {{ machine.oldestKnownPendingEventBusinessDate | date: 'd MMM yyyy' }}, the oldest of them.
+              </span>
+            }
+            <!--
+              Opening the machine is all this does (issues #891 and #948): Sync Restock lives on the
+              machine's page, and following the link changes nothing until the operator applies it
+              there, so it is never described as having synced anything.
+            -->
+            <a
+              [routerLink]="['/machines', machine.localMachineId]"
+              [queryParams]="restockLinkQueryParams(machine)"
+              class="mt-1 flex min-h-11 items-center gap-1 font-semibold text-rr-teal"
+              [attr.aria-label]="'Open Sync Restock for ' + machine.machineName"
+              [attr.data-testid]="'restock-sync-reminder-link-' + machine.localMachineId"
+            ><app-icon name="sync_alt" [size]="16" /> Open Sync Restock</a>
+          </li>
+        }
+      </ul>
+    </span>
   </output>
 }

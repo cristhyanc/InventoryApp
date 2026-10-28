@@ -8,6 +8,7 @@ import { ToastContainerComponent } from "./components/shared/toast-container.com
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
+import { BottomNavComponent } from './layout/bottom-nav.component';
 import { RolePreviewBannerComponent } from './layout/role-preview-banner.component';
 import { RolePreviewMenuComponent } from './layout/role-preview-menu.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
@@ -118,6 +119,7 @@ import { isPublicLayoutRoute } from './public/public-layout';
   imports: [
     RouterOutlet,
     SidebarNavComponent,
+    BottomNavComponent,
     UserMenuComponent,
     IconComponent,
     ToastContainerComponent,
@@ -232,6 +234,9 @@ export class AppComponent implements OnInit, OnDestroy {
   private accountStateAnswer: AccountStateAnswer = { status: 'unread' };
 
   readonly sidebarId = PRIMARY_NAVIGATION_ID;
+
+  /** The control that opened the menu sheet, when it was not the top bar's (issue #972). */
+  private sidebarOpener: HTMLElement | null = null;
 
   /** Only rendered on a narrow layout, which is the only layout that returns focus to it. */
   @ViewChild('sidebarToggle') private readonly sidebarToggle?: ElementRef<HTMLButtonElement>;
@@ -415,6 +420,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   toggleSidebar(): void {
+    this.sidebarOpener = null;
     this.isSidebarOpen = !this.isSidebarOpen;
   }
 
@@ -422,9 +428,26 @@ export class AppComponent implements OnInit, OnDestroy {
     this.isSidebarOpen = true;
   }
 
+  /**
+   * Opens the narrow layout's menu sheet from the bottom bar's More control (issue #972), and
+   * remembers that control so closing the sheet returns focus to it rather than to the top bar.
+   */
+  openSidebarFrom(opener: HTMLElement): void {
+    this.sidebarOpener = opener;
+    this.isSidebarOpen = true;
+  }
+
   closeSidebar(): void {
+    if (!this.isSidebarOpen) {
+      return;
+    }
     this.isSidebarOpen = false;
-    this.sidebarToggle?.nativeElement.focus();
+    const opener = this.sidebarOpener;
+    this.sidebarOpener = null;
+    // On a narrow layout the menu is a modal dialog (issue #972) that keeps the rest of the page
+    // inert while it is open, so it is removed first; only then can the opener take focus back.
+    this.changeDetector.detectChanges();
+    (opener ?? this.sidebarToggle?.nativeElement)?.focus();
   }
 
   /** A narrow drawer covers the page, so choosing a destination dismisses it. */
