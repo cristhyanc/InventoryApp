@@ -14,52 +14,16 @@
     -->
     <app-support-session-banner />
     <app-role-preview-banner />
-    <header class="sticky top-0 z-30">
-      <div class="flex items-center gap-3 px-4 py-3 sm:px-6">
-        <!--
-          The top bar keeps an opener only on a narrow layout, where the sidebar is a drawer that is
-          not on the page and so has no header row of its own to put a control in. On a wide layout
-          the single collapse control lives in the sidebar's own header, beside the app title
-          (issue #456), so no detached toggle floats above the menu.
-        -->
-        @if (isSidebarDrawer) {
-          <button
-            #sidebarToggle
-            type="button"
-            class="btn btn-secondary flex h-11 w-11 shrink-0 items-center justify-center p-0"
-            [attr.aria-expanded]="isSidebarOpen"
-            [attr.aria-controls]="sidebarId"
-            [attr.aria-label]="sidebarToggleLabel"
-            (click)="toggleSidebar()"
-          >
-            <app-icon name="menu" variant="outlined" [size]="20" />
-          </button>
-        }
-        <div class="ml-auto">
-          <app-user-menu
-            #userMenu
-            [isSignedIn]="isLoggedIn"
-            [userName]="userName"
-            (signInRequested)="login()"
-            (signOutRequested)="logout()"
-          >
-            <!--
-              The Super Admin's **View as** entry (issue #721). It is projected into the menu so the
-              menu itself keeps owning no access decision, and it closes the panel when a preview
-              starts, because every page behind it is about to be rebuilt.
-            -->
-            <app-role-preview-menu (previewStarted)="userMenu.close()" />
-          </app-user-menu>
-        </div>
-      </div>
-    </header>
-
     <div class="flex flex-1 items-stretch">
+      <!--
+        The backdrop sits above the top bar (z-30), which now follows it inside the content column,
+        and below the drawer (z-40).
+      -->
       @if (isSidebarDrawer && isSidebarOpen) {
         <button
           type="button"
           aria-label="Close navigation menu"
-          class="fixed inset-0 z-30 bg-md-dark/40"
+          class="fixed inset-0 z-[35] bg-md-dark/40"
           (click)="closeSidebar()"
         ></button>
       }
@@ -79,7 +43,51 @@
       }
 
       <main class="min-w-0 flex-1">
-        <div class="w-full p-4 sm:p-6">
+        <!--
+          The top bar sits inside the content column rather than above the whole shell, so the
+          sidebar starts at the top of the window instead of below an empty strip, and the page starts
+          right under the user menu.
+        -->
+        <header class="sticky top-0 z-30">
+          <div class="flex items-center gap-3 px-4 pt-4 sm:px-6">
+            <!--
+              The top bar keeps an opener only on a narrow layout, where the sidebar is a drawer that is
+              not on the page and so has no header row of its own to put a control in. On a wide layout
+              the single collapse control lives in the sidebar's own header, beside the app title
+              (issue #456), so no detached toggle floats above the menu.
+            -->
+            @if (isSidebarDrawer) {
+              <button
+                #sidebarToggle
+                type="button"
+                class="btn btn-secondary flex h-11 w-11 shrink-0 items-center justify-center p-0"
+                [attr.aria-expanded]="isSidebarOpen"
+                [attr.aria-controls]="sidebarId"
+                [attr.aria-label]="sidebarToggleLabel"
+                (click)="toggleSidebar()"
+              >
+                <app-icon name="menu" variant="outlined" [size]="20" />
+              </button>
+            }
+            <div class="ml-auto">
+              <app-user-menu
+                #userMenu
+                [isSignedIn]="isLoggedIn"
+                [userName]="userName"
+                (signInRequested)="login()"
+                (signOutRequested)="logout()"
+              >
+                <!--
+                  The Super Admin's **View as** entry (issue #721). It is projected into the menu so the
+                  menu itself keeps owning no access decision, and it closes the panel when a preview
+                  starts, because every page behind it is about to be rebuilt.
+                -->
+                <app-role-preview-menu (previewStarted)="userMenu.close()" />
+              </app-user-menu>
+            </div>
+          </div>
+        </header>
+        <div class="w-full px-4 pb-4 pt-3 sm:px-6 sm:pb-6">
           <app-breadcrumbs />
           <!--
             No page at all while this tab cannot present the administrator's active support session
