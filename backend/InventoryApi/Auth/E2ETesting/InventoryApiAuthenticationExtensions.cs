@@ -1,4 +1,5 @@
 using InventoryApi.Auth.ExternalIdentity;
+using InventoryApi.Auth.PriceCollector;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Identity.Web;
@@ -47,19 +48,23 @@ public static class InventoryApiAuthenticationExtensions
         if (E2ETestEnvironment.IsEnabled(environment))
         {
             services.AddSingleton(ExternalIdAuthenticationDecision.SyntheticHost);
+            services.AddSingleton(PriceCollectorAuthenticationDecision.SyntheticHost);
             AddE2ETestAuthentication(services);
             return services;
         }
 
         var workforce = configuration.GetSection("AzureAd");
         var customerIdentity = ExternalIdAuthenticationDecision.From(configuration);
+        var collector = PriceCollectorAuthenticationDecision.From(configuration);
         services.AddSingleton(customerIdentity);
+        services.AddSingleton(collector);
 
         if (customerIdentity.Authority is not { } authority)
         {
-            services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-                .AddMicrosoftIdentityWebApi(workforce);
+            var workforceOnly = services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme);
+            workforceOnly.AddMicrosoftIdentityWebApi(workforce);
 
+            AddPriceCollectorScheme(workforceOnly, workforce, collector);
             StateWorkforceTokenRules(services, workforce);
             return services;
         }
@@ -81,8 +86,59 @@ public static class InventoryApiAuthenticationExtensions
         services.AddOptions<JwtBearerOptions>(ExternalIdBearerScheme.Name)
             .PostConfigure<ILoggerFactory>(ExternalIdBearerScheme.FailClosedOnUnreadableMetadata);
 
+        AddPriceCollectorScheme(authentication, workforce, collector);
         StateWorkforceTokenRules(services, workforce);
         return services;
+    }
+
+    /// <summary>
+    /// Registers the price collector's bearer scheme (issue #924), beside whichever of the two
+    /// people-serving schemes this host ended up with and never as the default.
+    ///
+    /// <para><strong>It is always registered, and it accepts nothing unless a collector is
+    /// configured.</strong> The collector endpoints name this scheme by
+    /// <c>[Authorize(AuthenticationSchemes = …)]</c>, and an endpoint naming an unregistered scheme
+    /// faults the request - so "no collector is configured" would be a <c>500</c> rather than the
+    /// <c>401</c> the issue requires. With the section empty or unusable the scheme is given no
+    /// authority and a rule that refuses every request before validation is attempted; with one
+    /// configured it is pinned to that tenant's workforce authority, this API's own audience, the
+    /// collector's own application and the collector app role.</para>
+    ///
+    /// <para><strong>It changes nothing about the other schemes.</strong> It is not the default, it is
+    /// not in the policy scheme's selector, and it carries no rule they read: an app-only token
+    /// presented to any other endpoint is still refused by that endpoint's own scheme, which keeps
+    /// <see cref="BearerTokenValidationRules.RequireDelegatedAccessToken"/> exactly as it was.</para>
+    /// </summary>
+    private static void AddPriceCollectorScheme(
+        AuthenticationBuilder authentication,
+        IConfiguration workforce,
+        PriceCollectorAuthenticationDecision collector)
+    {
+        var apiClientId = workforce["ClientId"]?.Trim();
+
+        if (!collector.IsRegistered
+            || collector.TenantId is not { } collectorTenantId
+            || collector.ClientId is not { } collectorClientId
+            || string.IsNullOrEmpty(apiClientId))
+        {
+            authentication.AddJwtBearer(
+                PriceCollectorBearerScheme.Name,
+                PriceCollectorBearerScheme.ConfigureRefusingEverything);
+            return;
+        }
+
+        authentication.AddJwtBearer(
+            PriceCollectorBearerScheme.Name,
+            options => PriceCollectorBearerScheme.Configure(
+                options,
+                PriceCollectorBearerScheme.MetadataAuthorityFor(
+                    workforce["Instance"], collectorTenantId),
+                PinnedAudiences.For(apiClientId, workforce["Audience"]?.Trim()),
+                collectorTenantId,
+                collectorClientId));
+
+        authentication.Services.AddOptions<JwtBearerOptions>(PriceCollectorBearerScheme.Name)
+            .PostConfigure<ILoggerFactory>(ExternalIdBearerScheme.FailClosedOnUnreadableMetadata);
     }
 
     /// <summary>

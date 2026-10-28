@@ -110,6 +110,79 @@ internal static class BearerTokenValidationRules
             return Task.CompletedTask;
         });
 
+    /// <summary>
+    /// Requires the token to be an <em>app-only access token</em> carrying one named application
+    /// role, and nothing that would make it a user's token (issue #924, parent #817).
+    ///
+    /// <para>It is the mirror image of <see cref="RequireDelegatedAccessToken"/>, and it is applied
+    /// to exactly one scheme, which exactly one endpoint family authenticates with. Three things are
+    /// refused, each because the alternative is somebody else's token being accepted on the
+    /// collector's surface:</para>
+    ///
+    /// <list type="bullet">
+    ///   <item>a token with <strong>no <c>roles</c> claim naming <paramref name="role"/></strong> -
+    ///   an application that was never granted this role may not run the collector, whatever else it
+    ///   was granted;</item>
+    ///   <item>a token with <strong>any <c>scp</c></strong> - a delegated user token, which is what
+    ///   every other endpoint in this API accepts and what this one must not. Entra does put assigned
+    ///   app roles in a <em>user's</em> token, so "has the role" alone would let an assigned person
+    ///   impersonate the collector; the absence of a delegated scope is what makes this an
+    ///   application's token rather than somebody's;</item>
+    ///   <item>a token carrying an <strong>ID-token binding claim</strong>, for the reason
+    ///   <see cref="RequireDelegatedAccessToken"/> refuses one.</item>
+    /// </list>
+    /// </summary>
+    public static void RequireApplicationRole(JwtBearerOptions options, string role) =>
+        AddRule(options, context =>
+        {
+            var principal = context.Principal;
+
+            var hasRole = PriceCollector.PriceCollectorRole.RoleClaimTypes
+                .SelectMany(claimType => principal?.FindAll(claimType) ?? [])
+                .Any(claim => string.Equals(claim.Value?.Trim(), role, StringComparison.Ordinal));
+
+            if (!hasRole
+                || HasAnyClaim(principal, ScopeClaimTypes)
+                || HasAnyClaim(principal, IdTokenOnlyClaimTypes))
+            {
+                // No token content in the message, as everywhere here: a failure reason is logged,
+                // and a bearer token and its claims never are.
+                context.Fail(
+                    "The bearer token is not an app-only access token carrying the required "
+                        + "application role for this API.");
+            }
+
+            return Task.CompletedTask;
+        });
+
+    /// <summary>
+    /// Requires the token to have been issued to one named client application, read from <c>azp</c>
+    /// or <c>appid</c> (issue #924).
+    ///
+    /// <para>The workforce authority is multi-tenant, so another tenant can consent to this API and
+    /// assign its own application the collector role. <see cref="RequireDirectoryTenant"/> is what
+    /// stops that tenant's token; this is what stops a <em>second application inside the configured
+    /// tenant</em> - a tenant's own other workloads are not the collector. A token carrying neither
+    /// claim names no application and is refused rather than allowed in as a caller nobody can
+    /// attribute, and a token whose two claims disagree is refused too.</para>
+    /// </summary>
+    public static void RequireClientApplication(JwtBearerOptions options, Guid clientId) =>
+        AddRule(options, context =>
+        {
+            var claims = PriceCollector.PriceCollectorRole.ClientApplicationClaimTypes
+                .SelectMany(claimType => context.Principal?.FindAll(claimType) ?? [])
+                .ToArray();
+
+            if (claims.Length == 0
+                || claims.Any(claim =>
+                    !Guid.TryParse(claim.Value?.Trim(), out var claimed) || claimed != clientId))
+            {
+                context.Fail("The bearer token was not issued to the configured client application.");
+            }
+
+            return Task.CompletedTask;
+        });
+
     private static void AddRule(JwtBearerOptions options, Func<TokenValidatedContext, Task> rule)
     {
         options.Events ??= new JwtBearerEvents();

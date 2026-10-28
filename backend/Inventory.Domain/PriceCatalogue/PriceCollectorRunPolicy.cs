@@ -29,6 +29,19 @@ public enum PriceCollectorRunStatus
 
     /// <summary>Finished having accounted for nothing. It records no price at all.</summary>
     Failed = 4,
+
+    /// <summary>
+    /// Closed without the collector ever reporting what it did (issue #924): the run was still open
+    /// when its expiry passed, or when a later run was issued.
+    ///
+    /// <para>It is deliberately its own outcome rather than a <see cref="Failed"/> one. A failed run
+    /// is one that reported failing; an expired run reported nothing at all, and the difference is
+    /// exactly what a reviewer of "did the collector run last night?" needs. Like every finished
+    /// status it records an end instant - the instant it was expired, not the instant it should have
+    /// expired - and like every other status it removes nothing: the work items it issued keep their
+    /// own outcomes, and the listings it never reached keep their last accepted observation.</para>
+    /// </summary>
+    Expired = 5,
 }
 
 /// <summary>
@@ -67,6 +80,62 @@ public static class PriceCollectorRunPolicy
     /// <summary>What a caller who submitted a negative count is told.</summary>
     public const string NegativeCountMessage =
         "A price collector run's counts cannot be negative.";
+
+    /// <summary>
+    /// How long an issued run stays open unless the collector reports back, in hours (issue #924):
+    /// six, the owner's default, overridden per deployment by the collector's own App Service
+    /// setting.
+    ///
+    /// <para>It is a lifetime rather than a deadline because a run is issued by this application and
+    /// finished by a separate scheduled process: the expiry is what stops a collector that died
+    /// mid-run from leaving work nobody will ever account for, and six hours is comfortably longer
+    /// than a whole catalogue takes to search while still being the same day's work.</para>
+    /// </summary>
+    public const int DefaultExpiryHours = 6;
+
+    /// <summary>
+    /// The longest run lifetime this application accepts: seven days. It bounds a configured value
+    /// rather than expressing a rule - a run still open a week after it was issued is not a run - and
+    /// it is generous enough that a deliberately slow backfill would fit.
+    /// </summary>
+    public const int MaxExpiryHours = 24 * 7;
+
+    /// <summary>What a deployment whose configured run lifetime is outside the accepted range is told.</summary>
+    public const string ExpiryOutOfRangeMessage =
+        "A price collector run's lifetime must be between 1 and 168 hours.";
+
+    /// <summary>Whether <paramref name="expiryHours"/> is a run lifetime this application accepts.</summary>
+    public static bool IsAcceptedExpiry(int expiryHours) => expiryHours is > 0 and <= MaxExpiryHours;
+
+    /// <summary>
+    /// <paramref name="expiryHours"/> as it is to be used, refusing anything outside the accepted
+    /// range. Zero is refused rather than read as "never expires" or "expires immediately": an
+    /// absent lifetime would be a silently wrong answer in whichever direction it was resolved.
+    /// </summary>
+    /// <exception cref="DomainValidationException">The lifetime is not in the accepted range.</exception>
+    public static int RequireExpiryHours(int expiryHours) =>
+        IsAcceptedExpiry(expiryHours)
+            ? expiryHours
+            : throw new DomainValidationException(ExpiryOutOfRangeMessage);
+
+    /// <summary>
+    /// When a run issued at <paramref name="issuedAtUtc"/> stops being open, under a lifetime of
+    /// <paramref name="expiryHours"/> hours.
+    /// </summary>
+    /// <exception cref="DomainValidationException">The lifetime is not in the accepted range.</exception>
+    public static DateTime ExpiresAt(DateTime issuedAtUtc, int expiryHours) =>
+        issuedAtUtc.AddHours(RequireExpiryHours(expiryHours));
+
+    /// <summary>
+    /// Whether a run that expires at <paramref name="expiresAtUtc"/> has expired by
+    /// <paramref name="asOfUtc"/>.
+    ///
+    /// <para>The expiry instant belongs to the expired side, the same way
+    /// <see cref="SupplierPriceFreshnessPolicy.IsFresh"/>'s limit belongs to the stale side: "six
+    /// hours" is the answer to "how long may this run stay open", and the boundary has to belong to
+    /// one side deliberately rather than by accident.</para>
+    /// </summary>
+    public static bool HasExpired(DateTime expiresAtUtc, DateTime asOfUtc) => asOfUtc >= expiresAtUtc;
 
     /// <summary>Whether <paramref name="status"/> is one of the declared outcomes.</summary>
     public static bool IsDeclaredStatus(PriceCollectorRunStatus status) => Enum.IsDefined(status);

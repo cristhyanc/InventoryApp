@@ -156,8 +156,8 @@ four SPA values are build-time, so changing them is a build.
 
 ### 3.2 Journey C — Google (row 40)
 
-1. Open the staging application signed out. `/sign-in` offers **Continue with Google or an email
-   address** beside **Sign in with a Microsoft work account**.
+1. Open the staging application signed out. `/sign-in` offers **Continue with Google or email**
+   beside **Sign in with a Microsoft account**.
 2. Choose the customer identity action. The hosted page is the tenant's, and it **offers Google**.
 3. Complete the journey with a Google account that has never used this application.
 4. The browser returns to `/auth` and then to the application, which shows the `NoMembership`
