@@ -1540,10 +1540,10 @@ public class AppDbContext : DbContext
     {
         var pending = modelBuilder.Entity<SupplierListingPendingObservation>();
 
-        pending.Property(x => x.PackPrice).HasColumnType("decimal(18,4)");
-        pending.Property(x => x.RegularPackPrice).HasColumnType("decimal(18,4)");
+        pending.Property(x => x.PackPrice).HasColumnType(MoneyColumnType);
+        pending.Property(x => x.RegularPackPrice).HasColumnType(MoneyColumnType);
         pending.Property(x => x.SupplierGstRate).HasColumnType("decimal(5,4)");
-        pending.Property(x => x.SizeValue).HasColumnType("decimal(18,3)");
+        pending.Property(x => x.SizeValue).HasColumnType(SizeColumnType);
 
         pending.Property(x => x.Currency)
             .IsRequired()
@@ -1624,6 +1624,12 @@ public class AppDbContext : DbContext
     /// on the same terms.
     /// </summary>
     private const int MaxResultReasonLength = ProductMatchSuggestionPolicy.MaxReasonLength;
+
+    /// <summary>The column type a pack or regular price is stored as, wherever issue #937 declares one.</summary>
+    private const string MoneyColumnType = "decimal(18,4)";
+
+    /// <summary>The column type an individual item's size is stored as, wherever issue #937 declares one.</summary>
+    private const string SizeColumnType = "decimal(18,3)";
 
     /// <summary>
     /// Maps one issued piece of collector work (issue #924, parent #817).
@@ -1879,7 +1885,7 @@ public class AppDbContext : DbContext
         // uses: a listing's size is compared against a master product's, so a second scale would be
         // a second answer to "is this the same size?".
         listing.Property(x => x.Variant).HasMaxLength(SupplierListingPolicy.MaxVariantLength);
-        listing.Property(x => x.SizeValue).HasColumnType("decimal(18,3)");
+        listing.Property(x => x.SizeValue).HasColumnType(SizeColumnType);
 
         // Text, and never a number: 0012345678905 and 12345678905 are different barcodes, and the
         // leading zeros are not recoverable once a column has parsed them away.

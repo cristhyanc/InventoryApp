@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Domain.PriceCatalogue;
 
@@ -120,7 +121,12 @@ public sealed record PriceCollectorResultRowRequest
 /// </summary>
 public sealed record PriceCollectorResultsRequest
 {
-    /// <summary>The run the collector is reporting under, as <c>GET /api/price-collector/work</c> issued it.</summary>
+    /// <summary>
+    /// The run the collector is reporting under, as <c>GET /api/price-collector/work</c> issued it.
+    /// Marked <see cref="JsonRequiredAttribute"/> because a run id defaults to <c>0</c> on
+    /// under-posting, which is never a real run rather than being refused outright.
+    /// </summary>
+    [JsonRequired]
     public long RunId { get; init; }
 
     /// <summary>The rows. A larger batch is refused whole, with nothing stored.</summary>
@@ -188,10 +194,20 @@ public sealed record PriceCollectorResultsResponse(
 /// </summary>
 public sealed record PriceCollectorSearchOutcomeRequest
 {
-    /// <summary>The run this search belongs to.</summary>
+    /// <summary>
+    /// The run this search belongs to. Marked <see cref="JsonRequiredAttribute"/> because a run id
+    /// defaults to <c>0</c> on under-posting, which is never a real run rather than being refused
+    /// outright.
+    /// </summary>
+    [JsonRequired]
     public long RunId { get; init; }
 
-    /// <summary>What happened. <c>NotSearched</c> is the run completion's own answer and is refused here.</summary>
+    /// <summary>
+    /// What happened. <c>NotSearched</c> is the run completion's own answer and is refused here.
+    /// Marked <see cref="JsonRequiredAttribute"/> because an outcome left out would otherwise default
+    /// to the enum's own <c>0</c>, which names none of the four answers a search may give.
+    /// </summary>
+    [JsonRequired]
     public PriceCollectorWorkItemOutcome Outcome { get; init; }
 
     /// <summary>Why it failed, for a failed search and for no other.</summary>
@@ -200,7 +216,12 @@ public sealed record PriceCollectorSearchOutcomeRequest
     /// <summary>
     /// How many distinct supplier product ids the collector submitted for this search, across every
     /// batch. The answer is accepted only while this equals what the backend received.
+    ///
+    /// <para>Marked <see cref="JsonRequiredAttribute"/> because <c>0</c> is itself a legitimate count
+    /// - the one <c>no_matches</c> and <c>failed</c> require - so it must be the collector's own
+    /// stated count rather than what under-posting would default it to.</para>
     /// </summary>
+    [JsonRequired]
     public int SubmittedRowCount { get; init; }
 
     /// <summary>This answer as the use case takes it.</summary>

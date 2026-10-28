@@ -494,6 +494,10 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
     /// Decides one submitted row and writes what the decision implies, in the fixed order the class
     /// summary states. It adds entities to the context and never saves: the caller owns the
     /// transaction and the two saves.
+    ///
+    /// <para>Each stage of the fixed order - resolving the work item, validating the row's content
+    /// against it, resolving the listing it names, and applying what the Domain decided - is its own
+    /// method below, in that order, so the sequence reads the way the class summary states it.</para>
     /// </summary>
     private DecidedRow Decide(
         PriceCollectorRun run,
@@ -517,20 +521,56 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             return Refused(submission.WorkItemId, string.Empty, refusal.Message);
         }
 
+        var resolved = ResolveWorkItem(run, submission, context, supplierProductId);
+
+        if (resolved.Refusal is not null)
+        {
+            return resolved.Refusal;
+        }
+
+        var workItem = resolved.WorkItem!;
+        var validated = ValidateContent(run, workItem, submission, context, supplierProductId, asOfUtc);
+
+        if (validated.Refusal is not null)
+        {
+            return validated.Refusal;
+        }
+
+        return DecideForValidatedRow(
+            run,
+            workItem,
+            supplierProductId,
+            validated.Observed!,
+            context,
+            asOfUtc,
+            accepted);
+    }
+
+    /// <summary>
+    /// The first two checks of the fixed order - is this work item real and is it this run's - and
+    /// the idempotency and in-batch checks that follow them: has this key already been answered, has
+    /// its search already been answered some other way, and has this batch already claimed it.
+    /// </summary>
+    private static WorkItemResolution ResolveWorkItem(
+        PriceCollectorRun run,
+        PriceCollectorResultRowSubmission submission,
+        SubmissionContext context,
+        string supplierProductId)
+    {
         if (!context.WorkItems.TryGetValue(submission.WorkItemId, out var workItem))
         {
-            return Refused(
+            return new WorkItemResolution(null, Refused(
                 submission.WorkItemId,
                 supplierProductId,
-                PriceCollectorResultPolicy.UnknownWorkItemReason);
+                PriceCollectorResultPolicy.UnknownWorkItemReason));
         }
 
         if (workItem.PriceCollectorRunId != run.Id)
         {
-            return Refused(
+            return new WorkItemResolution(null, Refused(
                 submission.WorkItemId,
                 supplierProductId,
-                PriceCollectorResultPolicy.WorkItemFromAnotherRunReason);
+                PriceCollectorResultPolicy.WorkItemFromAnotherRunReason));
         }
 
         var key = (workItem.Id, supplierProductId);
@@ -540,7 +580,7 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             // The earlier outcome, verbatim, and nothing written. The reason is the stored one
             // rather than a re-derived one, so a repeat cannot answer differently because the
             // catalogue moved underneath it.
-            return new DecidedRow(
+            return new WorkItemResolution(null, new DecidedRow(
                 workItem.Id,
                 supplierProductId,
                 prior.Outcome,
@@ -548,35 +588,50 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
                 Listing: null,
                 Observation: null,
                 prior.SupplierListingId,
-                prior.SupplierPriceObservationId);
+                prior.SupplierPriceObservationId));
         }
 
         if (workItem.Outcome is not null)
         {
-            return Refused(
+            return new WorkItemResolution(null, Refused(
                 workItem.Id,
                 supplierProductId,
-                PriceCollectorResultPolicy.SearchAlreadyAnsweredReason);
+                PriceCollectorResultPolicy.SearchAlreadyAnsweredReason));
         }
 
         if (!context.ClaimedInThisBatch.Add(key))
         {
-            return Refused(
+            return new WorkItemResolution(null, Refused(
                 workItem.Id,
                 supplierProductId,
-                PriceCollectorResultPolicy.DuplicateRowInBatchReason);
+                PriceCollectorResultPolicy.DuplicateRowInBatchReason));
         }
 
+        return new WorkItemResolution(workItem, null);
+    }
+
+    /// <summary>
+    /// The content checks of the fixed order: is it this supplier's, is the payload storable, is the
+    /// basis the supplier's, and was it read inside the run window and from the supplier's own site.
+    /// </summary>
+    private ContentValidation ValidateContent(
+        PriceCollectorRun run,
+        PriceCollectorWorkItem workItem,
+        PriceCollectorResultRowSubmission submission,
+        SubmissionContext context,
+        string supplierProductId,
+        DateTime asOfUtc)
+    {
         if (submission.SupplierPresetId != workItem.SupplierPresetId)
         {
-            return Record(
+            return new ContentValidation(null, Record(
                 workItem,
                 supplierProductId,
                 PriceCollectorRowOutcome.Rejected,
                 PriceCollectorResultPolicy.SupplierDiffersFromWorkItemReason,
                 listing: null,
                 observation: null,
-                asOfUtc);
+                asOfUtc));
         }
 
         ObservedRow observed;
@@ -587,28 +642,28 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
         }
         catch (DomainValidationException refusal)
         {
-            return Record(
+            return new ContentValidation(null, Record(
                 workItem,
                 supplierProductId,
                 PriceCollectorRowOutcome.Rejected,
                 refusal.Message,
                 listing: null,
                 observation: null,
-                asOfUtc);
+                asOfUtc));
         }
 
         var supplier = context.Suppliers[workItem.SupplierPresetId];
 
         if (observed.PriceBasis != supplier.PriceBasis)
         {
-            return Record(
+            return new ContentValidation(null, Record(
                 workItem,
                 supplierProductId,
                 PriceCollectorRowOutcome.Rejected,
                 PriceCollectorResultPolicy.PriceBasisDiffersFromSupplierReason,
                 listing: null,
                 observation: null,
-                asOfUtc);
+                asOfUtc));
         }
 
         if (!PriceCollectorResultPolicy.IsObservedWithinRun(
@@ -616,7 +671,7 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             run.StartedAtUtc,
             asOfUtc))
         {
-            return Record(
+            return new ContentValidation(null, Record(
                 workItem,
                 supplierProductId,
                 PriceCollectorRowOutcome.Rejected,
@@ -625,21 +680,37 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
                     : PriceCollectorResultPolicy.ObservedInFutureReason,
                 listing: null,
                 observation: null,
-                asOfUtc);
+                asOfUtc));
         }
 
         if (!PriceCollectorResultPolicy.SourceLinkMatchesSupplier(supplier.SiteUrl, observed.SourceUrl))
         {
-            return Record(
+            return new ContentValidation(null, Record(
                 workItem,
                 supplierProductId,
                 PriceCollectorRowOutcome.Rejected,
                 PriceCollectorResultPolicy.SourceLinkHostMismatchReason,
                 listing: null,
                 observation: null,
-                asOfUtc);
+                asOfUtc));
         }
 
+        return new ContentValidation(observed, null);
+    }
+
+    /// <summary>
+    /// The last check of the fixed order - does the listing already belong to another product - and,
+    /// once a row has passed every check, what the Domain decides it implies.
+    /// </summary>
+    private DecidedRow DecideForValidatedRow(
+        PriceCollectorRun run,
+        PriceCollectorWorkItem workItem,
+        string supplierProductId,
+        ObservedRow observed,
+        SubmissionContext context,
+        DateTime asOfUtc,
+        List<(SupplierListing, SupplierPriceObservation, DateTime, decimal?)> accepted)
+    {
         var resolvedMasterProductId = workItem.MasterProductId
             ?? (workItem.WaitingKey is { } ownKey ? context.ResolvedWaitingKeys[ownKey] : null);
 
@@ -668,6 +739,33 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
                 asOfUtc);
         }
 
+        return ApplyDecision(
+            run,
+            workItem,
+            listing,
+            resolvedMasterProductId,
+            supplierProductId,
+            observed,
+            context,
+            accepted,
+            asOfUtc);
+    }
+
+    /// <summary>
+    /// What the Domain's decision for one validated row implies: the listing it creates or updates,
+    /// the observation it accepts or the pending reading it holds instead, and the row's own outcome.
+    /// </summary>
+    private DecidedRow ApplyDecision(
+        PriceCollectorRun run,
+        PriceCollectorWorkItem workItem,
+        SupplierListing? listing,
+        long? resolvedMasterProductId,
+        string supplierProductId,
+        ObservedRow observed,
+        SubmissionContext context,
+        List<(SupplierListing, SupplierPriceObservation, DateTime, decimal?)> accepted,
+        DateTime asOfUtc)
+    {
         var previousPrice = listing?.LatestObservationId is { } latest
             && context.LastAcceptedPrices.TryGetValue(latest, out var price)
                 ? price
@@ -744,6 +842,12 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
             observation,
             asOfUtc);
     }
+
+    /// <summary>The outcome of <see cref="ResolveWorkItem"/>: a work item to continue with, or a decided refusal.</summary>
+    private sealed record WorkItemResolution(PriceCollectorWorkItem? WorkItem, DecidedRow? Refusal);
+
+    /// <summary>The outcome of <see cref="ValidateContent"/>: a storable row to continue with, or a decided refusal.</summary>
+    private sealed record ContentValidation(ObservedRow? Observed, DecidedRow? Refusal);
 
     /// <summary>
     /// Whether <paramref name="listing"/> is a listing of the product this work item is about: the
