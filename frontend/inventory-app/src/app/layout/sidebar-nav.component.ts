@@ -163,8 +163,13 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
    */
   @ViewChild('sheet')
   private set sheetElement(ref: ElementRef<HTMLDialogElement> | undefined) {
+    this.stopListeningToSheet();
     this.sheet = ref?.nativeElement;
     if (this.sheet !== undefined && !this.sheet.open) {
+      // Listened for here rather than bound in the template: the dialog is not itself a control.
+      // A click matters only on its backdrop, and a key only to keep Tab inside it.
+      this.sheet.addEventListener('click', this.onSheetClick);
+      this.sheet.addEventListener('keydown', this.onSheetKeydown);
       openModal(this.sheet);
     }
   }
@@ -308,6 +313,7 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     // Leave the top layer before the element goes, so the page is interactive again at once.
+    this.stopListeningToSheet();
     if (this.sheet?.open) {
       closeModal(this.sheet);
     }
@@ -329,10 +335,17 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
    * A click whose target is the dialog element itself landed on its `::backdrop` - the dimmed page
    * above the sheet - because the sheet's content fills the dialog box. That dismisses the sheet.
    */
-  onSheetClick(event: MouseEvent): void {
+  private readonly onSheetClick = (event: MouseEvent): void => {
     if (event.target === this.sheet) {
       this.dismissed.emit();
     }
+  };
+
+  private readonly onSheetKeydown = (event: KeyboardEvent): void => this.containFocus(event);
+
+  private stopListeningToSheet(): void {
+    this.sheet?.removeEventListener('click', this.onSheetClick);
+    this.sheet?.removeEventListener('keydown', this.onSheetKeydown);
   }
 
   /**

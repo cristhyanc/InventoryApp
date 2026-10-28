@@ -14,9 +14,7 @@
     aria-label="Menu"
     class="fixed inset-x-0 bottom-0 top-auto m-0 hidden max-h-[85vh] w-full max-w-none flex-col overflow-hidden rounded-t-2xl border-0 bg-white p-0 font-rr text-rr-navy shadow-md-lg backdrop:bg-md-dark/40 open:flex"
     data-testid="more-sheet"
-    (keydown)="containFocus($event)"
     (cancel)="onSheetCancel($event)"
-    (click)="onSheetClick($event)"
   >
     <ng-container *ngTemplateOutlet="navigationPanel" />
   </dialog>
