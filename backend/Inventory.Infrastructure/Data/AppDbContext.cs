@@ -369,6 +369,23 @@ public class AppDbContext : DbContext
     public DbSet<PriceCollectorWorkItem> PriceCollectorWorkItems => Set<PriceCollectorWorkItem>();
 
     /// <summary>
+    /// One result row a collector submitted and what was done with it (issue #937, parent #817). The
+    /// ninth platform table, on the terms <see cref="SupplierPresets"/> states, and the store of the
+    /// idempotency key the results endpoint answers a repeat from. See
+    /// <see cref="PriceCollectorResultRow"/>.
+    /// </summary>
+    public DbSet<PriceCollectorResultRow> PriceCollectorResultRows => Set<PriceCollectorResultRow>();
+
+    /// <summary>
+    /// The latest reading of one listing that was not accepted as its price (issue #937). The tenth
+    /// platform table, one row per listing, kept apart from <see cref="SupplierPriceObservations"/>
+    /// so every row of <em>that</em> table stays an accepted price. See
+    /// <see cref="SupplierListingPendingObservation"/>.
+    /// </summary>
+    public DbSet<SupplierListingPendingObservation> SupplierListingPendingObservations =>
+        Set<SupplierListingPendingObservation>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -1434,7 +1451,179 @@ public class AppDbContext : DbContext
         ConfigurePriceCollectorRuns(modelBuilder);
         ConfigurePriceCollectorWorkItems(modelBuilder);
         ConfigureSupplierPriceObservations(modelBuilder);
+        ConfigurePriceCollectorResultRows(modelBuilder);
+        ConfigureSupplierListingPendingObservations(modelBuilder);
     }
+
+    /// <summary>
+    /// Maps one submitted collector result row (issue #937, parent #817).
+    ///
+    /// <para>A platform table like the six beside it: no business key, no index on one and no query
+    /// filter. Every reference restricts, because a row is the record of a decision and a decision
+    /// whose run, work item, listing or observation had been deleted from under it would be
+    /// unreadable.</para>
+    ///
+    /// <para><strong>The unique index is the idempotency key, and it is the database's.</strong>
+    /// <c>(run, work item, supplier product id)</c> is what the issue states, and it is an index
+    /// rather than a <c>WHERE</c> clause because two concurrent submissions of the same key would
+    /// both pass the clause and store one reading twice. The supplier product id is <em>in</em> the
+    /// key on purpose: one search legitimately returns a 24-pack and a 30-pack, so accepting one
+    /// must not suppress the other. The outcome vocabulary stays the Domain's, for the reason the
+    /// work item's does.</para>
+    /// </summary>
+    private static void ConfigurePriceCollectorResultRows(ModelBuilder modelBuilder)
+    {
+        var row = modelBuilder.Entity<PriceCollectorResultRow>();
+
+        row.Property(x => x.SupplierProductId)
+            .IsRequired()
+            .HasMaxLength(SupplierListingPolicy.MaxSupplierProductIdLength);
+        row.Property(x => x.Outcome).IsRequired();
+        row.Property(x => x.Reason).HasMaxLength(MaxResultReasonLength);
+
+        row
+            .HasIndex(x => new
+            {
+                x.PriceCollectorRunId,
+                x.PriceCollectorWorkItemId,
+                x.SupplierProductId,
+            })
+            .IsUnique();
+
+        // "How many distinct supplier product ids has this work item received?" - the count the
+        // outcome call of #937 refuses a wrong total against.
+        row.HasIndex(x => x.PriceCollectorWorkItemId);
+
+        row
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        row
+            .HasOne(x => x.PriceCollectorWorkItem)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorWorkItemId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        row
+            .HasOne(x => x.SupplierListing)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierListingId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        row
+            .HasOne(x => x.SupplierPriceObservation)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierPriceObservationId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(row.Property(x => x.SubmittedAtUtc));
+    }
+
+    /// <summary>
+    /// Maps the latest reading of one listing that was not accepted as its price (issue #937).
+    ///
+    /// <para><strong>The listing is unique</strong>, which is the "replacing the previous pending
+    /// one" rule expressed as an index: one listing holds at most one pending reading, enforced
+    /// rather than left to a delete-then-insert nothing checks. The reference to the listing
+    /// cascades - deleting a listing deletes the reading that was waiting on it, which has no
+    /// meaning without it - and the run and work item restrict, because they are its
+    /// provenance.</para>
+    ///
+    /// <para>The amount, currency, GST-rate and promotion checks are the ones an accepted
+    /// observation carries, for the same reasons: a held reading is reviewed and may then become a
+    /// price, so storing one this application would refuse as a price would only move the refusal to
+    /// the moment somebody approved it.</para>
+    /// </summary>
+    private static void ConfigureSupplierListingPendingObservations(ModelBuilder modelBuilder)
+    {
+        var pending = modelBuilder.Entity<SupplierListingPendingObservation>();
+
+        pending.Property(x => x.PackPrice).HasColumnType("decimal(18,4)");
+        pending.Property(x => x.RegularPackPrice).HasColumnType("decimal(18,4)");
+        pending.Property(x => x.SupplierGstRate).HasColumnType("decimal(5,4)");
+        pending.Property(x => x.SizeValue).HasColumnType("decimal(18,3)");
+
+        pending.Property(x => x.Currency)
+            .IsRequired()
+            .HasMaxLength(SupplierPriceObservationPolicy.Currency.Length);
+        pending.Property(x => x.PriceBasis).IsRequired();
+        pending.Property(x => x.StockStatus).IsRequired();
+        pending.Property(x => x.Reason).IsRequired().HasMaxLength(MaxResultReasonLength);
+        pending.Property(x => x.SourceReference)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceReferenceLength);
+        pending.Property(x => x.SourceUrl)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceUrlLength);
+        pending.Property(x => x.Title).HasMaxLength(SupplierListingPolicy.MaxTitleLength);
+        pending.Property(x => x.Variant).HasMaxLength(SupplierListingPolicy.MaxVariantLength);
+        pending.Property(x => x.Barcode).HasMaxLength(SupplierListingPolicy.MaxBarcodeLength);
+
+        pending.HasIndex(x => x.SupplierListingId).IsUnique();
+        pending.HasIndex(x => x.PriceCollectorRunId);
+        pending.HasIndex(x => x.PriceCollectorWorkItemId);
+
+        pending.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_PackPricePositive",
+                @"""PackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_RegularPackPricePositive",
+                @"""RegularPackPrice"" IS NULL OR ""RegularPackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_GstRateIsAProportion",
+                @"""SupplierGstRate"" IS NULL "
+                    + @"OR (""SupplierGstRate"" >= 0 AND ""SupplierGstRate"" <= 1)");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_PromotionEndNeedsPromotion",
+                @"""PromotionEndsAtUtc"" IS NULL OR ""IsPromotion"" = 1");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_CurrencyIsAud",
+                $@"""Currency"" = '{SupplierPriceObservationPolicy.Currency}'");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_UnitsPerPackPositive",
+                @"""UnitsPerPack"" IS NULL OR ""UnitsPerPack"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_SizeAndUnitTogether",
+                @"(""SizeValue"" IS NULL AND ""SizeUnit"" IS NULL) "
+                    + @"OR (""SizeValue"" IS NOT NULL AND ""SizeUnit"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_BarcodeAndScopeTogether",
+                @"(""Barcode"" IS NULL AND ""BarcodeScope"" IS NULL) "
+                    + @"OR (""Barcode"" IS NOT NULL AND ""BarcodeScope"" IS NOT NULL)");
+        });
+
+        pending
+            .HasOne(x => x.SupplierListing)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierListingId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        pending
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        pending
+            .HasOne(x => x.PriceCollectorWorkItem)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorWorkItemId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(pending.Property(x => x.ObservedAtUtc));
+        MarkUtcNullable(pending.Property(x => x.PromotionEndsAtUtc));
+        MarkUtc(pending.Property(x => x.RecordedAtUtc));
+    }
+
+    /// <summary>
+    /// The longest stored refusal or hold reason (issue #937). The reasons are
+    /// <c>PriceCollectorResultPolicy</c>'s own sentences rather than caller text, and this bound is
+    /// the same one a match suggestion's reason carries, so a reviewer's two explanations are stored
+    /// on the same terms.
+    /// </summary>
+    private const int MaxResultReasonLength = ProductMatchSuggestionPolicy.MaxReasonLength;
 
     /// <summary>
     /// Maps one issued piece of collector work (issue #924, parent #817).
@@ -1535,6 +1724,15 @@ public class AppDbContext : DbContext
             "CK_PriceCollectorRuns_CountsNotNegative",
             @"""ListingsCheckedCount"" >= 0 AND ""ObservationsRecordedCount"" >= 0 "
                 + @"AND ""FailureCount"" >= 0"));
+
+        // The per-outcome counts of issue #937, checked on exactly the terms the three above are:
+        // a stored row is not something an application-level check can be trusted to have
+        // prevented, and a negative count of searches is not a smaller number of searches.
+        run.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorRuns_SearchCountsNotNegative",
+            @"""CompleteSearchCount"" >= 0 AND ""TruncatedSearchCount"" >= 0 "
+                + @"AND ""NoMatchesSearchCount"" >= 0 AND ""FailedSearchCount"" >= 0 "
+                + @"AND ""NotSearchedCount"" >= 0"));
 
         // The one read a collector and the summary of #930 both make: the most recent runs.
         run.HasIndex(x => x.StartedAtUtc);
@@ -1677,6 +1875,12 @@ public class AppDbContext : DbContext
         listing.Property(x => x.Url).HasMaxLength(SupplierListingPolicy.MaxUrlLength);
         listing.Property(x => x.Title).HasMaxLength(SupplierListingPolicy.MaxTitleLength);
 
+        // The listing's own identity reading (issue #937), at the one size scale this catalogue
+        // uses: a listing's size is compared against a master product's, so a second scale would be
+        // a second answer to "is this the same size?".
+        listing.Property(x => x.Variant).HasMaxLength(SupplierListingPolicy.MaxVariantLength);
+        listing.Property(x => x.SizeValue).HasColumnType("decimal(18,3)");
+
         // Text, and never a number: 0012345678905 and 12345678905 are different barcodes, and the
         // leading zeros are not recoverable once a column has parsed them away.
         listing.Property(x => x.Barcode).HasMaxLength(SupplierListingPolicy.MaxBarcodeLength);
@@ -1720,6 +1924,17 @@ public class AppDbContext : DbContext
                 "CK_SupplierListings_BarcodeAndScopeTogether",
                 @"(""Barcode"" IS NULL AND ""BarcodeScope"" IS NULL) "
                     + @"OR (""Barcode"" IS NOT NULL AND ""BarcodeScope"" IS NOT NULL)");
+
+            // Issue #937's own pair, on the barcode rule's terms: a number with no unit cannot be
+            // compared with anything, and a unit with no number describes nothing. A size of zero
+            // is refused for the reason a master product's is - it is a denominator.
+            table.HasCheckConstraint(
+                "CK_SupplierListings_SizeAndUnitTogether",
+                @"(""SizeValue"" IS NULL AND ""SizeUnit"" IS NULL) "
+                    + @"OR (""SizeValue"" IS NOT NULL AND ""SizeUnit"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_SupplierListings_SizeValuePositive",
+                @"""SizeValue"" IS NULL OR ""SizeValue"" > 0");
         });
 
         listing
@@ -1764,6 +1979,7 @@ public class AppDbContext : DbContext
         MarkUtc(listing.Property(x => x.UpdatedAtUtc));
         MarkUtcNullable(listing.Property(x => x.LastCheckedAtUtc));
         MarkUtcNullable(listing.Property(x => x.LastPriceChangeAtUtc));
+        MarkUtcNullable(listing.Property(x => x.LastNotFoundAtUtc));
     }
 
     private static void ConfigureProductMatchSuggestions(ModelBuilder modelBuilder)
