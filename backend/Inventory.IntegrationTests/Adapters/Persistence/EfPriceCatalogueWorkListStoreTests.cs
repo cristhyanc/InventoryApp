@@ -336,10 +336,8 @@ public class EfPriceCatalogueWorkListStoreTests
         var last = await fixture.SeedMasterProductAsync("Zephyr", "Cola");
         var first = await fixture.SeedMasterProductAsync("Alpine", "Water");
 
-        var mine = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
-        var theirs = await fixture.TrackAsync(
-            fixture.FirstBusinessId, fixture.FirstBusinessPepsiId, "Pepsi Max", "375mL");
+        var mine = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var theirs = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessPepsiId);
         await fixture.MatchAsync(mine.Id, last);
         await fixture.MatchAsync(theirs.Id, first);
 
