@@ -22,6 +22,14 @@ namespace Inventory.Infrastructure.Persistence;
 /// <c>RequireConsistentMatch</c> to check the row it produced, so a mapping returned to awaiting a
 /// match cannot be left still pointing at a master product.</para>
 ///
+/// <para><strong>It refuses nothing, and it never leaves a stale match standing either</strong>
+/// (repaired on review of issue #938). An edit that makes the product unsearchable - a unit label
+/// replaced by the generic <c>"unit"</c>, or a name the search text cannot hold - suspends the
+/// mapping into <c>ProductPriceTrackingStatus.AwaitingProductDetails</c> and clears the master
+/// product and the match source with it, so that master product's prices can no longer be read as
+/// this product's and the previous size's text is no longer sent to the collector. The product edit
+/// itself still succeeds: what a product may be saved with is issue #895's rule, not this one's.</para>
+///
 /// <para><strong>It never creates or removes a mapping</strong>, and it never touches a master
 /// product, a supplier listing, a match suggestion or another business's mapping: turning tracking on
 /// and off is the switch's own write, and a product edit is not a place a business acquires or loses
@@ -73,19 +81,28 @@ internal static class TrackedProductSearchTextRefresh
 
         mapping.Status = refresh.Status;
 
-        // A mapping returned to awaiting a match stops naming a master product, and stops recording
-        // how a match that no longer stands was made. Which of the two matched states it came from
-        // does not matter: both are a statement that this product is that master product, and a
-        // changed size is exactly the reason to stop making it.
+        // A mapping that stops being matched - returned to awaiting a match by a new size, or
+        // suspended because the product can no longer be searched for at all - stops naming a master
+        // product, and stops recording how a match that no longer stands was made. Which of the two
+        // matched states it came from does not matter: both are a statement that this product is that
+        // master product, and a changed or missing size is exactly the reason to stop making it.
         if (!ProductPriceTrackingPolicy.IsMatched(refresh.Status))
         {
             mapping.MasterProductId = null;
             mapping.MatchSource = null;
         }
 
-        mapping.SearchName = refresh.Text.SearchName;
-        mapping.UnitLabel = refresh.Text.UnitLabel;
-        mapping.WaitingKey = refresh.Text.WaitingKey;
+        // Text only when the rule captured some. A suspended mapping keeps the text it holds, which
+        // nothing reads while it is suspended: the collector work list is the Requested rows, so the
+        // previous size is not searched for, and a corrected product captures its current name and
+        // label afresh.
+        if (refresh.Text is { } text)
+        {
+            mapping.SearchName = text.SearchName;
+            mapping.UnitLabel = text.UnitLabel;
+            mapping.WaitingKey = text.WaitingKey;
+        }
+
         mapping.UpdatedAtUtc = updatedAtUtc;
 
         // The row this just produced, checked by the same rule that governs every other writer of

@@ -480,6 +480,138 @@ public class EfProductPriceTrackingStoreTests
     }
 
     /// <summary>
+    /// The repair of issue #938's review finding, over the real migration history and the real
+    /// <c>EfProductStore</c>: relabelling a <strong>matched</strong> product to the generic
+    /// <c>"unit"</c> suspends its mapping and clears the match, so the master product it was matched
+    /// to can no longer supply prices for a size the product no longer has. The product edit itself
+    /// still succeeds, and the shared catalogue rows are all exactly as they were.
+    /// </summary>
+    [Theory]
+    [InlineData(ProductPriceTrackingStatus.AutoMatched, ProductPriceTrackingMatchSource.CollectorAutomaticMatch)]
+    [InlineData(ProductPriceTrackingStatus.Matched, ProductPriceTrackingMatchSource.SuperAdmin)]
+    public async Task Relabelling_a_matched_product_to_the_generic_label_suspends_it_and_clears_the_match(
+        ProductPriceTrackingStatus status,
+        ProductPriceTrackingMatchSource source)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var listing = await fixture.SeedListingAsync(master, "ALPHA-COLA-375");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(mapping.Id, master, status, source);
+
+        var attempt = await fixture.UpdateProductAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "unit");
+
+        // The edit is accepted: what a product may be saved with is #895's rule, and an existing
+        // mapping is not a reason to refuse an otherwise valid product edit.
+        Assert.Equal(ProductWriteOutcome.Succeeded, attempt.Outcome);
+
+        var suspended = Assert.Single(await fixture.AllMappingsAsync());
+        Assert.Equal(ProductPriceTrackingStatus.AwaitingProductDetails, suspended.Status);
+        Assert.Null(suspended.MasterProductId);
+        Assert.Null(suspended.MatchSource);
+
+        // The master product and its listing are untouched - the reference restricts, and nothing
+        // here writes a platform table.
+        Assert.True(await fixture.MasterProductExistsAsync(master));
+        Assert.True(await fixture.ListingExistsAsync(listing));
+
+        // And that master product is no longer eligible for this business at all: the tracked-master
+        // read is what a price comparison is built from, and nothing points at it any more.
+        Assert.Empty(
+            await fixture.WorkListStoreFor(fixture.FirstBusinessId)
+                .ListTrackedMasterProductsAsync(CancellationToken.None));
+
+        // Nor is its previous size searched for: the work list is the Requested rows.
+        Assert.Empty(
+            await fixture.WorkListStoreFor(fixture.FirstBusinessId)
+                .ListProductsAwaitingMatchAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// And the other half: correcting the unit label to a real, <em>different</em> size captures the
+    /// product's current name and label afresh and returns the mapping to awaiting a match - with no
+    /// master product, because the one it had was invalidated rather than remembered.
+    /// </summary>
+    [Theory]
+    [InlineData(ProductPriceTrackingStatus.AutoMatched, ProductPriceTrackingMatchSource.CollectorAutomaticMatch)]
+    [InlineData(ProductPriceTrackingStatus.Matched, ProductPriceTrackingMatchSource.SuperAdmin)]
+    public async Task Correcting_the_unit_label_of_a_suspended_mapping_makes_it_wait_for_a_match_again(
+        ProductPriceTrackingStatus status,
+        ProductPriceTrackingMatchSource source)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(mapping.Id, master, status, source);
+        await fixture.UpdateProductAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "unit");
+
+        await fixture.UpdateProductAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "1.25L");
+
+        var resumed = Assert.Single(await fixture.AllMappingsAsync());
+        Assert.Equal(ProductPriceTrackingStatus.Requested, resumed.Status);
+        Assert.Null(resumed.MasterProductId);
+        Assert.Null(resumed.MatchSource);
+        Assert.Equal("Coca-Cola Classic", resumed.SearchName);
+        Assert.Equal("1.25L", resumed.UnitLabel);
+        Assert.Equal(PriceCatalogueWaitingKey.For("Coca-Cola Classic", "1.25L"), resumed.WaitingKey);
+
+        // The corrected text is what is searched for now, and the old master product is still not
+        // tracked through by anybody.
+        var awaiting = Assert.Single(
+            await fixture.WorkListStoreFor(fixture.FirstBusinessId)
+                .ListProductsAwaitingMatchAsync(CancellationToken.None));
+        Assert.Equal("1.25L", awaiting.UnitLabel);
+        Assert.Empty(
+            await fixture.WorkListStoreFor(fixture.FirstBusinessId)
+                .ListTrackedMasterProductsAsync(CancellationToken.None));
+        Assert.True(await fixture.MasterProductExistsAsync(master));
+    }
+
+    /// <summary>
+    /// A suspension reaches one business's own mapping and nothing else: the other business's mapping
+    /// of the <em>same</em> master product stays matched and stays eligible. The refresh reads through
+    /// the central query filters, so there is exactly one row it can see.
+    /// </summary>
+    [Fact]
+    public async Task Suspending_one_business_s_mapping_leaves_the_other_s_match_eligible()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var mine = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var theirs = await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
+        await fixture.MatchAsync(mine.Id, master);
+        await fixture.MatchAsync(theirs.Id, master);
+
+        await fixture.UpdateProductAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "unit");
+
+        var stored = await fixture.AllMappingsAsync();
+        var suspended = Assert.Single(stored, mapping => mapping.Id == mine.Id);
+        Assert.Equal(ProductPriceTrackingStatus.AwaitingProductDetails, suspended.Status);
+        Assert.Null(suspended.MasterProductId);
+
+        var untouched = Assert.Single(stored, mapping => mapping.Id == theirs.Id);
+        Assert.Equal(ProductPriceTrackingStatus.Matched, untouched.Status);
+        Assert.Equal(master, untouched.MasterProductId);
+        Assert.Equal(ProductPriceTrackingMatchSource.SuperAdmin, untouched.MatchSource);
+        Assert.Equal("coca-cola  classic", untouched.SearchName);
+        Assert.Equal("375 ML", untouched.UnitLabel);
+
+        // Their match still supplies that master product; mine does not.
+        Assert.Equal(
+            [master],
+            (await fixture.WorkListStoreFor(fixture.SecondBusinessId)
+                .ListTrackedMasterProductsAsync(CancellationToken.None))
+                .Select(tracked => tracked.Id));
+        Assert.Empty(
+            await fixture.WorkListStoreFor(fixture.FirstBusinessId)
+                .ListTrackedMasterProductsAsync(CancellationToken.None));
+    }
+
+    /// <summary>
     /// Editing an <em>untracked</em> product writes no mapping at all: a product edit is not a place a
     /// business acquires a tracked product. This is the regression that keeps issue #938 from changing
     /// what <c>PUT api/products/{id}</c> does for every product that is not tracked.

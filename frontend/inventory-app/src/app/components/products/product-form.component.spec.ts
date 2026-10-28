@@ -1285,7 +1285,7 @@ describe('ProductFormComponent requiring a Unit Label (issue #895)', () => {
 
 /**
  * The "Track supplier prices" switch on the product form (issue #938). The switch's own behaviour -
- * the write, the unit-label message and the four statuses - is `ProductPriceTrackingComponent`'s
+ * the write, the unit-label message and the five statuses - is `ProductPriceTrackingComponent`'s
  * spec; what this page is responsible for is mounting it for the product being edited, and saying
  * where to find it on New Product.
  */

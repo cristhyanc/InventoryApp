@@ -5,7 +5,7 @@ namespace Inventory.Domain.PriceCatalogue;
 /// <summary>
 /// Where one of a business's products has got to in the shared catalogue (issue #923, parent #817).
 ///
-/// <para>The four states are answers, never labels on each other, and
+/// <para>The five states are answers, never labels on each other, and
 /// <see cref="ProductPriceTrackingStatus.NotFound"/> in particular is a recorded outcome rather than
 /// a gap: a product nothing in the catalogue matches has been looked for and not found, which is what
 /// stops it being searched for again every run. Numbered from 1.</para>
@@ -29,6 +29,22 @@ public enum ProductPriceTrackingStatus
     /// reason the search text is not re-run forever.
     /// </summary>
     NotFound = 4,
+
+    /// <summary>
+    /// The business still wants this product priced, but the product's own name or unit label can no
+    /// longer be searched for - today a unit label edited to blank or to the generic
+    /// <c>"unit"</c>, or a name longer than the search text can hold (issue #938, repaired on review).
+    ///
+    /// <para><strong>It waits on the product, not on the catalogue, and nothing stands while it
+    /// does.</strong> A mapping in this state names no master product and records no match source, so
+    /// it supplies no price and is not eligible for a comparison; and it is not
+    /// <see cref="Requested"/>, so the collector work list does not send its text - which would be the
+    /// previous size, a search for a product the business no longer has. The mapping is kept rather
+    /// than removed because the business never withdrew its request: correcting the product's own
+    /// details captures them afresh and returns it to <see cref="Requested"/>, where matching may
+    /// happen again.</para>
+    /// </summary>
+    AwaitingProductDetails = 5,
 }
 
 /// <summary>
@@ -182,9 +198,11 @@ public static class ProductPriceTrackingPolicy
 
     /// <summary>
     /// Whether a mapping in <paramref name="status"/> names a master product. The two matched states
-    /// do; <see cref="ProductPriceTrackingStatus.Requested"/> and
-    /// <see cref="ProductPriceTrackingStatus.NotFound"/> do not, and a mapping that is still waiting
-    /// is exactly what the collector work list of #924 is a list of.
+    /// do; <see cref="ProductPriceTrackingStatus.Requested"/>,
+    /// <see cref="ProductPriceTrackingStatus.NotFound"/> and
+    /// <see cref="ProductPriceTrackingStatus.AwaitingProductDetails"/> do not, and a mapping that is
+    /// still <see cref="ProductPriceTrackingStatus.Requested"/> is exactly what the collector work
+    /// list of #924 is a list of.
     /// </summary>
     public static bool IsMatched(ProductPriceTrackingStatus status) =>
         status is ProductPriceTrackingStatus.AutoMatched or ProductPriceTrackingStatus.Matched;
@@ -384,7 +402,8 @@ public static class ProductPriceTrackingPolicy
     /// What an edit of a product's name or unit label does to the mapping it already has, or
     /// <see langword="null"/> when it does nothing at all (issue #938).
     ///
-    /// <para><strong>Three answers, one per state, and each is the issue's own criterion.</strong> A
+    /// <para><strong>One answer per state, and each of the first three is the issue's own
+    /// criterion.</strong> A
     /// mapping still <see cref="ProductPriceTrackingStatus.Requested"/> follows the product: the
     /// search text and the waiting key both move, because the key is the fold of the text and a
     /// collector must look for what the business now calls the product. A
@@ -398,14 +417,29 @@ public static class ProductPriceTrackingPolicy
     /// <para><strong><see cref="ProductPriceTrackingStatus.NotFound"/> is left exactly as it is.</strong>
     /// It is a recorded answer rather than a gap (issue #923), and issue #938's criteria name only the
     /// awaiting and the matched states; re-running a search that already came back empty is precisely
-    /// what recording that answer prevents.</para>
+    /// what recording that answer prevents. It names no master product and is not sent to the
+    /// collector, so there is nothing stale for it to keep standing on either.</para>
     ///
-    /// <para><strong>Text this policy cannot capture refreshes nothing.</strong> A product renamed to
-    /// something longer than <see cref="MaxSearchNameLength"/>, or edited to a blank or generic unit
-    /// label, leaves the mapping with the text it already has rather than refusing the product edit:
-    /// changing a product's own fields and their rules is issue #895's subject and explicitly outside
-    /// this issue, and a mapping keeping valid text is strictly better than failing an unrelated
-    /// catalogue edit.</para>
+    /// <para><strong>Text this policy cannot capture suspends the mapping; it never leaves a stale one
+    /// standing</strong> (repaired on review of issue #938). A product renamed to something longer
+    /// than <see cref="MaxSearchNameLength"/>, or relabelled to a blank or generic unit label, cannot
+    /// be searched for at all - so the mapping goes to
+    /// <see cref="ProductPriceTrackingStatus.AwaitingProductDetails"/>, its master product and match
+    /// source are cleared by the applier, and the collector stops being sent its text. Keeping a
+    /// match made on the <em>previous</em> size would let that master product's prices be read as this
+    /// product's, which is the one thing a price comparison must never do, and keeping the row
+    /// <see cref="ProductPriceTrackingStatus.Requested"/> would send the previous size's text to the
+    /// collector - a search for a product the business no longer has.</para>
+    ///
+    /// <para><strong>The product edit is still never refused.</strong> Changing a product's own fields
+    /// and their rules is issue #895's subject and explicitly outside issue #938, so this rule reports
+    /// a state and refuses nothing: an otherwise valid edit of a tracked product succeeds exactly as
+    /// it does for an untracked one. The stored text is left as it is while a mapping is suspended -
+    /// inert, because nothing reads it in that state, and the row still records what was last searched
+    /// for. Correcting the product's name or unit label captures the <em>current</em> values and
+    /// returns the mapping to <see cref="ProductPriceTrackingStatus.Requested"/>, even when the
+    /// corrected text is the text it was suspended with, because the match it had was invalidated and
+    /// deciding the next one is the matcher's (#941) work rather than this rule's.</para>
     /// </summary>
     /// <param name="status">The mapping's current status.</param>
     /// <param name="storedSearchName">The search name it currently holds.</param>
@@ -426,7 +460,25 @@ public static class ProductPriceTrackingPolicy
 
         if (!TryCapture(productName, productUnit, out var captured))
         {
-            return null;
+            // The product can no longer be searched for. A mapping that was waiting, auto-matched or
+            // matched is suspended - the applier clears the master product and the match source with
+            // it - and one that is already suspended stays exactly as it is. No new text is carried:
+            // there is none this policy would store, and the stored text is read by nothing in this
+            // state.
+            return status == ProductPriceTrackingStatus.AwaitingProductDetails
+                ? null
+                : new ProductPriceTrackingRefresh(
+                    ProductPriceTrackingStatus.AwaitingProductDetails,
+                    Text: null);
+        }
+
+        if (status == ProductPriceTrackingStatus.AwaitingProductDetails)
+        {
+            // Corrected: the product's current name and unit label are captured afresh and the
+            // mapping waits for a match again. Unconditionally, including when the corrected text is
+            // the text it was suspended with - the status itself is the change, and the match it once
+            // had was invalidated rather than remembered.
+            return new ProductPriceTrackingRefresh(ProductPriceTrackingStatus.Requested, captured);
         }
 
         var unitLabelChanged = !string.Equals(
@@ -475,9 +527,17 @@ public sealed record ProductPriceTrackingText(string SearchName, string UnitLabe
 /// it named are cleared by whoever applies this - which
 /// <c>ProductPriceTrackingPolicy.RequireConsistentMatch</c> then checks, so an applier that forgot
 /// cannot store a waiting mapping still pointing at a master product.</para>
+///
+/// <para><see cref="Text"/> is <see langword="null"/> for exactly one answer: a mapping suspended
+/// into <see cref="ProductPriceTrackingStatus.AwaitingProductDetails"/>, whose product can no longer
+/// be searched for and for which there is therefore no text to capture. The mapping keeps the text it
+/// holds, which nothing reads in that state. Every other answer carries text, because a mapping that
+/// is still searched for must be searched for by what the product says now.</para>
 /// </summary>
 /// <param name="Status">The status to store.</param>
-/// <param name="Text">The search text and waiting key to store.</param>
+/// <param name="Text">
+/// The search text and waiting key to store, or <see langword="null"/> to leave the stored text alone.
+/// </param>
 public sealed record ProductPriceTrackingRefresh(
     ProductPriceTrackingStatus Status,
-    ProductPriceTrackingText Text);
+    ProductPriceTrackingText? Text);

@@ -28,8 +28,8 @@
     </label>
 
     <!-- The server's own reason, verbatim: a blank or generic unit label is a rule this page must
-         not word a second time (issue #938). Shown only while tracking is off, because it is a
-         reason not to start. -->
+         not word a second time (issue #938). Shown tracking on or off - off it is a reason not to
+         start, on it is why the mapping is paused and how to resume it. -->
     @if (refusal) {
       <p class="text-sm text-amber-700" data-testid="price-tracking-refusal">{{ refusal }}</p>
     }

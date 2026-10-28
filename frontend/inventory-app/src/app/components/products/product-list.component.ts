@@ -215,6 +215,11 @@ export class ProductListComponent implements OnInit, OnDestroy {
         return 'Matched';
       case ProductPriceTrackingStatus.NotFound:
         return 'Not found';
+      case ProductPriceTrackingStatus.AwaitingProductDetails:
+        // Paused: the product's own name or unit label can no longer be searched for, so nothing is
+        // searched and no match stands. Why, and how to resume it, is the switch's own panel on that
+        // product's Edit page - this column states the state and words no rule.
+        return 'Paused';
       default:
         return null;
     }

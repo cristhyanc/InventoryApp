@@ -41,7 +41,9 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
         CancellationToken cancellationToken)
     {
         // Requested and nothing else: NotFound is a recorded answer, and re-sending it every run is
-        // exactly what recording it prevents (IPriceCatalogueWorkListStore states the rule).
+        // exactly what recording it prevents (IPriceCatalogueWorkListStore states the rule). A
+        // suspended mapping (AwaitingProductDetails) is excluded by the same comparison, which is
+        // what keeps its stored text - the size the product no longer has - out of the collector.
         //
         // DISTINCT in SQL over the three columns, so rows that agree exactly - the common case, five
         // businesses holding the same product name - collapse before they are materialised.

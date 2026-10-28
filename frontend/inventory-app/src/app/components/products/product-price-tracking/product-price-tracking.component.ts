@@ -26,7 +26,7 @@ type ProductPriceTrackingRead = { id: number; state: ProductPriceTracking | null
  * **It words no rule of its own.** Whether the switch may be turned on, and the sentence explaining
  * why not, are the server's answers (`canTrack`/`trackRefusal`, decided by
  * `Inventory.Domain.PriceCatalogue.ProductPriceTrackingPolicy`) - the same shape the product's
- * `canDelete`/`deletionRefusal` already has. What this component words is the four statuses, which
+ * `canDelete`/`deletionRefusal` already has. What this component words is the five statuses, which
  * are presentation.
  */
 @Component({
@@ -139,17 +139,24 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * Why the switch may not be turned on, in the server's own words, or `null` when there is nothing
-   * to explain. It is shown only while tracking is off, because it is a reason not to start.
+   * Why this product may not be tracked as it now stands, in the server's own words, or `null` when
+   * there is nothing to explain.
+   *
+   * It is shown whenever the server reports one, tracking on or off. While tracking is off it is a
+   * reason not to start; while it is on it is the reason the mapping is **paused** - a product whose
+   * unit label was replaced by the generic one is not searched for and holds no match any more, and
+   * this sentence is the only thing that says how to resume it (issue #938, repaired on review).
    */
   get refusal(): string | null {
-    return this.state !== null && !this.tracked ? this.state.trackRefusal : null;
+    return this.state?.trackRefusal ?? null;
   }
 
   /**
-   * What the mapping's status says, or `null` while the product is not tracked. The four states are
-   * answers rather than labels on each other, so each has its own sentence and "not found" reads as
-   * the recorded outcome it is rather than as an error.
+   * What the mapping's status says, or `null` while the product is not tracked. The five states are
+   * answers rather than labels on each other, so each has its own sentence: "not found" reads as the
+   * recorded outcome it is rather than as an error, and a paused mapping says it is paused rather
+   * than looking like one that is still waiting its turn. The paused line words no rule - the
+   * server's own `trackRefusal` sentence below it is what explains the cause.
    */
   get statusLabel(): string | null {
     if (!this.tracked) {
@@ -165,6 +172,8 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
         return 'Matched';
       case ProductPriceTrackingStatus.NotFound:
         return 'Not found';
+      case ProductPriceTrackingStatus.AwaitingProductDetails:
+        return 'Paused - this product cannot be searched for';
       default:
         return null;
     }
@@ -179,9 +188,19 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
     return master ? `${master.name} ${master.sizeValue}${master.sizeUnit}` : null;
   }
 
-  /** What is being searched for while the mapping waits, or `null` when there is nothing to search. */
+  /**
+   * What is being searched for while the mapping waits, or `null` when there is nothing to search.
+   *
+   * A **paused** mapping shows nothing here, because nothing is being searched for: the text it
+   * still holds is the product's previous name and size, and printing it under "Searched for as"
+   * would say the opposite of what is happening.
+   */
   get searchText(): string | null {
-    if (!this.tracked || this.state?.searchName == null) {
+    if (
+      !this.tracked
+      || this.state?.searchName == null
+      || this.state.status === ProductPriceTrackingStatus.AwaitingProductDetails
+    ) {
       return null;
     }
 

@@ -422,7 +422,10 @@ public class ProductsController : ControllerBase
     /// <c>trackRefusal</c>, decided by the one
     /// <c>Inventory.Domain.PriceCatalogue.ProductPriceTrackingPolicy</c> that refuses the write - so
     /// the form never words the unit-label rule a second time. The same shape as the product's own
-    /// <c>canDelete</c>/<c>deletionRefusal</c>.</para>
+    /// <c>canDelete</c>/<c>deletionRefusal</c>. Those two fields are also what explains a mapping
+    /// suspended into <c>awaitingProductDetails</c> because the product's own name or unit label can
+    /// no longer be searched for: that mapping names no master product, is sent to no collector, and
+    /// resumes when the product is corrected.</para>
     /// </summary>
     /// <response code="200">The product's tracking state, tracked or not.</response>
     /// <response code="404">No such product in this business.</response>

@@ -160,6 +160,34 @@ public class EfPriceCatalogueWorkListStoreTests
                 .ListProductsAwaitingMatchAsync(CancellationToken.None));
     }
 
+    /// <summary>
+    /// And nor is a mapping that was <strong>suspended</strong> because its product's unit label was
+    /// replaced by the generic one (issue #938, repaired on review): it still holds the text it was
+    /// matched or waiting under - the size the product no longer has - and sending that would be
+    /// asking the collector to price a product the business does not have. It is waiting on its own
+    /// product's details, not on the catalogue.
+    ///
+    /// <para>The suspension is arranged through the <strong>real</strong> product store, because that
+    /// is where it happens: writing the status directly would prove only that this query filters on
+    /// it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_suspended_mapping_is_sent_to_neither_collector_read()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        await fixture.SeedListingAsync(master, "SKU-SUSPENDED");
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(mapping.Id, master);
+
+        await fixture.UpdateProductAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "unit");
+
+        var store = fixture.UnscopedWorkListStore();
+        Assert.Empty(await store.ListProductsAwaitingMatchAsync(CancellationToken.None));
+        Assert.Empty(await store.ListTrackedMasterProductsAsync(CancellationToken.None));
+    }
+
     #endregion
 
     #region Tracked master products and their listings

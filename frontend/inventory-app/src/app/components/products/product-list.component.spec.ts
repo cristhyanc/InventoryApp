@@ -2078,7 +2078,11 @@ describe('ProductListComponent Tracked column (issue #938)', () => {
     [ProductPriceTrackingStatus.Requested, 'Awaiting match'],
     [ProductPriceTrackingStatus.AutoMatched, 'Matched automatically'],
     [ProductPriceTrackingStatus.Matched, 'Matched'],
-    [ProductPriceTrackingStatus.NotFound, 'Not found']
+    [ProductPriceTrackingStatus.NotFound, 'Not found'],
+    // A mapping paused because its product's name or unit label can no longer be searched for
+    // (issue #938, repaired on review). It reads as paused rather than as "awaiting match", which
+    // would look like a search still in progress.
+    [ProductPriceTrackingStatus.AwaitingProductDetails, 'Paused']
   ])('reads status %s as "%s"', async (status, label) => {
     const { cells } = await render(
       [product({ id: 1, name: 'Tracked Cola' })],

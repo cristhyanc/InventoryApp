@@ -1363,7 +1363,7 @@ product you have not switched on.
   so this product needs a real unit label such as "375mL" before tracking can be turned on."*
   Give the product its real label on the same form, save, and the switch becomes available. This
   changes nothing about what a product may be saved with; it is only a condition for tracking it.
-- **What the status means.** Under the switch, a tracked product shows one of four states, and each
+- **What the status means.** Under the switch, a tracked product shows one of five states, and each
   is an answer rather than a stage:
   - **Awaiting match** — the request is recorded and nothing has matched it yet.
   - **Matched automatically, awaiting check** — the matcher chose a catalogue product and nobody has
@@ -1371,6 +1371,11 @@ product you have not switched on.
   - **Matched** — the match is settled. The catalogue product's name and size are named beside it.
   - **Not found** — it was looked for and nothing in the catalogue describes it. A real answer, which
     is why it is not searched for again every run.
+  - **Paused - this product cannot be searched for** — the product's own name or unit label can no
+    longer be searched for, usually because the unit label was replaced by the generic `unit`.
+    Nothing is searched for it, it is matched to nothing, and the same sentence about a real unit
+    label is shown under it saying how to resume. Give the product a real unit label again and it
+    goes back to **awaiting match**.
   Only the catalogue product's **name and size** are ever shown — nothing about which suppliers
   stock it, what it costs, or any other business.
 - **Renaming or relabelling the product.** While a product is still **awaiting a match**, editing its
@@ -1378,6 +1383,13 @@ product you have not switched on.
   changing its **unit label** puts it back to **awaiting a match** with the new text — a 375 ml can
   that became a 1.25 l bottle is not the same product — while a **name-only** change keeps the match.
   A **not found** product is left as it is.
+- **Taking a product's unit label away pauses its tracking; it never prices the old size.** If you
+  replace a tracked product's unit label with the generic `unit`, the edit is still saved — tracking
+  never stops you editing a product — but its tracking goes to **Paused**: any match it had is
+  dropped, so no supplier's price for the old size is shown as this product's, and nothing is
+  searched for it in the meantime. Giving it a real unit label again starts it off from the product's
+  current name and label; it waits for a match afresh rather than returning to the match it had,
+  because that match was made on the size you changed.
 - **Turning it off removes only your request.** The shared catalogue of products, supplier listings
   and prices is untouched, and so is every other business's. You can switch it back on at any time.
 - **Nobody sees anybody else's choices.** A business cannot see which products another business

@@ -50,8 +50,11 @@ public record MatchedMasterProductResponse(string Name, decimal SizeValue, strin
 /// <param name="ProductId">The product this answer is about.</param>
 /// <param name="Tracked">Whether this business has asked for the product's supplier prices.</param>
 /// <param name="Status">
-/// Where the mapping has got to - requested, auto-matched, matched or not found - or
-/// <see langword="null"/> when the product is not tracked.
+/// Where the mapping has got to - requested, auto-matched, matched, not found, or awaiting the
+/// product's own details - or <see langword="null"/> when the product is not tracked. The last state
+/// is a mapping suspended because the product's name or unit label can no longer be searched for; it
+/// names no master product, is sent to no collector, and <see cref="TrackRefusal"/> is the sentence
+/// that says how to resume it.
 /// </param>
 /// <param name="SearchName">
 /// The product name the collector searches with, or <see langword="null"/> when untracked. It is the
@@ -66,7 +69,9 @@ public record MatchedMasterProductResponse(string Name, decimal SizeValue, strin
 /// <param name="CanTrack">Whether tracking may be turned on for this product as it now stands.</param>
 /// <param name="TrackRefusal">
 /// Why it may not be, in the rule's own words - today a blank or generic unit label - or
-/// <see langword="null"/> when it may.
+/// <see langword="null"/> when it may. It is the product's own eligibility as it now stands, so it is
+/// also what explains a mapping suspended into
+/// <see cref="ProductPriceTrackingStatus.AwaitingProductDetails"/>, and what says how to resume it.
 /// </param>
 public record ProductPriceTrackingResponse(
     long ProductId,

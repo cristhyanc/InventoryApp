@@ -369,6 +369,110 @@ public sealed class ProductPriceTrackingApiTests
         await _factory.UntrackAsync(productId);
     }
 
+    /// <summary>
+    /// The repair of this issue's review finding, over the whole pipeline: relabelling a matched
+    /// product to the generic <c>"unit"</c> through the ordinary <c>PUT api/products/{id}</c> leaves
+    /// the edit accepted and the mapping <strong>suspended</strong> - no master product, no match
+    /// source, and a published state that says so with the sentence that explains it. The master
+    /// product, its supplier listing and the other business's matched mapping of the same master
+    /// product are all untouched.
+    /// </summary>
+    [Theory]
+    [InlineData(ProductPriceTrackingStatus.AutoMatched)]
+    [InlineData(ProductPriceTrackingStatus.Matched)]
+    public async Task Relabelling_a_matched_product_to_the_generic_label_suspends_its_mapping(
+        ProductPriceTrackingStatus matched)
+    {
+        var client = _factory.BusinessA();
+        var productId = await _factory.TrackableProductAsync(client, "375mL");
+        await SetTrackingAsync(client, productId, tracked: true);
+        var (masterProductId, listingId) = await _factory.MatchAsync(productId, matched);
+
+        // Business B's own product, matched to the same master product, so the isolation claim is
+        // about a row that would be affected if the refresh reached past the tenant filters.
+        var businessB = _factory.BusinessB();
+        var theirs = await _factory.TrackableOtherBusinessProductAsync(businessB, "375mL");
+        await SetTrackingAsync(businessB, theirs, tracked: true);
+        await _factory.MatchAsync(theirs, ProductPriceTrackingStatus.Matched);
+
+        // Only the unit label changes, and only to the generic placeholder.
+        await _factory.EditProductAsync(
+            client, productId, await _factory.ProductNameAsync(productId), "unit");
+
+        var state = await TrackingAsync(client, productId);
+        Assert.True(state.GetProperty("tracked").GetBoolean());
+        Assert.Equal(
+            (int)ProductPriceTrackingStatus.AwaitingProductDetails,
+            state.GetProperty("status").GetInt32());
+        Assert.Equal(JsonValueKind.Null, state.GetProperty("masterProduct").ValueKind);
+        Assert.False(state.GetProperty("canTrack").GetBoolean());
+        Assert.Equal(
+            ProductPriceTrackingPolicy.UnitLabelNotSpecificMessage,
+            state.GetProperty("trackRefusal").GetString());
+
+        // The stored row, from outside the boundary: the match is gone rather than merely unpublished.
+        var stored = await _factory.MappingAsync(productId);
+        Assert.Equal(ProductPriceTrackingStatus.AwaitingProductDetails, stored!.Status);
+        Assert.Null(stored.MasterProductId);
+        Assert.Null(stored.MatchSource);
+
+        // The Tracked column says the same thing.
+        var listed = Assert.Single(
+            await TrackedListAsync(client),
+            entry => entry.GetProperty("productId").GetInt64() == productId);
+        Assert.Equal(
+            (int)ProductPriceTrackingStatus.AwaitingProductDetails,
+            listed.GetProperty("status").GetInt32());
+
+        // Nothing shared was touched, and neither was the other business's match.
+        Assert.True(await _factory.MasterProductExistsAsync(masterProductId));
+        Assert.True(await _factory.ListingExistsAsync(listingId));
+        var untouched = await _factory.MappingAsync(theirs);
+        Assert.Equal(ProductPriceTrackingStatus.Matched, untouched!.Status);
+        Assert.Equal(masterProductId, untouched.MasterProductId);
+
+        await _factory.UntrackAsync(productId);
+        await _factory.UntrackAsync(theirs);
+    }
+
+    /// <summary>
+    /// And the other half of the repair: correcting the unit label to a real, different size captures
+    /// the product's current name and label afresh and returns the mapping to awaiting a match, with
+    /// no master product - the one it had was invalidated, not remembered.
+    /// </summary>
+    [Theory]
+    [InlineData(ProductPriceTrackingStatus.AutoMatched)]
+    [InlineData(ProductPriceTrackingStatus.Matched)]
+    public async Task Correcting_the_unit_label_resumes_a_suspended_mapping(
+        ProductPriceTrackingStatus matched)
+    {
+        var client = _factory.BusinessA();
+        var productId = await _factory.TrackableProductAsync(client, "375mL");
+        await SetTrackingAsync(client, productId, tracked: true);
+        await _factory.MatchAsync(productId, matched);
+        var name = await _factory.ProductNameAsync(productId);
+        await _factory.EditProductAsync(client, productId, name, "unit");
+
+        await _factory.EditProductAsync(client, productId, name, "1.25L");
+
+        var state = await TrackingAsync(client, productId);
+        Assert.Equal(
+            (int)ProductPriceTrackingStatus.Requested,
+            state.GetProperty("status").GetInt32());
+        Assert.Equal("1.25L", state.GetProperty("unitLabel").GetString());
+        Assert.Equal(name, state.GetProperty("searchName").GetString());
+        Assert.Equal(JsonValueKind.Null, state.GetProperty("masterProduct").ValueKind);
+        Assert.True(state.GetProperty("canTrack").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, state.GetProperty("trackRefusal").ValueKind);
+
+        var stored = await _factory.MappingAsync(productId);
+        Assert.Null(stored!.MasterProductId);
+        Assert.Null(stored.MatchSource);
+        Assert.Equal(PriceCatalogueWaitingKey.For(name, "1.25L"), stored.WaitingKey);
+
+        await _factory.UntrackAsync(productId);
+    }
+
     /// <summary>And the other half of that criterion: a name-only edit keeps the match.</summary>
     [Fact]
     public async Task Renaming_a_matched_product_keeps_the_match()
@@ -700,6 +804,27 @@ public sealed class ProductPriceTrackingApiTests
             await db.SaveChangesAsync();
         }
 
+        /// <summary>
+        /// That product's mapping exactly as it is stored, read from outside the boundary, or
+        /// <see langword="null"/> when it has none. It is what proves a cleared match is cleared in
+        /// the row rather than merely absent from the response.
+        /// </summary>
+        public async Task<StoredMapping?> MappingAsync(long productId)
+        {
+            await using var db = Database();
+
+            return await db.ProductPriceTrackings.AsNoTracking()
+                .Where(tracking => tracking.ProductId == productId)
+                .Select(tracking => new StoredMapping(
+                    tracking.Status,
+                    tracking.MasterProductId,
+                    tracking.MatchSource,
+                    tracking.SearchName,
+                    tracking.UnitLabel,
+                    tracking.WaitingKey))
+                .SingleOrDefaultAsync();
+        }
+
         /// <summary>How many mappings that product has, read from outside the boundary.</summary>
         public async Task<int> MappingCountAsync(long productId)
         {
@@ -804,6 +929,19 @@ public sealed class ProductPriceTrackingApiTests
 
             return product.Id;
         }
+
+        /// <summary>
+        /// One stored mapping's own columns, for the assertions that are about the row rather than
+        /// about the response: the status, the match it names and how that was decided, and the text
+        /// it is searched for by.
+        /// </summary>
+        public sealed record StoredMapping(
+            ProductPriceTrackingStatus Status,
+            long? MasterProductId,
+            ProductPriceTrackingMatchSource? MatchSource,
+            string SearchName,
+            string UnitLabel,
+            string WaitingKey);
 
         /// <summary>
         /// An unrestricted context for arranging and verifying both businesses' rows from outside the

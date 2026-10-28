@@ -14,6 +14,14 @@ namespace Inventory.Application.PriceCatalogue;
 /// server that decides the write rather than by a second rule in a component. It is the shape the
 /// product's own <c>canDelete</c>/<c>deletionRefusal</c> already has (issue #737).</para>
 ///
+/// <para><strong>It is also what reports a suspended mapping</strong> (issue #938, repaired on
+/// review). A mapping whose product can no longer be searched for carries
+/// <see cref="ProductPriceTrackingStatus.AwaitingProductDetails"/> with no
+/// <see cref="MasterProduct"/>, and <see cref="TrackRefusal"/> - the same eligibility sentence - is
+/// what says why and how to resume it. Nothing else is needed: the two values already answer "is it
+/// searched for?" and "what is stopping it?" without a second flag that could disagree with
+/// them.</para>
+///
 /// <para><strong>What it says about the shared catalogue is a name and a size.</strong>
 /// <see cref="MasterProduct"/> is present only while the mapping is matched, and carries only that
 /// master product's name and size - the reviewed limit of issue #938's platform-table read. Nothing

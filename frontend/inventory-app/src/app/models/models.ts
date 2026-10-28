@@ -20,15 +20,18 @@ export interface ProductGstRule {
 
 /**
  * Where one of the business's products has got to in the shared supplier price catalogue (backend
- * `Inventory.Domain.PriceCatalogue.ProductPriceTrackingStatus`, issue #938 of parent #817). The four
+ * `Inventory.Domain.PriceCatalogue.ProductPriceTrackingStatus`, issue #938 of parent #817). The five
  * states are answers, never labels on each other: `NotFound` is "looked for and not found", which is
- * a recorded outcome rather than a gap.
+ * a recorded outcome rather than a gap, and `AwaitingProductDetails` is a mapping paused because the
+ * product's own name or unit label can no longer be searched for - it names no catalogue product and
+ * nothing is searched for it until the product is corrected.
  */
 export enum ProductPriceTrackingStatus {
   Requested = 1,
   AutoMatched = 2,
   Matched = 3,
-  NotFound = 4
+  NotFound = 4,
+  AwaitingProductDetails = 5
 }
 
 /**

@@ -156,7 +156,7 @@ public class ProductPriceTrackingSwitchPolicyTests
 
         Assert.NotNull(refresh);
         Assert.Equal(ProductPriceTrackingStatus.Requested, refresh.Status);
-        Assert.Equal("Coca-Cola Classic No Sugar", refresh.Text.SearchName);
+        Assert.Equal("Coca-Cola Classic No Sugar", refresh.Text!.SearchName);
         Assert.Equal("375mL", refresh.Text.UnitLabel);
         Assert.Equal(
             PriceCatalogueWaitingKey.For("Coca-Cola Classic No Sugar", "375mL"),
@@ -176,7 +176,7 @@ public class ProductPriceTrackingSwitchPolicyTests
 
         Assert.NotNull(refresh);
         Assert.Equal(ProductPriceTrackingStatus.Requested, refresh.Status);
-        Assert.Equal("600mL", refresh.Text.UnitLabel);
+        Assert.Equal("600mL", refresh.Text!.UnitLabel);
     }
 
     /// <summary>
@@ -215,7 +215,7 @@ public class ProductPriceTrackingSwitchPolicyTests
 
         Assert.NotNull(refresh);
         Assert.Equal(ProductPriceTrackingStatus.Requested, refresh.Status);
-        Assert.Equal("1.25L", refresh.Text.UnitLabel);
+        Assert.Equal("1.25L", refresh.Text!.UnitLabel);
         Assert.Equal(
             PriceCatalogueWaitingKey.For("Coca-Cola Classic", "1.25L"),
             refresh.Text.WaitingKey);
@@ -251,30 +251,152 @@ public class ProductPriceTrackingSwitchPolicyTests
             productName: "Coca-Cola Classic No Sugar",
             productUnit: "600mL"));
 
+    #endregion
+
+    #region An edit that leaves the product unsearchable (repaired on review of #938)
+
     /// <summary>
-    /// Text the capture cannot store - a product renamed to something longer than the search-name
-    /// limit - refreshes nothing rather than refusing the product edit. Changing the product's own
-    /// fields and their rules is out of this issue's scope (#895), and a mapping keeping the text it
-    /// was created with is strictly better than failing an unrelated catalogue edit.
+    /// The repair: a <strong>matched</strong> product relabelled to the generic <c>"unit"</c> is
+    /// suspended rather than left matched. The mapping carries
+    /// <see cref="ProductPriceTrackingStatus.AwaitingProductDetails"/> - which clears the master
+    /// product and the match source, so the master product it was matched to can no longer supply
+    /// prices for the size the product no longer has - and no text, because there is none this rule
+    /// would store. It holds for an automatic match and a decided one alike.
+    ///
+    /// <para>This test replaced the earlier
+    /// <c>A_product_edited_to_the_generic_unit_label_refreshes_nothing</c>, which asserted the
+    /// behaviour the review found wrong: the rule intentionally changed, it was not weakened.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(ProductPriceTrackingStatus.AutoMatched)]
+    [InlineData(ProductPriceTrackingStatus.Matched)]
+    public void Relabelling_a_matched_product_to_the_generic_unit_label_suspends_the_mapping(
+        ProductPriceTrackingStatus matched)
+    {
+        var refresh = ProductPriceTrackingPolicy.RefreshFor(
+            matched,
+            storedSearchName: "Coca-Cola Classic",
+            storedUnitLabel: "375mL",
+            productName: "Coca-Cola Classic",
+            productUnit: "unit");
+
+        Assert.NotNull(refresh);
+        Assert.Equal(ProductPriceTrackingStatus.AwaitingProductDetails, refresh.Status);
+        Assert.Null(refresh.Text);
+    }
+
+    /// <summary>
+    /// A mapping still awaiting a match is suspended too: its stored text is the size the product no
+    /// longer has, and <see cref="ProductPriceTrackingStatus.Requested"/> is exactly what the
+    /// collector work list is a list of - so leaving it there would keep searching for a product the
+    /// business does not have.
+    /// </summary>
+    [Theory]
+    [InlineData("unit")]
+    [InlineData("Unit")]
+    [InlineData("  unit  ")]
+    public void Relabelling_a_waiting_product_to_the_generic_unit_label_suspends_the_mapping(
+        string productUnit)
+    {
+        var refresh = ProductPriceTrackingPolicy.RefreshFor(
+            ProductPriceTrackingStatus.Requested,
+            storedSearchName: "Coca-Cola Classic",
+            storedUnitLabel: "375mL",
+            productName: "Coca-Cola Classic",
+            productUnit);
+
+        Assert.NotNull(refresh);
+        Assert.Equal(ProductPriceTrackingStatus.AwaitingProductDetails, refresh.Status);
+        Assert.Null(refresh.Text);
+    }
+
+    /// <summary>
+    /// And so is text the capture cannot store for any other reason - a product renamed to something
+    /// longer than the search-name limit. One rule, one answer: whatever makes the product
+    /// unsearchable suspends the mapping instead of leaving a stale one standing.
     /// </summary>
     [Fact]
-    public void Text_the_capture_cannot_store_refreshes_nothing() =>
-        Assert.Null(ProductPriceTrackingPolicy.RefreshFor(
+    public void A_name_the_capture_cannot_store_suspends_the_mapping()
+    {
+        var refresh = ProductPriceTrackingPolicy.RefreshFor(
             ProductPriceTrackingStatus.Requested,
             storedSearchName: "Coca-Cola Classic",
             storedUnitLabel: "375mL",
             productName: new string('x', ProductPriceTrackingPolicy.MaxSearchNameLength + 1),
-            productUnit: "375mL"));
+            productUnit: "375mL");
+
+        Assert.NotNull(refresh);
+        Assert.Equal(ProductPriceTrackingStatus.AwaitingProductDetails, refresh.Status);
+        Assert.Null(refresh.Text);
+    }
 
     /// <summary>
-    /// A product edited to the generic label is the same case: the mapping keeps what it has. The
-    /// generic label is a rule about turning tracking <em>on</em>, and refusing a product edit over an
-    /// existing mapping would be changing the unit label rules of #895.
+    /// A suspended mapping whose product is still unsearchable is left exactly as it is: there is
+    /// nothing to change, and rewriting the row on every save of the product would record a change
+    /// that did not happen.
     /// </summary>
     [Fact]
-    public void A_product_edited_to_the_generic_unit_label_refreshes_nothing() =>
+    public void A_further_edit_leaves_a_suspended_mapping_as_it_is() =>
         Assert.Null(ProductPriceTrackingPolicy.RefreshFor(
-            ProductPriceTrackingStatus.Requested,
+            ProductPriceTrackingStatus.AwaitingProductDetails,
+            storedSearchName: "Coca-Cola Classic",
+            storedUnitLabel: "375mL",
+            productName: "Coke Classic",
+            productUnit: "unit"));
+
+    /// <summary>
+    /// The other half of the repair: correcting the product captures its <em>current</em> name and
+    /// unit label and returns the mapping to awaiting a match, so matching may happen again - against
+    /// the new size, never against the master product the suspension cleared.
+    /// </summary>
+    [Fact]
+    public void Correcting_the_product_returns_a_suspended_mapping_to_awaiting_a_match()
+    {
+        var refresh = ProductPriceTrackingPolicy.RefreshFor(
+            ProductPriceTrackingStatus.AwaitingProductDetails,
+            storedSearchName: "Coca-Cola Classic",
+            storedUnitLabel: "375mL",
+            productName: "Coca-Cola Classic No Sugar",
+            productUnit: "1.25L");
+
+        Assert.NotNull(refresh);
+        Assert.Equal(ProductPriceTrackingStatus.Requested, refresh.Status);
+        Assert.Equal("Coca-Cola Classic No Sugar", refresh.Text!.SearchName);
+        Assert.Equal("1.25L", refresh.Text.UnitLabel);
+        Assert.Equal(
+            PriceCatalogueWaitingKey.For("Coca-Cola Classic No Sugar", "1.25L"),
+            refresh.Text.WaitingKey);
+    }
+
+    /// <summary>
+    /// Even when the corrected text is the text the mapping was suspended with: the status itself is
+    /// the change, and the match the mapping once had was invalidated rather than remembered. A
+    /// "nothing changed" answer here would leave the mapping paused forever.
+    /// </summary>
+    [Fact]
+    public void Correcting_the_product_back_to_the_stored_text_still_resumes_the_mapping()
+    {
+        var refresh = ProductPriceTrackingPolicy.RefreshFor(
+            ProductPriceTrackingStatus.AwaitingProductDetails,
+            storedSearchName: "Coca-Cola Classic",
+            storedUnitLabel: "375mL",
+            productName: "Coca-Cola Classic",
+            productUnit: "375mL");
+
+        Assert.NotNull(refresh);
+        Assert.Equal(ProductPriceTrackingStatus.Requested, refresh.Status);
+        Assert.Equal("375mL", refresh.Text!.UnitLabel);
+    }
+
+    /// <summary>
+    /// A <see cref="ProductPriceTrackingStatus.NotFound"/> mapping is still left alone, generic label
+    /// or not: it names no master product and the work list does not send it, so there is nothing
+    /// stale about it to invalidate - which is why the suspension does not reach it.
+    /// </summary>
+    [Fact]
+    public void An_edit_to_the_generic_unit_label_leaves_a_not_found_mapping_alone() =>
+        Assert.Null(ProductPriceTrackingPolicy.RefreshFor(
+            ProductPriceTrackingStatus.NotFound,
             storedSearchName: "Coca-Cola Classic",
             storedUnitLabel: "375mL",
             productName: "Coca-Cola Classic",

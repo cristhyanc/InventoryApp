@@ -194,8 +194,11 @@ describe('ProductPriceTrackingComponent', () => {
 
     /**
      * A product tracked before its unit label was made generic must still be untrackable, or the
-     * business would be stuck with a search it cannot withdraw. The reason is not shown either: it
-     * is a reason not to start, and this product already has.
+     * business would be stuck with a search it cannot withdraw. The reason **is** shown now (issue
+     * #938, repaired on review): for a tracked product it is why the mapping is paused and how to
+     * resume it, which is the one thing a business needs to read in that state. The earlier
+     * assertion that it stayed hidden while tracking was on was the behaviour the review found
+     * wrong, so it changed deliberately rather than being dropped.
      */
     it('still lets a tracked product be turned off when it could no longer be turned on', async () => {
       const { switchControl, toggle, text, setPriceTracking } = await render(
@@ -212,7 +215,7 @@ describe('ProductPriceTrackingComponent', () => {
       );
 
       expect(switchControl().disabled).toBe(false);
-      expect(text('price-tracking-refusal')).toBeNull();
+      expect(text('price-tracking-refusal')).toBe(UNIT_LABEL_REFUSAL);
       toggle();
       expect(setPriceTracking).toHaveBeenCalledWith(42, false);
     });
@@ -267,6 +270,60 @@ describe('ProductPriceTrackingComponent', () => {
 
       expect(text('price-tracking-status')).toBe('Status: Not found');
       expect(text('price-tracking-match')).toBeNull();
+    });
+
+    /**
+     * The repair of this issue's review finding, as the page shows it: a mapping paused because the
+     * product's unit label was replaced by the generic one says it is paused, names no matched
+     * product, prints no "Searched for as" line - nothing is being searched for, and the text the
+     * row still holds is the product's previous size - and carries the server's own sentence saying
+     * how to resume it. Turning the switch off stays available.
+     */
+    it('reads a paused mapping as paused, with the reason and no search text', async () => {
+      const { text, switchControl } = await render(
+        jest.fn(() =>
+          of(
+            state({
+              tracked: true,
+              status: ProductPriceTrackingStatus.AwaitingProductDetails,
+              searchName: 'Coca-Cola Classic',
+              unitLabel: '375mL',
+              canTrack: false,
+              trackRefusal: UNIT_LABEL_REFUSAL
+            })
+          )
+        )
+      );
+
+      expect(text('price-tracking-status')).toBe('Status: Paused - this product cannot be searched for');
+      expect(text('price-tracking-match')).toBeNull();
+      expect(text('price-tracking-search-text')).toBeNull();
+      expect(text('price-tracking-refusal')).toBe(UNIT_LABEL_REFUSAL);
+      expect(switchControl().disabled).toBe(false);
+    });
+
+    /**
+     * And once the product is corrected, the same panel reads as awaiting a match again, with the
+     * product's new size as the search text and nothing left of the match the suspension cleared.
+     */
+    it('reads a corrected mapping as awaiting a match with the new search text', async () => {
+      const { text } = await render(
+        jest.fn(() =>
+          of(
+            state({
+              tracked: true,
+              status: ProductPriceTrackingStatus.Requested,
+              searchName: 'Coca-Cola Classic',
+              unitLabel: '1.25L'
+            })
+          )
+        )
+      );
+
+      expect(text('price-tracking-status')).toBe('Status: Awaiting match');
+      expect(text('price-tracking-match')).toBeNull();
+      expect(text('price-tracking-search-text')).toBe('Searched for as "Coca-Cola Classic 1.25L".');
+      expect(text('price-tracking-refusal')).toBeNull();
     });
 
     it('shows no status for a product that is not tracked', async () => {
