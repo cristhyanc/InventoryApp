@@ -693,9 +693,9 @@ public class PriceCollectorResultsTests
     /// accepted price it is, and does not move the listing's current price, its freshness or its
     /// last change backwards.
     ///
-    /// <para>Its band is the band of the price the listing currently holds - the latest reading
-    /// observed, which is the one the first batch accepted - and not of the price that reading
-    /// replaced.</para>
+    /// <para>Its band is the band of the price the listing held when the run started - not of the
+    /// reading the first batch accepted, which is this run's own evidence and never another of its
+    /// readings' band (<c>Delivery_order_and_batching_do_not_decide_which_price_is_current</c>).</para>
     /// </summary>
     [Fact]
     public async Task An_earlier_reading_delivered_in_a_later_batch_does_not_move_the_current_price()
@@ -726,9 +726,6 @@ public class PriceCollectorResultsTests
         var current = Assert.Single(
             (await fixture.AllObservationsAsync()).Where(row => row.PackPrice == 33m));
 
-        // 64 is inside the band of the 33 this run accepted (ceiling 66) and outside the band of
-        // the 30 it replaced (ceiling 60), so accepting it is what proves the band followed the
-        // listing's current accepted price rather than a stale one.
         var receipt = await SubmitAsync(
             fixture,
             runId,
@@ -736,11 +733,11 @@ public class PriceCollectorResultsTests
                 keyWorkItemId,
                 fixture.SupplierPresetId,
                 "SKU-30",
-                packPrice: 64m,
+                packPrice: 34m,
                 observedAtUtc: Observed.AddHours(-1)));
 
         var accepted = Assert.Single(receipt!.Accepted);
-        Assert.Equal(64m, (await fixture.AllObservationsAsync())
+        Assert.Equal(34m, (await fixture.AllObservationsAsync())
             .Single(row => row.Id == accepted.ObservationId)
             .PackPrice);
 
@@ -783,7 +780,7 @@ public class PriceCollectorResultsTests
                 keyWorkItemId,
                 fixture.SupplierPresetId,
                 "SKU-30",
-                packPrice: 64m,
+                packPrice: 34m,
                 observedAtUtc: Observed.AddHours(-1)));
 
         // Both are accepted prices, and both are stored.
@@ -794,6 +791,108 @@ public class PriceCollectorResultsTests
         Assert.Equal(current.Id, listing.LatestObservationId);
         Assert.Equal(Observed, listing.LastCheckedAtUtc);
         Assert.Equal(Observed, listing.LastPriceChangeAtUtc);
+    }
+
+    /// <summary>
+    /// The review of repair attempt 2: the same two readings must leave the same current price
+    /// whichever order they arrive in, in one batch or in two.
+    ///
+    /// <para>A confirmed listing whose price before the run was 30, and two searches of it in one
+    /// run: 20 read at 07:00 and 50 read at 08:00. Judged against each other, delivery order decided
+    /// the answer - 20 first made 50 fall outside 20's band and flagged the listing with 20 current,
+    /// while 50 first made 20 fall outside 50's band and flagged it with 50 current. Judged against
+    /// the price the run found (band 15 to 60), both are accepted in every order and the latest
+    /// observed is current.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Delivery_order_and_batching_do_not_decide_which_price_is_current(
+        bool laterFirst,
+        bool splitBatches)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var (runId, listingId, earlier, later) = await SeedTwoReadingsOfOneConfirmedListingAsync(
+            fixture,
+            earlierPrice: 20m,
+            laterPrice: 50m);
+
+        var receipts = await DeliverAsync(fixture, runId, earlier, later, laterFirst, splitBatches);
+
+        Assert.Equal(2, receipts.Sum(receipt => receipt.Accepted.Count));
+        Assert.All(receipts, receipt => Assert.Empty(receipt.SentToReview));
+
+        var listing = await fixture.ListingAsync(listingId);
+        var current = (await fixture.AllObservationsAsync()).Single(row => row.PackPrice == 50m);
+        Assert.Equal(SupplierListingMatchStatus.Confirmed, listing.MatchStatus);
+        Assert.Equal(current.Id, listing.LatestObservationId);
+        Assert.Equal(Observed, listing.LastCheckedAtUtc);
+        Assert.Equal(Observed, listing.LastPriceChangeAtUtc);
+        Assert.Empty(await fixture.AllPendingObservationsAsync());
+    }
+
+    /// <summary>
+    /// And a reading that fails the band does not hold back another reading of the same run: the
+    /// in-band one is accepted and the out-of-band one is sent to review and held, in every order
+    /// and however the two are batched - the flag one row raises is not the status another row of
+    /// the run is judged against.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task A_reading_sent_to_review_does_not_decide_another_reading_of_the_same_run(
+        bool laterFirst,
+        bool splitBatches)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var (runId, listingId, earlier, later) = await SeedTwoReadingsOfOneConfirmedListingAsync(
+            fixture,
+            earlierPrice: 20m,
+            laterPrice: 70m);
+
+        var receipts = await DeliverAsync(fixture, runId, earlier, later, laterFirst, splitBatches);
+
+        var accepted = Assert.Single(receipts.SelectMany(receipt => receipt.Accepted));
+        Assert.Equal(earlier.WorkItemId, accepted.WorkItemId);
+
+        var flagged = Assert.Single(receipts.SelectMany(receipt => receipt.SentToReview));
+        Assert.Equal(later.WorkItemId, flagged.WorkItemId);
+        Assert.Equal(PriceCollectorResultPolicy.PriceOutsideBandReason, flagged.Reason);
+
+        var listing = await fixture.ListingAsync(listingId);
+        var current = (await fixture.AllObservationsAsync()).Single(row => row.PackPrice == 20m);
+        Assert.Equal(SupplierListingMatchStatus.NeedsReview, listing.MatchStatus);
+        Assert.Equal(current.Id, listing.LatestObservationId);
+        Assert.Equal(Observed.AddHours(-1), listing.LastCheckedAtUtc);
+
+        var held = Assert.Single(await fixture.AllPendingObservationsAsync());
+        Assert.Equal(70m, held.PackPrice);
+    }
+
+    /// <summary>
+    /// A run that moved the price and then re-read it unchanged changed it at the first of the two
+    /// instants, whichever of them was delivered first.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_changed_price_read_twice_records_the_change_at_its_first_reading(bool laterFirst)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var (runId, listingId, earlier, later) = await SeedTwoReadingsOfOneConfirmedListingAsync(
+            fixture,
+            earlierPrice: 33m,
+            laterPrice: 33m);
+
+        await DeliverAsync(fixture, runId, earlier, later, laterFirst, splitBatches: true);
+
+        var listing = await fixture.ListingAsync(listingId);
+        Assert.Equal(Observed, listing.LastCheckedAtUtc);
+        Assert.Equal(Observed.AddHours(-1), listing.LastPriceChangeAtUtc);
     }
 
     /// <summary>
@@ -838,6 +937,71 @@ public class PriceCollectorResultsTests
         Assert.Equal(Observed, reading.ObservedAtUtc);
         Assert.Equal(masterWorkItemId, reading.PriceCollectorWorkItemId);
         Assert.Empty(await fixture.AllObservationsAsync());
+    }
+
+    /// <summary>
+    /// A confirmed listing whose accepted price before the run was 30, and one reading of it from
+    /// each of the run's two searches: the earlier at 07:00 and the later at 08:00.
+    /// </summary>
+    private static async Task<(
+        long RunId,
+        long ListingId,
+        PriceCollectorResultRowSubmission Earlier,
+        PriceCollectorResultRowSubmission Later)> SeedTwoReadingsOfOneConfirmedListingAsync(
+        PriceCatalogueFixture fixture,
+        decimal earlierPrice,
+        decimal laterPrice)
+    {
+        var (runId, masterWorkItemId, keyWorkItemId, cola) = await SeedTwoSearchesOfOneProductAsync(
+            fixture);
+
+        var listingId = await fixture.SeedIdentifiedListingAsync(
+            cola,
+            waitingKey: null,
+            "SKU-30",
+            SupplierListingMatchStatus.Confirmed);
+
+        var earlierRunId = await fixture.SeedRunAsync(RunStarted.AddDays(-1), null);
+        await fixture.SeedAcceptedPriceAsync(
+            listingId,
+            earlierRunId,
+            30m,
+            RunStarted.AddDays(-1),
+            SupplierPriceBasis.ExclusiveOfGst);
+
+        return (
+            runId,
+            listingId,
+            Row(
+                keyWorkItemId,
+                fixture.SupplierPresetId,
+                "SKU-30",
+                packPrice: earlierPrice,
+                observedAtUtc: Observed.AddHours(-1)),
+            Row(masterWorkItemId, fixture.SupplierPresetId, "SKU-30", packPrice: laterPrice));
+    }
+
+    /// <summary>Delivers two rows in the order and the batching a test names, and returns every receipt.</summary>
+    private static async Task<List<PriceCollectorResultReceipt>> DeliverAsync(
+        PriceCatalogueFixture fixture,
+        long runId,
+        PriceCollectorResultRowSubmission earlier,
+        PriceCollectorResultRowSubmission later,
+        bool laterFirst,
+        bool splitBatches)
+    {
+        var (first, second) = laterFirst ? (later, earlier) : (earlier, later);
+
+        if (!splitBatches)
+        {
+            return [(await SubmitAsync(fixture, runId, first, second))!];
+        }
+
+        return
+        [
+            (await SubmitAsync(fixture, runId, first))!,
+            (await SubmitAsync(fixture, runId, second))!,
+        ];
     }
 
     /// <summary>

@@ -113,4 +113,67 @@ public class SupplierListingPriceStatePolicyTests
             SupplierListingPriceStatePolicy.PriceChangeNeedsObservationMessage,
             refusal.Message);
     }
+
+    /// <summary>
+    /// A run's accepted readings are replayed in the order they were observed, so the state they
+    /// leave is the same whichever order they were delivered in: the latest observed is current and
+    /// the change is the first reading of the trailing stretch at that price.
+    /// </summary>
+    [Fact]
+    public void A_runs_readings_are_replayed_in_observed_order_whatever_order_they_arrive_in()
+    {
+        AcceptedSupplierReading earlier = new(7, Checked, 20m);
+        AcceptedSupplierReading later = new(3, Checked.AddHours(1), 50m);
+
+        var forwards = SupplierListingPriceStatePolicy.StateAfterRun(30m, Checked.AddDays(-1), [earlier, later]);
+        var backwards = SupplierListingPriceStatePolicy.StateAfterRun(30m, Checked.AddDays(-1), [later, earlier]);
+
+        Assert.Equal(forwards, backwards);
+        Assert.Equal(new SupplierListingPriceState(3, Checked.AddHours(1), Checked.AddHours(1)), forwards);
+    }
+
+    /// <summary>A price moved and then re-read unchanged changed at the first of the two instants.</summary>
+    [Fact]
+    public void A_price_moved_then_re_read_changed_at_its_first_reading()
+    {
+        var state = SupplierListingPriceStatePolicy.StateAfterRun(
+            30m,
+            Checked.AddDays(-1),
+            [new(2, Checked.AddHours(1), 33m), new(1, Checked, 33m)]);
+
+        Assert.Equal(new SupplierListingPriceState(2, Checked.AddHours(1), Checked), state);
+    }
+
+    /// <summary>A run that only re-read the price it started with leaves the change where it was.</summary>
+    [Fact]
+    public void A_run_that_found_the_same_price_leaves_the_change_where_it_was()
+    {
+        var state = SupplierListingPriceStatePolicy.StateAfterRun(
+            30m,
+            Checked.AddDays(-3),
+            [new(4, Checked, 30m)]);
+
+        Assert.Equal(new SupplierListingPriceState(4, Checked, Checked.AddDays(-3)), state);
+    }
+
+    /// <summary>A listing's first accepted price is its first change.</summary>
+    [Fact]
+    public void A_first_accepted_price_is_a_change()
+    {
+        var state = SupplierListingPriceStatePolicy.StateAfterRun(null, null, [new(9, Checked, 30m)]);
+
+        Assert.Equal(new SupplierListingPriceState(9, Checked, Checked), state);
+    }
+
+    /// <summary>Of two readings bearing the same instant, the one recorded first stands.</summary>
+    [Fact]
+    public void Of_two_readings_at_one_instant_the_one_recorded_first_is_current()
+    {
+        var state = SupplierListingPriceStatePolicy.StateAfterRun(
+            30m,
+            Checked.AddDays(-1),
+            [new(6, Checked, 31m), new(5, Checked, 32m)]);
+
+        Assert.Equal(5, state.LatestObservationId);
+    }
 }

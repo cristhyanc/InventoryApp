@@ -288,4 +288,25 @@ public class PriceCollectorResultPolicyTests
             observed,
             packPrice,
             lastAcceptedPackPrice);
+
+    /// <summary>
+    /// The status a listing held when the run started: a review transition this run made is undone
+    /// in the reading, and anything else is the status it holds now.
+    /// </summary>
+    [Theory]
+    [InlineData(SupplierListingMatchStatus.NeedsReview, true, SupplierListingMatchStatus.Confirmed)]
+    [InlineData(SupplierListingMatchStatus.Proposed, true, SupplierListingMatchStatus.Rejected)]
+    [InlineData(SupplierListingMatchStatus.NeedsReview, false, SupplierListingMatchStatus.NeedsReview)]
+    [InlineData(SupplierListingMatchStatus.Proposed, false, SupplierListingMatchStatus.Proposed)]
+    [InlineData(SupplierListingMatchStatus.Confirmed, true, SupplierListingMatchStatus.Confirmed)]
+    [InlineData(SupplierListingMatchStatus.Rejected, false, SupplierListingMatchStatus.Rejected)]
+    public void The_status_at_run_start_undoes_only_this_runs_review_transitions(
+        SupplierListingMatchStatus current,
+        bool sentToReviewThisRun,
+        SupplierListingMatchStatus expected)
+    {
+        Assert.Equal(
+            expected,
+            PriceCollectorResultPolicy.StatusAtRunStart(current, sentToReviewThisRun));
+    }
 }

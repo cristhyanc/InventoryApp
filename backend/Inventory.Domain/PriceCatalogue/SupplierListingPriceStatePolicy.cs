@@ -94,6 +94,65 @@ public static class SupplierListingPriceStatePolicy
         DateTime candidateObservedAtUtc) =>
         currentObservedAtUtc is not { } current || candidateObservedAtUtc > current;
 
+    /// <summary>
+    /// The price-check state a listing is left in by the readings one collector run has accepted for
+    /// it: the latest accepted observation, its last successful check and its last price change.
+    ///
+    /// <para><strong>A replay of the run's timeline, not of its deliveries.</strong> The readings
+    /// are walked in the order they were <em>observed</em>, starting from the price the listing held
+    /// before the run, so the answer depends only on which readings the run accepted and never on
+    /// how the collector split or ordered them. The latest observed reading is the current one
+    /// (<see cref="ReplacesCurrentReading"/>: of two bearing the same instant, the one recorded
+    /// first stands); the change instant is the first reading of the trailing stretch at that price,
+    /// so a run that moved a price and then re-read it unchanged records the change at the first of
+    /// the two instants, and a run that only re-read the price it started with leaves the change
+    /// where it was.</para>
+    /// </summary>
+    /// <param name="priceBeforeRun">
+    /// The pack price of the listing's latest accepted observation from before this run, or
+    /// <see langword="null"/> while it held none.
+    /// </param>
+    /// <param name="priceChangeBeforeRunUtc">
+    /// The listing's last price change as it stands - which is its value from before the run
+    /// whenever the run found nothing but that price.
+    /// </param>
+    /// <param name="runReadings">Every reading this run has accepted for the listing. At least one.</param>
+    public static SupplierListingPriceState StateAfterRun(
+        decimal? priceBeforeRun,
+        DateTime? priceChangeBeforeRunUtc,
+        IReadOnlyCollection<AcceptedSupplierReading> runReadings)
+    {
+        ArgumentNullException.ThrowIfNull(runReadings);
+
+        if (runReadings.Count == 0)
+        {
+            throw new ArgumentException("A run's state needs at least one accepted reading.", nameof(runReadings));
+        }
+
+        // Observed order, and among equal instants the reading recorded first walked last, so it is
+        // the one that stands.
+        var timeline = runReadings
+            .OrderBy(reading => reading.ObservedAtUtc)
+            .ThenByDescending(reading => reading.ObservationId);
+
+        var price = priceBeforeRun;
+        var changedAtUtc = priceChangeBeforeRunUtc;
+        AcceptedSupplierReading? current = null;
+
+        foreach (var reading in timeline)
+        {
+            if (price != reading.PackPrice)
+            {
+                changedAtUtc = reading.ObservedAtUtc;
+            }
+
+            price = reading.PackPrice;
+            current = reading;
+        }
+
+        return new SupplierListingPriceState(current!.ObservationId, current.ObservedAtUtc, changedAtUtc);
+    }
+
     /// <summary>Refuses a listing whose three price-check facts do not describe one coherent state.</summary>
     /// <exception cref="DomainValidationException">
     /// The observation and the check instant disagree, or a price change is recorded with no
@@ -115,3 +174,12 @@ public static class SupplierListingPriceStatePolicy
         }
     }
 }
+
+/// <summary>One accepted reading of a supplier listing, as <see cref="SupplierListingPriceStatePolicy.StateAfterRun"/> replays it.</summary>
+public sealed record AcceptedSupplierReading(long ObservationId, DateTime ObservedAtUtc, decimal PackPrice);
+
+/// <summary>A listing's three price-check facts (<see cref="SupplierListingPriceStatePolicy"/>).</summary>
+public sealed record SupplierListingPriceState(
+    long LatestObservationId,
+    DateTime LastCheckedAtUtc,
+    DateTime? LastPriceChangeAtUtc);

@@ -306,6 +306,40 @@ public static class PriceCollectorResultPolicy
     }
 
     /// <summary>
+    /// The match status a listing held when the current run started, recovered from the status it
+    /// holds now and from whether this run has already sent it to review.
+    ///
+    /// <para><strong>Every row of one run is judged against the listing as the run found it</strong>,
+    /// never against what an earlier row of the same run did to it. The collector chooses how it
+    /// splits a run into batches and in which order it sends them, and two work items of one run can
+    /// report the same listing; if the first row to arrive could flag the listing and so turn the
+    /// second into a held reading, delivery order would decide which reading became a price. Nothing
+    /// in a run moves a listing except <see cref="DecideForKnownListing"/>'s two review transitions -
+    /// <see cref="SupplierListingMatchStatus.Confirmed"/> to
+    /// <see cref="SupplierListingMatchStatus.NeedsReview"/> and
+    /// <see cref="SupplierListingMatchStatus.Rejected"/> to
+    /// <see cref="SupplierListingMatchStatus.Proposed"/> - and both are recorded as
+    /// <see cref="PriceCollectorRowOutcome.SentToReview"/>, so the status the run started from is
+    /// the one those transitions came from. A listing this run created started as nothing and is
+    /// treated as the proposal it became, which decides every later row of it exactly as a new
+    /// listing would.</para>
+    /// </summary>
+    /// <param name="currentStatus">The match status the listing holds now.</param>
+    /// <param name="sentToReviewThisRun">
+    /// Whether a row of this run has already been recorded as
+    /// <see cref="PriceCollectorRowOutcome.SentToReview"/> for this listing.
+    /// </param>
+    public static SupplierListingMatchStatus StatusAtRunStart(
+        SupplierListingMatchStatus currentStatus,
+        bool sentToReviewThisRun) =>
+        (currentStatus, sentToReviewThisRun) switch
+        {
+            (SupplierListingMatchStatus.NeedsReview, true) => SupplierListingMatchStatus.Confirmed,
+            (SupplierListingMatchStatus.Proposed, true) => SupplierListingMatchStatus.Rejected,
+            _ => currentStatus,
+        };
+
+    /// <summary>
     /// What to do about a row for a listing this catalogue has never held: record it as the
     /// collector's own proposal, and hold its price.
     ///
