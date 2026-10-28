@@ -243,7 +243,7 @@ describe('Dashboard without a usable provider (issue #727)', () => {
       alerts$: of(storageOnlyAlerts([product()]))
     });
 
-    expect(cardLabels(host)).toEqual(['Needs ordering', 'Inventory']);
+    expect(cardLabels(host)).toEqual(['Products needing ordering', 'Business-owned inventory at cost']);
   });
 
   it('hides the Sites and Machines sections and leaves reorder alerts as the main section', async () => {
@@ -252,7 +252,7 @@ describe('Dashboard without a usable provider (issue #727)', () => {
       alerts$: of(storageOnlyAlerts([product()]))
     });
 
-    expect(sectionTitles(host)).toEqual(['⚠️ Reorder Alerts']);
+    expect(sectionTitles(host)).toEqual(['Reorder priorities']);
     expect(host.textContent).not.toContain('No sites available yet');
     expect(host.textContent).not.toContain('No machines available yet');
   });
@@ -329,8 +329,8 @@ describe('Dashboard for a feature Nayax has not granted (issue #727)', () => {
   it('keeps every card and section, because the connection itself is usable', async () => {
     const host = await renderDashboard({ summary$: of(PERMISSION_NOT_GRANTED_SUMMARY) });
 
-    expect(cardLabels(host)).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(cardLabels(host)).toEqual(['Sales this week', 'Machines needing refill', 'Products needing ordering', 'Business-owned inventory at cost']);
+    expect(sectionTitles(host)).toEqual(['Site performance', 'Machine performance', 'Reorder priorities']);
   });
 
   it('shows the permission message on the Needs refill card, not the support-view sentence', async () => {
@@ -422,7 +422,7 @@ describe('Dashboard failed requests are never an empty state (issue #727)', () =
     const host = await renderDashboard({
       summary$: throwError(() => new Error('network error')) as Observable<DashboardSummary>
     });
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(sectionTitles(host)).toEqual(['Site performance', 'Machine performance', 'Reorder priorities']);
     expect(host.textContent).toContain('The Dashboard summary could not be loaded');
   });
 
@@ -440,8 +440,8 @@ describe('Dashboard in a support session keeps its existing behaviour (issue #72
   it('keeps every card and section and the support-view sentence', async () => {
     const host = await renderDashboard({ summary$: of(SUPPORT_VIEW_SUMMARY), sessionActive: of(true) });
 
-    expect(cardLabels(host)).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(cardLabels(host)).toEqual(['Sales this week', 'Machines needing refill', 'Products needing ordering', 'Business-owned inventory at cost']);
+    expect(sectionTitles(host)).toEqual(['Site performance', 'Machine performance', 'Reorder priorities']);
     expect(host.textContent).toContain('Nayax is not available in support view');
   });
 
@@ -466,8 +466,8 @@ describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
   it('shows all four cards, all three sections and the machine-need column', async () => {
     const host = await renderDashboard({ alerts$: of(machineAwareAlerts([product()])) });
 
-    expect(cardLabels(host)).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(cardLabels(host)).toEqual(['Sales this week', 'Machines needing refill', 'Products needing ordering', 'Business-owned inventory at cost']);
+    expect(sectionTitles(host)).toEqual(['Site performance', 'Machine performance', 'Reorder priorities']);
 
     const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
     expect(headers).toContain('Machine need');

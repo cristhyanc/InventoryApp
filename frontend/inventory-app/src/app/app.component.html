@@ -125,6 +125,25 @@
     <footer class="border-t border-md-gray-200 px-4 py-2 text-center text-md-badge value-muted sm:px-6">
       Version {{ appVersion }}
     </footer>
+
+    <!--
+      The narrow layout's bottom navigation (issue #972): shortcuts out of the member's own menu and
+      More, which opens that whole menu as a sheet. It is not rendered on a wide layout, where the
+      sidebar is always on the page.
+    -->
+    @if (isSidebarDrawer) {
+      <!--
+        The bar is fixed over the bottom of the window, so the page ends with room for it: nothing
+        the page or the footer renders is ever hidden beneath it.
+      -->
+      <div aria-hidden="true" class="h-[calc(4.5rem+env(safe-area-inset-bottom))] shrink-0"></div>
+      <app-bottom-nav
+        [businessNavigation]="businessNavigation"
+        [moreOpen]="isSidebarOpen"
+        [menuId]="sidebarId"
+        (moreRequested)="openSidebarFrom($event)"
+      />
+    }
   </div>
 }
 

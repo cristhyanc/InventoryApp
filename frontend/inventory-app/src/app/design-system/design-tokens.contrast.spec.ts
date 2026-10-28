@@ -429,8 +429,9 @@ describe('styles.scss', () => {
 // ---- Public landing page (issue #954) -------------------------------------------------------
 
 /**
- * The landing page's `rr` scale, from the owner-approved Restockroo design. Only
- * `public/landing/` and the `rr-` button classes use it; these are the text pairs they render.
+ * The landing page's `rr` scale, from the owner-approved Restockroo design. `public/landing/`, the
+ * `rr-` button classes and, since issue #972, the Dashboard and the shell's navigation use it;
+ * these are the text pairs they render.
  */
 describe('landing page tokens (issue #954)', () => {
   function rr(name: string): string {
@@ -469,6 +470,10 @@ describe('landing page tokens (issue #954)', () => {
     ['low-stock figures on white', () => rr('danger-text'), () => WHITE],
     ['in-stock figures on white', () => rr('ok-text'), () => WHITE],
     ['the low-stock metric icon on white', () => rr('warn-text'), () => WHITE],
+    // The Dashboard and the authenticated navigation (issue #972).
+    ['dashboard values and navigation labels on white', () => rr('navy'), () => WHITE],
+    ['navigation labels on the hovered or active-group surface', () => rr('navy'), () => rr('surface')],
+    ['the Needs attention heading on its panel', () => rr('navy'), () => rr('warn-bg')],
   ];
 
   it.each(pairs)('%s reach WCAG AA 4.5:1', (_label, foreground, background) => {

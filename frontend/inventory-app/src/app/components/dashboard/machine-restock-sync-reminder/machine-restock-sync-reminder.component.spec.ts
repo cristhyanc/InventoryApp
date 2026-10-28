@@ -98,7 +98,8 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
     const { host } = await render();
 
     expect(banner(host)).not.toBeNull();
-    expect(banner(host)?.textContent).toContain('Machine restock sync needs attention.');
+    expect(banner(host)?.textContent).toContain('Restock sync pending');
+    expect(banner(host)?.textContent).toContain("Recorded refills haven't been synced yet.");
     expect(banner(host)?.textContent).toContain('Avenue Hotel');
     expect(banner(host)?.textContent).toContain('last synced 7 days ago');
     expect(banner(host)?.textContent).toContain('Sync Restock');
