@@ -63,8 +63,8 @@ public sealed class CrossBusinessAccessException : Exception
 /// Since issue #849 the denied-scope rule has one reviewed exception, and it is narrower than the
 /// rule rather than a way around it: while <c>AppDbContext.BeginSupplierProvisioning</c> holds a
 /// lease, a denied scope may create <em>new <see cref="Supplier"/> rows of that one business</em> -
-/// the copies a newly approved business gets of the enabled platform supplier presets - and nothing
-/// else. See <see cref="EnforceSupplierProvisioning"/>.
+/// the copies a newly approved business gets of the platform supplier presets that serve it - and
+/// nothing else. See <see cref="EnforceSupplierProvisioning"/>.
 /// </summary>
 internal static class BusinessOwnershipEnforcer
 {

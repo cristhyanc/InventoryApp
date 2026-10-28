@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { GstClassification, Supplier, SupplierGstDefaults } from '../models/models';
+import { AvailableSupplierPreset, GstClassification, Supplier, SupplierGstDefaults } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface SupplierDto {
@@ -47,6 +47,25 @@ export class SupplierService {
    */
   getAllIncludingHidden(): Observable<Supplier[]> {
     return this.http.get<Supplier[]>(`${this.baseUrl}?includeHidden=true`);
+  }
+
+  /**
+   * The suppliers from the platform's list this business may add (issue #935): the enabled records
+   * that serve its own state and that it holds no copy of. The server decides both; this request
+   * carries no filter, no state and no business.
+   */
+  getAvailablePresets(): Observable<AvailableSupplierPreset[]> {
+    return this.http.get<AvailableSupplierPreset[]>(`${this.baseUrl}/available-presets`);
+  }
+
+  /**
+   * Adds one of them as this business's own linked copy (issue #935). The request carries the
+   * record's id and no body at all: its name and website are the platform's, so there is nothing
+   * for a client to send. A record this business already has answers `409`, and one it is not
+   * offered answers `404`.
+   */
+  addFromPreset(presetId: number): Observable<Supplier> {
+    return this.http.post<Supplier>(`${this.baseUrl}/available-presets/${presetId}`, null);
   }
 
   /**

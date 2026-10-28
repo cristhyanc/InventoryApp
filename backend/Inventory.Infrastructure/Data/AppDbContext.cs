@@ -79,7 +79,7 @@ public class AppDbContext : DbContext
     /// the platform administrator, who is a member of no business, so the request carries a denied
     /// <see cref="BusinessScope"/> and the enforcer refuses every tenant-owned write - which is what
     /// makes the platform-admin surface unable to touch a business's own data. The new business's own
-    /// copies of the enabled supplier presets are nevertheless tenant-owned rows that have to be
+    /// copies of the supplier presets that serve it are nevertheless tenant-owned rows that have to be
     /// written in that same transaction, because a business that was approved but did not get them
     /// would be a half-finished tenant. This is the narrow, reviewed exception rather than a
     /// relaxation of the rule: see docs/architecture.md § Supplier presets copied into an approved

@@ -189,6 +189,19 @@ public record SupplierDetailResponse(
     bool CanDelete);
 
 /// <summary>
+/// One platform supplier record this business may add, as <c>GET /api/suppliers/available</c>
+/// publishes it (issue #935): the id an add names, the name somebody reads, and the website that
+/// tells two similarly named suppliers apart.
+///
+/// <para>Three fields, deliberately. This is the one member-facing read of a platform table besides
+/// issue #873's single boolean, and what a record claims about its market, its price basis and its
+/// collection route (issue #931) is platform configuration a business has no use for - see
+/// docs/architecture.md § Tenant ownership. It carries no business id either: the business is the
+/// caller's own, resolved from their membership.</para>
+/// </summary>
+public record AvailableSupplierPresetResponse(int Id, string Name, string? Url);
+
+/// <summary>
 /// The body of <c>PUT /api/suppliers/{id}/not-used</c> (issue #934): the state the "Not used"
 /// switch is being set to. It carries nothing else - no name, no supplier id, no business - because
 /// this request decides one boolean about one row the route already named.

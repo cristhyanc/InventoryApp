@@ -115,6 +115,10 @@ public class SupportSessionRequestApiTests
     [InlineData("Inventory.Operate", "/api/categories")]
     [InlineData("Inventory.Operate", "/api/stock-history")]
     [InlineData("Purchasing.Operate", "/api/suppliers")]
+    // The "Available to add" list of issue #935. A platform record is about no business, so a
+    // supporter reading it learns nothing about the business they are looking at beyond which
+    // suggestions it has not taken up - and the add beside it is refused below.
+    [InlineData("Purchasing.Operate", "/api/suppliers/available-presets")]
     [InlineData("Purchasing.Operate", "/api/purchases")]
     [InlineData("Expenses.Manage", "/api/operating-expenses")]
     [InlineData("SiteCommissions.Manage", "/api/site-commissions/agreements")]
@@ -149,6 +153,9 @@ public class SupportSessionRequestApiTests
     // rule refuses it under the capability the session does grant, so a supporter cannot take a
     // business's supplier out of its pickers while looking at it.
     [InlineData("Purchasing.Operate", "PUT", "/api/suppliers/999999/not-used")]
+    // The "Available to add" add of issue #935, on the same terms: it declares no rule of its own,
+    // so the method rule is what stops somebody from outside the business giving it a supplier.
+    [InlineData("Purchasing.Operate", "POST", "/api/suppliers/available-presets/999999")]
     [InlineData("Expenses.Manage", "POST", "/api/operating-expenses")]
     [InlineData("Expenses.Manage", "PUT", "/api/operating-expenses/999999")]
     [InlineData("Expenses.Manage", "DELETE", "/api/operating-expenses/999999")]

@@ -227,6 +227,15 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<UpdateSupplier>();
         services.AddScoped<DeleteSupplier>();
         services.AddScoped<SetSupplierNotUsed>();
+
+        // The "Available to add" suppliers of issue #935: the platform records that serve this
+        // business's state and that it holds no copy of, and the one-click add that copies one.
+        services.AddScoped<ListAvailableSupplierPresets>();
+        services.AddScoped<AddSupplierFromPreset>();
+
+        // The same records as the top-up a business state change makes, which UpdateBusinessSettings
+        // runs inside its own write transaction.
+        services.AddScoped<AddMatchingSupplierPresets>();
         services.AddScoped<GetSupplierGstDefaults>();
         services.AddScoped<SetSupplierGstDefaults>();
         services.AddScoped<ListOperatingExpenses>();

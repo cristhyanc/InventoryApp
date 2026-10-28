@@ -89,6 +89,13 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Purchasing.Operate", "GET", "/api/purchases", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers/1/gst-defaults", "Operator,Manager,Owner" },
+        // Issue #935. The "Available to add" list is a read on the suppliers' own capability: it is
+        // the Suppliers page, and deciding which suppliers this business buys from is purchasing
+        // work. The add beside it declares the same capability and is safe to call here in both
+        // directions, because a platform record with this id does not exist: every role that holds
+        // the capability is answered 404 and writes nothing.
+        { "Purchasing.Operate", "GET", "/api/suppliers/available-presets", "Operator,Manager,Owner" },
+        { "Purchasing.Operate", "POST", $"/api/suppliers/available-presets/{MissingId}", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/supplierorders", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "POST", "/api/supplierorders", "Operator,Manager,Owner" },
         { "Suppliers.ManageGstDefaults", "PUT", "/api/suppliers/1/gst-defaults", "Manager,Owner" },
@@ -194,6 +201,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // Issue #548. Only the refusal direction: the allowed direction would rename the shared
         // fixture's business and move its time zone, which every other row here reads.
         { "Business.Manage", "PUT", "/api/business/settings", false, "Operator,Manager" },
+
 
         // Issue #537. Only the refusal direction: the re-test authenticates to Nayax with whatever
         // this host's connection holds, and this fixture substitutes no check runner, so the

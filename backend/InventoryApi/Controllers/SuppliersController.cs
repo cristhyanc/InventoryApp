@@ -28,6 +28,11 @@ namespace InventoryApi.Controllers;
 /// configuration like the GST defaults, and no new capability is declared for it. In a read-only
 /// support session it is refused like every other non-GET request, by the method rule in
 /// <c>SupportSessionAccessPolicy</c> and not by anything written here.
+///
+/// Issue #935 added the "Available to add" list and the one-click add on that same capability, for
+/// the same reason: deciding that this business buys from a supplier the platform suggests is a
+/// purchasing decision. The list is a <c>GET</c> a support session may make; the add is refused
+/// there, and in a role preview, by those features' own method rules.
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -42,6 +47,8 @@ public class SuppliersController : ControllerBase
     private readonly UpdateSupplier _updateSupplier;
     private readonly DeleteSupplier _deleteSupplier;
     private readonly SetSupplierNotUsed _setSupplierNotUsed;
+    private readonly ListAvailableSupplierPresets _listAvailableSupplierPresets;
+    private readonly AddSupplierFromPreset _addSupplierFromPreset;
     private readonly GetSupplierGstDefaults _getSupplierGstDefaults;
     private readonly SetSupplierGstDefaults _setSupplierGstDefaults;
 
@@ -52,6 +59,8 @@ public class SuppliersController : ControllerBase
         UpdateSupplier updateSupplier,
         DeleteSupplier deleteSupplier,
         SetSupplierNotUsed setSupplierNotUsed,
+        ListAvailableSupplierPresets listAvailableSupplierPresets,
+        AddSupplierFromPreset addSupplierFromPreset,
         GetSupplierGstDefaults getSupplierGstDefaults,
         SetSupplierGstDefaults setSupplierGstDefaults)
     {
@@ -63,6 +72,8 @@ public class SuppliersController : ControllerBase
         _updateSupplier = updateSupplier;
         _deleteSupplier = deleteSupplier;
         _setSupplierNotUsed = setSupplierNotUsed;
+        _listAvailableSupplierPresets = listAvailableSupplierPresets;
+        _addSupplierFromPreset = addSupplierFromPreset;
     }
 
     /// <summary>
@@ -179,6 +190,62 @@ public class SuppliersController : ControllerBase
     }
 
     /// <summary>
+    /// The platform supplier records this business may add, for the Suppliers page's "Available to
+    /// add" section (issue #935): the enabled records that serve the business's own state - or the
+    /// nationwide ones alone, for a business with no recorded state - minus the ones it already
+    /// holds a copy of.
+    ///
+    /// <para>It takes no parameter at all: no filter, no search, no page, and no business, which is
+    /// the caller's own resolved from their membership. Each record carries its id, its name and its
+    /// website and nothing else; this is the one member-facing read of a platform table besides
+    /// issue #873's single boolean, and it is bounded to those three fields on purpose
+    /// (docs/architecture.md § Tenant ownership). A read-only support session may make it, like any
+    /// other <c>GET</c> this controller's capability allows.</para>
+    /// </summary>
+    [HttpGet("available-presets")]
+    public async Task<ActionResult<IEnumerable<AvailableSupplierPresetResponse>>> GetAvailablePresets(
+        CancellationToken cancellationToken)
+    {
+        var available = await _listAvailableSupplierPresets.Handle(cancellationToken);
+
+        return Ok(available
+            .Select(preset => new AvailableSupplierPresetResponse(preset.Id, preset.Name, preset.Url))
+            .ToList());
+    }
+
+    /// <summary>
+    /// Adds one of those records to this business as a linked copy of it (issue #935).
+    ///
+    /// <para>The request carries the platform record's id in the route and no body: the name, the
+    /// website and the link are the record's, so there is nothing a caller submits that decides what
+    /// is stored, and the business is the caller's own. It is an ordinary supplier write under this
+    /// controller's existing <c>Purchasing.Operate</c> capability - the same one the "Not used"
+    /// switch of issue #934 uses - and it is refused in a read-only support session and in a role
+    /// preview by those features' own method rules, not by anything written here.</para>
+    ///
+    /// <para>A record that does not exist, is no longer suggested, or does not serve this business's
+    /// state is <c>404</c>: all three are one answer, so a member learns nothing about the platform's
+    /// list beyond what the list above told them. A record this business already holds a copy of is
+    /// <c>409</c> with that rule's own sentence - the answer to a double-click, a second tab, or a
+    /// state change that committed in between - and there is still exactly one copy.</para>
+    /// </summary>
+    [HttpPost("available-presets/{presetId:int}")]
+    public async Task<ActionResult<SupplierDetailResponse>> AddFromPreset(
+        int presetId, CancellationToken cancellationToken)
+    {
+        var result = await _addSupplierFromPreset.Handle(presetId, cancellationToken);
+
+        return result.Outcome switch
+        {
+            SupplierPresetAdditionOutcome.Added =>
+                CreatedAtAction(nameof(Get), new { id = result.Supplier!.Id }, ToResponse(result.Supplier)),
+            SupplierPresetAdditionOutcome.AlreadyAdded =>
+                Conflict(ConflictProblem(SupplierPresetMarketPolicy.AlreadyAddedMessage)),
+            _ => NotFound(),
+        };
+    }
+
+    /// <summary>
     /// The supplier's explicitly configured GST defaults (issue #430). They are their own resource
     /// rather than fields on the supplier payload because that payload is the pinned legacy
     /// <c>Supplier</c> API component every nested <c>supplier</c> object references; the reasoning
@@ -285,6 +352,24 @@ public class SuppliersController : ControllerBase
             Title = DomainExceptionHandler.ValidationTitle,
             Detail = message,
             Status = StatusCodes.Status400BadRequest,
+        };
+        problem.Extensions["message"] = message;
+        return problem;
+    }
+
+    /// <summary>
+    /// A refusal because the state the caller asked for is already the case: this business holds a
+    /// copy of that platform record (issue #935). Same shape as <see cref="RefusalProblem"/> with
+    /// the status and title <see cref="DomainExceptionHandler"/> gives a domain conflict, so the
+    /// existing client error handling reads it without a second convention.
+    /// </summary>
+    private static ProblemDetails ConflictProblem(string message)
+    {
+        var problem = new ProblemDetails
+        {
+            Title = DomainExceptionHandler.ConflictTitle,
+            Detail = message,
+            Status = StatusCodes.Status409Conflict,
         };
         problem.Extensions["message"] = message;
         return problem;

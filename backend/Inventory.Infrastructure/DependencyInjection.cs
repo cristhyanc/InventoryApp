@@ -245,6 +245,11 @@ public static class InfrastructureServiceCollectionExtensions
         // request's own AppDbContext.
         services.AddScoped<IProviderMachineLinkStore, EfProviderMachineLinkStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
+
+        // The "Available to add" suppliers of issue #935. Scoped on the request's own AppDbContext
+        // like every other adapter here: its reads and its insert are the ordinary tenant-scoped
+        // ones, and the state change's top-up joins the settings save's own write transaction.
+        services.AddScoped<IAvailableSupplierPresetStore, EfAvailableSupplierPresetStore>();
         services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
         services.AddScoped<IProductStore, EfProductStore>();
         services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();

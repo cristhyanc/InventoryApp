@@ -183,6 +183,9 @@ public class RolePreviewApiTests : IClassFixture<RolePreviewApiTests.ApiFactory>
     [InlineData("PUT", "/api/operating-expenses/999999")]
     [InlineData("DELETE", "/api/operating-expenses/999999")]
     [InlineData("PUT", BusinessSettings)]
+    // The "Available to add" supplier add of issue #935, which declares no rule of its own: the
+    // method rule is what refuses it, so a previewed role cannot give the business a supplier.
+    [InlineData("POST", "/api/suppliers/available-presets/999999")]
     [InlineData("POST", "/api/invites/redeem")]
     [InlineData("POST", "/api/onboarding/business-applications")]
     [InlineData("POST", "/api/nayax-sales-sync")]

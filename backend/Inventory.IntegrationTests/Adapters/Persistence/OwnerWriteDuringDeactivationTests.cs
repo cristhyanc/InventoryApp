@@ -1,6 +1,7 @@
 using Inventory.Application.Businesses;
 using Inventory.Application.Members;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.Tenancy;
@@ -344,6 +345,7 @@ public class OwnerWriteDuringDeactivationTests : IAsyncDisposable
                 new FakeCurrentBusinessProvider(BusinessIdValue),
                 FakeAuthenticatedActorAccessor.Identified(MembershipWriteRaceHarness.Actor(OwnerOid)),
                 new EfBusinessSettingsStore(db),
+                new AddMatchingSupplierPresets(new EfAvailableSupplierPresetStore(db)),
                 new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
                 audit,
                 new FakeClock(Now))

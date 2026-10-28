@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Xunit;
 
@@ -560,6 +561,123 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
             SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
             copies.Select(supplier => supplier.Name).Order());
         Assert.All(copies, supplier => Assert.Null(supplier.Url));
+    }
+
+    #endregion
+
+    #region Supplier records by business state, and "Available to add" (issue #935)
+
+    /// <summary>
+    /// The outcome issue #935 is about, at the HTTP boundary: the approval copies the records that
+    /// serve the approved business's own recorded state - the nationwide ones and the ones naming
+    /// that state - and not a record that serves somewhere else.
+    ///
+    /// <para>The pending application recorded <c>QLD</c>, so a Queensland record is copied and a
+    /// Western Australian one is not, from the same platform list.</para>
+    /// </summary>
+    [Fact]
+    public async Task Approving_copies_only_the_records_that_serve_the_business_s_state()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        await _factory.SeedSupplierPresetAsync(
+            "Brisbane Wholesale", servesNationwide: false, servedStates: SuperAdminBusinessesApiFactory.PendingState);
+        await _factory.SeedSupplierPresetAsync("Perth Wholesale", servesNationwide: false, servedStates: "WA");
+        await _factory.SeedSupplierPresetAsync(
+            "Disabled Queensland",
+            isEnabled: false,
+            servesNationwide: false,
+            servedStates: SuperAdminBusinessesApiFactory.PendingState);
+
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        Assert.Equal(
+            ["Big W", "Brisbane Wholesale", "Coles", "Costco", "Woolworths"],
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId))
+                .Select(supplier => supplier.Name)
+                .Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The "Available to add" section and its one-click add, end to end as the business's own Owner:
+    /// a record enabled after the approval is <strong>not</strong> pushed into the business, is
+    /// offered to it, and becomes a linked copy when the Owner adds it. Adding it again is a
+    /// <c>409</c> with one copy, and a record that serves another state is not offered and cannot be
+    /// added by id.
+    /// </summary>
+    [Fact]
+    public async Task A_record_enabled_later_is_offered_to_the_business_and_added_with_one_request()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        // The platform adds two records afterwards. Neither reaches the business by itself.
+        var brisbane = await _factory.SeedSupplierPresetAsync(
+            "Brisbane Wholesale",
+            "https://brisbane.example",
+            servesNationwide: false,
+            servedStates: SuperAdminBusinessesApiFactory.PendingState);
+        var perth = await _factory.SeedSupplierPresetAsync(
+            "Perth Wholesale", servesNationwide: false, servedStates: "WA");
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.ApplicantObjectId);
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Length,
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId)).Count);
+
+        // It is offered instead, with its id, name and website - and the Western Australian record
+        // is not offered at all.
+        var offered = await ReadJsonAsync(await owner.GetAsync("/api/suppliers/available-presets"));
+        var row = Assert.Single(offered.RootElement.EnumerateArray());
+        Assert.Equal(
+            (brisbane, "Brisbane Wholesale", "https://brisbane.example"),
+            (row.GetProperty("id").GetInt32(),
+                row.GetProperty("name").GetString(),
+                row.GetProperty("url").GetString()));
+
+        // One click adds it, as this business's own linked copy.
+        var added = await owner.PostAsync($"/api/suppliers/available-presets/{brisbane}", null);
+        Assert.Equal(HttpStatusCode.Created, added.StatusCode);
+        var copy = await ReadJsonAsync(added);
+        Assert.Equal("Brisbane Wholesale", copy.RootElement.GetProperty("name").GetString());
+        Assert.True(copy.RootElement.GetProperty("isLinked").GetBoolean());
+        Assert.False(copy.RootElement.GetProperty("canRename").GetBoolean());
+        Assert.False(copy.RootElement.GetProperty("canDelete").GetBoolean());
+
+        var suppliers = await _factory.SuppliersOfAsync(_factory.PendingBusinessId);
+        Assert.Equal(
+            brisbane,
+            suppliers.Single(supplier => supplier.Name == "Brisbane Wholesale").SupplierPresetId);
+
+        // It is no longer on offer, a second add is refused as already added, and there is one copy.
+        Assert.Empty(
+            (await ReadJsonAsync(await owner.GetAsync("/api/suppliers/available-presets")))
+                .RootElement.EnumerateArray());
+
+        var again = await owner.PostAsync($"/api/suppliers/available-presets/{brisbane}", null);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+        Assert.Equal(SupplierPresetMarketPolicy.AlreadyAddedMessage, await DetailAsync(again));
+
+        // A record that serves another state cannot be added by id either.
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await owner.PostAsync($"/api/suppliers/available-presets/{perth}", null)).StatusCode);
+
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Length + 1,
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId)).Count);
+
+        // And nothing of this reached the other business: it is offered the nationwide records it
+        // has no copy of - it has none at all - and holds no supplier of its own.
+        var otherOwner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
+            (await ReadJsonAsync(await otherOwner.GetAsync("/api/suppliers/available-presets")))
+                .RootElement.EnumerateArray()
+                .Select(preset => preset.GetProperty("name").GetString()!)
+                .Order());
+        Assert.Empty(await _factory.SuppliersOfAsync(_factory.TradingBusinessId));
     }
 
     #endregion

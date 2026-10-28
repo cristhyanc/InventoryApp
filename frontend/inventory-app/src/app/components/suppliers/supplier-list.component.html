@@ -181,4 +181,65 @@
       }
     </div>
   </section>
+
+  <!-- The suppliers from the platform's list this business may add (issue #935). The section is
+       shown only while there is something to add: a business that has taken up every suggestion
+       for its state - the normal state after a while - is offered nothing and sees nothing. -->
+  @if (availablePresets.length > 0) {
+    <section class="card" data-testid="available-presets">
+      <div class="card-header">
+        <h2 class="card-title">Available to add</h2>
+      </div>
+      <div class="card-body p-0">
+        <p class="p-4 text-md-body value-muted">
+          Suppliers from the platform's list that serve your state and that you have not added yet.
+          Adding one creates your own supplier, with its name and website from that list.
+        </p>
+        <div class="overflow-x-auto">
+          <table class="table">
+            <thead class="table-head">
+              <tr>
+                <th scope="col" class="table-cell">Name</th>
+                <th scope="col" class="table-cell">Website</th>
+                <th scope="col" class="table-cell"></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (preset of availablePresets; track preset.id) {
+                <tr class="table-row">
+                  <td class="table-cell">{{ preset.name }}</td>
+                  <!-- Only an http(s) address the client rule also accepts becomes a link
+                       (issue #847), exactly as in the list above. -->
+                  <td class="table-cell">
+                    @if (canLinkToPreset(preset)) {
+                      <a [href]="preset.url" target="_blank" rel="noopener noreferrer">{{ preset.url }}</a>
+                    } @else {
+                      {{ preset.url }}
+                    }
+                  </td>
+                  <td class="table-cell">
+                    <!-- Hidden rather than disabled in a support session or a role preview
+                         (issues #657 and #721): both grant PurchasingOperate and then refuse every
+                         write, so the button would render and be refused. -->
+                    @if (canAddFromPlatformList) {
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-secondary"
+                        [attr.data-testid]="'add-preset-' + preset.id"
+                        [attr.aria-label]="'Add ' + preset.name"
+                        (click)="addFromPreset(preset)"
+                      >
+                        <app-icon name="add" [size]="16" />
+                        Add
+                      </button>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  }
 </div>
