@@ -93,6 +93,13 @@ public class SupplierPriceObservationBoundaryTests
     /// </summary>
     private static readonly string[] FilesThatMayNameThem =
     [
+        // Issue #930's cheapest-supplier summary: the port and the use case that hand stored facts
+        // to the comparison, the adapter that reads the listings and their latest observations, and
+        // the HTTP boundary that publishes the answer. Each one is here on purpose - this list is
+        // where a new reader of an observed price is declared, which is what makes the next one a
+        // decision rather than a discovery.
+        "Inventory.Application/PriceCatalogue/CheapestSupplierSummary.cs",
+        "Inventory.Application/PriceCatalogue/ICheapestSupplierSummaryStore.cs",
         "Inventory.Domain/PriceCatalogue/CheapestUnitOfferPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorRunPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierListingPriceStatePolicy.cs",
@@ -103,6 +110,9 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Infrastructure/Models/SupplierListing.cs",
         "Inventory.Infrastructure/Models/SupplierPreset.cs",
         "Inventory.Infrastructure/Models/SupplierPriceObservation.cs",
+        "Inventory.Infrastructure/Persistence/EfCheapestSupplierSummaryStore.cs",
+        "InventoryApi/Controllers/CheapestSuppliersController.cs",
+        "InventoryApi/DTOs/CheapestSupplierDtos.cs",
     ];
 
     private static readonly string[] ProductionProjects =

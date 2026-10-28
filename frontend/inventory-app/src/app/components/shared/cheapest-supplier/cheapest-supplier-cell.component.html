@@ -1,0 +1,148 @@
+<!--
+  The cell. It is a button only when there is a popup to open: "Not tracked", "Awaiting match",
+  "Loading" and "Unavailable" are statements, and a control that opens nothing would be a control
+  that lies about having something to show.
+-->
+@if (canOpen) {
+  <button
+    #trigger
+    type="button"
+    class="text-left text-md-body font-semibold text-md-primary hover:underline"
+    aria-haspopup="dialog"
+    [attr.aria-expanded]="open"
+    [attr.aria-label]="'Supplier prices for ' + productName + ': ' + display"
+    (click)="openPopup()"
+    data-testid="cheapest-supplier-cell"
+  >{{ display }}</button>
+} @else {
+  <span
+    class="text-md-body value-muted"
+    data-testid="cheapest-supplier-cell"
+  >{{ display }}</span>
+}
+
+@if (open) {
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-md-gray-800/50 p-4" (click)="closePopup()">
+    <div
+      #dialogPanel
+      role="dialog"
+      aria-modal="true"
+      [attr.aria-labelledby]="titleId"
+      tabindex="-1"
+      class="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col rounded-md-dialog bg-white text-left shadow-md-lg outline-none"
+      (click)="$event.stopPropagation()"
+      data-testid="cheapest-supplier-popup"
+    >
+      <div class="flex items-start justify-between gap-4 border-b border-md-gray-200 px-6 py-4">
+        <div>
+          <h2 [id]="titleId" class="card-title">{{ dialogTitle }}</h2>
+          <p class="value-muted">{{ observedPricesNote }}</p>
+          @if (isAutomaticMatch) {
+            <p class="mt-1 text-md-body value-muted" data-testid="cheapest-supplier-auto-match">{{ automaticMatchNote }}</p>
+          }
+        </div>
+        <button
+          type="button"
+          aria-label="Close supplier prices"
+          class="rounded-md-control px-2 py-1 text-md-gray-600 hover:bg-md-gray-100"
+          (click)="closePopup()"
+        >✕</button>
+      </div>
+
+      <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Supplier</th>
+              <th scope="col" class="table-cell table-num">Unit price</th>
+              <th scope="col" class="table-cell">Pack</th>
+              <th scope="col" class="table-cell">Stock</th>
+              <th scope="col" class="table-cell">Last checked</th>
+              <th scope="col" class="table-cell"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <!--
+              Cheapest first, in the server's own order: comparable offers by unit price, then the
+              ones it could not compare, then the listings nobody has checked, then the suppliers
+              that do not list the product. Re-ordering them here would be a second opinion about
+              which supplier to look at first.
+            -->
+            @for (offer of suppliers; track offer.supplierId + ':' + (offer.packQuantity ?? 0) + ':' + (offer.productUrl ?? '')) {
+              <tr class="table-row" data-testid="cheapest-supplier-row">
+                <td class="table-cell">
+                  <span class="font-semibold">{{ offer.supplierName }}</span>
+                  @if (offer.isCheapest) {
+                    <span class="badge badge-success ml-2">Cheapest</span>
+                  }
+                  @if (statusOf(offer); as status) {
+                    <span class="block text-md-body value-muted">{{ status }}</span>
+                  }
+                </td>
+                <td class="table-cell table-num">
+                  <!--
+                    Both bases, always, with the one this business is compared on first: a price
+                    that is not knowable is left blank rather than written as a zero, which is a
+                    price (AGENTS.md § Frontend rules).
+                  -->
+                  @if (priceOf(offer.unitPrice); as unitPrice) {
+                    <span class="font-semibold">{{ unitPrice }} {{ basisOf(displayBasis) }}</span>
+                  } @else {
+                    <span class="value-muted">—</span>
+                  }
+                  @if (priceOf(offer.unitPriceExGst); as exGst) {
+                    <span class="block text-md-body value-muted">{{ exGst }} ex GST</span>
+                  }
+                  @if (priceOf(offer.unitPriceIncGst); as incGst) {
+                    <span class="block text-md-body value-muted">{{ incGst }} inc GST</span>
+                  }
+                </td>
+                <td class="table-cell">
+                  @if (offer.packQuantity !== null && priceOf(offer.packPrice); as packPrice) {
+                    <span>{{ offer.packQuantity }} pack {{ packPrice }} {{ basisOf(offer.packPriceBasis) }}</span>
+                  } @else if (offer.packQuantity !== null) {
+                    <span>{{ offer.packQuantity }} pack</span>
+                  } @else {
+                    <span class="value-muted">—</span>
+                  }
+                  @if (offer.isSpecial) {
+                    <span class="block text-md-body value-positive">Special</span>
+                  }
+                </td>
+                <td class="table-cell">
+                  @if (stockOf(offer); as stock) {
+                    <span>{{ stock }}</span>
+                  } @else {
+                    <span class="value-muted">—</span>
+                  }
+                </td>
+                <td class="table-cell whitespace-nowrap">
+                  @if (offer.lastCheckedAtUtc) {
+                    <span>{{ offer.lastCheckedAtUtc | date:'medium' }}</span>
+                  } @else {
+                    <span class="value-muted">Never</span>
+                  }
+                </td>
+                <td class="table-cell">
+                  @if (offer.productUrl) {
+                    <a
+                      class="text-md-primary hover:underline"
+                      [href]="offer.productUrl"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      [attr.aria-label]="'Open ' + offer.supplierName + ' product page for ' + productName"
+                    >View</a>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <div class="flex justify-end border-t border-md-gray-200 px-6 py-4">
+        <button type="button" class="btn btn-secondary" (click)="closePopup()">Close</button>
+      </div>
+    </div>
+  </div>
+}

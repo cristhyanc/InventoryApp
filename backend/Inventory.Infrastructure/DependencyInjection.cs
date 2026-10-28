@@ -217,6 +217,11 @@ public static class InfrastructureServiceCollectionExtensions
         // and neither makes an IgnoreQueryFilters statement.
         services.AddScoped<IProductPriceTrackingStore, EfProductPriceTrackingStore>();
         services.AddScoped<IPriceCatalogueWorkListStore, EfPriceCatalogueWorkListStore>();
+        // The third (issue #930): the read behind the Cheapest supplier column. It reaches the
+        // platform catalogue only through the caller's own matched mappings and the supplier
+        // records the caller holds a copy of, on the request's own scoped context like the two
+        // above.
+        services.AddScoped<ICheapestSupplierSummaryStore, EfCheapestSupplierSummaryStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has

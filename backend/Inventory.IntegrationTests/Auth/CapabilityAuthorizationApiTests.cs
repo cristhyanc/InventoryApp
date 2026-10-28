@@ -95,6 +95,12 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Inventory.Operate", "GET", "/api/products/price-tracking", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
         { "Inventory.Operate", "PUT", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
+        // Issue #930. The cheapest-supplier summary is on Dashboard.View, which every role holds:
+        // an observed shelf price is purchasing guidance about a pack nobody has bought, not a
+        // recorded cost, so it is not behind the financial capability that guards what the business
+        // actually paid. It is safe to call in both directions here - the body below carries no
+        // product ids, which the use case refuses with 400 before anything is read.
+        { "Dashboard.View", "POST", "/api/cheapest-suppliers/summary", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/purchases", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers/1/gst-defaults", "Operator,Manager,Owner" },
