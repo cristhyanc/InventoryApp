@@ -62,10 +62,20 @@ namespace InventoryApi.Controllers;
 public sealed class PriceCollectorController : ControllerBase
 {
     private readonly IssuePriceCollectorWorkList _issueWorkList;
+    private readonly RecordPriceCollectorResults _recordResults;
+    private readonly AnswerPriceCollectorSearch _answerSearch;
+    private readonly CompletePriceCollectorRun _completeRun;
 
-    public PriceCollectorController(IssuePriceCollectorWorkList issueWorkList)
+    public PriceCollectorController(
+        IssuePriceCollectorWorkList issueWorkList,
+        RecordPriceCollectorResults recordResults,
+        AnswerPriceCollectorSearch answerSearch,
+        CompletePriceCollectorRun completeRun)
     {
         _issueWorkList = issueWorkList;
+        _recordResults = recordResults;
+        _answerSearch = answerSearch;
+        _completeRun = completeRun;
     }
 
     /// <summary>
@@ -86,5 +96,111 @@ public sealed class PriceCollectorController : ControllerBase
         var workList = await _issueWorkList.Handle(cancellationToken);
 
         return Ok(PriceCollectorWorkResponse.From(workList));
+    }
+
+    /// <summary>
+    /// Submits one batch of results for a run's issued work, and answers what became of every row:
+    /// accepted as a price, sent to review, held pending, or refused with a reason.
+    ///
+    /// <para>Nothing here is trusted. Every row must cite a work item this run issued, at that work
+    /// item's own supplier; the listing it names is resolved from
+    /// <c>(supplier, supplier product id)</c> and attached to the work item's product, never to one
+    /// the row chose; and a price becomes the listing's price only when the listing is confirmed,
+    /// its identity still matches, and the amount is inside the band around the last accepted one.
+    /// The idempotency key is run, work item and supplier product id, so one search may report
+    /// several packs and re-sending a batch writes nothing new.</para>
+    /// </summary>
+    /// <response code="200">Every row's outcome. Refused rows carry their reason.</response>
+    /// <response code="400">
+    /// The batch is larger than one request may carry. Nothing was stored.
+    /// </response>
+    /// <response code="401">The token is not the configured collector's app-only token.</response>
+    /// <response code="404">No run has that id.</response>
+    /// <response code="409">The run has finished or has expired. Nothing was stored.</response>
+    [HttpPost("results")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<PriceCollectorResultsResponse>> Results(
+        [FromBody] PriceCollectorResultsRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // The refusals are DomainValidationException and DomainConflictException, which
+        // DomainExceptionHandler maps centrally to 400 and 409 - see Http/DomainExceptionHandler.cs.
+        var receipt = await _recordResults.Handle(request.ToBatch(), cancellationToken);
+
+        return receipt is null
+            ? NotFound()
+            : Ok(PriceCollectorResultsResponse.From(receipt));
+    }
+
+    /// <summary>
+    /// Finishes one search: what happened to it, why if it failed, and how many distinct supplier
+    /// product ids the collector submitted for it.
+    ///
+    /// <para>The total is what makes a search split across batches finishable: the answer is
+    /// accepted only while it equals the rows this backend actually received, so a batch lost in
+    /// transit leaves the search unanswered rather than finishing it short. Only an accepted
+    /// <c>Complete</c> or <c>NoMatches</c> answer records that a known listing was not found; a
+    /// truncated or failed search records none, because it stopped before it had seen
+    /// everything.</para>
+    /// </summary>
+    /// <response code="200">The recorded answer, and how many listings it recorded as not found.</response>
+    /// <response code="400">
+    /// The outcome is not one a collector may report, the failure reason does not belong with it,
+    /// or a "nothing found" answer contradicts the rows already submitted.
+    /// </response>
+    /// <response code="401">The token is not the configured collector's app-only token.</response>
+    /// <response code="404">That run has no such work item.</response>
+    /// <response code="409">
+    /// The run has finished or expired, the declared total does not match the rows received, or the
+    /// search was already answered differently. The search stays as it was.
+    /// </response>
+    [HttpPost("work-items/{workItemId:long}/outcome")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<PriceCollectorSearchOutcomeResponse>> SearchOutcome(
+        long workItemId,
+        [FromBody] PriceCollectorSearchOutcomeRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var receipt = await _answerSearch.Handle(request.ToAnswer(workItemId), cancellationToken);
+
+        return receipt is null
+            ? NotFound()
+            : Ok(PriceCollectorSearchOutcomeResponse.From(receipt));
+    }
+
+    /// <summary>
+    /// Closes one run: every search still unanswered becomes <c>NotSearched</c>, the per-outcome
+    /// counts are recorded, and the run takes the status those counts imply.
+    /// </summary>
+    /// <response code="200">How the run ended and what became of its searches.</response>
+    /// <response code="401">The token is not the configured collector's app-only token.</response>
+    /// <response code="404">No run has that id.</response>
+    /// <response code="409">The run had already finished, which includes having been expired.</response>
+    [HttpPost("runs/{runId:long}/complete")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<PriceCollectorRunCompletionResponse>> CompleteRun(
+        long runId,
+        CancellationToken cancellationToken)
+    {
+        var completion = await _completeRun.Handle(runId, cancellationToken);
+
+        return completion is null
+            ? NotFound()
+            : Ok(PriceCollectorRunCompletionResponse.From(completion));
     }
 }

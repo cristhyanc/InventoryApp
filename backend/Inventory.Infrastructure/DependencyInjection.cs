@@ -223,6 +223,11 @@ public static class InfrastructureServiceCollectionExtensions
         // The collector work list's one write (issue #924): a run and its work items, both platform
         // tables, in one transaction on the request's own denied-scope context.
         services.AddScoped<IPriceCollectorRunStore, EfPriceCollectorRunStore>();
+        // And the collector's results (issue #937): the same platform tables plus the listings, the
+        // observations, the held readings and the recorded outcome of every submitted row - each
+        // method one transaction on that same denied-scope context, so the authoritative read, the
+        // comparison and the write are one operation. See EfPriceCollectorResultStore.
+        services.AddScoped<IPriceCollectorResultStore, EfPriceCollectorResultStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
