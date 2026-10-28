@@ -257,6 +257,74 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         return listing.Id;
     }
 
+    /// <summary>
+    /// Several listings of one master product in one save, for the per-product size bounds of issue
+    /// #924: the bound is about how <em>many</em> there are, so what a test needs is a number of them
+    /// rather than a described one. Each gets its own supplier product id, because the pair
+    /// <c>(supplier master record, supplier product id)</c> is unique.
+    /// </summary>
+    public async Task SeedListingsAsync(long masterProductId, int count)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        for (var index = 0; index < count; index++)
+        {
+            db.SupplierListings.Add(new SupplierListing
+            {
+                SupplierPresetId = SupplierPresetId,
+                MasterProductId = masterProductId,
+                SupplierProductId = $"SKU-{masterProductId}-{index:D4}",
+                MatchStatus = SupplierListingMatchStatus.Proposed,
+                CreatedAtUtc = CreatedAt,
+                UpdatedAtUtc = CreatedAt,
+            });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Several refused master products against one waiting key in one save, on the same terms: a
+    /// master product per refusal, because a refusal names one.
+    /// </summary>
+    public async Task SeedRefusalsAsync(string waitingKey, int count)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        for (var index = 0; index < count; index++)
+        {
+            var brand = $"Refused {waitingKey.GetHashCode(StringComparison.Ordinal):X8}";
+            var name = $"Variant {index:D4}";
+
+            var master = new MasterProduct
+            {
+                Brand = brand,
+                Name = name,
+                SizeValue = 375m,
+                SizeUnit = MasterProductSizeUnit.Millilitre,
+                NormalisedKey = MasterProductPolicy.NormalisedKey(
+                    brand, name, 375m, MasterProductSizeUnit.Millilitre),
+                CreatedAtUtc = CreatedAt,
+                UpdatedAtUtc = CreatedAt,
+            };
+
+            db.MasterProducts.Add(master);
+            db.ProductMatchSuggestions.Add(new ProductMatchSuggestion
+            {
+                WaitingKey = waitingKey,
+                MasterProduct = master,
+                Confidence = 0.9m,
+                Reason = "Seeded by the fixture.",
+                CollectorRun = "fixture",
+                Status = ProductMatchSuggestionStatus.Rejected,
+                CreatedAtUtc = CreatedAt,
+                UpdatedAtUtc = CreatedAt,
+            });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
     /// <summary>A listing that is still held under a waiting key, with no master product yet.</summary>
     public async Task SeedWaitingListingAsync(string waitingKey, string supplierProductId)
     {

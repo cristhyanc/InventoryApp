@@ -401,7 +401,16 @@ public class PriceCollectorWorkListTests
                 .Order(StringComparer.Ordinal));
 
         Assert.Equal(
-            ["Brand", "KnownListings", "MasterProductId", "Name", "SizeUnit", "SizeValue", "WorkItems"],
+            [
+                "Brand",
+                "KnownListings",
+                "KnownListingsOmitted",
+                "MasterProductId",
+                "Name",
+                "SizeUnit",
+                "SizeValue",
+                "WorkItems",
+            ],
             typeof(PriceCollectorMatchedProduct)
                 .GetProperties()
                 .Select(property => property.Name)
@@ -409,7 +418,9 @@ public class PriceCollectorWorkListTests
 
         Assert.Equal(
             [
+                "MatchingSuppressed",
                 "ProposedListings",
+                "ProposedListingsOmitted",
                 "RefusedMasterProductIds",
                 "SearchName",
                 "UnitLabel",
@@ -424,15 +435,16 @@ public class PriceCollectorWorkListTests
 
     #endregion
 
-    #region The response is bounded
+    #region The response is bounded, and the bound is a schedule
 
     /// <summary>
-    /// A catalogue with more work than one run may be issued with yields a deterministic prefix and
-    /// says so. Both halves matter: a silent prefix reads as "this is everything there is to search",
-    /// and a product published without its work items would be a product no result could reference.
+    /// A catalogue with more work than one run may be issued with yields a deterministic stretch of
+    /// the rotation and says so. Both halves matter: a silent prefix reads as "this is everything
+    /// there is to search", and a product published without its work items would be a product no
+    /// result could reference.
     /// </summary>
     [Fact]
-    public async Task More_work_than_a_run_may_carry_is_a_flagged_deterministic_prefix()
+    public async Task More_work_than_a_run_may_carry_is_a_flagged_deterministic_stretch()
     {
         await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
         await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.Kmart);
@@ -441,11 +453,15 @@ public class PriceCollectorWorkListTests
         // number of products this run may carry.
         const int Budget = 3;
 
+        var keys = new List<string>();
+
         for (var index = 0; index < Budget + 1; index++)
         {
             var product = await fixture.SeedProductAsync(
                 fixture.FirstBusinessId, $"Product {index}", "375mL");
-            await fixture.TrackAsync(fixture.FirstBusinessId, product, $"Product {index}", "375mL");
+            var mapping = await fixture.TrackAsync(
+                fixture.FirstBusinessId, product, $"Product {index}", "375mL");
+            keys.Add(mapping.WaitingKey);
         }
 
         var workList = await IssueAsync(fixture, budget: Budget);
@@ -455,12 +471,212 @@ public class PriceCollectorWorkListTests
         Assert.All(workList.WaitingProducts, product => Assert.Single(product.WorkItems));
         Assert.Equal(Budget, (await fixture.AllWorkItemsAsync()).Count);
 
-        // And the prefix is the same prefix on a second read, because the order is the comparison
-        // key's rather than the database's discretion.
-        var again = await IssueAsync(fixture, budget: Budget);
+        // And it is the stretch the waiting-key order states rather than the database's discretion:
+        // asserted against the expected keys, which is a stronger claim than two reads agreeing.
         Assert.Equal(
-            workList.WaitingProducts.Select(product => product.WaitingKey),
-            again.WaitingProducts.Select(product => product.WaitingKey));
+            keys.Order(StringComparer.Ordinal).Take(Budget),
+            workList.WaitingProducts.Select(product => product.WaitingKey));
+    }
+
+    /// <summary>
+    /// <strong>The products a bounded run omits are the next run's first.</strong> Three runs over a
+    /// catalogue of two matched products and two waiting ones, with a budget of one product a run:
+    /// every product is issued its own work within the rotation, the waiting products behind the
+    /// matched prefix included, and the fourth run comes back round to the first product.
+    ///
+    /// <para>This is the regression for the starvation an unrotated bound has. Before it, run two and
+    /// every run after it re-issued the same first product, so the second matched product and both
+    /// waiting ones would never have been searched at all - which is the opposite of the parent
+    /// issue's "every run searches every tracked product".</para>
+    /// </summary>
+    [Fact]
+    public async Task Successive_runs_issue_the_products_the_bounded_run_before_them_omitted()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.Kmart);
+
+        var firstMaster = await fixture.SeedMasterProductAsync("Alpine", "Water");
+        var secondMaster = await fixture.SeedMasterProductAsync("Zephyr", "Cola");
+
+        var firstMatched = await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var secondMatched = await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessPepsiId, "Pepsi Max", "375mL");
+        await fixture.MatchAsync(firstMatched.Id, firstMaster);
+        await fixture.MatchAsync(secondMatched.Id, secondMaster);
+
+        // Two waiting products, deliberately behind both matched ones in the rotation.
+        var firstWaitingProduct = await fixture.SeedProductAsync(
+            fixture.SecondBusinessId, "Solo Lemon", "375mL");
+        var firstWaiting = await fixture.TrackAsync(
+            fixture.SecondBusinessId, firstWaitingProduct, "Solo Lemon", "375mL");
+        var secondWaiting = await fixture.TrackAsync(
+            fixture.SecondBusinessId, fixture.SecondBusinessColaId, "coca-cola  classic", "375 ML");
+
+        // One product a run: whatever is issued is the whole of that run's work.
+        var issuedProducts = new List<string>();
+        var clock = new FakeClock(IssuedAt);
+
+        for (var run = 0; run < 5; run++)
+        {
+            clock.UtcNow = IssuedAt.AddHours(run);
+            var workList = await IssueAsync(fixture, clock, budget: 1);
+
+            Assert.True(workList.WorkItemLimitReached);
+            Assert.Single(
+                workList.MatchedProducts.Select(product => $"master:{product.MasterProductId}")
+                    .Concat(workList.WaitingProducts.Select(product => $"waiting:{product.WaitingKey}")));
+
+            issuedProducts.AddRange(
+                workList.MatchedProducts.Select(product => $"master:{product.MasterProductId}"));
+            issuedProducts.AddRange(
+                workList.WaitingProducts.Select(product => $"waiting:{product.WaitingKey}"));
+
+            // Every product a run publishes carries its own work item, whichever stretch it is.
+            Assert.All(workList.MatchedProducts, product => Assert.Single(product.WorkItems));
+            Assert.All(workList.WaitingProducts, product => Assert.Single(product.WorkItems));
+        }
+
+        var waitingKeys = new[] { firstWaiting.WaitingKey, secondWaiting.WaitingKey }
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        // The rotation in full - matched products by master product id, then waiting products by
+        // waiting key - and then round again, which is what "eventually searched" means.
+        Assert.Equal(
+            [
+                $"master:{firstMaster}",
+                $"master:{secondMaster}",
+                $"waiting:{waitingKeys[0]}",
+                $"waiting:{waitingKeys[1]}",
+                $"master:{firstMaster}",
+            ],
+            issuedProducts);
+
+        // And every one of those products is a stored, attributable work item of its own run.
+        var stored = await fixture.AllWorkItemsAsync();
+        Assert.Equal(5, stored.Count);
+        Assert.Equal(5, stored.Select(item => item.PriceCollectorRunId).Distinct().Count());
+    }
+
+    /// <summary>
+    /// The size bound the work-item limit cannot state: one product whose catalogue entry holds more
+    /// listings than a run may carry is published with <strong>none</strong> of them and says so,
+    /// while a product inside the bound keeps all of its.
+    ///
+    /// <para>Its work is still issued, which is the point of omitting the context rather than the
+    /// product: the collector searches it and reports what it finds, and the listing it reports is
+    /// reconciled by <c>(supplier master record, supplier product id)</c> rather than recognised.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_product_with_more_listings_than_a_run_may_carry_is_published_without_them()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.Kmart);
+
+        var crowded = await fixture.SeedMasterProductAsync("Alpine", "Water");
+        var ordinary = await fixture.SeedMasterProductAsync("Zephyr", "Cola");
+        await fixture.SeedListingsAsync(
+            crowded, PriceCollectorWorkListPolicy.MaxListingsPerProduct + 1);
+        await fixture.SeedListingsAsync(ordinary, count: 2);
+
+        var crowdedMapping = await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var ordinaryMapping = await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessPepsiId, "Pepsi Max", "375mL");
+        await fixture.MatchAsync(crowdedMapping.Id, crowded);
+        await fixture.MatchAsync(ordinaryMapping.Id, ordinary);
+
+        var workList = await IssueAsync(fixture);
+
+        var published = Assert.Single(
+            workList.MatchedProducts, product => product.MasterProductId == crowded);
+
+        Assert.True(published.KnownListingsOmitted);
+        Assert.Empty(published.KnownListings);
+        Assert.Single(published.WorkItems);
+
+        var unaffected = Assert.Single(
+            workList.MatchedProducts, product => product.MasterProductId == ordinary);
+
+        Assert.False(unaffected.KnownListingsOmitted);
+        Assert.Equal(2, unaffected.KnownListings.Count);
+    }
+
+    /// <summary>
+    /// And the one omission with a rule attached: a waiting key holding more refusals than a run may
+    /// carry is published with no refusals and with matching <em>suppressed</em>, never with a prefix
+    /// of them.
+    ///
+    /// <para>A refusal list is the safeguard that stops a matcher proposing a pair a Super Admin
+    /// rejected. Half of it is not a safeguard - it would let one of the omitted pairs be proposed a
+    /// second time - so the response says instead that no master product may be proposed for this key
+    /// on this run. The search itself is still issued.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_waiting_key_with_more_refusals_than_a_run_may_carry_suppresses_matching()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.Kmart);
+
+        var crowdedKey = PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL");
+        await fixture.SeedRefusalsAsync(
+            crowdedKey, PriceCollectorWorkListPolicy.MaxRefusedMasterProductsPerWaitingProduct + 1);
+
+        var refusedOnce = await fixture.SeedMasterProductAsync("Pepsi", "Max");
+        var ordinaryKey = PriceCatalogueWaitingKey.For("Solo Lemon", "375mL");
+        await fixture.SeedMatchSuggestionAsync(
+            ordinaryKey, refusedOnce, ProductMatchSuggestionStatus.Rejected);
+
+        await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var ordinaryProduct = await fixture.SeedProductAsync(
+            fixture.SecondBusinessId, "Solo Lemon", "375mL");
+        await fixture.TrackAsync(
+            fixture.SecondBusinessId, ordinaryProduct, "Solo Lemon", "375mL");
+
+        var workList = await IssueAsync(fixture);
+
+        var crowded = Assert.Single(
+            workList.WaitingProducts, product => product.WaitingKey == crowdedKey);
+
+        Assert.True(crowded.MatchingSuppressed);
+        Assert.Empty(crowded.RefusedMasterProductIds);
+        Assert.Single(crowded.WorkItems);
+
+        // The other key is unaffected: one key beyond the bound does not suppress anything else.
+        var ordinary = Assert.Single(
+            workList.WaitingProducts, product => product.WaitingKey == ordinaryKey);
+
+        Assert.False(ordinary.MatchingSuppressed);
+        Assert.Equal([refusedOnce], ordinary.RefusedMasterProductIds);
+    }
+
+    /// <summary>
+    /// The proposals under a waiting key are bounded the same way, and the omission is stated for the
+    /// same reason an empty list must never read as "nothing has been found here yet".
+    /// </summary>
+    [Fact]
+    public async Task A_waiting_key_with_more_proposals_than_a_run_may_carry_is_published_without_them()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.Kmart);
+
+        var waitingKey = PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL");
+
+        for (var index = 0; index <= PriceCollectorWorkListPolicy.MaxListingsPerProduct; index++)
+        {
+            await fixture.SeedWaitingListingAsync(waitingKey, $"SKU-PROPOSED-{index:D4}");
+        }
+
+        await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+
+        var product = Assert.Single((await IssueAsync(fixture)).WaitingProducts);
+
+        Assert.True(product.ProposedListingsOmitted);
+        Assert.Empty(product.ProposedListings);
+        Assert.Single(product.WorkItems);
     }
 
     #endregion

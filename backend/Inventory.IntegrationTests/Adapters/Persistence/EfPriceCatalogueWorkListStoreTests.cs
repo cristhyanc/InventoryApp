@@ -220,8 +220,10 @@ public class EfPriceCatalogueWorkListStoreTests
         Assert.Equal(375m, tracked.SizeValue);
         Assert.Equal(MasterProductSizeUnit.Millilitre, tracked.SizeUnit);
 
-        // And its one listing exactly once, with the pack size and the barcode as published.
-        var listing = Assert.Single(tracked.Listings);
+        // And its one listing exactly once, with the pack size and the barcode as published - read
+        // for the products a run is issued for, which is where a listing travels from since the
+        // response bounds of #924.
+        var listing = Assert.Single(await ListingsOfAsync(fixture, master));
         Assert.Equal("SKU-1", listing.SupplierProductId);
         Assert.Equal(30, listing.UnitsPerPack);
         Assert.Equal("0012345678905", listing.Barcode);
@@ -250,7 +252,7 @@ public class EfPriceCatalogueWorkListStoreTests
             "375mL");
         await fixture.MatchAsync(mapping.Id, master);
 
-        var tracked = Assert.Single(
+        Assert.Single(
             await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
 
@@ -260,7 +262,7 @@ public class EfPriceCatalogueWorkListStoreTests
                 (fixture.SupplierPresetId, "SKU-2"),
                 (otherSupplier, "SKU-1"),
             ],
-            tracked.Listings
+            (await ListingsOfAsync(fixture, master))
                 .Select(listing => (listing.SupplierPresetId, listing.SupplierProductId))
                 .Order());
     }
@@ -297,11 +299,11 @@ public class EfPriceCatalogueWorkListStoreTests
             "375mL");
         await fixture.MatchAsync(mapping.Id, master);
 
-        var tracked = Assert.Single(
+        Assert.Single(
             await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
 
-        Assert.Empty(tracked.Listings);
+        Assert.Empty(await ListingsOfAsync(fixture, master));
     }
 
     /// <summary>
@@ -321,11 +323,40 @@ public class EfPriceCatalogueWorkListStoreTests
         await fixture.MatchAsync(mapping.Id, master);
         await fixture.SeedWaitingListingAsync(mapping.WaitingKey, "SKU-WAITING");
 
-        var tracked = Assert.Single(
+        Assert.Single(
             await fixture.DeniedWorkListStore()
                 .ListTrackedMasterProductsAsync(CancellationToken.None));
 
-        Assert.Empty(tracked.Listings);
+        Assert.Empty(await ListingsOfAsync(fixture, master));
+    }
+
+    /// <summary>
+    /// The tracked products are ordered by their own key, which is what a bounded run's rotation
+    /// continues from (issue #924): the cursor the next run starts after is a stored master product
+    /// id, so "the product after the one we stopped at" only means something while the issue order is
+    /// the id order.
+    /// </summary>
+    [Fact]
+    public async Task Tracked_master_products_are_ordered_by_their_own_key()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+
+        // Seeded so the row order and the comparison-key order disagree: "Zephyr" is created first
+        // and sorts last by brand.
+        var last = await fixture.SeedMasterProductAsync("Zephyr", "Cola");
+        var first = await fixture.SeedMasterProductAsync("Alpine", "Water");
+
+        var mine = await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessColaId, "Coca-Cola Classic", "375mL");
+        var theirs = await fixture.TrackAsync(
+            fixture.FirstBusinessId, fixture.FirstBusinessPepsiId, "Pepsi Max", "375mL");
+        await fixture.MatchAsync(mine.Id, last);
+        await fixture.MatchAsync(theirs.Id, first);
+
+        Assert.Equal(
+            [last, first],
+            (await fixture.DeniedWorkListStore().ListTrackedMasterProductsAsync(CancellationToken.None))
+                .Select(product => product.Id));
     }
 
     /// <summary>
@@ -341,7 +372,112 @@ public class EfPriceCatalogueWorkListStoreTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(["Brand", "Id", "Listings", "Name", "SizeUnit", "SizeValue"], published);
+        Assert.Equal(["Brand", "Id", "Name", "SizeUnit", "SizeValue"], published);
+    }
+
+    #endregion
+
+    #region The context reads are bounded per product (issue #924)
+
+    /// <summary>
+    /// A product holding more listings than the bound allows comes back as "beyond the bound" with
+    /// <strong>none</strong> of its listings, and a product inside the bound comes back with all of
+    /// them. The prefix is deliberately not sent: an unflagged prefix would read as the product's
+    /// whole catalogue entry.
+    /// </summary>
+    [Fact]
+    public async Task A_product_with_more_listings_than_the_bound_is_answered_as_beyond_it()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var crowded = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var ordinary = await fixture.SeedMasterProductAsync("Pepsi", "Max");
+        await fixture.SeedListingsAsync(crowded, count: 4);
+        await fixture.SeedListingsAsync(ordinary, count: 3);
+
+        var bounded = await fixture.DeniedWorkListStore().ListListingsForMasterProductsAsync(
+            [crowded, ordinary],
+            perProductLimit: 3,
+            CancellationToken.None);
+
+        Assert.Equal([crowded], bounded.MasterProductsBeyondLimit);
+        Assert.DoesNotContain(crowded, bounded.ByMasterProduct.Keys);
+        Assert.Equal(3, bounded.ByMasterProduct[ordinary].Count);
+    }
+
+    /// <summary>The same bound over a waiting key's proposals.</summary>
+    [Fact]
+    public async Task A_waiting_key_with_more_proposals_than_the_bound_is_answered_as_beyond_it()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var crowded = PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL");
+        var ordinary = PriceCatalogueWaitingKey.For("Pepsi Max", "375mL");
+
+        for (var index = 0; index < 4; index++)
+        {
+            await fixture.SeedWaitingListingAsync(crowded, $"SKU-CROWDED-{index}");
+        }
+
+        await fixture.SeedWaitingListingAsync(ordinary, "SKU-ORDINARY");
+
+        var bounded = await fixture.DeniedWorkListStore().ListWaitingListingsAsync(
+            [crowded, ordinary],
+            perKeyLimit: 3,
+            CancellationToken.None);
+
+        Assert.Equal([crowded], bounded.WaitingKeysBeyondLimit);
+        Assert.DoesNotContain(crowded, bounded.ByWaitingKey.Keys);
+        Assert.Single(bounded.ByWaitingKey[ordinary]);
+    }
+
+    /// <summary>
+    /// And over a key's refusals, where the stakes are different: a refusal list is the safeguard
+    /// that stops a matcher re-proposing a pair somebody rejected, so a key beyond the bound comes
+    /// back with none of its refusals and is never answered with a prefix of them.
+    ///
+    /// <para>One pair refused twice - rejected once and undone once - counts once, which is why the
+    /// count is taken over the distinct pairs: counting it twice could put a key beyond a bound it is
+    /// inside.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_waiting_key_with_more_refusals_than_the_bound_is_answered_as_beyond_it()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var crowded = PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL");
+        var ordinary = PriceCatalogueWaitingKey.For("Pepsi Max", "375mL");
+
+        foreach (var index in Enumerable.Range(0, 4))
+        {
+            var refused = await fixture.SeedMasterProductAsync("Refused", $"Variant {index}");
+            await fixture.SeedMatchSuggestionAsync(
+                crowded, refused, ProductMatchSuggestionStatus.Rejected);
+        }
+
+        // Refused twice, which is one refusal: the only key inside the bound stays inside it.
+        var twice = await fixture.SeedMasterProductAsync("Refused", "Twice");
+        await fixture.SeedMatchSuggestionAsync(ordinary, twice, ProductMatchSuggestionStatus.Rejected);
+        await fixture.SeedMatchSuggestionAsync(ordinary, twice, ProductMatchSuggestionStatus.Undone);
+
+        var bounded = await fixture.DeniedWorkListStore().ListRefusedMasterProductsAsync(
+            [crowded, ordinary],
+            perKeyLimit: 3,
+            CancellationToken.None);
+
+        Assert.Equal([crowded], bounded.WaitingKeysBeyondLimit);
+        Assert.Equal(
+            [new RefusedMasterProduct(ordinary, twice)],
+            bounded.Refusals);
+    }
+
+    private static async Task<IReadOnlyList<TrackedSupplierListing>> ListingsOfAsync(
+        PriceCatalogueFixture fixture,
+        long masterProductId)
+    {
+        var bounded = await fixture.DeniedWorkListStore().ListListingsForMasterProductsAsync(
+            [masterProductId],
+            PriceCollectorWorkListPolicy.MaxListingsPerProduct,
+            CancellationToken.None);
+
+        return bounded.ByMasterProduct.TryGetValue(masterProductId, out var own) ? own : [];
     }
 
     #endregion
