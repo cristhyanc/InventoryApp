@@ -190,4 +190,53 @@ describe('ProductService reorder-alert listing metadata (issue #727)', () => {
     expect(request.request.params.has('supplierId')).toBe(false);
     request.flush([]);
   });
+
+  /**
+   * The "Track supplier prices" requests (issue #938). Each is the product's own sub-resource rather
+   * than a catalogue field, for the reason the GST rule is - the product payload is a pinned API
+   * contract - and the write carries one boolean, because the search text is the product's own name
+   * and unit label read by the server.
+   */
+  describe('supplier price tracking (issue #938)', () => {
+    it('reads one product\'s tracking state from its own resource', () => {
+      const { service, httpMock } = createService();
+
+      service.getPriceTracking(7).subscribe();
+      const request = httpMock.expectOne('/api/products/7/price-tracking');
+
+      expect(request.request.method).toBe('GET');
+      request.flush({
+        productId: 7,
+        tracked: false,
+        status: null,
+        searchName: null,
+        unitLabel: null,
+        masterProduct: null,
+        canTrack: true,
+        trackRefusal: null
+      });
+    });
+
+    it.each([true, false])('writes the switch as one boolean (%s)', (tracked) => {
+      const { service, httpMock } = createService();
+
+      service.setPriceTracking(7, tracked).subscribe();
+      const request = httpMock.expectOne('/api/products/7/price-tracking');
+
+      expect(request.request.method).toBe('PUT');
+      expect(request.request.body).toEqual({ tracked });
+      request.flush(null);
+    });
+
+    it('reads the tracked products with no parameter at all', () => {
+      const { service, httpMock } = createService();
+
+      service.getTrackedProducts().subscribe();
+      const request = httpMock.expectOne((candidate) => candidate.url === '/api/products/price-tracking');
+
+      expect(request.request.method).toBe('GET');
+      expect(request.request.params.keys()).toEqual([]);
+      request.flush([]);
+    });
+  });
 });

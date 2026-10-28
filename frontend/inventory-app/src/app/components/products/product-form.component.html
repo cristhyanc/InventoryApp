@@ -105,6 +105,12 @@
         </form>
 
         <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
+        <!-- The "Track supplier prices" switch (issue #938). A workflow of its own - its own read of
+             the product's price-tracking resource, its own write, its own refusal and error states -
+             so a dedicated feature component owns it (the page composition boundary). This page only
+             says which product it is about, and the switch saves separately from the form because
+             tracking is its own API resource, like the GST rule above it. -->
+        <app-product-price-tracking [productId]="productId"></app-product-price-tracking>
         <app-product-price-history [productId]="productId"></app-product-price-history>
       } @else {
         <!--
@@ -221,6 +227,16 @@
           (persisted)="onGstRulePersisted()"
           (failed)="onGstRuleFailed()"
         ></app-product-create-gst-rule>
+
+        <!-- New Product has no "Track supplier prices" switch (issue #938): there is no product yet
+             to track, and the search text is read from the stored product rather than from this
+             form - so offering the switch here would either write nothing or capture a name that is
+             not stored yet. The note says where to find it instead. Turning tracking on for many
+             products at once is explicitly out of that issue's scope. -->
+        <p class="mt-6 border-t border-md-gray-200 pt-6 text-sm text-md-gray-600" data-testid="product-price-tracking-after-create">
+          Supplier price tracking can be switched on from this product's Edit page once it has been
+          created.
+        </p>
 
         <div data-testid="product-form-actions" class="mt-6 flex flex-wrap gap-3 border-t border-md-gray-200 pt-6">
           <!-- Gone once this page has created its product (issue #829): the product exists, these

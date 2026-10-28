@@ -1,11 +1,14 @@
 using Inventory.Application.Access;
 using Inventory.Application.Gst;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reporting.Dashboard;
+using Inventory.Domain.PriceCatalogue;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
+using InventoryApi.Http;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -33,6 +36,16 @@ namespace InventoryApi.Controllers;
 /// products. The endpoints stay open to every role that may operate inventory - unit cost, selling
 /// price and every stock figure are unchanged - and only the response shape differs, decided once
 /// per request from <see cref="CurrentCapabilities"/> and never from a role name.</para>
+///
+/// <para><b>Issue #938 added the "Track supplier prices" switch on the same capability</b> (fourth
+/// task of #817): <c>GET price-tracking</c>, <c>GET {id}/price-tracking</c> and
+/// <c>PUT {id}/price-tracking</c>. Deciding which of its products a business wants priced at
+/// suppliers is the same day-to-day catalogue work as the rest of this controller, which is the
+/// "existing product-edit capability" that issue names, so no new capability is declared - and the
+/// write is refused in a read-only support session and in a role preview by those features' own
+/// method rules rather than by anything written here. The matched status publishes the shared master
+/// product's name and size, which is a member-facing read of a platform table bounded by that issue's
+/// own review; see docs/architecture.md § Tenant ownership.</para>
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -58,6 +71,9 @@ public class ProductsController : ControllerBase
     private readonly GetProductPriceComparison _getProductPriceComparison;
     private readonly GetProductGstRule _getProductGstRule;
     private readonly SetProductGstRule _setProductGstRule;
+    private readonly GetProductPriceTracking _getProductPriceTracking;
+    private readonly SetProductPriceTracking _setProductPriceTracking;
+    private readonly ListTrackedProducts _listTrackedProducts;
     private readonly CurrentCapabilities _capabilities;
 
     public ProductsController(
@@ -71,11 +87,17 @@ public class ProductsController : ControllerBase
         GetProductPriceComparison getProductPriceComparison,
         GetProductGstRule getProductGstRule,
         SetProductGstRule setProductGstRule,
+        GetProductPriceTracking getProductPriceTracking,
+        SetProductPriceTracking setProductPriceTracking,
+        ListTrackedProducts listTrackedProducts,
         CurrentCapabilities capabilities)
     {
         _capabilities = capabilities;
         _getProductGstRule = getProductGstRule;
         _setProductGstRule = setProductGstRule;
+        _getProductPriceTracking = getProductPriceTracking;
+        _setProductPriceTracking = setProductPriceTracking;
+        _listTrackedProducts = listTrackedProducts;
         _listProducts = listProducts;
         _getProduct = getProduct;
         _listLowStockProducts = listLowStockProducts;
@@ -358,5 +380,147 @@ public class ProductsController : ControllerBase
             GstRuleUpdateOutcome.NotFound => NotFound(),
             _ => BadRequest(result.ValidationError),
         };
+    }
+
+    /// <summary>
+    /// Which of the business's products have supplier prices tracked, and where each one has got to
+    /// (issue #938, parent #817) - the catalogue listing's "Tracked" column.
+    ///
+    /// <para>It takes no parameter at all: no filter, no page, no sort, and no business, which is the
+    /// caller's own resolved from their membership. Each entry carries a product id and a status and
+    /// nothing else, and the list holds only this business's mappings, because the central tenant
+    /// query filters match none of any other's.</para>
+    ///
+    /// <para>Its own resource rather than two fields on the catalogue payload, for the reason the
+    /// product's GST rule is one: that payload - and every nested product snapshot a purchase or
+    /// supplier-order response carries - is a pinned API contract.</para>
+    /// </summary>
+    [HttpGet("price-tracking")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<IEnumerable<TrackedProductResponse>>> PriceTracking(CancellationToken ct)
+    {
+        var tracked = await _listTrackedProducts.Handle(ct);
+
+        return Ok(tracked
+            .Select(product => new TrackedProductResponse(product.ProductId, product.Status))
+            .ToList());
+    }
+
+    /// <summary>
+    /// Where one product has got to in the shared supplier price catalogue (issue #938): whether this
+    /// business tracks it, the mapping's status, the search text it holds, and - only while it is
+    /// matched - the master product's name and size.
+    ///
+    /// <para><strong>The matched description is a read of a platform table from a business endpoint,
+    /// and it is bounded by the review of this issue</strong>: the master product's name and size, and
+    /// nothing else. It says nothing about any other business, because a master product is a fact
+    /// about a brand's product and carries no business identity at all - which is what makes "the
+    /// business never sees which other businesses track the same product" true by construction rather
+    /// than by filtering. See docs/architecture.md § Tenant ownership.</para>
+    ///
+    /// <para>It also publishes the eligibility answer the switch needs - <c>canTrack</c> and
+    /// <c>trackRefusal</c>, decided by the one
+    /// <c>Inventory.Domain.PriceCatalogue.ProductPriceTrackingPolicy</c> that refuses the write - so
+    /// the form never words the unit-label rule a second time. The same shape as the product's own
+    /// <c>canDelete</c>/<c>deletionRefusal</c>. Those two fields are also what explains a mapping
+    /// suspended into <c>awaitingProductDetails</c> because the product's own name or unit label can
+    /// no longer be searched for: that mapping names no master product, is sent to no collector, and
+    /// resumes when the product is corrected.</para>
+    /// </summary>
+    /// <response code="200">The product's tracking state, tracked or not.</response>
+    /// <response code="404">No such product in this business.</response>
+    [HttpGet("{id:long}/price-tracking")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ProductPriceTrackingResponse>> GetPriceTracking(
+        long id, CancellationToken ct)
+    {
+        var state = await _getProductPriceTracking.Handle(id, ct);
+
+        return state is null ? NotFound() : Ok(ToResponse(state));
+    }
+
+    /// <summary>
+    /// Turns the "Track supplier prices" switch on or off for one product (issue #938).
+    ///
+    /// <para>On creates this business's own mapping with status <c>requested</c>, copying the
+    /// product's <c>Name</c> and unit label as the search text (the owner's decision of 27 October
+    /// 2026); off removes that mapping and nothing else - no master product, supplier listing or price
+    /// is touched, and no other business's mapping is reachable to touch.</para>
+    ///
+    /// <para>It needs no capability of its own: the controller's existing <c>Inventory.Operate</c> is
+    /// the product-edit capability this issue names, and deciding which of its products a business
+    /// wants priced is the same day-to-day catalogue work as the rest of this controller. A read-only
+    /// support session and a Super Admin's role preview refuse it by their own method rules
+    /// (<c>SupportSessionAccessPolicy</c>, <c>RolePreviewPolicy</c>), not by anything written
+    /// here - the same way the supplier "Not used" switch and the "Available to add" add are
+    /// refused.</para>
+    ///
+    /// <para>Both directions are idempotent: a product already tracked, and one already untracked,
+    /// answer <c>204</c> as well, because the switch states an intention and a double click, a second
+    /// tab or a retried request must not need a different answer.</para>
+    /// </summary>
+    /// <response code="204">The switch is in the state asked for.</response>
+    /// <response code="400">
+    /// The product may not be tracked, with the rule's own sentence: its unit label is blank or the
+    /// generic default. Nothing is written.
+    /// </response>
+    /// <response code="404">No such product in this business.</response>
+    [HttpPut("{id:long}/price-tracking")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetPriceTracking(
+        long id, ProductPriceTrackingDto dto, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+
+        var result = await _setProductPriceTracking.Handle(id, dto.Tracked, ct);
+
+        return result.Outcome switch
+        {
+            ProductPriceTrackingWriteOutcome.ProductNotFound => NotFound(),
+            ProductPriceTrackingWriteOutcome.Refused => BadRequest(RefusalProblem(result.Refusal!)),
+            _ => NoContent(),
+        };
+    }
+
+    /// <summary>
+    /// The tracking state as this controller publishes it, with the size unit written as the code
+    /// <c>MasterProductPolicy</c> defines rather than as an enum member name.
+    /// </summary>
+    private static ProductPriceTrackingResponse ToResponse(ProductPriceTrackingState state) =>
+        new(
+            state.ProductId,
+            state.Tracked,
+            state.Status,
+            state.SearchName,
+            state.UnitLabel,
+            state.MasterProduct is { } master
+                ? new MatchedMasterProductResponse(
+                    master.Name,
+                    master.SizeValue,
+                    MasterProductPolicy.SizeUnitCode(master.SizeUnit))
+                : null,
+            state.CanTrack,
+            state.TrackRefusal);
+
+    /// <summary>
+    /// A refusal of the request itself rather than of a field the caller filled in: a product whose
+    /// unit label is not one supplier prices can be searched for by (issue #938). It carries the
+    /// sentence in <c>detail</c> and in the <c>message</c> extension, the same shape
+    /// <see cref="DomainExceptionHandler"/> produces for a domain validation failure, so the existing
+    /// client error handling reads it without a second convention.
+    /// </summary>
+    private static ProblemDetails RefusalProblem(string message)
+    {
+        var problem = new ProblemDetails
+        {
+            Title = DomainExceptionHandler.ValidationTitle,
+            Detail = message,
+            Status = StatusCodes.Status400BadRequest,
+        };
+        problem.Extensions["message"] = message;
+        return problem;
     }
 }
