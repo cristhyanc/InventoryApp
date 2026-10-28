@@ -19,6 +19,63 @@ export interface ProductGstRule {
 }
 
 /**
+ * Where one of the business's products has got to in the shared supplier price catalogue (backend
+ * `Inventory.Domain.PriceCatalogue.ProductPriceTrackingStatus`, issue #938 of parent #817). The five
+ * states are answers, never labels on each other: `NotFound` is "looked for and not found", which is
+ * a recorded outcome rather than a gap, and `AwaitingProductDetails` is a mapping paused because the
+ * product's own name or unit label can no longer be searched for - it names no catalogue product and
+ * nothing is searched for it until the product is corrected.
+ */
+export enum ProductPriceTrackingStatus {
+  Requested = 1,
+  AutoMatched = 2,
+  Matched = 3,
+  NotFound = 4,
+  AwaitingProductDetails = 5
+}
+
+/**
+ * The matched master product, as `/api/products/{id}/price-tracking` publishes it (issue #938): its
+ * name and its size, and nothing else at all.
+ *
+ * The catalogue is shared across every business, so what a business endpoint may say about one of its
+ * products was decided on that issue - the name and the size of a *matched* mapping's master product.
+ * `sizeUnit` is the published code (`ml`, `l`, `g`, `kg`, `each`), not an enum member name.
+ */
+export interface MatchedMasterProduct {
+  name: string;
+  sizeValue: number;
+  sizeUnit: string;
+}
+
+/**
+ * The product's price-tracking state, from `/api/products/{id}/price-tracking` (issue #938).
+ *
+ * `canTrack` and `trackRefusal` are the server's own eligibility answer about the stored product -
+ * the same rule that refuses the write - so the switch never words the unit-label rule a second time.
+ * The same shape the product's `canDelete`/`deletionRefusal` already has.
+ */
+export interface ProductPriceTracking {
+  productId: number;
+  tracked: boolean;
+  status: ProductPriceTrackingStatus | null;
+  searchName: string | null;
+  unitLabel: string | null;
+  masterProduct: MatchedMasterProduct | null;
+  canTrack: boolean;
+  trackRefusal: string | null;
+}
+
+/**
+ * One tracked product in `/api/products/price-tracking` (issue #938), which is what the catalogue
+ * listing's Tracked column is built from. A product id and a status, and deliberately nothing else.
+ */
+export interface TrackedProduct {
+  productId: number;
+  status: ProductPriceTrackingStatus;
+}
+
+/**
  * A supplier's explicitly configured GST defaults (issue #430), from
  * `/api/suppliers/{id}/gst-defaults`. The delivery and package defaults are separate from the
  * product-line default because a charge never inherits a product line's classification, and a

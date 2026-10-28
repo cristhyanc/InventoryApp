@@ -1191,7 +1191,10 @@ does not manage.
   list's **Deactivate** and **Reactivate** (which send the whole product back) keep working for
   those older products. Imported products are unaffected: the catalogue import gives a product it
   creates the `unit` default and leaves a linked product's own label alone, and no label is
-  backfilled anywhere.
+  backfilled anywhere. **One feature does require a real label**: supplier price tracking cannot be
+  switched on for a product whose label is blank or is still that `unit` default, because the label
+  is half of what is searched for at a supplier — see
+  [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **New Product is read down in titled sections** (issue #892). **Products → New Product** groups
   its fields under **Product details** — Name beside SKU, Category beside Unit Label, Description
   across the row below them, and then the compact **Active product** checkbox — **Opening
@@ -1308,7 +1311,9 @@ does not manage.
   are unaffected by this change. The **Status** column itself is shown only under **All**: under
   **Only active**, every row would say "Active" anyway, so the column (and a sort on it) is hidden
   instead, and switching back to **Only active** clears a Status sort rather than leaving it pointed
-  at a hidden column (issue #828).
+  at a hidden column (issue #828). A **Tracked** column shows which products have supplier prices
+  tracked and where each one has got to — see
+  [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase
@@ -1361,6 +1366,67 @@ does not manage.
   take Nayax's), the SKU, the **unit/volume**, the low-stock threshold, the restock
   target, the active flag and all of your stock, costing and history. Nayax publishes no unit or
   volume label at all, so the review never proposes one.
+
+## Track supplier prices on a product
+
+You choose which of your products should have their prices checked at the suppliers in the shared
+price catalogue, and you can see whether each one has been matched yet. Nothing is checked for a
+product you have not switched on.
+
+- **Products → edit a product → Track supplier prices.** One switch. Turning it on asks for this
+  product's prices; turning it off withdraws the request. It saves on its own, separately from the
+  rest of the product form, because it is not a catalogue field — the same way the **GST rule**
+  panel beside it saves.
+- **A product is searched for by its own name and unit label** — "Coca-Cola Classic" and "375mL".
+  Those two values are copied when you switch tracking on, so what is searched for is what you were
+  shown rather than something that changes under you later.
+- **A real unit label is required** (see **Unit Label is required** under
+  [Products and categories](#products-and-categories)). A product whose label is blank, or is still
+  the generic `unit` every imported product starts with, cannot be switched on: the switch is
+  unavailable and says so — *"Supplier prices are searched for by the product's name and unit label,
+  so this product needs a real unit label such as "375mL" before tracking can be turned on."*
+  Give the product its real label on the same form, save, and the switch becomes available. This
+  changes nothing about what a product may be saved with; it is only a condition for tracking it.
+- **What the status means.** Under the switch, a tracked product shows one of five states, and each
+  is an answer rather than a stage:
+  - **Awaiting match** — the request is recorded and nothing has matched it yet.
+  - **Matched automatically, awaiting check** — the matcher chose a catalogue product and nobody has
+    reviewed that choice. The product it chose is named beside it, with its size.
+  - **Matched** — the match is settled. The catalogue product's name and size are named beside it.
+  - **Not found** — it was looked for and nothing in the catalogue describes it. A real answer, which
+    is why it is not searched for again every run.
+  - **Paused - this product cannot be searched for** — the product's own name or unit label can no
+    longer be searched for, usually because the unit label was replaced by the generic `unit`.
+    Nothing is searched for it, it is matched to nothing, and the same sentence about a real unit
+    label is shown under it saying how to resume. Give the product a real unit label again and it
+    goes back to **awaiting match**.
+  Only the catalogue product's **name and size** are ever shown — nothing about which suppliers
+  stock it, what it costs, or any other business.
+- **Renaming or relabelling the product.** While a product is still **awaiting a match**, editing its
+  name or unit label updates what is searched for. For a product that is already **matched**,
+  changing its **unit label** puts it back to **awaiting a match** with the new text — a 375 ml can
+  that became a 1.25 l bottle is not the same product — while a **name-only** change keeps the match.
+  A **not found** product is left as it is.
+- **Taking a product's unit label away pauses its tracking; it never prices the old size.** If you
+  replace a tracked product's unit label with the generic `unit`, the edit is still saved — tracking
+  never stops you editing a product — but its tracking goes to **Paused**: any match it had is
+  dropped, so no supplier's price for the old size is shown as this product's, and nothing is
+  searched for it in the meantime. Giving it a real unit label again starts it off from the product's
+  current name and label; it waits for a match afresh rather than returning to the match it had,
+  because that match was made on the size you changed.
+- **Turning it off removes only your request.** The shared catalogue of products, supplier listings
+  and prices is untouched, and so is every other business's. You can switch it back on at any time.
+- **Nobody sees anybody else's choices.** A business cannot see which products another business
+  tracks, and the shared catalogue records no business at all — a product is looked up once for
+  everybody, which is the whole point of sharing it.
+- **Products → All Products** has a **Tracked** column showing which of your products are tracked and
+  where each one has got to. It is read-only: the switch itself is on each product's own page, and
+  there is no way to switch many products on at once.
+- **New Product** has no switch — there is no product yet to track. The form says so, and the switch
+  is on that product's **Edit** page once it exists.
+- **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
+  permission is involved. It is unavailable while you are looking at a business in read-only support
+  view, and while a Super Admin is previewing a role, like every other write in those states.
 
 ## A supplier's website
 

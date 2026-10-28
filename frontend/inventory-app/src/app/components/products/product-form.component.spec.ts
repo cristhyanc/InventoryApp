@@ -7,6 +7,7 @@ import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { Category, GstClassification, Product } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { RolePreviewService } from '../../role-preview/role-preview.service';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -61,6 +62,7 @@ async function render(
     routeParams?: Record<string, string>;
     getCategories?: jest.Mock;
     createCategory?: jest.Mock;
+    getPriceTracking?: jest.Mock;
   } = {}
 ) {
   const update = overrides.update ?? jest.fn(() => of(undefined));
@@ -70,6 +72,20 @@ async function render(
   const getGstRule =
     overrides.getGstRule ?? jest.fn(() => of({ productId: 7, gstRule: GstClassification.Unknown }));
   const setGstRule = overrides.setGstRule ?? jest.fn(() => of(undefined));
+  const getPriceTracking =
+    overrides.getPriceTracking ??
+    jest.fn(() =>
+      of({
+        productId: 7,
+        tracked: false,
+        status: null,
+        searchName: null,
+        unitLabel: null,
+        masterProduct: null,
+        canTrack: true,
+        trackRefusal: null
+      })
+    );
   const navigate = jest.fn();
 
   await TestBed.configureTestingModule({
@@ -83,11 +99,16 @@ async function render(
           create,
           getGstRule,
           setGstRule,
-          getPriceComparison: jest.fn(() => of({ productId: 7, entries: [] }))
+          getPriceComparison: jest.fn(() => of({ productId: 7, entries: [] })),
+          // The "Track supplier prices" panel (issue #938) reads this; its own behaviour is
+          // ProductPriceTrackingComponent's spec, and here it only has to render.
+          getPriceTracking: getPriceTracking,
+          setPriceTracking: jest.fn(() => of(undefined))
         }
       },
       { provide: CategoryService, useValue: { getAll: getCategories, create: createCategory } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
+      { provide: RolePreviewService, useValue: { active$: of(false) } },
       provideRouter([]),
       { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap(overrides.routeParams ?? { id: '7' }) } } }
     ]
@@ -152,6 +173,7 @@ async function render(
     create,
     getGstRule,
     setGstRule,
+    getPriceTracking,
     getCategories,
     createCategory,
     chooseGstRule,
@@ -1033,7 +1055,9 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
 
     expect(host.querySelector('[data-testid="product-section-product-details"]')).toBeNull();
     expect(host.querySelector('[data-testid="product-section-opening-inventory"]')).toBeNull();
-    expect(headings(host)).toEqual(['GST rule', 'Supplier price comparison']);
+    // "Track supplier prices" joined the composed panels in issue #938, between the GST rule and
+    // the price comparison - the order the template mounts them in.
+    expect(headings(host)).toEqual(['GST rule', 'Track supplier prices', 'Supplier price comparison']);
 
     const form = host.querySelector('form')!;
     expect(Array.from(form.querySelector('.grid')!.classList)).toEqual(
@@ -1256,5 +1280,47 @@ describe('ProductFormComponent requiring a Unit Label (issue #895)', () => {
     component.save();
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ unit: 'bag' }));
+  });
+});
+
+/**
+ * The "Track supplier prices" switch on the product form (issue #938). The switch's own behaviour -
+ * the write, the unit-label message and the five statuses - is `ProductPriceTrackingComponent`'s
+ * spec; what this page is responsible for is mounting it for the product being edited, and saying
+ * where to find it on New Product.
+ */
+describe('ProductFormComponent supplier price tracking (issue #938)', () => {
+  it('mounts the switch for the product being edited, and reads that product', async () => {
+    const { host, getPriceTracking } = await render();
+
+    expect(host.querySelector('[data-testid="product-price-tracking"]')).not.toBeNull();
+    expect(getPriceTracking).toHaveBeenCalledWith(7);
+  });
+
+  /**
+   * New Product offers no switch: there is no product yet to track, and the search text is read from
+   * the stored product rather than from this form - so the switch would either write nothing or
+   * capture a name that is not stored. The note is what says where it is instead.
+   */
+  it('offers no switch on New Product, and says where it is', async () => {
+    const { host, getPriceTracking } = await render({ routeParams: {} });
+
+    expect(host.querySelector('[data-testid="product-price-tracking"]')).toBeNull();
+    expect(getPriceTracking).not.toHaveBeenCalled();
+    expect(
+      host.querySelector('[data-testid="product-price-tracking-after-create"]')?.textContent
+    ).toContain("Supplier price tracking can be switched on from this product's Edit page");
+  });
+
+  /**
+   * The panel reads and writes its own resource, so the product form's Save is untouched by it: an
+   * edit still sends exactly the catalogue fields it always did, with no tracking value among them.
+   */
+  it('leaves the product update carrying no tracking value', async () => {
+    const { component, update } = await render();
+
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(7, expect.not.objectContaining({ tracked: expect.anything() }));
   });
 });

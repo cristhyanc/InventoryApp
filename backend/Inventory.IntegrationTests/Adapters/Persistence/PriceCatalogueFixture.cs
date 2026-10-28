@@ -1,4 +1,5 @@
 using Inventory.Application.PriceCatalogue;
+using Inventory.Application.Products;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
@@ -7,6 +8,7 @@ using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Xunit;
 
 namespace InventoryApi.Tests.Adapters.Persistence;
 
@@ -262,16 +264,59 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     }
 
     /// <summary>
-    /// Turns tracking on for one product, through the real adapter on that business's own scope.
+    /// Turns tracking on for one product, through the real adapter on that business's own scope, and
+    /// answers the mapping it stored.
+    ///
+    /// <para>No name or unit label is passed: since issue #938 the adapter reads the product's own
+    /// name and unit label inside the write, which is exactly the property most of these tests are
+    /// about - the search text is the product's, never text a caller captured.</para>
     /// </summary>
-    public Task<ProductPriceTrackingRecord> TrackAsync(
+    public async Task<ProductPriceTrackingRecord> TrackAsync(int businessId, long productId)
+    {
+        var store = TrackingStoreFor(businessId);
+
+        var write = await store.TrackAsync(productId, CreatedAt, CancellationToken.None);
+        Assert.Equal(ProductPriceTrackingWriteOutcome.Tracked, write.Outcome);
+
+        var stored = await store.FindForProductAsync(productId, CancellationToken.None);
+        return stored!.Tracking!;
+    }
+
+    /// <summary>
+    /// The same write without asserting its outcome, for the tests that are about a refusal or a
+    /// second attempt.
+    /// </summary>
+    public Task<ProductPriceTrackingWrite> TryTrackAsync(int businessId, long productId) =>
+        TrackingStoreFor(businessId).TrackAsync(productId, CreatedAt, CancellationToken.None);
+
+    /// <summary>Turns tracking off for one product, through the real adapter on that business's scope.</summary>
+    public Task<ProductPriceTrackingWrite> UntrackAsync(int businessId, long productId) =>
+        TrackingStoreFor(businessId).UntrackAsync(productId, CancellationToken.None);
+
+    /// <summary>
+    /// Edits a product's name and unit label through the <strong>real</strong> product store on that
+    /// business's own scope, which is what makes the mapping refresh of issue #938 under test: the
+    /// refresh happens inside that store's own update transaction, so arranging the edit by writing
+    /// the row directly would prove nothing.
+    ///
+    /// <para>Everything else on the product is sent as the fixture's seeded products hold it - no SKU,
+    /// no description, no category - because what is under test is the name and the label.</para>
+    /// </summary>
+    public async Task<ProductWriteAttempt> UpdateProductAsync(
         int businessId,
         long productId,
-        string productName,
-        string? productUnit) =>
-        TrackingStoreFor(businessId).AddAsync(
-            NewProductPriceTracking.For(productId, productName, productUnit, CreatedAt),
+        string name,
+        string? unit)
+    {
+        await using var db = TestAppDbContext.For(_options, businessId);
+
+        var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
+
+        return await store.UpdateAsync(
+            productId,
+            new ProductUpdateFields(name, null, null, 0, 0, unit, null, true),
             CancellationToken.None);
+    }
 
     /// <summary>
     /// Records a decided match on an existing mapping, which no port method does yet: deciding one is
@@ -327,6 +372,49 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         db.Products.Remove(await db.Products.SingleAsync(product => product.Id == productId));
 
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Inserts a mapping behind the adapter's back, for the tests that are about the unique index
+    /// itself: a row written by a writer the adapter's own in-lock read could not have seen.
+    /// </summary>
+    public async Task InsertMappingDirectlyAsync(int businessId, long productId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var product = await db.Products.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == productId);
+        var captured = ProductPriceTrackingPolicy.Capture(product.Name, product.Unit);
+
+        db.ProductPriceTrackings.Add(new ProductPriceTracking
+        {
+            BusinessId = businessId,
+            ProductId = productId,
+            Status = ProductPriceTrackingStatus.Requested,
+            WaitingKey = captured.WaitingKey,
+            SearchName = captured.SearchName,
+            UnitLabel = captured.UnitLabel,
+            CreatedAtUtc = CreatedAt,
+            UpdatedAtUtc = CreatedAt,
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Whether that master product is still there, for the "nothing shared was touched" tests.</summary>
+    public async Task<bool> MasterProductExistsAsync(long masterProductId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.MasterProducts.AnyAsync(master => master.Id == masterProductId);
+    }
+
+    /// <summary>Whether that supplier listing is still there, for the same reason.</summary>
+    public async Task<bool> ListingExistsAsync(long listingId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.SupplierListings.AnyAsync(listing => listing.Id == listingId);
     }
 
     public async Task DeleteMasterProductAsync(long masterProductId)

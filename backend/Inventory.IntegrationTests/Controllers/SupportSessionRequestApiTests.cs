@@ -114,6 +114,9 @@ public class SupportSessionRequestApiTests
     [InlineData("Inventory.Operate", "/api/products")]
     [InlineData("Inventory.Operate", "/api/categories")]
     [InlineData("Inventory.Operate", "/api/stock-history")]
+    // The tracked-products list of issue #938. A supporter may read which of the business's products
+    // it has asked supplier prices for; the switch itself is refused below.
+    [InlineData("Inventory.Operate", "/api/products/price-tracking")]
     [InlineData("Purchasing.Operate", "/api/suppliers")]
     // The "Available to add" list of issue #935. A platform record is about no business, so a
     // supporter reading it learns nothing about the business they are looking at beyond which
@@ -140,6 +143,10 @@ public class SupportSessionRequestApiTests
     /// </summary>
     [Theory]
     [InlineData("Inventory.Operate", "POST", "/api/products/1/inventory-count/apply")]
+    // The "Track supplier prices" switch of issue #938, which declares no rule of its own: the method
+    // rule refuses it under the capability the session does grant, so somebody from outside the
+    // business cannot decide which of its products get sent to the price collector.
+    [InlineData("Inventory.Operate", "PUT", "/api/products/999999/price-tracking")]
     // The pick list's two refill writes (issues #743 and #897). Neither carries a rule of its own:
     // the method rule is what refuses them, which is why a multi-machine batch needed no support
     // session handling when it was added.
