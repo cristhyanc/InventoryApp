@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { PENDING_INVITE_TOKEN_KEY, storePendingInviteToken } from '../access/pending-invite-token';
 import { configureExternalId, unconfigureExternalId } from './external-id.spec-helpers';
 import { SignInComponent } from './sign-in.component';
@@ -16,6 +17,7 @@ function createHarness(failure: SignInFailureKind | null = null): Harness {
   TestBed.configureTestingModule({
     imports: [SignInComponent],
     providers: [
+      provideRouter([]),
       {
         provide: SignInService,
         useValue: {
@@ -73,6 +75,58 @@ describe('SignInComponent (issue #711)', () => {
       expect(fixture.nativeElement.querySelector('[data-testid="sign-in-password-help"]')).toBeNull();
       expect(fixture.nativeElement.textContent).not.toContain('password');
     });
+
+    /** With one action there is no secondary choice, so the work account action is the primary one. */
+    it('styles the lone Microsoft work account action as the primary action', () => {
+      const { fixture } = createHarness();
+      fixture.detectChanges();
+
+      const workforce = button(fixture, 'sign-in-workforce')!;
+      expect(workforce.classList).toContain('rr-button-primary');
+      expect(workforce.classList).toContain('w-full');
+      expect(fixture.nativeElement.querySelector('[data-testid="sign-in-help"]')).toBeNull();
+      expect(fixture.nativeElement.querySelector('[data-testid="sign-in-separate-accounts"]')).toBeNull();
+    });
+  });
+
+  /** The Restockroo presentation (issue #957), whatever the configuration. */
+  describe('Restockroo presentation (issue #957)', () => {
+    it('names Restockroo in the heading and asks how to sign in', () => {
+      const { fixture } = createHarness();
+      fixture.detectChanges();
+
+      const headings = fixture.nativeElement.querySelectorAll('h1') as NodeListOf<HTMLElement>;
+      expect(headings).toHaveLength(1);
+      expect(headings[0].textContent?.trim()).toBe('Sign in to Restockroo');
+      expect(fixture.nativeElement.textContent).toContain('Choose how you’d like to sign in.');
+      expect(fixture.nativeElement.textContent).not.toContain('Inventory Manager');
+    });
+
+    it('links the brand and Back to home to the public homepage', () => {
+      const { fixture } = createHarness();
+      fixture.detectChanges();
+
+      const brand = fixture.nativeElement.querySelector('[data-testid="sign-in-brand"]') as HTMLAnchorElement;
+      const back = fixture.nativeElement.querySelector('[data-testid="sign-in-back-home"]') as HTMLAnchorElement;
+      expect(brand.getAttribute('href')).toBe('/home');
+      expect(brand.textContent).toContain('Restockroo');
+      expect(back.getAttribute('href')).toBe('/home');
+      expect(back.textContent?.trim()).toBe('Back to home');
+    });
+
+    it('offers no sign-in link or button of its own besides the authority actions', () => {
+      configureExternalId();
+      const { fixture } = createHarness();
+      fixture.detectChanges();
+
+      const buttons = Array.from(fixture.nativeElement.querySelectorAll('button') as NodeListOf<HTMLElement>);
+      expect(buttons.map((candidate) => candidate.getAttribute('data-testid'))).toEqual([
+        'sign-in-customer-identity',
+        'sign-in-workforce'
+      ]);
+      const links = Array.from(fixture.nativeElement.querySelectorAll('a') as NodeListOf<HTMLAnchorElement>);
+      expect(links.map((link) => link.getAttribute('href'))).toEqual(['/home', '/home']);
+    });
   });
 
   describe('with a customer identity tenant configured', () => {
@@ -84,12 +138,12 @@ describe('SignInComponent (issue #711)', () => {
      * confirmed, so one action is the honest shape - a second button would send the person to the
      * identical page.
      */
-    it('offers one customer identity action naming Google and an email address', () => {
+    it('offers one customer identity action naming Google and email', () => {
       const { fixture } = createHarness();
       fixture.detectChanges();
 
       const customerIdentity = button(fixture, 'sign-in-customer-identity')!;
-      expect(customerIdentity.textContent?.trim()).toBe('Continue with Google or an email address');
+      expect(customerIdentity.textContent?.trim()).toBe('Continue with Google or email');
       expect(customerIdentity.getAttribute('type')).toBe('button');
 
       // The action is described by the line that explains the hosted flow, so a screen reader
@@ -181,6 +235,35 @@ describe('SignInComponent (issue #711)', () => {
 
       const note = fixture.nativeElement.querySelector('[data-testid="sign-in-separate-accounts"]') as HTMLElement;
       expect(note.textContent).toContain('separate account');
+    });
+
+    it('styles the customer identity action as primary and the work account action as secondary', () => {
+      const { fixture } = createHarness();
+      fixture.detectChanges();
+
+      expect(button(fixture, 'sign-in-customer-identity')!.classList).toContain('rr-button-primary');
+      expect(button(fixture, 'sign-in-workforce')!.classList).toContain('rr-button-secondary');
+      expect(button(fixture, 'sign-in-workforce')!.classList).toContain('w-full');
+    });
+
+    /**
+     * The separate-accounts warning stays visible (issue #957); only the longer verification and
+     * reset help is folded away, in a native disclosure a keyboard opens with Enter or Space.
+     */
+    it('keeps the separate-accounts warning visible and folds the longer help into a disclosure', () => {
+      const { fixture } = createHarness();
+      fixture.detectChanges();
+
+      const note = fixture.nativeElement.querySelector('[data-testid="sign-in-separate-accounts"]') as HTMLElement;
+      expect(note.closest('details')).toBeNull();
+      expect(note.textContent).toContain('Sign in the same way you did before');
+
+      const help = fixture.nativeElement.querySelector('[data-testid="sign-in-help"]') as HTMLDetailsElement;
+      expect(help.tagName).toBe('DETAILS');
+      expect(help.open).toBe(false);
+      const summary = help.querySelector('summary') as HTMLElement;
+      expect(summary.textContent?.trim()).toBe('Help with verification codes and passwords');
+      expect(help.querySelector('[data-testid="sign-in-password-help"]')).not.toBeNull();
     });
 
     /**

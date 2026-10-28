@@ -8,6 +8,8 @@ import { MsalGuard, MsalService } from '@azure/msal-angular';
 import { AccountInfo, AuthenticationResult } from '@azure/msal-browser';
 import { Observable, of } from 'rxjs';
 import { accountStateGuard } from '../access/account-state.guard';
+import { signInPageGuard } from '../auth/sign-in-page.guard';
+import { SignInComponent } from '../auth/sign-in.component';
 import { routes } from '../app.routes';
 import { LandingPageComponent } from './landing/landing-page.component';
 import { PUBLIC_LAYOUT_DATA } from './public-layout';
@@ -74,6 +76,15 @@ describe('public root route (issue #954)', () => {
       expect(homeRoute().canActivate).toBeUndefined();
       expect(homeRoute().canMatch).toBeUndefined();
       expect(homeRoute().data).toEqual(PUBLIC_LAYOUT_DATA);
+    });
+
+    it('draws the sign-in page in the public layout, behind the same guard as before (issue #957)', () => {
+      const signIn = routes.find((candidate) => candidate.path === 'sign-in')!;
+
+      expect(signIn.data).toEqual(PUBLIC_LAYOUT_DATA);
+      expect(signIn.canActivate).toEqual([signInPageGuard]);
+      expect(signIn.canMatch).toBeUndefined();
+      expect(signIn.component).toBe(SignInComponent);
     });
 
     it('loads the landing page for both public routes', async () => {

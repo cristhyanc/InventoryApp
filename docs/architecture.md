@@ -1461,7 +1461,7 @@ Neither scheme accepts the other's values, and the two sets are **never pooled**
 
 Issue #710 taught the API to trust a second issuer; this is the browser's side of it, and it is the whole of the Google journey. Everything about it is in `frontend/inventory-app/src/app/auth-config.ts` and `src/app/auth/`, and [docs/identity-provider-decision.md](identity-provider-decision.md) § 4 journey C, § 9 and § 12 is the design it implements.
 
-**Google is reached through the broker, never directly.** The customer identity action — labelled **Continue with Google** by this issue and **Continue with Google or an email address** since issue #712 added the local journey to the same flow — redirects to the configured External ID tenant's own sign-up/sign-in user flow, in which a human has enabled Google as a built-in provider; the person authenticates to that tenant, which redirects to Google and back, and the SPA acquires an access token *the tenant* issued. The application never contacts Google, never exchanges a Google ID token for anything, and sends **no provider-selection parameter of its own** — no `domain_hint`, no `login_hint`, nothing invented. Which providers a hosted page offers is the tenant's user flow, which is configuration, not code. The actor the API resolves is the validated `(tid, oid)` pair exactly as for every other sign-in: the Google `sub` and any `idp` claim beside it are read by nothing, and `ActorIdentity`/`EntraActorIdentityAccessor` are untouched by this issue as they were by #710.
+**Google is reached through the broker, never directly.** The customer identity action — labelled **Continue with Google** by this issue, **Continue with Google or an email address** since issue #712 added the local journey to the same flow, and **Continue with Google or email** since issue #957 — redirects to the configured External ID tenant's own sign-up/sign-in user flow, in which a human has enabled Google as a built-in provider; the person authenticates to that tenant, which redirects to Google and back, and the SPA acquires an access token *the tenant* issued. The application never contacts Google, never exchanges a Google ID token for anything, and sends **no provider-selection parameter of its own** — no `domain_hint`, no `login_hint`, nothing invented. Which providers a hosted page offers is the tenant's user flow, which is configuration, not code. The actor the API resolves is the validated `(tid, oid)` pair exactly as for every other sign-in: the Google `sub` and any `idp` claim beside it are read by nothing, and `ActorIdentity`/`EntraActorIdentityAccessor` are untouched by this issue as they were by #710.
 
 **The authority is chosen before any redirect, and never switched on a live MSAL instance.** MSAL partitions its token cache by client id and authority, so the two authorities are two configurations with two client ids rather than one instance repointed at runtime — repointing is precisely what serves a token issued by one authority out of the other's cache. `selected-authority.ts` holds the choice in `localStorage`; `browser-auth-providers.ts` builds `MSAL_INSTANCE`, the guard's `authRequest` and the interceptor's protected-resource map for that one authority, so the scope asked for is always the signed-in authority's own API audience and never the other's. `SignInService` starts the redirect on the bootstrapped instance when it already belongs to the chosen authority, and otherwise builds that authority's own instance (`AUTHORITY_CLIENT_FACTORY`) after recording the choice, so the page the redirect returns to bootstraps the matching instance and completes it there. The External ID token request names `openid` and `profile` **explicitly**, because External ID issues `oid` and `tid` only when `profile` is requested (design § 4) and they are the entire identity the API reads.
 
@@ -4219,7 +4219,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts; a route marked with the public layout is rendered with none of that chrome (issue #954) |
-| `public/` | The public layout boundary and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954) |
+| `public/` | The public layout boundary (also used by `/sign-in` since issue #957) and the Restockroo landing page (issue #954): `PUBLIC_LAYOUT_DATA`, `signedOutVisitorGuard`, and `landing/` (the page, its header and mobile menu, the static example dashboard, and its copy) — see [The public landing page](#the-public-landing-page-issue-954) |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
 | `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the per-feature permission vocabulary and evidence, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
@@ -7103,7 +7103,7 @@ which carries no guard, and its **Open app** action is a plain link back to `/`.
 authorization boundary - it only chooses which of two pages `/` shows - and no API changed: every
 endpoint still authorizes every request.
 
-**The public layout boundary.** Both landing routes carry `PUBLIC_LAYOUT_DATA`
+**The public layout boundary.** Both landing routes, and since issue #957 the `/sign-in` route, carry `PUBLIC_LAYOUT_DATA`
 (`public/public-layout.ts`). `AppComponent` reads it from the recognised route tree on
 `RoutesRecognized` - before any guard or page runs - and renders such a route with **none** of the
 authenticated chrome: no support-session or role-preview banner, no header or user control, no
@@ -7111,6 +7111,17 @@ sidebar, no breadcrumbs, and no business-context gate (a signed-out visitor has 
 page reads none). A cancelled or failed navigation puts the layout back to the route still shown.
 The shell's MSAL handling and the account and business context keep running underneath, so an
 authenticated page is exactly as it was when a person returns to it.
+
+**The sign-in page shares the layout (issue #957).** `/sign-in` is drawn in the same public
+layout, with the homepage's `rr` tokens, font and buttons: a Restockroo header linked to `/home`, a
+**Back to home** link and one centred card ("Sign in to Restockroo"). With a customer identity
+authority configured the card offers **Continue with Google or email** (primary) and **Sign in with a
+Microsoft work account** (secondary), keeps the separate-accounts warning visible, and folds the
+verification and password-reset help into a native `<details>` disclosure; without one, the work
+account action is the only, primary action. Provider and authentication semantics are unchanged:
+the route keeps `signInPageGuard` and no authentication guard, each action calls the same
+`SignInService.signIn` with the same authority, the return destination and the two fixed failure
+sentences are as before, and the page makes no request.
 
 **No protected requests.** The page (`public/landing/landing-page.component.ts`) injects no API
 service. Its copy and the example dashboard are static (`landing-content.ts`, rendered by
