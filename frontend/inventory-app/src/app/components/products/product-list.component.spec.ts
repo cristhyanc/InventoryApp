@@ -11,6 +11,8 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 import { AccessService } from '../../access/access.service';
 import { Capability } from '../../access/capabilities';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
+import { CheapestSupplierSummary, SupplierPriceBasis } from '../../models/cheapest-supplier';
 import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { SpecConnectionStatus, provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
@@ -47,6 +49,19 @@ const noTrackedProducts = () => of([] as TrackedProduct[]);
 /** A stub matching `ProductPurchaseCostService.getSummaries`, defaulting to no purchase history for anything asked. */
 function purchaseCostServiceStub(getSummaries: jest.Mock = jest.fn(() => of([]))): Pick<ProductPurchaseCostService, 'getSummaries'> {
   return { getSummaries };
+}
+
+/**
+ * A stub matching `CheapestSupplierService.getSummary` (issue #940, reusing #930's shared
+ * component), defaulting to an empty summary - no product tracked - for every describe block below
+ * that is not itself about the Cheapest supplier column.
+ */
+function cheapestSupplierServiceStub(
+  getSummary: jest.Mock = jest.fn(() =>
+    of({ displayBasis: SupplierPriceBasis.InclusiveOfGst, products: [] } as CheapestSupplierSummary)
+  )
+): Pick<CheapestSupplierService, 'getSummary'> {
+  return { getSummary };
 }
 
 function product(overrides: Partial<Product> = {}): Product {
@@ -103,7 +118,8 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -209,7 +225,8 @@ describe('ProductListComponent Actions fixed slots (issue #876)', () => {
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -293,7 +310,8 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -496,7 +514,8 @@ describe('ProductListComponent write controls during a support session (issue #5
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -590,7 +609,8 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -808,7 +828,8 @@ describe('ProductListComponent Status filter (issue #791)', () => {
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -874,7 +895,10 @@ describe('ProductListComponent Status filter (issue #791)', () => {
    * Cheapest purchase columns, so the header row is exactly these seven columns and the Actions
    * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it. Issue #938
    * then added Tracked, which is present because the tracked-products read answered - with an empty
-   * list, which is what the empty cells below say.
+   * list, which is what the empty cells below say. Issue #940 then added Cheapest supplier, the
+   * same shared column Needs Ordering already carries (issue #930) - it is unrelated to the
+   * supplier filter/column this test is otherwise about, and is never hidden by a capability or a
+   * filter the way the two purchase-cost columns are.
    */
   it('offers no supplier or price filter, column or sort', async () => {
     const { fixture, host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
@@ -891,6 +915,7 @@ describe('ProductListComponent Status filter (issue #791)', () => {
       'Last purchase',
       'Cheapest purchase',
       'Tracked',
+      'Cheapest supplier',
       ''
     ]);
 
@@ -909,6 +934,7 @@ describe('ProductListComponent Status filter (issue #791)', () => {
       'Last purchase',
       'Cheapest purchase',
       'Tracked',
+      'Cheapest supplier',
       ''
     ]);
   });
@@ -932,7 +958,8 @@ describe('ProductListComponent Stock column rendering (issue #893)', () => {
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -1054,7 +1081,8 @@ describe('ProductListComponent Status column visibility (issue #828)', () => {
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -1185,7 +1213,8 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub(options.allowed ?? true) },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -1339,7 +1368,8 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -1439,7 +1469,8 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -1523,7 +1554,8 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -1749,7 +1781,8 @@ describe('ProductListComponent Reactivate (issue #900)', () => {
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
-        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
       ]
     }).compileComponents();
 
@@ -1915,6 +1948,7 @@ describe('ProductListComponent Import products in the toolbar (issue #875)', () 
           useValue: accessServiceStubPerCapability({ 'Imports.Run': options.importsRunAllowed ?? true })
         },
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() },
         provideNayaxConnectionStatus(options.status ?? 'Ready')
       ]
     }).compileComponents();
@@ -2035,6 +2069,7 @@ describe('ProductListComponent Tracked column (issue #938)', () => {
         { provide: AccessService, useValue: accessServiceStub() },
         NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() },
         provideRouter([])
       ]
     }).compileComponents();
