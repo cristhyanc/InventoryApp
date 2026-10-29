@@ -241,6 +241,42 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
   });
 });
 
+/**
+ * `.page`'s `flex flex-col gap-6` spaces only its direct children, and `<app-manual-pick-list>` is
+ * one of them, so the gap between manual entry's own filter and quantities cards has to come from
+ * a wrapper inside the component. The host itself must carry no display utility: the parent hides
+ * it with `[hidden]`, and a `flex` class on the host would compete with that rule.
+ */
+describe('PickListComponent manual entry card spacing', () => {
+  const marginUtility = /\b(m[tbxy]?-\d|space-y-\d)\b/;
+
+  it('spaces the filter and quantities cards with one gap-6 wrapper, leaving the host display-free', async () => {
+    const { host, requireButton, click } = await render();
+
+    click(requireButton('Enter quantities taken'));
+
+    const manual = host.querySelector('app-manual-pick-list') as HTMLElement;
+    expect(manual.className).not.toMatch(/\b(flex|grid|block)\b/);
+    expect(manual.children).toHaveLength(1);
+    const wrapper = manual.firstElementChild as HTMLElement;
+    expect(wrapper.classList).toContain('flex');
+    expect(wrapper.classList).toContain('flex-col');
+    expect(wrapper.classList).toContain('gap-6');
+    const cards = Array.from(wrapper.children).filter((child) => child.classList.contains('card'));
+    expect(cards).toHaveLength(2); // filters, Enter quantities taken
+    cards.forEach((card) => expect(card.className).not.toMatch(marginUtility));
+  });
+
+  it('keeps the manual view hidden after switching back to the calculated view', async () => {
+    const { host, requireButton, click } = await render();
+
+    click(requireButton('Enter quantities taken'));
+    click(requireButton('Calculated'));
+
+    expect((host.querySelector('app-manual-pick-list') as HTMLElement).hidden).toBe(true);
+  });
+});
+
 describe('PickListComponent + ManualPickListComponent machine matrix rendering (issue #904)', () => {
   const machines = () => [localMachine({ id: 5, name: 'Front Lobby' }), localMachine({ id: 6, name: 'Back Room' })];
 
