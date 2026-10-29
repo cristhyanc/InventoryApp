@@ -282,7 +282,40 @@ describe('SKU lookup', () => {
     const { fetchImpl } = fakeFetch([ok(fixture('sku-batch'))]);
     const result = await lookupSkus({ fetchImpl, sleep: async () => {}, siteUrl: SITE, skus: ['BGB25', 'KB', 'CCC3'] });
 
+    // The batch was read to its end, so the site did answer for CCC3: that is a confirmed absence.
+    assert.equal(result.truncated, false);
     assert.deepEqual(result.notFound, ['CCC3']);
+    assert.deepEqual(result.unresolved, []);
+    assert.deepEqual(result.errors, []);
+  });
+
+  it('reads every page of a batch the site answered over two pages', async () => {
+    const { fetchImpl, calls } = fakeFetch([ok(fixture('sku-batch-page-1')), ok(fixture('sku-batch-page-2'))]);
+    const result = await lookupSkus({ fetchImpl, sleep: async () => {}, siteUrl: SITE, skus: ['BGB25', 'KB'] });
+
+    assert.deepEqual(calls.map((call) => call.variables.currentPage), [1, 2]);
+    assert.equal(result.truncated, false);
+    assert.deepEqual(result.products.map((p) => p.sku), ['BGB25', 'KB']);
+    assert.deepEqual(result.notFound, []);
+    assert.deepEqual(result.unresolved, []);
+  });
+
+  it('does not call a SKU missing when the page cap stopped its batch before the site had answered', async () => {
+    const { fetchImpl, calls } = fakeFetch([ok(fixture('sku-batch-page-1')), ok(fixture('sku-batch-page-2'))]);
+    const result = await lookupSkus({
+      fetchImpl,
+      sleep: async () => {},
+      siteUrl: SITE,
+      skus: ['BGB25', 'KB'],
+      options: { maxPages: 1 },
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(result.truncated, true);
+    // What was read is kept; KB is unresolved, because it may be on the page the cap stopped.
+    assert.deepEqual(result.products.map((p) => p.sku), ['BGB25']);
+    assert.deepEqual(result.unresolved, ['KB']);
+    assert.deepEqual(result.notFound, []);
     assert.deepEqual(result.errors, []);
   });
 
@@ -300,8 +333,9 @@ describe('SKU lookup', () => {
     assert.deepEqual(result.products.map((p) => p.sku), ['BGB25', 'KB']);
     assert.equal(result.errors.length, 1);
     assert.deepEqual(result.errors[0].skus, ['CCC3']);
-    // A SKU whose batch failed was never answered for, so it is an error and not a "not found".
+    // A SKU whose batch failed was never answered for, so it is unresolved and not a "not found".
     assert.deepEqual(result.notFound, []);
+    assert.deepEqual(result.unresolved, ['CCC3']);
   });
 });
 
@@ -354,7 +388,7 @@ describe('runLookup', () => {
 
   it('accepts a site the work list passed in', async () => {
     const { fetchImpl, calls } = fakeFetch([ok(fixture('sku-batch'))]);
-    const { exitCode } = await runLookup({
+    const { exitCode, result } = await runLookup({
       argv: ['https://www.jbmetro-nt.com.au', 'BGB25', 'KB'],
       env: { JBMETRO_SITE_URLS: 'https://www.jbmetro-nt.com.au' },
       fetchImpl,
@@ -363,5 +397,24 @@ describe('runLookup', () => {
 
     assert.equal(exitCode, 0);
     assert.equal(calls[0].url, 'https://www.jbmetro-nt.com.au/graphql');
+    assert.deepEqual(result.notFound, []);
+    assert.deepEqual(result.unresolved, []);
+  });
+
+  it('answers a SKU the page cap left unresolved separately from the ones it confirmed missing', async () => {
+    const { fetchImpl } = fakeFetch([ok(fixture('sku-batch-page-1')), ok(fixture('sku-batch-page-2'))]);
+    const { exitCode, result } = await runLookup({
+      argv: [SITE, 'BGB25', 'KB', '--max-pages', '1'],
+      env: {},
+      fetchImpl,
+      sleep: async () => {},
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(result.mode, 'sku');
+    assert.equal(result.truncated, true);
+    assert.deepEqual(result.products.map((p) => p.sku), ['BGB25']);
+    assert.deepEqual(result.unresolved, ['KB']);
+    assert.deepEqual(result.notFound, []);
   });
 });

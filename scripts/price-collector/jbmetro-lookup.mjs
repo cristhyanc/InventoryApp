@@ -27,7 +27,10 @@
 //
 // A GraphQL error returned with HTTP 200, a timeout, a 5xx and a 429 are retried with bounded
 // exponential backoff and then reported against the page or the SKU batch they happened on, without
-// stopping the rest of the run; `truncated` says that what was read is not everything there is.
+// stopping the rest of the run; `truncated` says that what was read is not everything there is. A
+// SKU is only `notFound` once its batch was read to its end: one whose batch stopped early, whether
+// a page failed or the page cap cut it short, is `unresolved` instead, because an unread page may
+// still hold it and a prefix must never be published as a confirmed absence.
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -440,8 +443,9 @@ function mergeBatchProducts(page, found, products) {
 
 /**
  * Looks products up by SKU in bounded batches. A batch that fails after its retries is reported and
- * the next one still runs; a SKU the site answered for but did not return is `notFound`, while one
- * whose batch failed is neither found nor not found — nothing answered for it.
+ * the next one still runs; a SKU the site answered for in full but did not return is `notFound`,
+ * while one whose batch was never read to its end — it failed, or the page cap stopped it — is
+ * `unresolved`: neither found nor missing, because nothing has answered for it yet.
  */
 export async function lookupSkus({ fetchImpl, sleep = sleepFor, siteUrl, skus, options = {} }) {
   const resolved = withDefaults(options);
@@ -458,15 +462,25 @@ export async function lookupSkus({ fetchImpl, sleep = sleepFor, siteUrl, skus, o
     const page = await lookupBatch({ fetchImpl, sleep, siteUrl, batch, resolved });
 
     mergeBatchProducts(page, found, products);
-    if (page.errors.length > 0) {
-      errors.push(...page.errors);
+    errors.push(...page.errors);
+    // A batch whose read stopped early answered for only part of itself, so absence is not yet a
+    // fact for any SKU in it — a failed page and the page cap are the same silence here.
+    if (page.truncated) {
+      truncated = true;
       for (const sku of batch) unanswered.add(sku);
     }
-    if (page.truncated) truncated = true;
   }
 
-  const notFound = requested.filter((sku) => !found.has(sku.toLowerCase()) && !unanswered.has(sku));
-  return { requested, batchSize: resolved.batchSize, truncated, products, notFound, errors };
+  const missing = requested.filter((sku) => !found.has(sku.toLowerCase()));
+  return {
+    requested,
+    batchSize: resolved.batchSize,
+    truncated,
+    products,
+    notFound: missing.filter((sku) => !unanswered.has(sku)),
+    unresolved: missing.filter((sku) => unanswered.has(sku)),
+    errors,
+  };
 }
 
 /** Runs one invocation and returns the JSON result with the process exit code it should carry. */
@@ -510,6 +524,7 @@ export async function runLookup({ argv, env = {}, fetchImpl = fetch, sleep = sle
       truncated: looked.truncated,
       products: looked.products,
       notFound: looked.notFound,
+      unresolved: looked.unresolved,
       errors: looked.errors,
     },
   };
