@@ -120,6 +120,18 @@ public class BusinessOwnershipCoverageTests
     /// collector that reads the work list cannot learn which business any mapping came from. See
     /// docs/architecture.md § Collector work list.</para>
     ///
+    /// <para><see cref="PriceCollectorResultRow"/> and
+    /// <see cref="SupplierListingPendingObservation"/> are the ninth and tenth, and the reviewed
+    /// ownership decision on issue #937 (parent #817), whose own "Migration, data and deployment
+    /// impact" declares an additive platform table if a separate pending store were needed. The
+    /// structural reason is the one above, one step further on again: a reading a collector
+    /// submitted, the decision this application made about it, and a reading that was held back
+    /// rather than priced are all facts about a supplier's shelf and about no business. A result
+    /// row names the run, the issued work item and the supplier's own product id - a product
+    /// description and a shelf, never anybody who wanted the search - and a held reading names the
+    /// listing it is a reading of. Neither has a <c>BusinessId</c> to carry. See
+    /// docs/architecture.md § Collector results.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
     /// by the ownership mechanism, because there is no ownership here to enforce. <strong>Reading has
@@ -145,6 +157,8 @@ public class BusinessOwnershipCoverageTests
         typeof(PriceCollectorRun),
         typeof(SupplierPriceObservation),
         typeof(PriceCollectorWorkItem),
+        typeof(PriceCollectorResultRow),
+        typeof(SupplierListingPendingObservation),
     ];
 
     /// <summary>
@@ -169,22 +183,25 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are eight, each
+    /// about no business is a tenancy decision, not an implementation detail. There are ten, each
     /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
     /// (#873), the shared price catalogue's master products, supplier listings and match suggestions
-    /// (#923), the collector runs and observed prices of #925, and the collector work items of #924 -
-    /// and a ninth one arriving is the change this assertion exists to make visible.
+    /// (#923), the collector runs and observed prices of #925, the collector work items of #924, and
+    /// the submitted result rows and held readings of #937 - and an eleventh one arriving is the
+    /// change this assertion exists to make visible.
     /// </summary>
     [Fact]
-    public void Exactly_eight_entities_are_declared_platform_tables() =>
+    public void Exactly_ten_entities_are_declared_platform_tables() =>
         Assert.Equal(
             [
                 "MasterProduct",
                 "PlatformOptionVisibility",
+                "PriceCollectorResultRow",
                 "PriceCollectorRun",
                 "PriceCollectorWorkItem",
                 "ProductMatchSuggestion",
                 "SupplierListing",
+                "SupplierListingPendingObservation",
                 "SupplierPreset",
                 "SupplierPriceObservation",
             ],

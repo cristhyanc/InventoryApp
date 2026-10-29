@@ -102,7 +102,23 @@ public class AddSupplierPriceObservationsMigrationTests
 
             // And the listing that existed before the rebuild, with its three new columns empty:
             // never checked is the state every listing is in until #937 writes one.
-            var listing = await after.SupplierListings.AsNoTracking().SingleAsync();
+            // Projected to exactly the columns this migration leaves behind: the model is today's
+            // and this database is at this migration, so a later release's columns are not here
+            // yet and asking for them would fail for the wrong reason (issue #937 added four).
+            var listing = await after.SupplierListings
+                .AsNoTracking()
+                .Select(row => new
+                {
+                    row.SupplierProductId,
+                    row.UnitsPerPack,
+                    row.WaitingKey,
+                    row.OriginWaitingKey,
+                    row.MatchStatus,
+                    row.LatestObservationId,
+                    row.LastCheckedAtUtc,
+                    row.LastPriceChangeAtUtc,
+                })
+                .SingleAsync();
 
             Assert.Equal("SKU-1", listing.SupplierProductId);
             Assert.Equal(24, listing.UnitsPerPack);

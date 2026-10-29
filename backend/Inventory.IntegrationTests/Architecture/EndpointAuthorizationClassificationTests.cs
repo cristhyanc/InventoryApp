@@ -126,14 +126,25 @@ public class EndpointAuthorizationClassificationTests
     /// <para>Adding a line here is the exemption itself, for the same reason the list above is: the
     /// collector marker is what makes an authenticated caller stop being a person acting in one
     /// business's API, so it may only ever be given to an endpoint that serves the shared price
-    /// catalogue and no business's own data. <c>GET api/price-collector/work</c> is the one entry and
-    /// serves a work list that carries no business id, business name, business product id or price
-    /// (docs/architecture.md § Collector work list). The results endpoint of #937 and the matches
-    /// endpoint of #941 are the next two, each on its own reviewed issue.</para>
+    /// catalogue and no business's own data. <c>GET api/price-collector/work</c> is the first entry
+    /// and serves a work list that carries no business id, business name, business product id or
+    /// price (docs/architecture.md § Collector work list).</para>
+    ///
+    /// <para>The other three are issue #937's results surface, reviewed on that issue: a collector
+    /// submits what it read, finishes one search, and closes its run. Each of them is the same kind
+    /// of entry as the first - every request and every response is about the shared catalogue, a
+    /// supplier's shelf and the run's own issued work, and none of them carries a business id, a
+    /// business name, a business product id or anything a business owns in either direction
+    /// (docs/architecture.md § Collector results). They write six platform tables and nothing
+    /// tenant-owned, under the same denied <c>BusinessScope</c>. The matches endpoint of #941 is
+    /// the next, on its own reviewed issue.</para>
     /// </summary>
     internal static readonly PriceCollectorEndpoint[] PriceCollectorAllowlist =
     [
         new("api/price-collector/work", "GET"),
+        new("api/price-collector/results", "POST"),
+        new("api/price-collector/work-items/{workItemId:long}/outcome", "POST"),
+        new("api/price-collector/runs/{runId:long}/complete", "POST"),
     ];
 
     /// <summary>One allowlisted collector endpoint: the route template and the HTTP method together.</summary>
@@ -776,6 +787,9 @@ public class EndpointAuthorizationClassificationTests
     /// </summary>
     [Theory]
     [InlineData("api/price-collector/work", "GET")]
+    [InlineData("api/price-collector/results", "POST")]
+    [InlineData("api/price-collector/work-items/{workItemId:long}/outcome", "POST")]
+    [InlineData("api/price-collector/runs/{runId:long}/complete", "POST")]
     public void The_collector_endpoints_are_class_five_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);

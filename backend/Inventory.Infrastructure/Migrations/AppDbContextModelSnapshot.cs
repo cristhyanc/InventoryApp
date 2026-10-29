@@ -1571,10 +1571,60 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("PlatformOptionVisibility");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorResultRow", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("PriceCollectorRunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("PriceCollectorWorkItemId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("SubmittedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("SupplierListingId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("SupplierPriceObservationId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SupplierProductId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PriceCollectorWorkItemId");
+
+                    b.HasIndex("SupplierListingId");
+
+                    b.HasIndex("SupplierPriceObservationId");
+
+                    b.HasIndex("PriceCollectorRunId", "PriceCollectorWorkItemId", "SupplierProductId")
+                        .IsUnique();
+
+                    b.ToTable("PriceCollectorResultRows");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorRun", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("CompleteSearchCount")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("CompletedAtUtc")
@@ -1583,10 +1633,19 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime?>("ExpiresAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("FailedSearchCount")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("FailureCount")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("ListingsCheckedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("NoMatchesSearchCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("NotSearchedCount")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("ObservationsRecordedCount")
@@ -1598,6 +1657,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("TruncatedSearchCount")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
 
                     b.HasIndex("StartedAtUtc");
@@ -1607,6 +1669,8 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("PriceCollectorRuns", t =>
                         {
                             t.HasCheckConstraint("CK_PriceCollectorRuns_CountsNotNegative", "\"ListingsCheckedCount\" >= 0 AND \"ObservationsRecordedCount\" >= 0 AND \"FailureCount\" >= 0");
+
+                            t.HasCheckConstraint("CK_PriceCollectorRuns_SearchCountsNotNegative", "\"CompleteSearchCount\" >= 0 AND \"TruncatedSearchCount\" >= 0 AND \"NoMatchesSearchCount\" >= 0 AND \"FailedSearchCount\" >= 0 AND \"NotSearchedCount\" >= 0");
                         });
                 });
 
@@ -1614,6 +1678,9 @@ namespace Inventory.Infrastructure.Migrations
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("FailureReason")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("IssuedAtUtc")
@@ -1629,6 +1696,9 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<long>("PriceCollectorRunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("SubmittedRowCount")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("SupplierPresetId")
@@ -2360,6 +2430,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime?>("LastCheckedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("LastNotFoundAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("LastPriceChangeAtUtc")
                         .HasColumnType("TEXT");
 
@@ -2375,6 +2448,12 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("OriginWaitingKey")
                         .HasMaxLength(509)
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("SizeUnit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal?>("SizeValue")
+                        .HasColumnType("decimal(18,3)");
 
                     b.Property<int>("SupplierPresetId")
                         .HasColumnType("INTEGER");
@@ -2396,6 +2475,10 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<string>("Url")
                         .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Variant")
+                        .HasMaxLength(200)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("WaitingKey")
@@ -2421,7 +2504,124 @@ namespace Inventory.Infrastructure.Migrations
 
                             t.HasCheckConstraint("CK_SupplierListings_PriceStateConsistent", "((\"LatestObservationId\" IS NULL AND \"LastCheckedAtUtc\" IS NULL AND \"LastPriceChangeAtUtc\" IS NULL) OR (\"LatestObservationId\" IS NOT NULL AND \"LastCheckedAtUtc\" IS NOT NULL))");
 
+                            t.HasCheckConstraint("CK_SupplierListings_SizeAndUnitTogether", "(\"SizeValue\" IS NULL AND \"SizeUnit\" IS NULL) OR (\"SizeValue\" IS NOT NULL AND \"SizeUnit\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_SupplierListings_SizeValuePositive", "\"SizeValue\" IS NULL OR \"SizeValue\" > 0");
+
                             t.HasCheckConstraint("CK_SupplierListings_UnitsPerPackPositive", "\"UnitsPerPack\" IS NULL OR \"UnitsPerPack\" > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierListingPendingObservation", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Barcode")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("BarcodeScope")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsPromotion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ObservedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PackPrice")
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("PriceBasis")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("PriceCollectorRunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("PriceCollectorWorkItemId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("PromotionEndsAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("RegularPackPrice")
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int?>("SizeUnit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal?>("SizeValue")
+                        .HasColumnType("decimal(18,3)");
+
+                    b.Property<string>("SourceReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("StockStatus")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal?>("SupplierGstRate")
+                        .HasColumnType("decimal(5,4)");
+
+                    b.Property<long>("SupplierListingId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("UnitsPerPack")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Variant")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PriceCollectorRunId");
+
+                    b.HasIndex("PriceCollectorWorkItemId");
+
+                    b.HasIndex("SupplierListingId")
+                        .IsUnique();
+
+                    b.ToTable("SupplierListingPendingObservations", t =>
+                        {
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_BarcodeAndScopeTogether", "(\"Barcode\" IS NULL AND \"BarcodeScope\" IS NULL) OR (\"Barcode\" IS NOT NULL AND \"BarcodeScope\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_CurrencyIsAud", "\"Currency\" = 'AUD'");
+
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_GstRateIsAProportion", "\"SupplierGstRate\" IS NULL OR (\"SupplierGstRate\" >= 0 AND \"SupplierGstRate\" <= 1)");
+
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_PackPricePositive", "\"PackPrice\" > 0");
+
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_PromotionEndNeedsPromotion", "\"PromotionEndsAtUtc\" IS NULL OR \"IsPromotion\" = 1");
+
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_RegularPackPricePositive", "\"RegularPackPrice\" IS NULL OR \"RegularPackPrice\" > 0");
+
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_SizeAndUnitTogether", "(\"SizeValue\" IS NULL AND \"SizeUnit\" IS NULL) OR (\"SizeValue\" IS NOT NULL AND \"SizeUnit\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("CK_SupplierListingPendingObservations_UnitsPerPackPositive", "\"UnitsPerPack\" IS NULL OR \"UnitsPerPack\" > 0");
                         });
                 });
 
@@ -2925,6 +3125,39 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("Refill");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorResultRow", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.PriceCollectorRun", "PriceCollectorRun")
+                        .WithMany()
+                        .HasForeignKey("PriceCollectorRunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.PriceCollectorWorkItem", "PriceCollectorWorkItem")
+                        .WithMany()
+                        .HasForeignKey("PriceCollectorWorkItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.SupplierListing", "SupplierListing")
+                        .WithMany()
+                        .HasForeignKey("SupplierListingId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Inventory.Infrastructure.Models.SupplierPriceObservation", "SupplierPriceObservation")
+                        .WithMany()
+                        .HasForeignKey("SupplierPriceObservationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("PriceCollectorRun");
+
+                    b.Navigation("PriceCollectorWorkItem");
+
+                    b.Navigation("SupplierListing");
+
+                    b.Navigation("SupplierPriceObservation");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorWorkItem", b =>
                 {
                     b.HasOne("Inventory.Infrastructure.Models.MasterProduct", "MasterProduct")
@@ -3117,6 +3350,33 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("MasterProduct");
 
                     b.Navigation("SupplierPreset");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierListingPendingObservation", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.PriceCollectorRun", "PriceCollectorRun")
+                        .WithMany()
+                        .HasForeignKey("PriceCollectorRunId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.PriceCollectorWorkItem", "PriceCollectorWorkItem")
+                        .WithMany()
+                        .HasForeignKey("PriceCollectorWorkItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.SupplierListing", "SupplierListing")
+                        .WithMany()
+                        .HasForeignKey("SupplierListingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PriceCollectorRun");
+
+                    b.Navigation("PriceCollectorWorkItem");
+
+                    b.Navigation("SupplierListing");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierOrder", b =>

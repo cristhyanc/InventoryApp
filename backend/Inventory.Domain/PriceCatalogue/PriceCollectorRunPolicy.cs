@@ -45,6 +45,39 @@ public enum PriceCollectorRunStatus
 }
 
 /// <summary>
+/// How a closed run's searches turned out, one count per outcome (issue #937, parent #817).
+///
+/// <para>Five counts rather than a success total and a failure total, for the reason the outcomes
+/// themselves are five: a search that found nothing, one that was cut short and one that never
+/// happened are three different facts about a night's collection, and the only way to read "did the
+/// collector run properly?" afterwards is to see them apart.</para>
+/// </summary>
+/// <param name="Complete">Searched, and everything the supplier publishes was accounted for.</param>
+/// <param name="Truncated">Searched, and cut short.</param>
+/// <param name="NoMatches">Searched, and this supplier publishes nothing that matches.</param>
+/// <param name="Failed">Attempted and could not be completed.</param>
+/// <param name="NotSearched">Issued and never answered - the run closed with it still empty.</param>
+public sealed record PriceCollectorRunOutcomeCounts(
+    int Complete,
+    int Truncated,
+    int NoMatches,
+    int Failed,
+    int NotSearched)
+{
+    /// <summary>A run with no work at all, which is the state every run is created in.</summary>
+    public static PriceCollectorRunOutcomeCounts None { get; } = new(0, 0, 0, 0, 0);
+
+    /// <summary>The searches that accounted for everything they set out to: complete, or no match.</summary>
+    public int FullyAccounted => Complete + NoMatches;
+
+    /// <summary>And the ones that did not, for whichever of the three reasons.</summary>
+    public int ShortOfComplete => Truncated + Failed + NotSearched;
+
+    /// <summary>How many searches the run issued, which is every work item it holds.</summary>
+    public int Total => FullyAccounted + ShortOfComplete;
+}
+
+/// <summary>
 /// The rules of one price collector run (issue #925, parent #817): when it started, when it ended,
 /// how it ended and how much it accounted for.
 ///
@@ -136,6 +169,38 @@ public static class PriceCollectorRunPolicy
     /// one side deliberately rather than by accident.</para>
     /// </summary>
     public static bool HasExpired(DateTime expiresAtUtc, DateTime asOfUtc) => asOfUtc >= expiresAtUtc;
+
+    /// <summary>What a caller who tried to close a run that had already finished is told.</summary>
+    public const string AlreadyFinishedMessage =
+        "This price collector run has already finished.";
+
+    /// <summary>
+    /// How a run that is being closed ended, from what became of its searches (issue #937).
+    ///
+    /// <para>A run with nothing short of complete <see cref="PriceCollectorRunStatus.Succeeded"/>,
+    /// one with nothing fully accounted for <see cref="PriceCollectorRunStatus.Failed"/>, and
+    /// anything between the two <see cref="PriceCollectorRunStatus.PartiallySucceeded"/>. A
+    /// <see cref="PriceCollectorWorkItemOutcome.Truncated"/> search counts as short of complete and
+    /// not as a success, because it is a search that stopped before it had seen everything - the
+    /// same reason it never records a listing as not found.</para>
+    ///
+    /// <para>A run that was issued no work at all succeeded: it accounted for everything it set out
+    /// to check, which was nothing. Reading that as a failure would make "there was nothing due
+    /// tonight" indistinguishable from "the collector could not reach a single supplier".</para>
+    /// </summary>
+    public static PriceCollectorRunStatus StatusFor(PriceCollectorRunOutcomeCounts counts)
+    {
+        ArgumentNullException.ThrowIfNull(counts);
+
+        if (counts.ShortOfComplete == 0)
+        {
+            return PriceCollectorRunStatus.Succeeded;
+        }
+
+        return counts.FullyAccounted == 0
+            ? PriceCollectorRunStatus.Failed
+            : PriceCollectorRunStatus.PartiallySucceeded;
+    }
 
     /// <summary>Whether <paramref name="status"/> is one of the declared outcomes.</summary>
     public static bool IsDeclaredStatus(PriceCollectorRunStatus status) => Enum.IsDefined(status);

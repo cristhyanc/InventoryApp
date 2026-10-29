@@ -82,4 +82,33 @@ public class PriceCollectorRun
     /// are different failures, and subtraction would merge them.
     /// </summary>
     public int FailureCount { get; set; }
+
+    /// <summary>
+    /// How many of this run's searches were answered <see cref="PriceCollectorWorkItemOutcome.Complete"/>
+    /// when it closed (issue #937).
+    ///
+    /// <para>The five counts below are the run's own summary of what became of its work, written
+    /// once when the run is closed or expired. They are stored rather than counted from the work
+    /// items on demand because a run is the thing a person asks "did the collector run properly last
+    /// night?" about, and the answer must not change as later runs re-issue the same products - and
+    /// because <see cref="Status"/> is derived from exactly these five
+    /// (<c>PriceCollectorRunPolicy.StatusFor</c>), so the status and the evidence for it are written
+    /// together.</para>
+    /// </summary>
+    public int CompleteSearchCount { get; set; }
+
+    /// <summary>How many were cut short.</summary>
+    public int TruncatedSearchCount { get; set; }
+
+    /// <summary>How many found nothing that matched - a recorded answer, not a failure.</summary>
+    public int NoMatchesSearchCount { get; set; }
+
+    /// <summary>How many were attempted and could not be completed.</summary>
+    public int FailedSearchCount { get; set; }
+
+    /// <summary>
+    /// How many were never answered at all, which closing the run is what turns into a recorded
+    /// outcome. An expired run's work is counted here too, because an expiry has the same effect.
+    /// </summary>
+    public int NotSearchedCount { get; set; }
 }
