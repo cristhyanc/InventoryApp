@@ -63,9 +63,7 @@ public sealed class UploadPurchase
         CancellationToken cancellationToken)
     {
         // The document's own rules, unchanged, and only when there is a document (issue #976).
-        var extension = file is null ? null : Path.GetExtension(file.FileName).ToLowerInvariant();
-        if (file is not null && !PurchaseDocumentPolicy.IsSizeValid(file.Length)) return null;
-        if (file is not null && !PurchaseDocumentPolicy.IsExtensionAllowed(extension)) return null;
+        if (IsDocumentInvalid(file)) return null;
 
         // Nothing stands in for the uploaded file's name when there is no uploaded file, so a
         // purchase with no document has to be named. Refused before anything is validated further,
@@ -100,19 +98,7 @@ public sealed class UploadPurchase
                 PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(
                     conflictingBaseline.CutoffAt, conflictingBaseline.ProductId, conflictingBaseline.ProductName));
 
-        string? storedFileName = null;
-        PurchaseFileMetadata? fileMetadata = null;
-        if (file is not null)
-        {
-            storedFileName = $"{Guid.NewGuid()}{extension}";
-            await using (var source = file.OpenReadStream())
-            {
-                await _documents.SaveAsync(DocumentCategory.PurchaseDocument, storedFileName, source, cancellationToken);
-            }
-
-            fileMetadata = new PurchaseFileMetadata(
-                storedFileName, file.ContentType ?? string.Empty, file.FileName, file.Length);
-        }
+        var (storedFileName, fileMetadata) = await SaveDocumentAsync(file, cancellationToken);
 
         var resolvedFields = fields with
         {
@@ -122,6 +108,40 @@ public sealed class UploadPurchase
             PurchaseDate = effectivePurchaseDate,
         };
 
+        return await CreateOrCleanUpAsync(
+            resolvedFields, items, fileMetadata, decision, storedFileName, cancellationToken);
+    }
+
+    private static bool IsDocumentInvalid(PurchaseFileInput? file) =>
+        file is not null
+        && (!PurchaseDocumentPolicy.IsSizeValid(file.Length) || !PurchaseDocumentPolicy.IsExtensionAllowed(ExtensionOf(file)));
+
+    private static string? ExtensionOf(PurchaseFileInput? file) =>
+        file is null ? null : Path.GetExtension(file.FileName).ToLowerInvariant();
+
+    private async Task<(string? StoredFileName, PurchaseFileMetadata? Metadata)> SaveDocumentAsync(
+        PurchaseFileInput? file, CancellationToken cancellationToken)
+    {
+        if (file is null) return (null, null);
+
+        var storedFileName = $"{Guid.NewGuid()}{ExtensionOf(file)}";
+        await using (var source = file.OpenReadStream())
+        {
+            await _documents.SaveAsync(DocumentCategory.PurchaseDocument, storedFileName, source, cancellationToken);
+        }
+
+        var metadata = new PurchaseFileMetadata(storedFileName, file.ContentType ?? string.Empty, file.FileName, file.Length);
+        return (storedFileName, metadata);
+    }
+
+    private async Task<PurchaseRecord?> CreateOrCleanUpAsync(
+        PurchaseFields resolvedFields,
+        IReadOnlyList<PurchaseItemInput> items,
+        PurchaseFileMetadata? fileMetadata,
+        SupplierOrderCompletionDecision? decision,
+        string? storedFileName,
+        CancellationToken cancellationToken)
+    {
         try
         {
             return await _store.CreateAsync(resolvedFields, items, fileMetadata, decision, cancellationToken);

@@ -168,7 +168,12 @@ public class PurchasesController : ControllerBase
     // multipart/form-data: file
     [HttpPost("{id:int}/file")]
     [Consumes("multipart/form-data")]
+    // Both limits, as Upload above and NayaxSaleTimestampRepairsController.Preview already need:
+    // RequestSizeLimit caps the raw body through the host's max-request-body-size feature;
+    // RequestFormLimits caps what the multipart reader itself buffers in process, which otherwise
+    // defaults to FormOptions' 128 MB regardless of RequestSizeLimit.
     [RequestSizeLimit(10485760)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 10485760)]
     public async Task<ActionResult<PurchaseResponseDto>> AddFile(int id, IFormFile? file)
     {
         if (ToFileInput(file) is not { } input)
