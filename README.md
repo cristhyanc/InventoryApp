@@ -434,11 +434,20 @@ live (it stays open to every business today, and connecting it stays optional ev
 former "Inventory and cost reporting" feature card is "Inventory value at cost" naming the dashboard
 figure it actually shows, so it does not read as the gated Reports area. The FAQ "Do I need Nayax?"
 is unchanged and stays true either way. Three FAQs were added covering when Starter/Pro become
-purchasable, what happens at the attachment storage limit (an 80% warning, blocked uploads only at
-100%, with existing files and manual recording still available), and that the extra connected-machine
-charge only starts once paid plans and the Nayax connection are both live. GST tax treatment of the
-advertised prices is one of #965's open launch decisions and is intentionally not asserted here
-until it is decided.
+purchasable, what the storage allowances will do once the paid plans launch, and that the extra
+connected-machine charge only starts once paid plans and the Nayax connection are both live. GST tax
+treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
+asserted here until it is decided.
+
+**Plan limits are described as future behaviour, because none of them is enforced yet.** Attachment
+quota enforcement (issue #968) and recording a purchase without attaching a document (issue #976)
+have not shipped: today attachment storage is unrestricted and a purchase still requires its file.
+So the section's lead paragraph says the storage allowances and the connected-machine charge start
+when the paid plans launch and that nothing is limited today, the Free card repeats it for its 1 GB
+allowance, and the storage FAQ describes the 80% warning and the 100% upload pause only as what will
+happen from launch. The page must never present a limit, a paused upload, a per-machine charge or a
+document-free purchase as today's behaviour; `landing-page.component.spec.ts` holds that as a copy
+regression.
 
 ## The dashboard and the menu
 

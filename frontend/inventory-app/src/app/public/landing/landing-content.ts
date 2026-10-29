@@ -137,9 +137,13 @@ export interface LandingPlan {
   readonly billingNote: string;
   readonly description: string;
   readonly features: readonly string[];
-  /** Shown as a badge on the card. Absent only for Free, which needs no "coming soon" caveat. */
+  /** Shown as a badge on the card: Free is available now, Starter and Pro are coming soon. */
   readonly badge?: string;
-  /** An extra callout under the feature list, used by Pro to separate plan entitlement from a usable Nayax connection. */
+  /**
+   * An extra callout under the feature list. Free uses it to say its attachment allowance is not
+   * enforced yet (quota enforcement is issue #968 and has not shipped), and Pro to separate plan
+   * entitlement from a usable Nayax connection.
+   */
   readonly note?: string;
 }
 
@@ -159,7 +163,8 @@ export const LANDING_PLANS: readonly LandingPlan[] = [
       'Manual Pick List entry',
       '1 GB of purchase and expense attachments'
     ],
-    badge: 'Available now'
+    badge: 'Available now',
+    note: 'Attachment storage is not limited today. The 1 GB allowance starts when the paid plans launch.'
   },
   {
     id: 'starter',
@@ -228,14 +233,15 @@ export const LANDING_FAQS: readonly LandingFaq[] = [
   {
     question: 'What happens if I reach my storage limit?',
     answer:
-      "You'll see a warning at 80% of your plan's attachment storage. At 100%, new uploads pause until you free up space or upgrade; " +
-      'you can still view, download and delete existing attachments, and you can still record a purchase or expense without attaching a document.'
+      'Nothing is limited today: attachment storage is unrestricted while Free is the only plan, and the allowances above start ' +
+      "when the paid plans launch. From then on you'll see a warning at 80% of your plan's attachment storage, and at 100% new " +
+      'uploads will pause until you free up space or upgrade, while existing attachments stay available to view, download and delete.'
   },
   {
     question: 'Will connecting Nayax cost extra?',
     answer:
       'Nayax will be part of the Pro plan once paid plans launch, including 5 connected machines. Extra connected machines beyond ' +
-      'that are A$2/month each.'
+      'that will be A$2/month each.'
   }
 ];
 

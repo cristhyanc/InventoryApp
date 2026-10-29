@@ -7206,7 +7206,13 @@ endpoint does not exist yet. Free carries an "Available now" badge; Starter and 
 soon" and every plan's action is the same `getStarted()`/**Open app** the rest of the page uses, so
 there is no second, parallel purchase flow and nothing to keep anonymous. Pro's card carries its own
 `note` making the plan-entitlement/usable-connection distinction explicit, matching issue #965's
-rule that the two are never promised together. The GST tax treatment of the advertised prices is
+rule that the two are never promised together. **A plan limit is copy about the future, never a
+described current behaviour**: attachment quota enforcement (issue #968) and document-optional
+purchases (issue #976) have not shipped, so the section's lead paragraph, Free's own `note` and the
+storage FAQ all say the allowances — and the 80% warning and 100% upload pause — start when the paid
+plans launch, and that storage is unlimited today; nothing on the page claims a cap, a blocked
+upload or a purchase recorded without its document now. That is the same rule as the rest of the
+page's copy, and it is guarded as a copy regression in `landing-page.component.spec.ts`. The GST tax treatment of the advertised prices is
 one of #965's open launch decisions and is deliberately not stated here until it is decided — see
 [docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for how the rest of the
 page's copy is kept inside what the application actually does, which is the same rule applied to the
