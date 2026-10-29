@@ -1,8 +1,10 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 
@@ -25,16 +27,19 @@ internal static class TestPurchaseUseCases
         IPurchaseStore store,
         IDocumentStorage documents,
         IClock? clock = null,
-        IAuthenticatedActorAccessor? actors = null) =>
+        IAuthenticatedActorAccessor? actors = null,
+        AttachmentQuotaGuard? quota = null) =>
         new(
             store,
             documents,
             actors ?? FakeAuthenticatedActorAccessor.Identified(Operator),
-            clock ?? new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc)));
+            clock ?? new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc)),
+            quota ?? FakeAttachmentQuota.NotEnforced());
 
     /// <summary>Issue #976's "add a document later" use case, for the controller tests that construct it.</summary>
-    public static AttachPurchaseDocument Attach(IPurchaseStore store, IDocumentStorage documents) =>
-        new(store, documents);
+    public static AttachPurchaseDocument Attach(
+        IPurchaseStore store, IDocumentStorage documents, AttachmentQuotaGuard? quota = null) =>
+        new(store, documents, quota ?? FakeAttachmentQuota.NotEnforced());
 
     private static ActorIdentity Actor(string objectId)
     {

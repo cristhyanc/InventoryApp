@@ -1,4 +1,6 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Expenses;
+using Inventory.Application.Time;
 using Inventory.Domain.Expenses;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -21,10 +23,12 @@ namespace Inventory.Infrastructure.Persistence;
 public sealed class EfOperatingExpenseStore : IOperatingExpenseStore
 {
     private readonly AppDbContext _db;
+    private readonly IClock _clock;
 
-    public EfOperatingExpenseStore(AppDbContext db)
+    public EfOperatingExpenseStore(AppDbContext db, IClock clock)
     {
         _db = db;
+        _clock = clock;
     }
 
     public async Task<IReadOnlyList<OperatingExpenseListItem>> ListAsync(OperatingExpenseFilter filter, CancellationToken cancellationToken)
@@ -54,25 +58,70 @@ public sealed class EfOperatingExpenseStore : IOperatingExpenseStore
         return expense is null ? null : ToRecord(expense);
     }
 
-    public async Task<OperatingExpenseRecord> AddAsync(OperatingExpenseFields fields, OperatingExpenseAttachmentMetadata? attachment, CancellationToken cancellationToken)
+    public async Task<OperatingExpenseRecord> AddAsync(
+        OperatingExpenseFields fields,
+        OperatingExpenseAttachmentMetadata? attachment,
+        AttachmentUploadReservation? attachmentReservation,
+        CancellationToken cancellationToken)
     {
+        // The write lock only matters when there is a reservation to consume (issue #968): the
+        // reservation's state and the row that replaces it have to be read and written as one
+        // operation, and a deferred transaction takes the lock after the read. An expense with no
+        // attachment, and every expense while no plan is enforced, is the save it has always been.
+        await using var transaction = attachmentReservation is null
+            ? null
+            : await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
         var entity = new OperatingExpense();
         Apply(entity, fields);
         ApplyAttachment(entity, attachment);
+
+        if (attachmentReservation is not null)
+        {
+            // A new expense has no attachment to credit and no version to be stale against.
+            await AttachmentQuotaCommit.ConsumeAsync(
+                _db, _clock, attachmentReservation, null, null, cancellationToken);
+        }
+
         _db.OperatingExpenses.Add(entity);
         await _db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return ToRecord(entity);
     }
 
-    public async Task<OperatingExpenseRecord?> UpdateAsync(int id, OperatingExpenseFields fields, OperatingExpenseAttachmentMetadata? newAttachment, CancellationToken cancellationToken)
+    public async Task<OperatingExpenseRecord?> UpdateAsync(
+        int id,
+        OperatingExpenseFields fields,
+        OperatingExpenseAttachmentMetadata? newAttachment,
+        AttachmentUploadReservation? attachmentReservation,
+        CancellationToken cancellationToken)
     {
+        // Same reasoning as the insert, and one more: the attachment version this write is allowed
+        // to move on is read inside this transaction, so two replacements of one attachment are
+        // serialised and the second reads the first one's committed version and is refused.
+        await using var transaction = attachmentReservation is null
+            ? null
+            : await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
         var entity = await _db.OperatingExpenses.FindAsync(new object[] { id }, cancellationToken);
         if (entity is null) return null;
+
+        if (attachmentReservation is not null)
+        {
+            await AttachmentQuotaCommit.ConsumeAsync(
+                _db,
+                _clock,
+                attachmentReservation,
+                entity.AttachmentStoredFileName is null ? null : entity.AttachmentFileSizeBytes,
+                entity.AttachmentVersion,
+                cancellationToken);
+        }
 
         Apply(entity, fields);
         ApplyAttachment(entity, newAttachment);
         entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
 
         // Loaded explicitly, against the final SupplierId, right before the record is returned -
         // Update may itself have just changed SupplierId, and lazy loading is never used here.
@@ -115,6 +164,12 @@ public sealed class EfOperatingExpenseStore : IOperatingExpenseStore
         entity.AttachmentStoredFileName = attachment.StoredFileName;
         entity.AttachmentContentType = attachment.ContentType;
         entity.AttachmentFileSizeBytes = attachment.FileSizeBytes;
+
+        // Every write that points the expense at a document moves its attachment version on
+        // (issue #968), in the same transaction as the document itself. That is what a competing
+        // replacement's commit compares against, so two of them cannot both take credit for the
+        // file this one just replaced.
+        entity.AttachmentVersion++;
     }
 
     private static OperatingExpenseRecord ToRecord(OperatingExpense entity) => new(

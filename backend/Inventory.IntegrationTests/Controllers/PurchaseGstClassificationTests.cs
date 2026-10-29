@@ -679,7 +679,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
 
     private PurchasesController CreateController(AppDbContext db)
     {
-        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
         var documents = _documents.Object;
         return new PurchasesController(
             new ListPurchases(store),

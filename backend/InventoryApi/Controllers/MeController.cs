@@ -69,7 +69,13 @@ public sealed class MeController : ControllerBase
                 access.Entitlement.Enforced,
                 access.Entitlement.Plan?.ToString(),
                 access.Entitlement.Source.ToString(),
-                access.Entitlement.EndsAtUtc)));
+                access.Entitlement.EndsAtUtc,
+                access.AttachmentStorage is { } storage
+                    ? new MeAttachmentStorageResponse(
+                        storage.UsedBytes,
+                        storage.LimitBytes,
+                        storage.WarningLevel.ToString())
+                    : null)));
     }
 
     /// <summary>

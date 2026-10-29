@@ -415,7 +415,7 @@ public sealed class SupplierOrderPartialCompletionTests : IDisposable
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
             var editRefusal = await Assert.ThrowsAsync<InvalidOperationException>(() => store.UpdateAsync(
                 purchaseId,
                 new PurchaseFields("Weekly restock", null, null, null, null, PurchaseDate, SupplierId),
@@ -426,7 +426,7 @@ public sealed class SupplierOrderPartialCompletionTests : IDisposable
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
             var deleteRefusal = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => store.DeleteAsync(purchaseId, CancellationToken.None));
             Assert.Contains($"supplier order #{orderId}", deleteRefusal.Message, StringComparison.Ordinal);
@@ -449,7 +449,7 @@ public sealed class SupplierOrderPartialCompletionTests : IDisposable
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
             Assert.NotNull(await store.UpdateAsync(
                 purchaseId,
                 new PurchaseFields("Weekly restock", null, null, null, null, PurchaseDate, SupplierId),
@@ -566,7 +566,7 @@ public sealed class SupplierOrderPartialCompletionTests : IDisposable
         params (long ProductId, decimal Quantity)[] lines)
     {
         await using var db = TestAppDbContext.For(_options, BusinessA);
-        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
         var decision = orderId is { } id && fingerprint is not null
             ? new SupplierOrderCompletionDecision(
                 id,
@@ -581,6 +581,7 @@ public sealed class SupplierOrderPartialCompletionTests : IDisposable
             lines.Select(line => new PurchaseItemInput(line.ProductId, line.Quantity, UnitCost)).ToList(),
             new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
             decision,
+            attachmentReservation: null,
             CancellationToken.None);
         return purchase.Id;
     }

@@ -6,6 +6,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Application.Documents;
+using InventoryApi.Tests.Application.Attachments;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -89,10 +90,18 @@ public class OperatingExpenseLocalMachineTests
 
     // No attachment is submitted anywhere here, so document storage is never reached.
     private static CreateOperatingExpense Create(AppDbContext db) =>
-        new(new EfOperatingExpenseStore(db), Mock.Of<IDocumentStorage>(), new EfLocalMachineStore(db));
+        new(
+            new EfOperatingExpenseStore(db, TestClocks.Fixed),
+            Mock.Of<IDocumentStorage>(),
+            new EfLocalMachineStore(db),
+            FakeAttachmentQuota.NotEnforced());
 
     private static UpdateOperatingExpense Update(AppDbContext db) =>
-        new(new EfOperatingExpenseStore(db), Mock.Of<IDocumentStorage>(), new EfLocalMachineStore(db));
+        new(
+            new EfOperatingExpenseStore(db, TestClocks.Fixed),
+            Mock.Of<IDocumentStorage>(),
+            new EfLocalMachineStore(db),
+            FakeAttachmentQuota.NotEnforced());
 
     [Fact]
     public async Task An_expense_round_trips_the_local_machine_id_through_create_read_update_and_filter()
@@ -112,11 +121,11 @@ public class OperatingExpenseLocalMachineTests
             Assert.Equal(machineA, await verify.OperatingExpenses.Select(x => x.MachineId).SingleAsync());
         }
 
-        var read = await new GetOperatingExpense(new EfOperatingExpenseStore(db))
+        var read = await new GetOperatingExpense(new EfOperatingExpenseStore(db, TestClocks.Fixed))
             .Handle(created.Record.Id, CancellationToken.None);
         Assert.Equal(machineA, read!.MachineId);
 
-        var filtered = await new ListOperatingExpenses(new EfOperatingExpenseStore(db)).Handle(
+        var filtered = await new ListOperatingExpenses(new EfOperatingExpenseStore(db, TestClocks.Fixed)).Handle(
             new OperatingExpenseFilter(null, null, null, null, null, machineA), CancellationToken.None);
         Assert.Equal(machineA, Assert.Single(filtered).MachineId);
 

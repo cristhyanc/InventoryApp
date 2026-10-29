@@ -1,5 +1,6 @@
 using Inventory.Application.Expenses;
 using Inventory.Domain.Expenses;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Machines;
 using Xunit;
 
@@ -15,7 +16,7 @@ public class ListOperatingExpensesTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var create = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var create = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
         await create.Handle(Fields(ExpenseCategory.Insurance, new DateTime(2026, 1, 1)), null, CancellationToken.None);
         await create.Handle(Fields(ExpenseCategory.Software, new DateTime(2026, 2, 1)), null, CancellationToken.None);
         await create.Handle(Fields(ExpenseCategory.Insurance, new DateTime(2026, 3, 1)), null, CancellationToken.None);

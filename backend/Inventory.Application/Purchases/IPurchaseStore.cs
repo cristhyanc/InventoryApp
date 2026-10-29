@@ -1,3 +1,4 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.SupplierOrders;
 
 namespace Inventory.Application.Purchases;
@@ -49,12 +50,21 @@ public interface IPurchaseStore
     /// (issue #976), and then all four of the purchase's document values are stored as <c>null</c>
     /// together. Nothing else about the write changes: the items, the allocations, the stock
     /// movements and the cost rebuild are identical with and without a document.</para>
+    ///
+    /// <para><paramref name="attachmentReservation"/> is the storage reservation the document was
+    /// written under (issue #968), and <c>null</c> when there is no document or no plan is being
+    /// enforced. The implementation consumes it in this same transaction, so the reserved bytes
+    /// become the document's own recorded size with the row; an expired reservation is re-validated
+    /// inside that transaction and throws
+    /// <see cref="Attachments.AttachmentStorageQuotaExceededException"/> when the upload no longer
+    /// fits, persisting nothing at all.</para>
     /// </summary>
     Task<PurchaseRecord> CreateAsync(
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
+        AttachmentUploadReservation? attachmentReservation,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -67,9 +77,17 @@ public interface IPurchaseStore
     /// <see cref="PurchaseDocumentAttachOutcome.AlreadyHasDocument"/> rather than overwriting it.
     /// Replacing an existing document is out of scope, and a refusal writes nothing: the caller
     /// removes the bytes it had already stored.</para>
+    ///
+    /// <para><paramref name="attachmentReservation"/> is the storage reservation the document was
+    /// written under (issue #968), or <c>null</c> while no plan is being enforced. It is consumed
+    /// in the same transaction as the attach, and only when the attach actually happens: a refused
+    /// attach leaves it for the caller to release.</para>
     /// </summary>
     Task<PurchaseDocumentAttachment> AttachDocumentAsync(
-        int id, PurchaseFileMetadata document, CancellationToken cancellationToken);
+        int id,
+        PurchaseFileMetadata document,
+        AttachmentUploadReservation? attachmentReservation,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns <c>null</c> when no purchase with <paramref name="id"/> exists, or when

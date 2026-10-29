@@ -28,7 +28,27 @@ public interface IDocumentBlobContainer
     /// Deletes the blob and reports whether one was there to delete.
     /// </summary>
     Task<bool> DeleteAsync(string blobName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The blobs stored under <paramref name="prefix"/>, with their lengths (issue #968).
+    ///
+    /// <para>It exists for the human-invoked attachment storage reconciliation, which has to be
+    /// able to say "this file is stored and no record refers to it". The prefix is server-derived
+    /// by <see cref="BlobDocumentPath.PrefixFor"/> from a business and a category, exactly as
+    /// every other name reaching this seam is, so listing can no more cross a business than
+    /// reading can. No request path uses it: the only caller is
+    /// <see cref="Reconciliation.AzureBlobAttachmentFileInventory"/>, behind the command.</para>
+    /// </summary>
+    Task<IReadOnlyList<BlobDocumentListing>> ListAsync(string prefix, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// One blob the container holds: its full name and what it occupies. Deliberately no content and
+/// no URL - a listing is for reconciling storage against records, not for reading documents.
+/// </summary>
+/// <param name="BlobName">The blob's full name, including the prefix it was listed under.</param>
+/// <param name="ByteLength">Its length in bytes, as the service reports it.</param>
+public sealed record BlobDocumentListing(string BlobName, long ByteLength);
 
 /// <summary>
 /// A blob opened for reading: the content stream plus the two pieces of metadata the document

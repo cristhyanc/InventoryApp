@@ -1,3 +1,4 @@
+using Inventory.Application.Attachments;
 using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 
@@ -66,6 +67,19 @@ namespace Inventory.Application.Access;
 /// features a plan withholds is the enforcement work of #967 and #977; this is the answer those
 /// tasks read.</para>
 /// </param>
+/// <param name="AttachmentStorage">
+/// How much of the business's attachment storage allowance it is using, what that allowance is and
+/// which warning state that puts it in (issue #968), or <see langword="null"/> when no plan is
+/// being enforced for it - in which case there is no allowance to be a percentage of, nothing is
+/// reserved and nothing is withheld.
+///
+/// <para>It is reported beside <paramref name="Entitlement"/> for the reason the entitlement itself
+/// is reported beside the capabilities: a page that warns at 80% and explains a refused upload at
+/// 100% has to read the figures and the plan in one answer, or it will show a percentage of a limit
+/// the same response contradicts. It is not a capability and implies none - at capacity, viewing,
+/// downloading and deleting attachments and recording purchases and expenses without one all keep
+/// working, and nothing is ever deleted automatically.</para>
+/// </param>
 public sealed record CurrentAccess(
     BusinessRole? Role,
     IReadOnlyList<Capability> Capabilities,
@@ -73,7 +87,8 @@ public sealed record CurrentAccess(
     string TimeZoneId,
     CurrentSupportSession? SupportSession,
     bool HistoricalGstClassificationVisible,
-    EffectiveEntitlement Entitlement);
+    EffectiveEntitlement Entitlement,
+    AttachmentStorageStatus? AttachmentStorage);
 
 /// <summary>
 /// The support session a request is inside, as the caller's own access report describes it

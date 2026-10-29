@@ -5,6 +5,7 @@ using InventoryApi.Controllers;
 using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Attachments;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -312,7 +313,7 @@ public sealed class OperatingExpensesControllerTests : IDisposable
 
     private OperatingExpensesController CreateController(AppDbContext db)
     {
-        var store = new EfOperatingExpenseStore(db);
+        var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
         var documents = new FileSystemDocumentStorage(new FileSystemDocumentStorageOptions
         {
             ContentRootPath = _contentRoot,
@@ -322,8 +323,10 @@ public sealed class OperatingExpensesControllerTests : IDisposable
             new ListOperatingExpenses(store),
             new GetOperatingExpense(store),
             new GetOperatingExpenseAttachment(store, documents),
-            new CreateOperatingExpense(store, documents, new EfLocalMachineStore(db)),
-            new UpdateOperatingExpense(store, documents, new EfLocalMachineStore(db)),
+            new CreateOperatingExpense(
+                store, documents, new EfLocalMachineStore(db), FakeAttachmentQuota.NotEnforced()),
+            new UpdateOperatingExpense(
+                store, documents, new EfLocalMachineStore(db), FakeAttachmentQuota.NotEnforced()),
             new DeleteOperatingExpense(store, documents));
     }
 

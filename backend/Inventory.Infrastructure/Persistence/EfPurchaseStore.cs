@@ -1,5 +1,7 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
+using Inventory.Application.Time;
 using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
@@ -40,11 +42,13 @@ public sealed class EfPurchaseStore : IPurchaseStore
 {
     private readonly AppDbContext _db;
     private readonly IRebuildProductCost _rebuild;
+    private readonly IClock _clock;
 
-    public EfPurchaseStore(AppDbContext db, IRebuildProductCost rebuild)
+    public EfPurchaseStore(AppDbContext db, IRebuildProductCost rebuild, IClock clock)
     {
         _db = db;
         _rebuild = rebuild;
+        _clock = clock;
     }
 
     public async Task<IReadOnlyList<PurchaseRecord>> ListAsync(int? supplierId, CancellationToken cancellationToken)
@@ -112,6 +116,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
+        AttachmentUploadReservation? attachmentReservation,
         CancellationToken cancellationToken)
     {
         var purchase = new Purchase
@@ -148,16 +153,30 @@ public sealed class EfPurchaseStore : IPurchaseStore
         // fingerprint comparison and the status write have to be one operation against a competing
         // receipt, and a deferred transaction takes SQLite's write lock only at the first write -
         // which is after that read. An ordinary purchase save is unchanged.
-        await using var writeLock = supplierOrderCompletion is null
-            ? null
-            : await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
-        await using var transaction = supplierOrderCompletion is null ? await BeginTransactionAsync() : null;
+        //
+        // A document's storage reservation needs the same lock for the same reason (issue #968):
+        // an expired reservation is re-validated against the business's current usage inside this
+        // transaction, and that read has to be the one the write is decided on.
+        var needsWriteLock = supplierOrderCompletion is not null || attachmentReservation is not null;
+        await using var writeLock = needsWriteLock
+            ? await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken)
+            : null;
+        await using var transaction = needsWriteLock ? null : await BeginTransactionAsync();
 
         // Read, and refused, before anything at all is written: a stale decision must leave the
         // purchase unsaved rather than roll a committed-looking one back.
         var completionTarget = supplierOrderCompletion is null
             ? null
             : await ReadCompletionTargetAsync(supplierOrderCompletion, cancellationToken);
+
+        // The reservation becomes this document's own recorded size: it is removed by the same
+        // SaveChanges that inserts the purchase, so the two never both count. A purchase being
+        // created has no attachment to credit and no version to be stale against.
+        if (attachmentReservation is not null)
+        {
+            await AttachmentQuotaCommit.ConsumeAsync(
+                _db, _clock, attachmentReservation, null, null, cancellationToken);
+        }
 
         _db.Receipts.Add(purchase);
         await _db.SaveChangesAsync(cancellationToken);
@@ -204,7 +223,10 @@ public sealed class EfPurchaseStore : IPurchaseStore
     /// business-immutability enforcement all stay in force.</para>
     /// </summary>
     public async Task<PurchaseDocumentAttachment> AttachDocumentAsync(
-        int id, PurchaseFileMetadata document, CancellationToken cancellationToken)
+        int id,
+        PurchaseFileMetadata document,
+        AttachmentUploadReservation? attachmentReservation,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(document);
 
@@ -219,6 +241,17 @@ public sealed class EfPurchaseStore : IPurchaseStore
         // other three move with it, so one column decides.
         if (purchase.StoredFileName is not null)
             return new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.AlreadyHasDocument, null);
+
+        // Only once the attach is going to happen, and inside the same transaction and the same
+        // write lock (issue #968): a refused attach leaves the reservation for the caller to
+        // release, and a committed one becomes the document's own recorded size. The purchase has
+        // no document, so there is nothing to credit and no version to be stale against - the
+        // emptiness check above is this write's own concurrency guard.
+        if (attachmentReservation is not null)
+        {
+            await AttachmentQuotaCommit.ConsumeAsync(
+                _db, _clock, attachmentReservation, null, null, cancellationToken);
+        }
 
         purchase.FileName = document.FileName;
         purchase.StoredFileName = document.StoredFileName;

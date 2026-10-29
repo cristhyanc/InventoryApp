@@ -413,6 +413,15 @@ public class AppDbContext : DbContext
         Set<SubscriptionGrandfathering>();
 
     /// <summary>
+    /// The room uploads in progress have reserved in their business's attachment storage allowance
+    /// (issue #968): ordinary tenant-owned data, so the business key, the index, the query filter
+    /// and the ownership stamp are the central mechanism's with nothing added. See
+    /// <see cref="AttachmentStorageReservation"/>.
+    /// </summary>
+    public DbSet<AttachmentStorageReservation> AttachmentStorageReservations =>
+        Set<AttachmentStorageReservation>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -471,6 +480,7 @@ public class AppDbContext : DbContext
         ConfigureSupplierPresets(modelBuilder);
         ConfigurePlatformOptionVisibility(modelBuilder);
         ConfigureSubscriptions(modelBuilder);
+        ConfigureAttachmentStorageReservations(modelBuilder);
         ConfigurePriceCatalogue(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
@@ -1539,6 +1549,42 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+    }
+
+    /// <summary>
+    /// Maps the attachment storage reservations of issue #968: one tenant-owned table recording
+    /// the room uploads in progress have taken in their business's allowance.
+    ///
+    /// <para><strong>Tenant-owned with nothing added</strong>, exactly as the two subscription
+    /// tables above are: <see cref="ConfigureBusinessOwnership"/> gives it the business key, the
+    /// index, the query filter and the ownership stamp, so no adapter writes a business id of its
+    /// own and no reservation can be read or released across businesses.</para>
+    ///
+    /// <para><strong>The index is the one the quota read uses.</strong> Every statement over this
+    /// table asks the same question - what has this business reserved that has not expired - so the
+    /// index is <c>(BusinessId, ExpiresAtUtc)</c>, which serves both the sum and the cleanup of
+    /// expired rows.</para>
+    ///
+    /// <para>Both instants are persisted UTC and marked UTC on the way out, for the reason the
+    /// subscription periods are: the SQLite provider returns an unspecified kind otherwise, and an
+    /// expiry compared against the application clock must not depend on how it was read.</para>
+    ///
+    /// <para><see cref="AttachmentStorageReservation.RecordId"/> is deliberately <strong>not</strong>
+    /// a foreign key. The purchase or expense it names may not exist yet, and one that is deleted
+    /// while an upload is in progress must be deletable: the reservation then expires on its own,
+    /// and the commit that would have used it finds no record and writes nothing.</para>
+    /// </summary>
+    private static void ConfigureAttachmentStorageReservations(ModelBuilder modelBuilder)
+    {
+        var reservation = modelBuilder.Entity<AttachmentStorageReservation>();
+
+        reservation.HasIndex(x => new { x.BusinessId, x.ExpiresAtUtc });
+        reservation.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        reservation.Property(x => x.ExpiresAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>
