@@ -1,4 +1,5 @@
 using Inventory.Application.Purchases;
+using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Purchases;
 
 namespace InventoryApi.Tests.Application.Purchases;
@@ -18,6 +19,13 @@ public sealed class FakePurchaseStore : IPurchaseStore
     public (long ProductId, string? ProductName, DateTime CutoffAt)? ConflictingBaseline { get; set; }
     public bool ThrowOnCreate { get; set; }
     public PurchaseRecord? LastCreated { get; private set; }
+
+    /// <summary>
+    /// The supplier-order completion decision the use case handed the store (issue #974), so a test
+    /// can see the attribution the Application resolved without a database. The store itself applies
+    /// nothing: closing an order is the EF transaction's work, covered by <c>EfPurchaseStoreTests</c>.
+    /// </summary>
+    public SupplierOrderCompletionDecision? LastCompletionDecision { get; private set; }
 
     /// <summary>
     /// The effective purchase date the use case checked against the cost-transition baselines, so a
@@ -53,8 +61,13 @@ public sealed class FakePurchaseStore : IPurchaseStore
     }
 
     public Task<PurchaseRecord> CreateAsync(
-        PurchaseFields fields, IReadOnlyList<PurchaseItemInput> items, PurchaseFileMetadata file, CancellationToken cancellationToken)
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        PurchaseFileMetadata file,
+        SupplierOrderCompletionDecision? supplierOrderCompletion,
+        CancellationToken cancellationToken)
     {
+        LastCompletionDecision = supplierOrderCompletion;
         if (ThrowOnCreate) throw new InvalidOperationException("store failure");
 
         var id = _nextId++;

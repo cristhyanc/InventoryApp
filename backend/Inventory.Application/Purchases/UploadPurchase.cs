@@ -1,6 +1,9 @@
 using Inventory.Application.Documents;
+using Inventory.Application.SupplierOrders;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Purchases;
+using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.Purchases;
 
@@ -10,6 +13,13 @@ namespace Inventory.Application.Purchases;
 /// <c>InventoryApi.Services.PurchaseService.Upload</c> did, so an invalid request never reaches
 /// document storage - then saves the document and persists the purchase, deleting the document
 /// again if persistence fails.
+///
+/// <para>Since issue #974 the request may also carry the operator's decision to complete a linked
+/// supplier order with whatever stays undelivered. This use case adds only the attribution a client
+/// may not supply - who decided, and when - and hands the decision to the same
+/// <see cref="IPurchaseStore.CreateAsync"/> transaction the purchase, its allocations, its stock
+/// movements and its cost rebuild are already written in, so the completion commits with them or not
+/// at all. Nothing here closes an order, and there is no second request that could.</para>
 /// </summary>
 public sealed class UploadPurchase
 {
@@ -18,12 +28,15 @@ public sealed class UploadPurchase
 
     private readonly IPurchaseStore _store;
     private readonly IDocumentStorage _documents;
+    private readonly IAuthenticatedActorAccessor _actors;
     private readonly IClock _clock;
 
-    public UploadPurchase(IPurchaseStore store, IDocumentStorage documents, IClock clock)
+    public UploadPurchase(
+        IPurchaseStore store, IDocumentStorage documents, IAuthenticatedActorAccessor actors, IClock clock)
     {
         _store = store;
         _documents = documents;
+        _actors = actors;
         _clock = clock;
     }
 
@@ -31,6 +44,14 @@ public sealed class UploadPurchase
         PurchaseFileInput file,
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
+        CancellationToken cancellationToken)
+        => await Handle(file, fields, items, supplierOrderCompletion: null, cancellationToken);
+
+    public async Task<PurchaseRecord?> Handle(
+        PurchaseFileInput file,
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        SupplierOrderCompletionRequest? supplierOrderCompletion,
         CancellationToken cancellationToken)
     {
         if (file.Length == 0) return null;
@@ -47,6 +68,11 @@ public sealed class UploadPurchase
 
         // Before the document is saved, so an unsupported classification stores nothing at all.
         PurchaseGstSubmission.EnsureClassificationsAreSupported(fields, items);
+
+        // Resolved before the document is saved too, and before the write transaction opens: a
+        // completion that cannot name who decided it is not auditable, so an unidentifiable caller
+        // is refused rather than recorded as blank.
+        var decision = supplierOrderCompletion is null ? null : ToDecision(supplierOrderCompletion);
 
         var productIds = items.Select(item => item.ProductId).Distinct().ToList();
         if (productIds.Count > 0 && !await _store.AllProductsExistAsync(productIds, cancellationToken))
@@ -76,13 +102,27 @@ public sealed class UploadPurchase
 
         try
         {
-            return await _store.CreateAsync(resolvedFields, items, fileMetadata, cancellationToken);
+            return await _store.CreateAsync(resolvedFields, items, fileMetadata, decision, cancellationToken);
         }
         catch
         {
             await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
             throw;
         }
+    }
+
+    private SupplierOrderCompletionDecision ToDecision(SupplierOrderCompletionRequest request)
+    {
+        var actor = _actors.GetCurrentActor();
+        var identity = actor.Actor
+            ?? throw new BusinessAccessDeniedException(actor.DenialReason ?? BusinessAccessDenialReason.UnidentifiableActor);
+
+        return new SupplierOrderCompletionDecision(
+            request.SupplierOrderId,
+            request.DecisionFingerprint,
+            identity.DirectoryTenantId,
+            identity.ObjectId,
+            _clock.UtcNow);
     }
 
     private static PurchaseItemCandidate ToCandidate(PurchaseItemInput item) =>

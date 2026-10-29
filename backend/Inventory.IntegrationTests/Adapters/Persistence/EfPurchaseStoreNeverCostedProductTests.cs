@@ -193,6 +193,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
                 new PurchaseFields("Restock", null, null, null, null, PurchaseDate, null),
                 [new PurchaseItemInput(FreshProduct, 10m, 2.50m)],
                 new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
+                supplierOrderCompletion: null,
                 CancellationToken.None);
         }
 
@@ -222,6 +223,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
                     new PurchaseFields("Restock", null, null, null, null, PurchaseDate, null),
                     [new PurchaseItemInput(FreshProduct, 10m, 2.50m)],
                     new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
+                    supplierOrderCompletion: null,
                     CancellationToken.None));
             Assert.Contains($"Product New product ({FreshProduct}) stored physical quantity 20 does not reconcile to its movement history (10).", refusal.Message);
         }
@@ -260,6 +262,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
             new PurchaseFields("Restock", null, null, null, null, PurchaseDate, null),
             [new PurchaseItemInput(CostedProduct, 4m, 1.50m)],
             new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
+            supplierOrderCompletion: null,
             CancellationToken.None);
         return (purchase.Id, purchase.Items.Single().Id);
     }

@@ -189,6 +189,10 @@ public class RolePreviewApiTests : IClassFixture<RolePreviewApiTests.ApiFactory>
     // The "Track supplier prices" switch of issue #938, on the same terms: a previewed role cannot
     // turn tracking on or off for one of the business's products.
     [InlineData("PUT", "/api/products/999999/price-tracking")]
+    // Issue #974's supplier-order completion preview, on the same terms: a previewed role cannot
+    // ask the server to project an order, which is what a client needs before it can submit a
+    // completion decision at all.
+    [InlineData("POST", "/api/supplierorders/999999/completion-preview")]
     [InlineData("POST", "/api/invites/redeem")]
     [InlineData("POST", "/api/onboarding/business-applications")]
     [InlineData("POST", "/api/nayax-sales-sync")]

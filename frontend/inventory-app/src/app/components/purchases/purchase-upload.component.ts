@@ -7,7 +7,13 @@ import { switchMap, tap, map, catchError } from 'rxjs/operators';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
-import { GstClassification, Product, Supplier, SupplierOrder } from '../../models/models';
+import {
+  GstClassification,
+  Product,
+  Supplier,
+  SupplierOrder,
+  SupplierOrderCompletionPreview
+} from '../../models/models';
 import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
@@ -28,6 +34,7 @@ import {
   unitPriceFieldValue
 } from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { SupplierOrderCompletionDialogComponent } from './supplier-order-completion-dialog/supplier-order-completion-dialog.component';
 
 // Draft item representation where the quantity and either price may be null
 interface DraftPurchaseItem {
@@ -54,7 +61,7 @@ interface DraftPurchaseItem {
 @Component({
   selector: 'app-purchase-upload',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, IconComponent],
+  imports: [CommonModule, FormsModule, RouterLink, IconComponent, SupplierOrderCompletionDialogComponent],
   templateUrl: './purchase-upload.component.html'
 })
 export class PurchaseUploadComponent implements OnInit, OnDestroy {
@@ -81,6 +88,26 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   loadingSupplierOrder = false;
   noOutstandingItems = false;
   supplierOrderLoadFailed = false;
+
+  /**
+   * The server's projection of what the linked order would still be owed, while the operator is
+   * being asked about it (issue #974). Non-null is exactly "the confirmation is open", and every
+   * figure in it is the server's: this page formats them and calculates nothing.
+   */
+  completionChoice: SupplierOrderCompletionPreview | null = null;
+
+  /**
+   * The answer the operator gave, once. `null` means "keep the order open", which submits no
+   * completion fields at all - the save that has always happened.
+   */
+  private completionDecision: { supplierOrderId: number; fingerprint: string } | null = null;
+
+  /**
+   * Whether the choice has been settled for the attempt in progress. A failed save clears it, so
+   * the next attempt re-previews rather than resubmitting a fingerprint the server already refused
+   * as stale.
+   */
+  private completionChoiceSettled = false;
 
   /** The GST picker's options, shared with the purchase edit form. */
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
@@ -181,6 +208,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.loadingSupplierOrder = false;
     this.noOutstandingItems = false;
     this.supplierOrderLoadFailed = false;
+    this.completionChoice = null;
+    this.completionDecision = null;
+    this.completionChoiceSettled = false;
   }
 
   private prefillFromSupplierOrder(order: SupplierOrder): void {
@@ -280,7 +310,6 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     }
 
     this.error = '';
-    this.saving = true;
 
     // Map draft items to PurchaseItemPayload only after validation
     const validItems: PurchaseItemPayload[] = this.items.map(item => ({
@@ -290,6 +319,15 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       gstClassification: PurchaseUploadComponent.submittedClassification(item.gstClassification)
     }));
 
+    // Before the final save, when this purchase was started from a supplier order, ask the server
+    // what the order would still be owed (issue #974). The projection, the allocation and the
+    // eligibility are all its answers; nothing about the balance is worked out here.
+    if (this.supplierOrderId !== null && !this.completionChoiceSettled) {
+      this.askAboutSupplierOrderCompletion(this.supplierOrderId, validItems);
+      return;
+    }
+
+    this.saving = true;
     this.purchaseService
       .upload({
         file: this.selectedFile,
@@ -304,11 +342,17 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
           this.form.packageCost, this.form.packageGstClassification),
         purchaseDate: this.purchaseTimestamp(),
         supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
-        items: validItems
+        items: validItems,
+        completeSupplierOrderId: this.completionDecision?.supplierOrderId ?? null,
+        completeSupplierOrderFingerprint: this.completionDecision?.fingerprint ?? null
       })
       .subscribe({
         next: () => {
-          if (this.supplierOrderId) {
+          // Only now, after the server stored it, is a completion reported as having happened.
+          if (this.completionDecision) {
+            this.toastService.success('Purchase created and the supplier order completed.');
+            this.router.navigate(['/purchases/orders']);
+          } else if (this.supplierOrderId) {
             this.toastService.success('Purchase created from supplier order.');
             this.router.navigate(['/purchases/orders']);
           } else {
@@ -319,8 +363,90 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
         error: (err) => {
           this.error = err?.error ?? 'Failed to add purchase.';
           this.saving = false;
+          // The entered purchase stays on screen, and the choice is asked again: a refusal may be
+          // exactly that the order changed, so the fingerprint it was made against is no good.
+          this.completionDecision = null;
+          this.completionChoiceSettled = false;
         }
       });
+  }
+
+  /**
+   * Asks the server to project the linked order against the purchase as entered, and opens the
+   * confirmation only when a positive balance really would be left undelivered. An order that is no
+   * longer open, or one this purchase receives in full, has nothing to close and is saved straight
+   * through - which is what keeps the existing fully received path from asking about a balance that
+   * does not exist.
+   */
+  private askAboutSupplierOrderCompletion(supplierOrderId: number, items: PurchaseItemPayload[]): void {
+    this.saving = true;
+    this.supplierOrderService
+      .completionPreview(supplierOrderId, {
+        supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
+        purchaseDate: this.purchaseTimestamp(),
+        lines: items.map((item) => ({ productId: item.productId, quantity: item.quantity }))
+      })
+      .subscribe({
+        next: (preview) => {
+          this.saving = false;
+          if (preview.eligibleForCompletion && preview.hasOutstandingBalance) {
+            this.completionChoice = preview;
+            return;
+          }
+
+          this.completionChoiceSettled = true;
+          this.completionDecision = null;
+          this.upload();
+        },
+        error: () => {
+          this.saving = false;
+          this.error =
+            'Unable to check what this supplier order is still owed, so nothing was saved. ' +
+            'Try again, or reload the order.';
+        }
+      });
+  }
+
+  /**
+   * "Keep order open" - the safe default. The purchase is saved exactly as it always was, the order
+   * stays Partially received, and its remaining balance stays outstanding supply.
+   */
+  keepSupplierOrderOpen(): void {
+    this.completionChoice = null;
+    this.completionDecision = null;
+    this.completionChoiceSettled = true;
+    this.upload();
+  }
+
+  /**
+   * "Complete order" - no further delivery expected. The request carries the order id and the
+   * fingerprint the server issued, and nothing else: the save re-reads the order, re-checks its
+   * eligibility and recomputes that fingerprint inside its own transaction.
+   */
+  completeSupplierOrder(): void {
+    const choice = this.completionChoice;
+    if (choice === null) {
+      return;
+    }
+
+    this.completionChoice = null;
+    this.completionDecision = {
+      supplierOrderId: choice.supplierOrderId,
+      fingerprint: choice.decisionFingerprint
+    };
+    this.completionChoiceSettled = true;
+    this.upload();
+  }
+
+  /**
+   * Cancelling the confirmation returns to the purchase form with everything that was entered still
+   * there, and saves nothing at all.
+   */
+  cancelCompletionChoice(): void {
+    this.completionChoice = null;
+    this.completionDecision = null;
+    this.completionChoiceSettled = false;
+    this.saving = false;
   }
 
   addItem(): void {

@@ -113,6 +113,10 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Purchasing.Operate", "POST", $"/api/suppliers/available-presets/{MissingId}", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/supplierorders", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "POST", "/api/supplierorders", "Operator,Manager,Owner" },
+        // Issue #974's completion preview. It writes nothing and this id is not an order of either
+        // business, so every role that holds the capability is answered 404 - which makes the row
+        // safe to call in both directions, exactly as the "Available to add" add above is.
+        { "Purchasing.Operate", "POST", $"/api/supplierorders/{MissingId}/completion-preview", "Operator,Manager,Owner" },
         { "Suppliers.ManageGstDefaults", "PUT", "/api/suppliers/1/gst-defaults", "Manager,Owner" },
 
         // Issue #681. The product catalogue is Inventory.Operate, but this one action reports the

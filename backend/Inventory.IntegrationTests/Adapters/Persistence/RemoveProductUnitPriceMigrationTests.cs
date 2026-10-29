@@ -135,10 +135,15 @@ public class RemoveProductUnitPriceMigrationTests
         var item = Assert.Single(purchase.Items);
         Assert.Equal((7L, 12m, 1.10m), (item.ProductId, item.Quantity, item.UnitCost));
 
-        var order = await after.SupplierOrders.Include(o => o.Lines).SingleAsync();
-        var line = Assert.Single(order.Lines);
-        Assert.Equal((7L, 24m, 6m, 1.25m), (line.ProductId, line.QuantityOrdered,
-            line.QuantityReceived, line.UnitPrice));
+        // The supplier order's agreed price is read with SQL rather than through the EF model: this
+        // test stops at an older schema, and the model this project compiles against has moved on
+        // since (issue #974 added three nullable columns to SupplierOrders).
+        Assert.Equal(
+            "7|24|6|1.25",
+            (await ScalarAsync(connection, """
+                SELECT ProductId || '|' || QuantityOrdered || '|' || QuantityReceived || '|' || UnitPrice
+                FROM SupplierOrderLines;
+                """))?.ToString());
 
         var movement = await after.StockAdjustments.SingleAsync();
         Assert.Equal((7L, 12, 1.10m, 13.20m), (movement.ProductId, movement.QuantityChange,
@@ -183,7 +188,7 @@ public class RemoveProductUnitPriceMigrationTests
         var product = await after.Products.SingleAsync();
         Assert.Equal((7L, "Chips", 1.10m, 3L),
             (product.Id, product.Name, product.AverageUnitCost, product.CategoryId));
-        Assert.Equal(1.25m, (await after.SupplierOrders.Include(o => o.Lines).SingleAsync()).Lines.Single().UnitPrice);
+        Assert.Equal("1.25", (await ScalarAsync(connection, "SELECT UnitPrice FROM SupplierOrderLines;"))?.ToString());
         Assert.Equal(1.10m, (await after.Receipts.Include(r => r.Items).SingleAsync()).Items.Single().UnitCost);
         Assert.Empty(await ForeignKeyViolationsAsync(connection));
     }

@@ -3,7 +3,8 @@
     <div>
       <h1 class="page-title">Supplier Orders</h1>
       <p class="page-subtitle">
-        Showing open orders only (Ordered and Partially received). Received and cancelled orders are not listed here.
+        Showing open orders only (Ordered and Partially received). Received, cancelled and completed orders are not
+        listed here.
       </p>
     </div>
   </header>
@@ -59,31 +60,30 @@
                     </span>
                   </h3>
                   <p class="text-md-body value-muted">
-                    {{ order.orderDate | date:'mediumDate' }}@if (order.expectedDate) { · Expected {{ order.expectedDate | date:'mediumDate' }} }@if (order.reference) { · {{ order.reference }} }
+                    {{ order.orderDate | date:'mediumDate' }}@if (order.expectedDate) { · Expected {{ order.expectedDate | date:'mediumDate' }} }@if (order.reference) { · {{ order.reference }} }@if (order.completedWithUndeliveredAt) { · Completed {{ order.completedWithUndeliveredAt | date:'mediumDate' }} }
                   </p>
                 </div>
                 <!-- Hidden rather than disabled while a support session is active (issue #657): a
                      session grants PurchasingOperate, so these writes would otherwise still render. -->
-                @if (!sessionActive) {
+                <!-- Both writes require an order that is still open (issue #974): a closed one -
+                     received, cancelled, or completed with an undelivered balance - is offered
+                     neither, however it came to be on screen. -->
+                @if (!sessionActive && isOpen(order)) {
                   <div class="flex flex-wrap gap-2">
-                    @if (order.status !== 3 && order.status !== 2) {
-                      <button
-                        type="button"
-                        class="btn btn-primary"
-                        (click)="receiveOrder(order)"
-                      >
-                        Receive / Create Purchase
-                      </button>
-                    }
-                    @if (order.status < 2) {
-                      <button
-                        type="button"
-                        class="btn btn-secondary"
-                        (click)="cancelOrder(order)"
-                      >
-                        Cancel
-                      </button>
-                    }
+                    <button
+                      type="button"
+                      class="btn btn-primary"
+                      (click)="receiveOrder(order)"
+                    >
+                      Receive / Create Purchase
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-secondary"
+                      (click)="cancelOrder(order)"
+                    >
+                      Cancel
+                    </button>
                   </div>
                 }
               </div>
@@ -95,16 +95,25 @@
                       <th scope="col" class="table-cell table-num">Ordered</th>
                       <th scope="col" class="table-cell table-num">Received</th>
                       <th scope="col" class="table-cell table-num">Outstanding</th>
+                      <!-- Only for an order that records one: what never arrived and never will
+                           (issue #974) is a different figure from what is still expected, so the
+                           two are never shown as one column. -->
+                      @if (hasUndelivered(order)) {
+                        <th scope="col" class="table-cell table-num">Undelivered</th>
+                      }
                       <th scope="col" class="table-cell">Unit Price</th>
                     </tr>
                   </thead>
                   <tbody>
                     @for (line of order.lines; track line.id) {
-                      <tr class="table-row">
+                      <tr class="table-row" data-testid="supplier-order-line">
                         <td class="table-cell">{{ line.product?.name }}</td>
                         <td class="table-cell table-num">{{ line.quantityOrdered }}</td>
                         <td class="table-cell table-num">{{ line.quantityReceived }}</td>
                         <td class="table-cell table-num font-semibold">{{ line.outstandingQuantity }}</td>
+                        @if (hasUndelivered(order)) {
+                          <td class="table-cell table-num">{{ undelivered(line) }}</td>
+                        }
                         <td class="table-cell">{{ line.unitPrice != null ? ('$' + line.unitPrice.toFixed(4)) : '—' }}</td>
                       </tr>
                     }

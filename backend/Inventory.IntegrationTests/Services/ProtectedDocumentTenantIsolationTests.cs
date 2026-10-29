@@ -216,7 +216,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
     {
         var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
         return new PurchaseDocumentUseCases(
-            new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
+            TestPurchaseUseCases.Upload(store, documents, new FakeClock(DateTime.UtcNow)),
             new GetPurchaseFile(store, documents),
             new DeletePurchase(store, documents));
     }
