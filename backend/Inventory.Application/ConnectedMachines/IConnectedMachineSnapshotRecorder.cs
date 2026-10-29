@@ -42,6 +42,18 @@ public enum ConnectedMachineSnapshotOutcome
     /// work - so there was no account to count and, on the job's path, no call was made.
     /// </summary>
     ConnectionUnavailable = 60,
+
+    /// <summary>
+    /// The fleet read could not say which Nayax account authenticated it
+    /// (<see cref="ConnectedMachineFleetRead.AccountSeries"/> was absent), so nothing was recorded.
+    ///
+    /// <para>It is fail-closed rather than a guess at the business's current series: a count that
+    /// cannot name the account it was taken from is not billing evidence, and attributing it to
+    /// whichever account happens to be stored when the answer arrives is precisely the mistake this
+    /// state exists to make impossible. In this application only a client that does not reach Nayax
+    /// at all - the end-to-end testing stub - answers without provenance.</para>
+    /// </summary>
+    AccountUnknown = 70,
 }
 
 /// <summary>
@@ -65,8 +77,10 @@ public sealed record ConnectedMachineSnapshotAttempt(
 /// (<see cref="IConnectedMachineSnapshotStore.TryRecordAsync"/>), which is what makes concurrent page
 /// loads and the daily job unable to produce two snapshots for one business, day and account series.
 /// Neither way takes a business, a date, a series or a count from a caller: the business is the one
-/// the scope resolved, the day and the instant come from the application clock, the series comes from
-/// the business's own stored connection, and the count comes from the fleet read.</para>
+/// the scope resolved, the day and the instant come from the application clock, and the series and
+/// the count both come from the fleet read - the series being the account whose credentials
+/// authenticated that very read (<see cref="ConnectedMachineFleetRead.AccountSeries"/>), never a
+/// separate look at the stored connection.</para>
 /// </summary>
 public interface IConnectedMachineSnapshotRecorder
 {

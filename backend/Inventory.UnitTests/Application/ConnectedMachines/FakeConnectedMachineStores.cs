@@ -97,6 +97,12 @@ internal sealed class FakeConnectedMachineSnapshotStore : IConnectedMachineSnaps
 /// <summary>
 /// In-memory fake of the connected-machine fleet reader (issue #978): the one Nayax call the daily
 /// job makes, as a test decides it - a fleet, an incomplete read, or a failure.
+///
+/// <para>Every answer carries the account series the read was authenticated as, because that is what
+/// the recorder stamps a snapshot with. <see cref="DuringRead"/> is what makes the job path's race
+/// testable without a web host: it runs while the call is "in flight", so a test can switch the
+/// business's Nayax account between the job's eligibility read and the fleet answer and then assert
+/// which account the evidence landed under.</para>
 /// </summary>
 internal sealed class FakeConnectedMachineFleetReader : IConnectedMachineFleetReader
 {
@@ -111,14 +117,24 @@ internal sealed class FakeConnectedMachineFleetReader : IConnectedMachineFleetRe
 
     /// <summary>A reader that answers a complete read of these provider machine ids.</summary>
     public static FakeConnectedMachineFleetReader Returning(params long[] providerMachineIds) =>
+        ReturningFor(accountSeries: 1, providerMachineIds);
+
+    /// <summary>
+    /// A reader whose read was authenticated as <paramref name="accountSeries"/> - the account the
+    /// fleet answer really came from.
+    /// </summary>
+    public static FakeConnectedMachineFleetReader ReturningFor(
+        int? accountSeries, params long[] providerMachineIds) =>
         new(
-            ConnectedMachineFleetRead.Complete(providerMachineIds.Select(id => (long?)id)),
+            ConnectedMachineFleetRead.Complete(
+                accountSeries, providerMachineIds.Select(id => (long?)id)),
             failure: null);
 
     /// <summary>A reader whose read did not account for the whole fleet.</summary>
     public static FakeConnectedMachineFleetReader Incomplete(params long[] providerMachineIds) =>
         new(
-            ConnectedMachineFleetRead.Incomplete(providerMachineIds.Select(id => (long?)id)),
+            ConnectedMachineFleetRead.Incomplete(
+                accountSeries: 1, providerMachineIds.Select(id => (long?)id)),
             failure: null);
 
     /// <summary>A reader whose call to Nayax failed, as an upstream failure does.</summary>
@@ -134,12 +150,24 @@ internal sealed class FakeConnectedMachineFleetReader : IConnectedMachineFleetRe
     /// <summary>How many times Nayax was called.</summary>
     public int Reads { get; private set; }
 
-    public Task<ConnectedMachineFleetRead> ReadAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// What happens while this read is in flight - an Owner saving a different Nayax account, for
+    /// example. It runs after the caller decided to spend the call and before the answer is handed
+    /// back, which is exactly the window the job path's attribution has to survive.
+    /// </summary>
+    public Func<Task>? DuringRead { get; set; }
+
+    public async Task<ConnectedMachineFleetRead> ReadAsync(CancellationToken cancellationToken)
     {
         Reads++;
 
+        if (DuringRead is { } duringRead)
+        {
+            await duringRead().ConfigureAwait(false);
+        }
+
         return _failure is not null
             ? throw _failure
-            : Task.FromResult(_read!);
+            : _read!;
     }
 }

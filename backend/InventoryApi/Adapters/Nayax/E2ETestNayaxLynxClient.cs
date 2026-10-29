@@ -1,4 +1,5 @@
 using Inventory.Application.Nayax;
+using Inventory.Infrastructure.Nayax;
 
 namespace InventoryApi.Adapters.Nayax;
 
@@ -27,7 +28,7 @@ namespace InventoryApi.Adapters.Nayax;
 /// It is only ever registered behind <c>InventoryApi.Auth.E2ETesting.E2ETestEnvironment</c>; see
 /// <c>Program.cs</c>.
 /// </summary>
-public sealed class E2ETestNayaxLynxClient : INayaxLynxClient
+public sealed class E2ETestNayaxLynxClient : INayaxFleetProvenanceClient
 {
     private const string NoFleetMessage =
         "The end-to-end testing host serves no Nayax machine data. A test that needs a machine "
@@ -39,6 +40,16 @@ public sealed class E2ETestNayaxLynxClient : INayaxLynxClient
 
     // This host caches nothing either, so the fresh read is the same empty fleet (issue #840).
     public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) => Empty<NayaxMachine>();
+
+    /// <summary>
+    /// The same empty fleet, with <strong>no</strong> account series (issue #978): this host reaches
+    /// no Nayax account, resolves no credential and therefore cannot say which account a read was
+    /// authenticated as. Answering none is the honest answer, and the recorder refuses to attribute
+    /// a count it cannot name an account for - so an E2E run records no snapshot rather than one
+    /// stamped with a series nobody read.
+    /// </summary>
+    public async Task<NayaxFleetReadResult> ReadFleetFreshAsync(CancellationToken ct = default) =>
+        new(await Empty<NayaxMachine>().ConfigureAwait(false), AccountSeries: null);
 
     public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) =>
         Empty<NayaxMachineProduct>();

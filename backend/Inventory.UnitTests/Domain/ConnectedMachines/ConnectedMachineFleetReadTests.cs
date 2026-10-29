@@ -10,6 +10,11 @@ namespace InventoryApi.Tests.Domain.ConnectedMachines;
 /// to pin is which entries of a fleet answer are machines: every one Nayax returned with a usable id,
 /// counted once, and nothing else - no local machine, no duplicate, and no entry that identifies no
 /// machine at all.</para>
+///
+/// <para>And which <em>account</em> a read came from, because that travels with the read rather than
+/// being looked up again afterwards: a read carries the series of the credential snapshot that
+/// authenticated it, a reader that cannot say carries none, and a value that identifies no account is
+/// refused outright.</para>
 /// </summary>
 public class ConnectedMachineFleetReadTests
 {
@@ -24,7 +29,7 @@ public class ConnectedMachineFleetReadTests
     [Fact]
     public void Counts_every_machine_the_fleet_read_returned()
     {
-        var read = ConnectedMachineFleetRead.Complete([101, 102, 103]);
+        var read = ConnectedMachineFleetRead.Complete(accountSeries: 1, [101, 102, 103]);
 
         Assert.Equal(3, read.Count);
         Assert.Equal(new long[] { 101, 102, 103 }, read.ProviderMachineIds);
@@ -39,7 +44,7 @@ public class ConnectedMachineFleetReadTests
     [Fact]
     public void Counts_each_machine_once_and_records_the_ids_in_one_order()
     {
-        var read = ConnectedMachineFleetRead.Complete([103, 101, 102, 101]);
+        var read = ConnectedMachineFleetRead.Complete(accountSeries: 1, [103, 101, 102, 101]);
 
         Assert.Equal(3, read.Count);
         Assert.Equal(new long[] { 101, 102, 103 }, read.ProviderMachineIds);
@@ -56,7 +61,7 @@ public class ConnectedMachineFleetReadTests
     [InlineData(-1L)]
     public void Does_not_count_an_entry_that_identifies_no_machine(long? unusableId)
     {
-        var read = ConnectedMachineFleetRead.Complete([101, unusableId]);
+        var read = ConnectedMachineFleetRead.Complete(accountSeries: 1, [101, unusableId]);
 
         Assert.Equal(1, read.Count);
         Assert.Equal(new long[] { 101 }, read.ProviderMachineIds);
@@ -70,7 +75,7 @@ public class ConnectedMachineFleetReadTests
     [Fact]
     public void A_fleet_with_no_machines_is_a_count_of_none()
     {
-        var read = ConnectedMachineFleetRead.Complete([]);
+        var read = ConnectedMachineFleetRead.Complete(accountSeries: 1, []);
 
         Assert.Equal(0, read.Count);
         Assert.Empty(read.ProviderMachineIds);
@@ -81,10 +86,50 @@ public class ConnectedMachineFleetReadTests
     [Fact]
     public void An_incomplete_read_is_marked_incomplete()
     {
-        var read = ConnectedMachineFleetRead.Incomplete([101, 102]);
+        var read = ConnectedMachineFleetRead.Incomplete(accountSeries: 1, [101, 102]);
 
         Assert.False(read.IsComplete);
         Assert.Equal(2, read.Count);
+    }
+
+    /// <summary>
+    /// A read carries the account series it was authenticated as, so the snapshot it becomes can be
+    /// stamped with the account the fleet actually came from rather than with whichever account is
+    /// stored by the time the answer is recorded.
+    /// </summary>
+    [Fact]
+    public void A_read_carries_the_account_series_that_authenticated_it()
+    {
+        Assert.Equal(7, ConnectedMachineFleetRead.Complete(accountSeries: 7, [101]).AccountSeries);
+        Assert.Equal(7, ConnectedMachineFleetRead.Incomplete(accountSeries: 7, [101]).AccountSeries);
+    }
+
+    /// <summary>
+    /// A reader that cannot say which account authenticated its read says so, rather than naming
+    /// one. Nothing is recorded from such a read - see
+    /// <c>ConnectedMachineSnapshotOutcome.AccountUnknown</c> - because a count that cannot name its
+    /// account is not billing evidence.
+    /// </summary>
+    [Fact]
+    public void A_reader_that_cannot_name_the_account_carries_no_series()
+    {
+        Assert.Null(ConnectedMachineFleetRead.Complete(accountSeries: null, [101]).AccountSeries);
+    }
+
+    /// <summary>
+    /// And a value that identifies no account is refused outright rather than stored: a series starts
+    /// at 1, so zero or a negative number is a caller mistake, and "unknown" already has its own
+    /// honest representation above.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void An_account_series_that_identifies_no_account_is_refused(int series)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ConnectedMachineFleetRead.Complete(series, [101]));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ConnectedMachineFleetRead.Incomplete(series, [101]));
     }
 
     /// <summary>

@@ -17,6 +17,11 @@ namespace InventoryApi.Tests.Application.Nayax;
 /// because that is the behaviour the 401 rule depends on. The relational proof that the real
 /// <c>UPDATE ... WHERE</c> does the same lives in the integration tests; this keeps the unit tests
 /// honest about which revision they pass.
+///
+/// <see cref="SaveCredentialAsync"/> reproduces the real adapter's account-series rule for the same
+/// reason (issue #978): the revision moves on every save, and the series moves only when a
+/// <em>different</em> operator id is stored, so a test about an account change and a test about a
+/// token rotation are genuinely different here rather than only in their names.
 /// </summary>
 internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
 {
@@ -129,7 +134,8 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
         if (!mayDecryptToken(_connection.Status))
         {
             return Task.FromResult<NayaxConnectionSnapshot?>(
-                new NayaxConnectionSnapshot(_connection.Status, credential: null));
+                new NayaxConnectionSnapshot(
+                    _connection.Status, credential: null, _connection.AccountSeries));
         }
 
         CredentialReads++;
@@ -145,7 +151,8 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
                 _connection.OperatorId, _accessToken, _connection.CredentialRevision);
 
         return Task.FromResult<NayaxConnectionSnapshot?>(
-            new NayaxConnectionSnapshot(_connection.Status, credential));
+            new NayaxConnectionSnapshot(
+                _connection.Status, credential, _connection.AccountSeries));
     }
 
     public Task<NayaxConnection> SaveCredentialAsync(
@@ -153,6 +160,13 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
         string accessToken,
         CancellationToken cancellationToken)
     {
+        // The series moves only when a different Nayax account is stored, exactly as the real
+        // adapter's single UPDATE decides it against the row it is replacing (issue #978): a rotated
+        // token for the same operator id is the same fleet and must keep its evidence.
+        var series = _connection is { } previous
+            ? previous.AccountSeries + (previous.OperatorId == operatorId ? 0 : 1)
+            : 1;
+
         // MachineChecksPending is left at its default, like the real adapter's save: the machine
         // checks that were or were not verified belong to the token being replaced.
         _connection = new NayaxConnection(
@@ -160,7 +174,10 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
             NayaxConnectionStatus.PendingPermissions,
             (_connection?.CredentialRevision ?? 0) + 1,
             LastTestedAtUtc: null,
-            UpdatedAtUtc: new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc));
+            UpdatedAtUtc: new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc))
+        {
+            AccountSeries = series,
+        };
         _accessToken = accessToken;
         SavedTokens.Add(accessToken);
 

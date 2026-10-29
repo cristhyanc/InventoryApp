@@ -2907,6 +2907,12 @@ displayed and nothing is charged.
   re-testing credentials for the **same** account changes nothing: it is the same account and the same
   fleet. Until the new account has been counted once, the count reads as unavailable rather than
   showing the account you left.
+- **A read that was already under way when you switched accounts is recorded against the account it
+  was made with.** Each count is attributed using the credentials that actually fetched the fleet, so
+  a fleet read that started on the old account and finished after you connected the new one is kept as
+  the old account's count — never relabelled as the new account's, and never taking up the new
+  account's count for that day. Your first complete read on the new account still records its own
+  count the same day.
 
 ### Connecting Nayax when you already have machines (issue #742)
 

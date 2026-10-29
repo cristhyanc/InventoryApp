@@ -22,11 +22,19 @@ namespace Inventory.Application.ConnectedMachines;
 public interface IConnectedMachineFleetReader
 {
     /// <summary>
-    /// Reads the current business's fleet now.
+    /// Reads the current business's fleet now, and reports which Nayax account authenticated that
+    /// read (<see cref="ConnectedMachineFleetRead.AccountSeries"/>).
     ///
     /// <para>A read that cannot be completed is not reported as a smaller fleet: the adapter either
     /// answers a complete read or lets the failure propagate, and the caller stores nothing from an
     /// incomplete one.</para>
+    ///
+    /// <para>The account series must be the one the credential snapshot this request was
+    /// authenticated with carried, because it is what the snapshot is stamped with: the caller
+    /// decides whether to spend this call <em>before</em> making it, and an Owner can save a
+    /// different Nayax account in between, so a series the caller read earlier would name the wrong
+    /// account. An adapter that cannot say answers no series at all and nothing is recorded from its
+    /// read.</para>
     /// </summary>
     Task<ConnectedMachineFleetRead> ReadAsync(CancellationToken cancellationToken);
 }

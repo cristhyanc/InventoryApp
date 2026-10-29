@@ -24,15 +24,24 @@ namespace Inventory.Infrastructure.Nayax;
 /// Reading through the inner client changes no refusal: the gate and the support-session rule are the
 /// credential provider's, not the decorator's.</para>
 ///
+/// <para><strong>The read says which account answered it.</strong> It calls
+/// <see cref="INayaxFleetProvenanceClient.ReadFleetFreshAsync"/>, so the fleet arrives with the
+/// account series of the credential snapshot that authenticated the request, and the
+/// <see cref="ConnectedMachineFleetRead"/> it answers carries that series into the recorder. That is
+/// what closes the job path's own race: the job decides whether to spend a call <em>before</em> the
+/// call, and an Owner can save a different Nayax account in the window between that decision and the
+/// answer - so the series the snapshot is stamped with has to come from the request, never from the
+/// earlier eligibility read (issue #978).</para>
+///
 /// <para>A failure propagates. There is no retry here beyond the client's own bounded resilience
 /// handler, and nothing here turns a failed read into a smaller fleet: the job stores nothing for a
 /// business whose read failed, and its last complete snapshot remains the count.</para>
 /// </summary>
 public sealed class NayaxConnectedMachineFleetReader : IConnectedMachineFleetReader
 {
-    private readonly INayaxLynxClient _client;
+    private readonly INayaxFleetProvenanceClient _client;
 
-    public NayaxConnectedMachineFleetReader(INayaxLynxClient client)
+    public NayaxConnectedMachineFleetReader(INayaxFleetProvenanceClient client)
     {
         _client = client;
     }
@@ -40,10 +49,13 @@ public sealed class NayaxConnectedMachineFleetReader : IConnectedMachineFleetRea
     /// <inheritdoc />
     public async Task<ConnectedMachineFleetRead> ReadAsync(CancellationToken cancellationToken)
     {
-        var machines = await _client.GetMachinesFreshAsync(cancellationToken).ConfigureAwait(false);
+        var fleet = await _client.ReadFleetFreshAsync(cancellationToken).ConfigureAwait(false);
 
         // A successful whole-fleet read is a complete read; an unsuccessful one threw and is never
-        // reported as a fleet at all.
-        return ConnectedMachineFleetRead.Complete(machines.Select(machine => (long?)machine.MachineID));
+        // reported as a fleet at all. The series is the request's own, not a connection read of this
+        // adapter's.
+        return ConnectedMachineFleetRead.Complete(
+            fleet.AccountSeries,
+            fleet.Machines.Select(machine => (long?)machine.MachineID));
     }
 }

@@ -329,6 +329,68 @@ public class EfNayaxConnectionStoreTests
     }
 
     /// <summary>
+    /// That same read reports the account series of the row it read (issue #978), because that is the
+    /// account whose credentials the call is about to be made with: the connected-machine snapshot
+    /// taken from a fleet read is stamped with it, so reading it here rather than in a second query
+    /// is what makes the evidence attributable to the account that authenticated the request.
+    ///
+    /// <para>It moves with the account and not with the token: a different operator id starts a new
+    /// series, and rotating the same account's token keeps it - which is the difference between a
+    /// business's fleet evidence continuing and being split.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_operation_read_reports_the_account_series_of_the_same_row()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        var first = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.Equal(1, first!.AccountSeries);
+
+        // The same Nayax account with a fresh token: a new revision, the same series.
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OperatorId, OtherToken, CancellationToken.None);
+
+        var rotated = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.Equal(1, rotated!.AccountSeries);
+        Assert.Equal(2, rotated.Credential!.CredentialRevision);
+
+        // A different Nayax account: the next series.
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        var switched = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.Equal(2, switched!.AccountSeries);
+    }
+
+    /// <summary>
+    /// And a status the caller's gate refuses still reports the series, because the series is not a
+    /// secret and is never the thing being withheld: what a refused status withholds is the token,
+    /// which stays undecrypted.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_status_still_reports_the_account_series_and_no_credential()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        var snapshot = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(_ => false, CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Null(snapshot!.Credential);
+        Assert.Equal(1, snapshot.AccountSeries);
+    }
+
+    /// <summary>
     /// The property the snapshot exists for, pinned against the SQL the provider actually sends:
     /// one <c>SELECT</c>, so no credential save can commit between reading the status and reading
     /// the token and hand a caller a pair the row never held.

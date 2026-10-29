@@ -31,15 +31,27 @@ namespace Inventory.Infrastructure.Nayax;
 /// billing evidence must not be able to fail a feature. A cancelled request is not an error at all
 /// and propagates as cancellation. The log line carries the business-free outcome and nothing about
 /// the fleet, the credentials or the caller.</para>
+///
+/// <para><strong>The account the read was authenticated as comes out of the read itself.</strong>
+/// This decorator asks the client it wraps for the fleet <em>and</em> the account series of the
+/// credential snapshot that request carried
+/// (<see cref="INayaxFleetProvenanceClient.ReadFleetFreshAsync"/>), and hands that series to the
+/// recorder with the fleet. It deliberately does not read the connection itself, and the recorder
+/// deliberately does not read a series of its own: an Owner can save a different Nayax account while
+/// this request is in flight, and a series read after the answer arrives describes the account the
+/// fleet was <strong>not</strong> read from. Carrying it means a superseded response is recorded as
+/// its own account's evidence - which it truthfully is - and can never claim the replacement
+/// account's day, so a valid read of the new account still records its own snapshot the same
+/// day.</para>
 /// </summary>
 public sealed class ConnectedMachineCountingNayaxLynxClient : INayaxLynxClient
 {
-    private readonly INayaxLynxClient _inner;
+    private readonly INayaxFleetProvenanceClient _inner;
     private readonly IConnectedMachineSnapshotRecorder _recorder;
     private readonly ILogger<ConnectedMachineCountingNayaxLynxClient> _logger;
 
     public ConnectedMachineCountingNayaxLynxClient(
-        INayaxLynxClient inner,
+        INayaxFleetProvenanceClient inner,
         IConnectedMachineSnapshotRecorder recorder,
         ILogger<ConnectedMachineCountingNayaxLynxClient> logger)
     {
@@ -51,11 +63,11 @@ public sealed class ConnectedMachineCountingNayaxLynxClient : INayaxLynxClient
     /// <inheritdoc />
     public async Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default)
     {
-        var machines = await _inner.GetMachinesFreshAsync(ct).ConfigureAwait(false);
+        var fleet = await _inner.ReadFleetFreshAsync(ct).ConfigureAwait(false);
 
-        await RecordAsync(machines, ct).ConfigureAwait(false);
+        await RecordAsync(fleet, ct).ConfigureAwait(false);
 
-        return machines;
+        return fleet.Machines;
     }
 
     /// <inheritdoc />
@@ -103,13 +115,15 @@ public sealed class ConnectedMachineCountingNayaxLynxClient : INayaxLynxClient
         long machineId, CancellationToken ct = default) =>
         _inner.GetMachineLastAlertsAsync(machineId, ct);
 
-    private async Task RecordAsync(List<NayaxMachine> machines, CancellationToken ct)
+    private async Task RecordAsync(NayaxFleetReadResult fleet, CancellationToken ct)
     {
         try
         {
             var outcome = await _recorder
                 .RecordFromFleetReadAsync(
-                    ConnectedMachineFleetRead.Complete(machines.Select(machine => (long?)machine.MachineID)),
+                    ConnectedMachineFleetRead.Complete(
+                        fleet.AccountSeries,
+                        fleet.Machines.Select(machine => (long?)machine.MachineID)),
                     ct)
                 .ConfigureAwait(false);
 

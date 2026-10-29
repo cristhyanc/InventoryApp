@@ -25,11 +25,16 @@ internal sealed class FakeNayaxRequestCredentialProvider : INayaxRequestCredenti
         string operatorId,
         string accessToken,
         NayaxConnectionStatus status = NayaxConnectionStatus.Ready,
-        int credentialRevision = 1)
+        int credentialRevision = 1,
+        int? accountSeries = 1)
     {
+        // The account series the real provider reads in the same snapshot as the status and the
+        // token (issue #978), so a client test can state which Nayax account a call was
+        // authenticated as.
         _credential = new NayaxRequestCredential(
             new NayaxConnectionCredential(operatorId, accessToken, credentialRevision),
-            status);
+            status,
+            accountSeries);
     }
 
     private FakeNayaxRequestCredentialProvider(Exception refusal) => Refusal = refusal;

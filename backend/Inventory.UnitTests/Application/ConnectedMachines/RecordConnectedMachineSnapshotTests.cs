@@ -17,6 +17,14 @@ namespace InventoryApi.Tests.Application.ConnectedMachines;
 /// that every skip is decided <em>before</em> the Nayax call, so a business that is not counted costs
 /// no call; that an incomplete read stores nothing; and that losing the daily claim is discarded
 /// without an error and without a retry.</para>
+///
+/// <para><strong>And which account a snapshot is attributed to, on both paths.</strong> A snapshot is
+/// stamped with the series the fleet read itself carried - the account whose credentials
+/// authenticated that request - never with a series this use case read for itself, because an Owner
+/// can save a different Nayax account while a request is in flight. The account-change tests below
+/// are the regressions for that: they switch the stored account mid-read, from either side, and
+/// assert that no fleet lands under the wrong series and that the other account's day stays free for
+/// its own read.</para>
 /// </summary>
 public class RecordConnectedMachineSnapshotTests
 {
@@ -26,16 +34,16 @@ public class RecordConnectedMachineSnapshotTests
 
     /// <summary>
     /// A complete fleet read the application performed anyway becomes the day's snapshot - the
-    /// refresh rule of #978 - and what is stored is derived entirely from the read, the clock and the
-    /// business's own connection.
+    /// refresh rule of #978 - and what is stored is derived entirely from the read and the clock. The
+    /// series is the read's own, which is the account its credentials authenticated it as.
     /// </summary>
     [Fact]
     public async Task Records_the_days_snapshot_from_a_complete_fleet_read()
     {
         var snapshots = new FakeConnectedMachineSnapshotStore();
 
-        var outcome = await UseCase(snapshots: snapshots, accountSeries: 4)
-            .RecordFromFleetReadAsync(Read(103, 101, 102), CancellationToken.None);
+        var outcome = await UseCase(snapshots: snapshots)
+            .RecordFromFleetReadAsync(ReadFor(4, 103, 101, 102), CancellationToken.None);
 
         Assert.Equal(ConnectedMachineSnapshotOutcome.Recorded, outcome);
 
@@ -60,7 +68,7 @@ public class RecordConnectedMachineSnapshotTests
 
         var outcome = await UseCase(snapshots: snapshots, connections: connections)
             .RecordFromFleetReadAsync(
-                ConnectedMachineFleetRead.Incomplete([101, 102]),
+                ConnectedMachineFleetRead.Incomplete(accountSeries: 1, [101, 102]),
                 CancellationToken.None);
 
         Assert.Equal(ConnectedMachineSnapshotOutcome.IncompleteRead, outcome);
@@ -152,6 +160,120 @@ public class RecordConnectedMachineSnapshotTests
     }
 
     /// <summary>
+    /// <strong>The refresh path's account-change regression.</strong> A fleet request authenticated
+    /// as account A is in flight; the Owner saves account B; only then does A's answer arrive and get
+    /// offered to the recorder. The evidence must land under A - the account it actually came from -
+    /// and B's day must be left unclaimed, which is exactly what the earlier defect got wrong in both
+    /// directions: it stamped A's machines with B's series, and that row then blocked B's own read for
+    /// the rest of the day.
+    /// </summary>
+    [Fact]
+    public async Task A_read_that_finishes_after_an_account_change_is_recorded_under_its_own_series()
+    {
+        var snapshots = new FakeConnectedMachineSnapshotStore();
+        var connections = Connection(NayaxConnectionStatus.Ready);
+
+        // The fleet request resolves account A's credentials and leaves the API - series 1.
+        var inFlight = ReadFor(1, 101, 102, 103);
+
+        // While it is in flight the Owner connects a different Nayax account, which is series 2.
+        await connections.SaveCredentialAsync("9999", "token-b", CancellationToken.None);
+        Assert.Equal(2, connections.Connection!.AccountSeries);
+
+        // Only now does A's answer arrive.
+        var outcome = await UseCase(snapshots: snapshots, connections: connections)
+            .RecordFromFleetReadAsync(inFlight, CancellationToken.None);
+
+        Assert.Equal(ConnectedMachineSnapshotOutcome.Recorded, outcome);
+
+        var stored = Assert.Single(snapshots.Snapshots);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(3, stored.MachineCount);
+    }
+
+    /// <summary>
+    /// And the other half of that guarantee: because the superseded answer claimed only its own
+    /// series, a valid read of the <em>new</em> account records its own snapshot the same day. The day
+    /// then holds one row per series, which is #978's account-change rule, and
+    /// <c>ConnectedMachineSnapshotPolicy.Latest</c> decides which of them is the day's count.
+    /// </summary>
+    [Fact]
+    public async Task The_new_account_can_still_record_its_own_snapshot_the_same_day()
+    {
+        var snapshots = new FakeConnectedMachineSnapshotStore();
+        var connections = Connection(NayaxConnectionStatus.Ready);
+        var useCase = UseCase(snapshots: snapshots, connections: connections);
+
+        await connections.SaveCredentialAsync("9999", "token-b", CancellationToken.None);
+
+        // The superseded account's answer, then the new account's own read.
+        Assert.Equal(
+            ConnectedMachineSnapshotOutcome.Recorded,
+            await useCase.RecordFromFleetReadAsync(ReadFor(1, 101, 102, 103), CancellationToken.None));
+        Assert.Equal(
+            ConnectedMachineSnapshotOutcome.Recorded,
+            await useCase.RecordFromFleetReadAsync(ReadFor(2, 201), CancellationToken.None));
+
+        Assert.Equal(
+            [(1, 3), (2, 1)],
+            snapshots.Snapshots
+                .Select(snapshot => (snapshot.AccountSeries, snapshot.MachineCount))
+                .Order()
+                .ToArray());
+        Assert.All(snapshots.Snapshots, snapshot => Assert.Equal(Today, snapshot.DateUtc));
+    }
+
+    /// <summary>
+    /// Rotating the token of the <em>same</em> Nayax account is not an account change: the series is
+    /// unchanged, so the day is already claimed and the second read records nothing. A fleet is not
+    /// re-counted, and its evidence is not split, because an operator pasted a fresh token.
+    /// </summary>
+    [Fact]
+    public async Task A_token_rotation_on_the_same_account_does_not_start_a_new_series()
+    {
+        var snapshots = new FakeConnectedMachineSnapshotStore();
+        var connections = Connection(NayaxConnectionStatus.Ready);
+        var useCase = UseCase(snapshots: snapshots, connections: connections);
+
+        Assert.Equal(
+            ConnectedMachineSnapshotOutcome.Recorded,
+            await useCase.RecordFromFleetReadAsync(ReadFor(1, 101, 102), CancellationToken.None));
+
+        // The same operator id with a new token: a new credential revision, the same account.
+        await connections.SaveCredentialAsync("4242", "rotated-token", CancellationToken.None);
+        Assert.Equal(1, connections.Connection!.AccountSeries);
+        Assert.Equal(2, connections.Connection.CredentialRevision);
+
+        Assert.Equal(
+            ConnectedMachineSnapshotOutcome.AlreadyRecorded,
+            await useCase.RecordFromFleetReadAsync(ReadFor(1, 101, 102, 103), CancellationToken.None));
+
+        var stored = Assert.Single(snapshots.Snapshots);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(2, stored.MachineCount);
+    }
+
+    /// <summary>
+    /// A read that cannot say which Nayax account authenticated it records nothing at all, and asks
+    /// the stores nothing either: an unattributable count is not evidence, and guessing the account
+    /// stored at this moment is the mistake this answer exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task A_read_with_no_account_provenance_records_nothing()
+    {
+        var snapshots = new FakeConnectedMachineSnapshotStore();
+        var connections = Connection(NayaxConnectionStatus.Ready);
+
+        var outcome = await UseCase(snapshots: snapshots, connections: connections)
+            .RecordFromFleetReadAsync(ReadFor(null, 101, 102), CancellationToken.None);
+
+        Assert.Equal(ConnectedMachineSnapshotOutcome.AccountUnknown, outcome);
+        Assert.Empty(snapshots.Snapshots);
+        Assert.Equal(0, snapshots.ExistenceChecks);
+        Assert.Equal(0, connections.ConnectionReads);
+    }
+
+    /// <summary>
     /// The daily job's path reads the fleet once and records what it read, and reports that it spent
     /// a call - which is what the run-wide cap counts.
     /// </summary>
@@ -218,6 +340,54 @@ public class RecordConnectedMachineSnapshotTests
     }
 
     /// <summary>
+    /// <strong>The job path's account-change regression - the mirror image of the refresh path's.</strong>
+    /// The job reads eligibility (and the business's current series) <em>before</em> the call, so a
+    /// save that lands while the call is in flight leaves the earlier series describing the wrong
+    /// account. The fleet that comes back was authenticated as the new account, so that is the series
+    /// it is recorded under, and the superseded series' day is left alone.
+    /// </summary>
+    [Fact]
+    public async Task The_jobs_read_is_recorded_under_the_account_it_was_authenticated_as()
+    {
+        var snapshots = new FakeConnectedMachineSnapshotStore();
+        var connections = Connection(NayaxConnectionStatus.Ready);
+
+        // The answer comes back from the new account - series 2 - and the switch happens while the
+        // call is in flight, after the job has already read eligibility for series 1.
+        var fleet = FakeConnectedMachineFleetReader.ReturningFor(2, 201, 202);
+        fleet.DuringRead = () =>
+            connections.SaveCredentialAsync("9999", "token-b", CancellationToken.None);
+
+        var attempt = await UseCase(snapshots: snapshots, connections: connections, fleet: fleet)
+            .ReadFleetAndRecordAsync(CancellationToken.None);
+
+        Assert.Equal(ConnectedMachineSnapshotOutcome.Recorded, attempt.Outcome);
+        Assert.True(attempt.FleetWasRead);
+
+        var stored = Assert.Single(snapshots.Snapshots);
+        Assert.Equal(2, stored.AccountSeries);
+        Assert.Equal(2, stored.MachineCount);
+    }
+
+    /// <summary>
+    /// And nothing on the job's path is recorded for a read with no account provenance either - the
+    /// call was spent, so it is reported, but a count that cannot name its account is not stored.
+    /// </summary>
+    [Fact]
+    public async Task The_job_stores_nothing_from_a_read_with_no_account_provenance()
+    {
+        var snapshots = new FakeConnectedMachineSnapshotStore();
+        var fleet = FakeConnectedMachineFleetReader.ReturningFor(accountSeries: null, 201);
+
+        var attempt = await UseCase(snapshots: snapshots, fleet: fleet)
+            .ReadFleetAndRecordAsync(CancellationToken.None);
+
+        Assert.Equal(ConnectedMachineSnapshotOutcome.AccountUnknown, attempt.Outcome);
+        Assert.True(attempt.FleetWasRead);
+        Assert.Empty(snapshots.Snapshots);
+    }
+
+    /// <summary>
     /// A read the adapter could not complete stores nothing on the job's path either, and is reported
     /// as the call it did spend.
     /// </summary>
@@ -261,6 +431,16 @@ public class RecordConnectedMachineSnapshotTests
             ManualPlanGrantSource.Grandfathered,
             new EntitlementPeriod(Now.AddDays(-30), null));
 
+    /// <summary>A complete read of series 1 - the ordinary case, one account throughout.</summary>
     private static ConnectedMachineFleetRead Read(params long[] providerMachineIds) =>
-        ConnectedMachineFleetRead.Complete(providerMachineIds.Select(id => (long?)id));
+        ReadFor(1, providerMachineIds);
+
+    /// <summary>
+    /// A complete read authenticated as <paramref name="accountSeries"/>: the account the fleet
+    /// answer really came from, which is what a snapshot is stamped with.
+    /// </summary>
+    private static ConnectedMachineFleetRead ReadFor(
+        int? accountSeries, params long[] providerMachineIds) =>
+        ConnectedMachineFleetRead.Complete(
+            accountSeries, providerMachineIds.Select(id => (long?)id));
 }

@@ -208,9 +208,16 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
             return null;
         }
 
-        // One statement for the status, the operator id, the ciphertext and the revision. Two
-        // queries would let a credential save commit between them and hand the caller the previous
-        // status beside the new token - a pair the row never held.
+        // One statement for the status, the operator id, the ciphertext, the revision and the
+        // account series. Two queries would let a credential save commit between them and hand the
+        // caller the previous status beside the new token - a pair the row never held.
+        //
+        // The series is here, rather than left to a later FindAsync, because it is what makes the
+        // connected-machine evidence of issue #978 attributable: the snapshot a fleet read becomes is
+        // stamped with the series of the credentials that authenticated that very request, so an
+        // account saved while the request was in flight can neither re-label the answer nor claim the
+        // replacement account's day. A second read of this row is a different fact, not a cheaper
+        // copy of this one. It is non-secret - never the operator id, the token or the ciphertext.
         var stored = await _db.BusinessNayaxConnections
             .AsNoTracking()
             .Select(connection => new
@@ -220,6 +227,7 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
                 connection.AccessTokenCiphertext,
                 connection.EncryptionKeyId,
                 connection.CredentialRevision,
+                connection.AccountSeries,
             })
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -233,7 +241,8 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
         {
             // The caller's gate refused this snapshot's own status, so the ciphertext is left
             // alone: a refused state never handles the secret at all.
-            return new NayaxConnectionSnapshot(stored.Status, credential: null);
+            return new NayaxConnectionSnapshot(
+                stored.Status, credential: null, stored.AccountSeries);
         }
 
         // Throws for a corrupt ciphertext, an unconfigured key or a ciphertext encrypted for
@@ -245,7 +254,8 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
 
         return new NayaxConnectionSnapshot(
             stored.Status,
-            new NayaxConnectionCredential(stored.OperatorId, accessToken, stored.CredentialRevision));
+            new NayaxConnectionCredential(stored.OperatorId, accessToken, stored.CredentialRevision),
+            stored.AccountSeries);
     }
 
     /// <inheritdoc />

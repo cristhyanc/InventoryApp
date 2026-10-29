@@ -12,12 +12,15 @@ namespace InventoryApi.Tests.Infrastructure.Nayax;
 /// cache, which records the day's connected-machine snapshot from a complete fleet read the
 /// application was performing anyway.
 ///
-/// <para>Three properties matter, and each is a thing this decorator could otherwise quietly break.
+/// <para>Four properties matter, and each is a thing this decorator could otherwise quietly break.
 /// A fresh whole-fleet read is offered to the count, so the count costs <strong>no extra Nayax call
 /// on a page load</strong>. A <em>cached</em> machine list is not - an answer up to ten minutes old is
 /// not a read of the account, and dating a count to the wrong moment is worse than not taking one.
-/// And a snapshot that cannot be recorded never reaches the caller: the read succeeded, the caller is
-/// a sales sync or a dashboard refresh, and billing evidence must not be able to fail a feature.</para>
+/// A snapshot that cannot be recorded never reaches the caller: the read succeeded, the caller is
+/// a sales sync or a dashboard refresh, and billing evidence must not be able to fail a feature. And
+/// the <strong>account series the read was authenticated as</strong> is what travels to the recorder -
+/// taken from the client's own answer, never looked up again here - so an account saved while the
+/// request was in flight cannot re-label what came back.</para>
 /// </summary>
 public class ConnectedMachineCountingNayaxLynxClientTests
 {
@@ -35,6 +38,48 @@ public class ConnectedMachineCountingNayaxLynxClientTests
         var offered = Assert.Single(recorder.Offered);
         Assert.True(offered.IsComplete);
         Assert.Equal(new long[] { 101, 102, 103 }, offered.ProviderMachineIds);
+
+        // And the account the client says authenticated that request, carried through unchanged.
+        Assert.Equal(FleetNayaxLynxClient.DefaultAccountSeries, offered.AccountSeries);
+    }
+
+    /// <summary>
+    /// The series offered to the recorder is the one the client reported for <em>that</em> read, so a
+    /// Nayax account saved while the request was in flight cannot re-label the answer: the client
+    /// here switches the account it reports between two reads, and each read is offered under the
+    /// account it was actually made with.
+    /// </summary>
+    [Fact]
+    public async Task Each_read_is_offered_under_the_account_that_authenticated_it()
+    {
+        var recorder = new RecordingSnapshotRecorder();
+        var inner = new FleetNayaxLynxClient(101, 102) { AccountSeries = 1 };
+        var decorated = Decorate(inner, recorder);
+
+        await decorated.GetMachinesFreshAsync(CancellationToken.None);
+
+        // The Owner connects a different Nayax account; the next read is authenticated as it.
+        inner.AccountSeries = 2;
+        await decorated.GetMachinesFreshAsync(CancellationToken.None);
+
+        Assert.Equal([1, 2], recorder.Offered.Select(read => read.AccountSeries).ToArray());
+    }
+
+    /// <summary>
+    /// A client that cannot say which account authenticated its read offers no series, and the
+    /// decorator passes that through rather than inventing one - the recorder is what refuses to
+    /// attribute it. Nothing here reads a connection, which is the point: this decorator has no
+    /// second opinion about the account to give.
+    /// </summary>
+    [Fact]
+    public async Task A_read_with_no_account_provenance_is_offered_without_one()
+    {
+        var recorder = new RecordingSnapshotRecorder();
+        var decorated = Decorate(new FleetNayaxLynxClient(101) { AccountSeries = null }, recorder);
+
+        await decorated.GetMachinesFreshAsync(CancellationToken.None);
+
+        Assert.Null(Assert.Single(recorder.Offered).AccountSeries);
     }
 
     /// <summary>
@@ -96,7 +141,7 @@ public class ConnectedMachineCountingNayaxLynxClientTests
     }
 
     private static ConnectedMachineCountingNayaxLynxClient Decorate(
-        INayaxLynxClient inner,
+        INayaxFleetProvenanceClient inner,
         IConnectedMachineSnapshotRecorder recorder) =>
         new(inner, recorder, new CapturingLogger<ConnectedMachineCountingNayaxLynxClient>());
 
@@ -126,17 +171,34 @@ public class ConnectedMachineCountingNayaxLynxClientTests
                 "The refresh path never asks the recorder to read the fleet itself.");
     }
 
-    /// <summary>A client answering one fixed fleet, counting everything it was asked.</summary>
-    private sealed class FleetNayaxLynxClient : INayaxLynxClient
+    /// <summary>
+    /// A client answering one fixed fleet, counting everything it was asked, and reporting which
+    /// Nayax account authenticated its fresh fleet read - which is what the real chain's single
+    /// credential resolution per call establishes.
+    /// </summary>
+    private sealed class FleetNayaxLynxClient : INayaxFleetProvenanceClient
     {
+        /// <summary>The account a read is authenticated as unless a test says otherwise.</summary>
+        public const int DefaultAccountSeries = 3;
+
         private readonly long[] _machineIds;
 
         public FleetNayaxLynxClient(params long[] machineIds) => _machineIds = machineIds;
 
         public int OtherCalls { get; private set; }
 
+        /// <summary>
+        /// The account series this client reports for a fresh fleet read, or <see langword="null"/>
+        /// for a client that cannot say. A test changes it between reads to stand for an Owner
+        /// connecting a different Nayax account.
+        /// </summary>
+        public int? AccountSeries { get; set; } = DefaultAccountSeries;
+
         public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
             Task.FromResult(_machineIds.Select(id => new NayaxMachine { MachineID = id }).ToList());
+
+        public async Task<NayaxFleetReadResult> ReadFleetFreshAsync(CancellationToken ct = default) =>
+            new(await GetMachinesFreshAsync(ct).ConfigureAwait(false), AccountSeries);
 
         public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
             GetMachinesFreshAsync(ct);

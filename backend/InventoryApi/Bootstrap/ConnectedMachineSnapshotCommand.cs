@@ -292,6 +292,9 @@ public static class ConnectedMachineSnapshotCommand
                 "its plan does not have connected machines counted; no call made",
             { Outcome: ConnectedMachineSnapshotOutcome.ConnectionUnavailable } =>
                 "no usable Nayax connection; no call made",
+            { Outcome: ConnectedMachineSnapshotOutcome.AccountUnknown } =>
+                "the fleet read could not say which Nayax account authenticated it; nothing was "
+                    + "stored",
             _ => "no outcome recorded",
         };
 

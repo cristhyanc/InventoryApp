@@ -525,7 +525,11 @@ public static class InfrastructureServiceCollectionExtensions
         // snapshot from a complete fleet read the application was performing anyway - so the count
         // costs no extra Nayax call on a page load - and delegates everything else untouched. It is
         // outermost because it must see the fresh reads every consumer makes, and it is the only
-        // place the refresh path records a snapshot.
+        // place the refresh path records a snapshot. It takes the caching decorator as
+        // INayaxFleetProvenanceClient, because the fleet read has to come back with the account
+        // series of the credential snapshot that authenticated it: that is what the snapshot is
+        // stamped with, and reading the connection again afterwards would describe whichever account
+        // is stored by then rather than the one the fleet was read from.
         services.AddTransient<INayaxLynxClient>(serviceProvider =>
             new ConnectedMachineCountingNayaxLynxClient(
                 new CachingNayaxLynxClient(
@@ -543,7 +547,9 @@ public static class InfrastructureServiceCollectionExtensions
         // the job's read record the snapshot twice over - once through the decorator and once through
         // the job - and would be a resolution cycle besides. Every refusal is unchanged, because the
         // status gate and the support-session rule belong to the credential provider the typed client
-        // already uses.
+        // already uses. The typed client is also an INayaxFleetProvenanceClient, so the job's read
+        // reports the account series it was authenticated as and the snapshot is stamped with that
+        // rather than with the series the job read before the call.
         services.AddScoped<IConnectedMachineFleetReader>(serviceProvider =>
             new NayaxConnectedMachineFleetReader(serviceProvider.GetRequiredService<NayaxLynxClient>()));
 
