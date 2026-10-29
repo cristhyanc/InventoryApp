@@ -33,6 +33,14 @@ import {
   storageOnlyReorderLabel
 } from '../../provider/nayax-availability';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
+import {
+  CHEAPEST_SUPPLIERS_NOT_READ_YET,
+  CheapestSuppliers,
+  CheapestSuppliersComponent,
+  cheapestSupplierFor
+} from '../shared/cheapest-supplier/cheapest-suppliers.component';
+import { CheapestSupplierCellComponent } from '../shared/cheapest-supplier/cheapest-supplier-cell.component';
+import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
 import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
 import { money } from '../reports/report-formatting';
@@ -95,6 +103,43 @@ export interface AttentionAlert {
 /** How many products the Reorder priorities overview shows before linking to the full list. */
 export const REORDER_PRIORITY_LIMIT = 5;
 
+/**
+ * One site's machines in Machine performance (issue #980). `label` is the site's name, "Other
+ * machines" for machines at no listed site, or `null` when no machine could be placed at a site at
+ * all - then the list is one group with no heading, because a lone "Other machines" says nothing.
+ */
+export interface MachineSiteGroup {
+  readonly key: string;
+  readonly label: string | null;
+  readonly machines: readonly Machine[];
+}
+
+export const OTHER_MACHINES_LABEL = 'Other machines';
+
+/**
+ * Places each machine under its site (issue #980): the sites in the order the Sites section lists
+ * them, each with the machines whose `siteId` is that site's, then every remaining machine - at no
+ * site, or at a site the site list did not return - under "Other machines". Each machine lands in
+ * exactly one group and keeps the API's order inside it; a site with no listed machine gets no
+ * group. Nothing is summed here: the fleet totals still come from the whole machine list.
+ */
+export function groupMachinesBySite(machines: readonly Machine[], sites: readonly Site[]): readonly MachineSiteGroup[] {
+  const placed = new Set<Machine>();
+  const groups: MachineSiteGroup[] = [];
+  for (const site of sites) {
+    const atSite = machines.filter((machine) => machine.siteId != null && machine.siteId === site.siteId);
+    if (atSite.length > 0) {
+      atSite.forEach((machine) => placed.add(machine));
+      groups.push({ key: `site-${site.siteId}`, label: site.siteName, machines: atSite });
+    }
+  }
+  const others = machines.filter((machine) => !placed.has(machine));
+  if (others.length > 0) {
+    groups.push({ key: 'other', label: groups.length > 0 ? OTHER_MACHINES_LABEL : null, machines: others });
+  }
+  return groups;
+}
+
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -104,7 +149,9 @@ export const REORDER_PRIORITY_LIMIT = 5;
     IconComponent,
     LegacyBusinessSettingsPromptComponent,
     MachineRestockSyncReminderComponent,
-    BusinessDateTimePipe
+    BusinessDateTimePipe,
+    CheapestSuppliersComponent,
+    CheapestSupplierCellComponent
   ],
   templateUrl: './dashboard.component.html'
 })
@@ -136,6 +183,38 @@ export class DashboardComponent implements OnInit, OnDestroy {
   lowStock: Product[] = [];
   machines: Machine[] = [];
   sites: Site[] = [];
+
+  /**
+   * The ids of the products Reorder priorities shows, replaced only when the reorder list is, so
+   * the cheapest-supplier read (issue #981) is asked once per list rather than once per render.
+   */
+  reorderPriorityIds: readonly number[] = [];
+
+  /**
+   * The Cheapest supplier column's read for those products (issue #981, the shared component of
+   * issue #930). The dashboard lays the answers out and decides nothing about them.
+   */
+  cheapestSuppliers: CheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
+
+  private machineGroupsOf?: {
+    readonly machines: readonly Machine[];
+    readonly sites: readonly Site[];
+    readonly groups: readonly MachineSiteGroup[];
+  };
+
+  /**
+   * Machine performance's rows, under their sites (issue #980). Recomputed only when either list is
+   * replaced, so change detection hands the template the same groups and re-renders nothing.
+   */
+  get machineGroups(): readonly MachineSiteGroup[] {
+    const cached = this.machineGroupsOf;
+    if (cached?.machines === this.machines && cached.sites === this.sites) {
+      return cached.groups;
+    }
+    const groups = groupMachinesBySite(this.machines, this.sites);
+    this.machineGroupsOf = { machines: this.machines, sites: this.sites, groups };
+    return groups;
+  }
 
   /**
    * The Sites and Machines sections start as loading, not as empty: whether they are loaded at all
@@ -427,9 +506,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
   refreshLowStock(): void {
     this.isLoadingLowStock = true;
     this.reorderAlertsError = null;
+    this.cheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
     this.productService.getLowStock().subscribe({
       next: (listing) => {
         this.lowStock = listing.products.filter((product) => product.isActive !== false);
+        this.reorderPriorityIds = this.reorderPriorities.map((product) => product.id);
         this.reorderMode = listing.mode;
         this.reorderMachineNeedUnavailableReason = listing.machineNeedUnavailableReason;
         this.isLoadingLowStock = false;
@@ -438,6 +519,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       },
       error: (error: unknown) => {
         this.lowStock = [];
+        this.reorderPriorityIds = [];
         // A mode nobody published must not survive the failure and label the next render.
         this.reorderMode = null;
         this.reorderMachineNeedUnavailableReason = null;
@@ -883,6 +965,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   get reorderPriorities(): readonly Product[] {
     return this.lowStock.slice(0, REORDER_PRIORITY_LIMIT);
+  }
+
+  /** One product's cheapest-supplier answer, or `undefined` while the read has not settled it. */
+  cheapestSupplier(product: Product): CheapestSupplierProduct | undefined {
+    return cheapestSupplierFor(this.cheapestSuppliers, product.id);
   }
 
   /** The link to the full list, naming its real length once the list has been read. */

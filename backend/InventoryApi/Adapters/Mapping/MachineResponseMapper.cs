@@ -42,6 +42,7 @@ public static class MachineResponseMapper
         MonthToDateDirectProfit = summary.MonthToDateDirectProfit,
         ProfitabilityStatus = summary.ProfitabilityStatus,
         LocalMachineId = summary.LocalMachineId,
+        SiteId = summary.SiteId,
     };
 
     /// <summary>
@@ -50,8 +51,8 @@ public static class MachineResponseMapper
     /// added to the response later has to be decided here too, and so a withheld figure can never
     /// arrive as the <c>0</c> a client would read as a real one. Identity, name, number and the
     /// resolved site actor stay: without them the fleet an Operator restocks is unusable. The local
-    /// machine id (issue #780) is identity too and stays for the same reason - it names a row, not
-    /// an amount.
+    /// machine id (issue #780) and the site id (issue #980) are identity too and stay for the same
+    /// reason - they name a row and a place, not an amount.
     /// </summary>
     private static MachineResponse Redacted(MachineSummary summary) => new()
     {
@@ -73,5 +74,6 @@ public static class MachineResponseMapper
         MonthToDateDirectProfit = null,
         ProfitabilityStatus = null,
         LocalMachineId = summary.LocalMachineId,
+        SiteId = summary.SiteId,
     };
 }

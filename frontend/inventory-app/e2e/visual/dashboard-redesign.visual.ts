@@ -4,12 +4,14 @@ import { join, resolve } from 'node:path';
 
 /**
  * The visual evidence for issue #972: the Restockroo Dashboard and authenticated navigation at
- * 360, 390, 768 and 1440px, plus the narrow layout's More sheet opened and scrolled to its end.
+ * 360, 390, 768 and 1440px, plus the narrow layout's More sheet opened and scrolled to its end. The
+ * dashboard captures also show issue #980's machines under their sites and issue #981's Cheapest
+ * supplier column in Reorder priorities.
  *
  * Like the other visual runs this starts no API and no database. Every `/api/` request is answered
  * in the browser with neutral synthetic figures - an Owner's capabilities, a connected business,
- * two sites (one with a deliberately long name), three machines, seven reorder products and one
- * pending restock sync - so no business data, account name or credential can appear in a capture.
+ * two sites (one with a deliberately long name), three machines under them, seven reorder products,
+ * observed supplier prices for three of them and one pending restock sync - so no business data, account name or credential can appear in a capture.
  *
  * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule,
  * and the More sheet's modality is exercised in the browser at 390px from both of its openers.
@@ -125,9 +127,9 @@ function machine(id: number, name: string, today: number, week: number, lastWeek
 }
 
 const machines = [
-  machine(1, 'Harbour Point Plaza - Avenue Hotel VM', 57.6, 123.9, 210, 75.9, 610),
-  machine(2, 'Pavillion Left (Drinks & Cold)', 79, 210, 240, 166.5, 820),
-  machine(3, 'Pavillion Right (Snacks & Confectionery)', 92.6, 253.4, 270, 225.5, 905)
+  { ...machine(1, 'Harbour Point Plaza - Avenue Hotel VM', 57.6, 123.9, 210, 75.9, 610), siteId: 1 },
+  { ...machine(2, 'Pavillion Left (Drinks & Cold)', 79, 210, 240, 166.5, 820), siteId: 2 },
+  { ...machine(3, 'Pavillion Right (Snacks & Confectionery)', 92.6, 253.4, 270, 225.5, 905), siteId: 2 }
 ];
 
 function product(id: number, name: string, stock: number, need: number, toOrder: number, onOrder = 0) {
@@ -169,6 +171,38 @@ const purchaseCosts = [
   { productId: 3, lastUnitCost: 1.55, lastSupplierName: 'Coles', lastPurchaseDate: '2026-09-20', lowestUnitCost: 1.5, lowestSupplierName: 'Coles', lowestPurchaseDate: '2026-02-04' },
   { productId: 4, lastUnitCost: 1.5, lastSupplierName: 'Woolworths', lastPurchaseDate: '2026-10-18', lowestUnitCost: 1.5, lowestSupplierName: 'Woolworths', lowestPurchaseDate: '2026-01-18' }
 ];
+
+function offer(supplierId: number, supplierName: string, unitPrice: number, isCheapest: boolean) {
+  return {
+    supplierId,
+    supplierName,
+    hasListing: true,
+    hasPrice: true,
+    packQuantity: 24,
+    packPrice: Math.round(unitPrice * 2400) / 100,
+    packPriceBasis: 1,
+    unitPrice,
+    unitPriceExGst: unitPrice,
+    unitPriceIncGst: Math.round(unitPrice * 110) / 100,
+    isSpecial: false,
+    promotionEndsAtUtc: null,
+    stockStatus: 1,
+    lastCheckedAtUtc: '2026-10-27T22:00:00Z',
+    productUrl: null,
+    ineligibility: null,
+    isCheapest
+  };
+}
+
+/** Observed supplier prices (issue #981): two tracked products priced, one awaiting a match, the rest untracked. */
+const cheapestSuppliers = {
+  displayBasis: 1,
+  products: [
+    { productId: 1, trackingStatus: 3, cheapestUnitPrice: 0.98, suppliers: [offer(1, 'Woolworths', 0.98, true), offer(2, 'Coles', 1.04, false)] },
+    { productId: 2, trackingStatus: 3, cheapestUnitPrice: 1.49, suppliers: [offer(3, 'Costco', 1.49, true)] },
+    { productId: 3, trackingStatus: 1, cheapestUnitPrice: null, suppliers: [] }
+  ]
+};
 
 const restockReminder = {
   applicable: true,
@@ -215,6 +249,7 @@ async function answerApi(page: Page): Promise<void> {
     if (path.endsWith('/products/purchase-cost-summary')) return json(route, purchaseCosts);
     if (path.endsWith('/sites')) return json(route, sites);
     if (path.endsWith('/machines')) return json(route, machines);
+    if (path.endsWith('/cheapest-suppliers/summary')) return json(route, cheapestSuppliers);
     if (route.request().method() === 'POST') return route.fulfill({ status: 204, body: '' });
     return json(route, []);
   });
@@ -230,6 +265,7 @@ async function openDashboard(page: Page, width: number): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   await expect(page.getByText('Restock sync pending')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Reorder priorities' })).toBeVisible();
+  await expect(page.locator('[data-testid="cheapest-supplier-cell"]:visible', { hasText: 'Costco' }).first()).toBeVisible();
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {

@@ -74,4 +74,13 @@ public sealed record MachineResponse
     /// be opened, because every single-machine route needs its local id.</para>
     /// </summary>
     public long? LocalMachineId { get; init; }
+
+    /// <summary>
+    /// The site the machine stands at - the same id <c>GET api/sites</c> publishes as a site's
+    /// <c>siteId</c> (the provider's <c>CustomerID</c>) - or <c>null</c> when it stands at none
+    /// (issue #980). Appended after <see cref="LocalMachineId"/> so every key before it keeps its
+    /// name, order and value. Like the local id it names a place, not an amount, so it survives the
+    /// redacted projection: an Operator restocking a site needs to know which machines are there.
+    /// </summary>
+    public long? SiteId { get; init; }
 }

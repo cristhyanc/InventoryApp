@@ -419,15 +419,24 @@ changed, and every "Unavailable" still means unavailable, never zero.
   and the panel is hidden when there is none. It is two columns on a wide screen and one on a phone,
   and it offers only the two existing actions, **Open pick list** and **View needs ordering**. The
   reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
-- **Site performance** and **Machine performance** are two separate lists, because a machine's site
-  is not part of the machine list today. Every period is kept (Today, This week, Last week, Month to
-  date and the comparisons); a part-week comparison is labelled "vs same time last week". On a phone
-  the machines show one period at a time, chosen with the period buttons.
+- **Site performance** lists your sites with their stock levels and sales. **Machine performance**
+  lists every machine **under its site** (issue #980): each site with machines gets a heading row
+  naming it and how many machines it has, in the same order as Site performance, and machines with
+  no site - or at a site that is not listed - come last under **Other machines**. If the site list
+  cannot be read, the machines are simply listed without headings. The totals row still covers every
+  machine. Every period is kept (Today, This week, Last week, Month to date and the comparisons); a
+  part-week comparison is labelled "vs same time last week". On a phone the machines show one period
+  at a time, chosen with the period buttons, and keep their site headings.
 - **Reorder priorities** shows the first five products of the reorder list, in the list's own order,
   and a link naming how many there really are ("View all 7 products needing ordering") to Products →
-  Needs Ordering. Its columns are product, storage stock, machine need, need to order, and the last
-  and cheapest purchase. Those two are **historical costs from your own purchases**, and the section
-  says so; current supplier prices are not shown on the dashboard yet.
+  Needs Ordering. Its columns are product, storage stock, machine need, need to order, the last and
+  cheapest purchase, and **Cheapest supplier** (issue #981). Last and cheapest purchase are
+  **historical costs from your own purchases**; Cheapest supplier is the lowest price your own
+  suppliers **currently list** per unit - observed prices for purchasing guidance, not costs you have
+  paid - and the section says both. The supplier column is the same cell and popup as
+  [on Needs Ordering](#the-cheapest-supplier-on-needs-ordering): one request for the five products,
+  shown to everyone who sees the dashboard, unavailable in a read-only support view, and a failed
+  read says so with a **Retry** without affecting the rest of the dashboard.
 
 **The menu** is grouped under four headings: **Operations** (Dashboard, Pick List, Sites,
 Machines), **Inventory & purchasing** (Inventory, Purchases), **Finance & reports** (Expenses,
@@ -1493,8 +1502,8 @@ product you have not switched on.
 - **Products → All Products** has a **Tracked** column showing which of your products are tracked and
   where each one has got to. It is read-only: the switch itself is on each product's own page, and
   there is no way to switch many products on at once.
-- **What the prices look like once a product is matched** is on **Products → Needs Ordering**, in
-  the **Cheapest supplier** column — see
+- **What the prices look like once a product is matched** is on **Products → Needs Ordering** and
+  the Dashboard's **Reorder priorities**, in the **Cheapest supplier** column — see
   [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
 - **New Product** has no switch — there is no product yet to track. The form says so, and the switch
   is on that product's **Edit** page once it exists.
