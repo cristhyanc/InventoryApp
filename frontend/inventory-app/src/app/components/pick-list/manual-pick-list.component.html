@@ -21,18 +21,31 @@
         </select>
       </label>
 
+      <!--
+        The reveal behind every "hidden by the current filters" count: a quantity a filter is
+        hiding is still part of the submission, so there is always a way back to it.
+      -->
+      <button
+        type="button"
+        class="btn btn-secondary self-center"
+        data-testid="manual-pick-list-show-entered"
+        [attr.aria-pressed]="onlyEntered"
+        (click)="toggleShowEnteredOnly()">
+        {{ onlyEntered ? 'Show all' : 'Show entered products' }}
+      </button>
+
       @if (machinesLoadFailed) {
         <p data-testid="manual-pick-list-machines-failed" role="alert" class="text-md-body text-md-danger-text self-center">
           {{ machinesLoadFailedMessage }}
         </p>
       } @else if (machineSelectorShown) {
         <!--
-          A disabled <fieldset> is what blocks a selection change while a save is in flight: it
-          disables the dropdown's own trigger and checkboxes natively, so the matrix the outstanding
-          request was built from cannot change underneath it. onSelectedMachineIdsChange refuses as
-          well, so the rule is enforced and not merely rendered.
+          A disabled <fieldset> is what blocks a selection change while a save is in flight or its
+          outcome is unresolved: it disables the dropdown's own trigger and checkboxes natively, so
+          the columns the outstanding request was built from cannot change underneath it.
+          onSelectedMachineIdsChange refuses as well, so the rule is enforced and not merely rendered.
         -->
-        <fieldset class="m-0 border-0 p-0" [disabled]="saving">
+        <fieldset class="m-0 border-0 p-0" [disabled]="saving || unresolvedSubmission">
           <app-multi-select-dropdown
             label="Machines"
             itemLabelSingular="machine"
@@ -60,7 +73,7 @@
 
   <section class="card">
     <div class="card-header">
-      <h2 class="card-title">Enter quantities taken</h2>
+      <h2 class="card-title">Record refill</h2>
     </div>
     <!--
       Hidden rather than disabled while a support session is active (issue #658), matching the
@@ -81,7 +94,7 @@
     <div class="card-body p-0">
       <!-- Only a successful read may be described as having no products; see ManualPickListCatalogueState. -->
       @if (catalogueState === 'loading') {
-        <p data-testid="manual-pick-list-catalogue-loading" class="p-4 text-md-body value-muted">Loading products&hellip;</p>
+        <p data-testid="manual-pick-list-catalogue-loading" role="status" class="p-4 text-md-body value-muted">Loading products&hellip;</p>
       } @else if (catalogueState === 'failed') {
         <div class="p-4 flex flex-wrap items-center gap-4">
           <p data-testid="manual-pick-list-catalogue-failed" role="alert" class="text-md-body text-md-danger-text">{{ catalogueLoadFailedMessage }}</p>
@@ -91,21 +104,26 @@
         <p class="p-4 text-md-body value-muted">No active products match your filters.</p>
       } @else {
         <!--
-          One bounded scroll area for both axes, the same shape the calculated matrix uses: a long
-          product list scrolls vertically under the sticky header row, and a wide machine selection
-          scrolls horizontally inside this container rather than widening the page - which is what
-          keeps a narrow phone from overflowing sideways.
+          One bounded scroll area for both axes from md: up: a long product list scrolls vertically
+          under the sticky header row, and a wide machine selection scrolls horizontally inside this
+          container rather than widening the page. Below md: the product cards underneath replace it
+          entirely, so a phone never gets a squeezed matrix.
         -->
-        <div data-testid="manual-pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
+        <div
+          data-testid="manual-pick-list-table-scroll"
+          class="hidden max-h-[70vh] overflow-auto md:block"
+          tabindex="0"
+          role="region"
+          aria-label="Record refill entries, scrollable">
           <table class="table">
             <thead class="table-head">
               <tr>
-                <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Product</th>
+                <th scope="col" class="table-cell sticky left-0 top-0 z-20 bg-md-gray-100">Product</th>
                 <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Category</th>
-                <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Storage Qty</th>
+                <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Storage available</th>
                 @if (!sessionActive) {
                   @if (matrixMode) {
-                    <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Total Taken</th>
+                    <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Entered</th>
                     @for (machine of machineColumns; track machine.id) {
                       <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 min-w-[7.5rem]">
                         <span class="flex items-center gap-2">
@@ -114,13 +132,13 @@
                             type="button"
                             class="text-md-gray-500 hover:text-md-danger-text"
                             [attr.aria-label]="'Remove machine column: ' + machine.name"
-                            [disabled]="saving"
+                            [disabled]="saving || unresolvedSubmission"
                             (click)="removeMachineColumn(machine.id)">&times;</button>
                         </span>
                       </th>
                     }
                   } @else {
-                    <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Taken</th>
+                    <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Quantity taken</th>
                   }
                 }
               </tr>
@@ -128,14 +146,19 @@
             <tbody>
               @for (product of visibleProducts(); track product.id) {
                 <tr class="table-row">
-                  <td class="table-cell">{{ product.name }}</td>
+                  <th scope="row" class="table-cell sticky left-0 z-10 bg-white text-left font-normal">{{ product.name }}</th>
                   <td class="table-cell">{{ product.category?.name ?? '—' }}</td>
                   <td class="table-cell table-num" data-testid="manual-pick-list-storage-qty">{{ product.quantityInStock }}</td>
                   @if (!sessionActive) {
                     @if (matrixMode) {
-                      <td class="table-cell table-num" data-testid="manual-pick-list-row-total">{{ rowTotal(product.id) }}</td>
+                      <td class="table-cell table-num align-top">
+                        <span data-testid="manual-pick-list-row-total">{{ rowTotal(product.id) }}</span>
+                        @if (storageExcessMessageFor(product); as message) {
+                          <p data-testid="manual-pick-list-storage-excess" role="alert" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                        }
+                      </td>
                       @for (machine of machineColumns; track machine.id) {
-                        <td class="table-cell">
+                        <td class="table-cell align-top">
                           <input
                             type="text"
                             inputmode="numeric"
@@ -143,24 +166,27 @@
                             [attr.aria-label]="cellAriaLabel(product, machine)"
                             [ngModel]="cellValue(product.id, machine.id)"
                             (ngModelChange)="onCellChange(product.id, machine.id, $event)"
-                            [disabled]="saving" />
+                            [disabled]="!entriesEditable" />
                           @if (cellError(product.id, machine.id); as message) {
-                            <p data-testid="manual-pick-list-cell-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                            <p data-testid="manual-pick-list-cell-error" role="alert" class="text-md-badge text-md-danger-text">{{ message }}</p>
                           }
                         </td>
                       }
                     } @else {
-                      <td class="table-cell">
+                      <td class="table-cell align-top">
                         <input
                           type="text"
                           inputmode="numeric"
                           class="max-w-[100px]"
-                          [attr.aria-label]="'Taken: ' + product.name"
+                          [attr.aria-label]="'Quantity taken: ' + product.name"
                           [ngModel]="takenValue(product.id)"
                           (ngModelChange)="onTakenChange(product.id, $event)"
-                          [disabled]="saving" />
+                          [disabled]="!entriesEditable" />
                         @if (rowError(product.id); as message) {
-                          <p data-testid="manual-pick-list-row-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                          <p data-testid="manual-pick-list-row-error" role="alert" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                        }
+                        @if (storageExcessMessageFor(product); as message) {
+                          <p data-testid="manual-pick-list-storage-excess" role="alert" class="text-md-badge text-md-danger-text">{{ message }}</p>
                         }
                       </td>
                     }
@@ -170,24 +196,115 @@
             </tbody>
           </table>
         </div>
+
+        <!--
+          The narrow layout: one card per product, with a comfortable numeric box that takes direct
+          typing. In the machine matrix the cards enter one machine at a time, chosen above; the
+          focus hides nothing and loses nothing - every other column's quantities, errors and totals
+          are untouched by switching it.
+        -->
+        @if (!sessionActive) {
+          <div class="p-3 md:hidden">
+            @if (machineColumns.length > 1) {
+              <label class="block text-md-body" for="manual-pick-list-machine-focus">
+                <span class="block text-md-table-head font-bold uppercase tracking-wide text-md-gray-600">Entering for</span>
+                <select
+                  id="manual-pick-list-machine-focus"
+                  class="mt-1 w-full"
+                  data-testid="manual-pick-list-machine-focus"
+                  [ngModel]="focusedMachine?.id ?? null"
+                  [disabled]="saving || unresolvedSubmission"
+                  (ngModelChange)="onFocusMachineChange($event)">
+                  @for (machine of machineColumns; track machine.id) {
+                    <option [ngValue]="machine.id">{{ machine.name }}</option>
+                  }
+                </select>
+              </label>
+            }
+
+            <ul class="m-0 mt-3 flex list-none flex-col gap-3 p-0" data-testid="manual-pick-list-cards">
+              @for (product of visibleProducts(); track product.id) {
+                <li class="rounded-md-card border border-md-gray-200 p-3">
+                  <p class="text-md-body font-semibold text-md-gray-800">{{ product.name }}</p>
+                  <p class="text-md-badge value-muted">
+                    {{ product.category?.name ?? 'No category' }} &middot; Storage available {{ product.quantityInStock }}
+                  </p>
+                  @if (matrixMode) {
+                    @if (focusedMachine; as machine) {
+                      <label class="mt-2 block text-md-body text-md-gray-600">
+                        Quantity taken &middot; {{ machine.name }}
+                        <input
+                          type="text"
+                          inputmode="numeric"
+                          class="mt-1 h-11 w-full text-base"
+                          [attr.aria-label]="cellAriaLabel(product, machine)"
+                          [ngModel]="cellValue(product.id, machine.id)"
+                          (ngModelChange)="onCellChange(product.id, machine.id, $event)"
+                          [disabled]="!entriesEditable" />
+                      </label>
+                      @if (cellError(product.id, machine.id); as message) {
+                        <p role="alert" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                      }
+                      <p class="mt-1 text-md-badge value-muted">Entered across all machines: {{ rowTotal(product.id) }}</p>
+                    }
+                  } @else {
+                    <label class="mt-2 block text-md-body text-md-gray-600">
+                      Quantity taken
+                      <input
+                        type="text"
+                        inputmode="numeric"
+                        class="mt-1 h-11 w-full text-base"
+                        [attr.aria-label]="'Quantity taken: ' + product.name"
+                        [ngModel]="takenValue(product.id)"
+                        (ngModelChange)="onTakenChange(product.id, $event)"
+                        [disabled]="!entriesEditable" />
+                    </label>
+                    @if (rowError(product.id); as message) {
+                      <p role="alert" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                    }
+                  }
+                  @if (storageExcessMessageFor(product); as message) {
+                    <p role="alert" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                  }
+                </li>
+              }
+            </ul>
+          </div>
+        }
       }
     </div>
     @if (!sessionActive) {
       <!--
-        The storage this pick needs is the whole pick's, not the visible part of it: a filter hides
-        rows and changes nothing about what Save sends, so the hidden part is stated rather than left
-        to be discovered by a refusal.
+        The storage this submission needs is the whole submission's, not the visible part of it: a
+        filter hides rows and changes nothing about what Record refill sends, so the hidden part is
+        stated - with the action that reveals it - rather than left to be discovered by a refusal.
       -->
       <div class="card-body flex flex-wrap items-center gap-4 text-md-body">
         <span data-testid="manual-pick-list-total-required">
-          Total storage required: <span class="font-semibold text-md-gray-800">{{ totalUnitsRequired() }}</span> units
+          Entered: <span class="font-semibold text-md-gray-800">{{ totalUnitsRequired() }}</span> units across
+          {{ enteredEntryCount() }} {{ enteredEntryCount() === 1 ? 'entry' : 'entries' }}
         </span>
-        @if (hiddenUnitsRequired() > 0) {
+        @if (matrixMode && focusedMachine; as machine) {
+          <span data-testid="manual-pick-list-focus-total" class="value-muted md:hidden">
+            {{ machine.name }}: {{ focusedMachineUnits() }} units
+          </span>
+        }
+        @if (hiddenProductsWithEntries() > 0) {
           <span data-testid="manual-pick-list-hidden-required" class="value-muted">
             including {{ hiddenUnitsRequired() }} units on {{ hiddenProductsWithEntries() }}
             {{ hiddenProductsWithEntries() === 1 ? 'product' : 'products' }} hidden by the current filters
           </span>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            data-testid="manual-pick-list-reveal-hidden"
+            (click)="toggleShowEnteredOnly()">
+            {{ onlyEntered ? 'Show all' : 'Show entered products' }}
+          </button>
         }
+      </div>
+      <div class="card-body pt-0 text-md-body value-muted">
+        <p data-testid="manual-pick-list-impact">Recording this refill reduces storage stock by the quantities entered.</p>
       </div>
     }
     <div class="card-body flex flex-wrap items-center gap-4">
@@ -201,9 +318,27 @@
           </ul>
         </div>
       }
-      @if (requestErrors.length > 0) {
-        <p data-testid="manual-pick-list-request-error" class="text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
+      @if (storageExcessMessages.length > 0) {
+        <div data-testid="manual-pick-list-storage-excess-summary" role="alert" class="text-md-body text-md-danger-text">
+          <p>{{ storageExcessPrefix }}</p>
+          <ul class="list-disc pl-5">
+            @for (message of storageExcessMessages; track message) {
+              <li>{{ message }}</li>
+            }
+          </ul>
+        </div>
       }
+      @if (requestErrors.length > 0) {
+        <p data-testid="manual-pick-list-request-error" role="alert" class="text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
+      }
+      @if (recordedSummary; as summary) {
+        <p data-testid="manual-pick-list-recorded" role="status" class="text-md-body text-md-success-text">{{ summary }}</p>
+      }
+      <!--
+        An uncertain outcome keeps one action and one action only: resend the exact request that was
+        already sent. The notice cannot be dismissed, and neither a fresh submission nor Clear nor a
+        column change is offered beside it, because none of them can resolve what is outstanding.
+      -->
       @if (unresolvedSubmission) {
         <p data-testid="manual-pick-list-unresolved" role="alert" class="text-md-body text-md-danger-text">{{ unresolvedMessage }}</p>
         @if (!sessionActive) {
@@ -211,11 +346,16 @@
             {{ saving ? 'Retrying…' : 'Retry save' }}
           </button>
         }
-      }
-      @if (!sessionActive) {
-        <button type="button" class="btn btn-primary" [disabled]="!canSave" (click)="save()">
-          {{ saving ? 'Saving…' : 'Save' }}
+      } @else if (!sessionActive) {
+        <button type="button" class="btn btn-primary" data-testid="manual-pick-list-record" [disabled]="!canSave" (click)="save()">
+          {{ saving ? 'Recording…' : recordActionLabel }}
         </button>
+        <button type="button" class="btn btn-secondary" data-testid="manual-pick-list-clear" [disabled]="!canClear" (click)="clearEntries()">
+          Clear
+        </button>
+        @if (readyToRecord) {
+          <span data-testid="manual-pick-list-ready" class="text-md-body text-md-success-text">{{ readyToRecordLabel }}</span>
+        }
       }
     </div>
   </section>

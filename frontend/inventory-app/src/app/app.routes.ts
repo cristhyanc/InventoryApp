@@ -16,6 +16,7 @@ import {
 } from './access/invite-address-bar.guard';
 import { InviteLinkReopenComponent } from './access/invite-link-reopen.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
+import { pickListUnsavedWorkGuard } from './components/pick-list/pick-list-unsaved-work.guard';
 import { SIGN_IN_ROUTE } from './auth/intended-destination';
 import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
@@ -376,6 +377,10 @@ export const routes: Routes = [
   {
     path: 'pick-list',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('PickList.View')],
+    // The one route with a canDeactivate guard (issue #996): this page holds planning work, typed
+    // quantities and - at worst - an unresolved refill submission's retry context, none of which is
+    // stored anywhere else. See components/pick-list/pick-list-unsaved-work.guard.ts.
+    canDeactivate: [pickListUnsavedWorkGuard],
     loadComponent: () => import('./components/pick-list/pick-list.component').then((m) => m.PickListComponent)
   },
   {

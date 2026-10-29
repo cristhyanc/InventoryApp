@@ -13,6 +13,7 @@ import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ProductService } from '../../services/product.service';
+import { SiteService } from '../../services/site.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
@@ -46,6 +47,7 @@ async function render(options: { status?: SpecConnectionStatus; machines?: Obser
         useValue: { getAll: jest.fn(() => options.machines ?? of([machine(10, 'Machine A')])) }
       },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: PickListService, useValue: { get: jest.fn(() => of(pickListResult())) } },
       { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
@@ -87,7 +89,7 @@ describe('PickListComponent provider-optional page (issue #728)', () => {
     expect(machinesDropdown(host)).toBeDefined();
     expect(unavailableNotice(host)).toBeNull();
     expect(machinesError(host)).toBeNull();
-    expect(host.textContent).toContain('Select at least one machine to build a pick list.');
+    expect(host.textContent).toContain('Select at least one machine to plan a stock run.');
   });
 
   it('states why there is no pick list without a provider, and asks for no machines', async () => {
@@ -98,7 +100,7 @@ describe('PickListComponent provider-optional page (issue #728)', () => {
     expect(unavailableNotice(host)?.textContent?.trim()).toBe(
       'The pick list is unavailable because Nayax is not connected.'
     );
-    expect(host.textContent).not.toContain('Select at least one machine to build a pick list.');
+    expect(host.textContent).not.toContain('Select at least one machine to plan a stock run.');
     expect(host.textContent).not.toContain('No machines selected yet.');
   });
 

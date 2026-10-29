@@ -18,6 +18,7 @@ import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { generateIdempotencyKey } from './idempotency-key';
+import { MAXIMUM_PICK_QUANTITY } from './pick-list-quantity';
 import {
   multiMachineAllocationsEqual,
   parseMultiMachineRefillRejection,
@@ -26,15 +27,16 @@ import {
   refillCellKey
 } from './pick-list-refill-errors';
 
-/** The message a malformed "Taken" entry gets, matching `PickListRefillPolicy.QuantityMustBePositiveMessage`'s rule. */
+/** The message a malformed "Quantity taken" entry gets, matching `PickListRefillPolicy.QuantityMustBePositiveMessage`'s rule. */
 export const INVALID_TAKEN_QUANTITY_MESSAGE = 'Enter a whole number greater than 0.';
 
 /**
  * The largest quantity one entry may hold: the server records a quantity as a 32-bit integer, so a
  * bigger number is refused here, naming the cell it was typed into, rather than by model binding
- * with a message about a JSON field nobody typed.
+ * with a message about a JSON field nobody typed. It is the ceiling both Pick List views share
+ * (issue #996), so a planned quantity and a recorded one cannot disagree about what is storable.
  */
-export const MAXIMUM_TAKEN_QUANTITY = 2147483647;
+export const MAXIMUM_TAKEN_QUANTITY = MAXIMUM_PICK_QUANTITY;
 
 export const TAKEN_QUANTITY_TOO_LARGE_MESSAGE = `Enter a quantity of ${MAXIMUM_TAKEN_QUANTITY} or less.`;
 
@@ -90,8 +92,48 @@ export function discardMachineColumnConfirmation(...machineNames: string[]): str
   return `Remove the ${machineNames.join(', ')} ${columns}? The quantities already typed there will be discarded.`;
 }
 
-/** The sentence introducing every entry that has to be fixed before Save is offered again. */
-export const INVALID_ENTRIES_PREFIX = 'Fix these entries before saving:';
+/** The sentence introducing every entry that has to be fixed before recording is offered again. */
+export const INVALID_ENTRIES_PREFIX = 'Fix these entries before recording:';
+
+/** What a storage shortage is refused with (issue #996); never the wording of a below-suggestion note. */
+export const RESOLVE_SHORTAGE_TO_RECORD = 'Resolve shortage to record';
+
+/** The sentence introducing every product the submission is short of storage for. */
+export const STORAGE_EXCESS_PREFIX = 'Resolve these shortages to record:';
+
+/**
+ * One product's storage shortage, in the terms the operator entered it: what the whole submission
+ * takes off that product's shelf - across **every** selected machine, filtered rows included -
+ * against the storage this page last read. The backend's own validation stays authoritative for a
+ * stock change that happens after this read; this is the immediate answer, not a replacement for it.
+ */
+export function storageExcessMessage(entered: number, available: number): string {
+  return `Entered ${entered} but storage holds ${available}. ${RESOLVE_SHORTAGE_TO_RECORD}.`;
+}
+
+/** What the operator is asked before Clear discards every quantity they have entered. */
+export const CLEAR_ENTRIES_CONFIRMATION =
+  'Clear every quantity you have entered? Nothing has been recorded, and the quantities cannot be brought back.';
+
+/** The label the primary action carries, and the one the summary uses for a submission that is ready. */
+export const RECORD_REFILL_ACTION_LABEL = 'Record refill';
+
+export const READY_TO_RECORD_LABEL = 'Ready to record';
+
+/** What a confirmed save reports: the whole submission, in units and entries (issue #996). */
+export function recordedTotalsMessage(units: number, entries: number): string {
+  const entryWord = entries === 1 ? 'entry' : 'entries';
+  const unitWord = units === 1 ? 'unit' : 'units';
+  return `Recorded ${units} ${unitWord} across ${entries} ${entryWord}.`;
+}
+
+/** What `ManualPickListComponent` reports that leaving the page would lose; see `PickListComponent.confirmLeave`. */
+export interface ManualPickUnsavedWork {
+  /** Whether any quantity has been entered and not recorded. */
+  readonly entriesPresent: boolean;
+  /** Whether a save ended without the server's answer, so only its own retry may resolve it. */
+  readonly unresolvedSubmission: boolean;
+}
 
 /**
  * Where the page's read of the active catalogue stands. Only `'loaded'` means {@link
@@ -230,6 +272,36 @@ interface ManualPickSubmission {
  * real answer yet, so a slow or failed read is never shown as an empty catalogue, and
  * {@link catalogueRefreshFailed} says the refresh after a save failed, so stale storage quantities
  * are labelled as such; both offer {@link retryCatalogue}.
+ *
+ * **Issue #996 is the view's redesign, and it adds four rules rather than a new workflow.** The
+ * catalogue entry, the local machine selection, the deep link, the no-machine attribution, the
+ * atomic single-batch write and the idempotent retry are all exactly as above.
+ *
+ * 1. **A storage shortage blocks a fresh recording, and nothing else does.**
+ *    {@link storageExcessFor} weighs each product's whole submission - the sum across **every**
+ *    selected machine, including the entries a filter is hiding - against the storage quantity this
+ *    page last read, and {@link canSave} and {@link save} both refuse while any product is short,
+ *    with {@link RESOLVE_SHORTAGE_TO_RECORD} saying so on the row. It is the immediate answer, not
+ *    a replacement for the server's: `PickListRefillPolicy` stays authoritative for a stock change
+ *    between that read and the save. There is deliberately **no** auto-cap and no allocation rule -
+ *    choosing which machine loses units is the operator's decision, not this screen's. A suggestion
+ *    to be *below* would be the other, non-blocking kind of note; this view has no source for one,
+ *    because nothing transfers a plan into a recording, so it shows none rather than inventing it.
+ * 2. **An unresolved outcome freezes the form, not just the Save button.**
+ *    {@link entriesEditable} is false while one is outstanding, so an edited quantity, Clear, a
+ *    column removal or a selection change cannot get past it; the only action offered is
+ *    {@link retry}, which resends the kept payload under the kept key. It stays available even when
+ *    the storage read would now refuse those quantities: refusing the retry would leave a possibly
+ *    committed write unresolvable, which is the worse of the two outcomes.
+ * 3. **A hidden entry is always reachable.** {@link onlyEntered} - "Show entered products" - reveals
+ *    every entered row whatever the search and category filters are set to, beside the count and
+ *    units they hide. Clearing, and removing a column that holds quantities, each ask first.
+ * 4. **A success is reported only once it is confirmed, and reports the whole submission.**
+ *    {@link lastRecorded} is written from the response, never from what was typed, and
+ *    {@link recordedSummary} states its units and entries on screen rather than only in a toast.
+ *
+ * It also reports what leaving the page would lose, through {@link unsavedWorkChange}, which is
+ * what `PickListComponent`'s navigation guard asks about.
  */
 @Component({
   selector: 'app-manual-pick-list',
@@ -262,9 +334,29 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** Emitted whenever a save starts or finishes, so the page can refuse a mode switch while one is outstanding. */
   @Output() readonly saveInFlightChange = new EventEmitter<boolean>();
 
+  /**
+   * Emitted whenever what leaving the page would lose changes (issue #996): typed quantities, or an
+   * unresolved submission whose retry context lives here. The page's navigation guard is its one
+   * consumer.
+   */
+  @Output() readonly unsavedWorkChange = new EventEmitter<ManualPickUnsavedWork>();
+
   search = '';
   categoryId: number | '' = '';
   saving = false;
+
+  /**
+   * Whether the list is restricted to the products that hold an entry - the reveal behind "Show
+   * entered products", so a quantity a filter is hiding can always be reached and fixed. It is a
+   * view filter and nothing more: no entry, error or total depends on it.
+   */
+  onlyEntered = false;
+
+  /** The machine the narrow layout's product cards enter quantities for; see {@link focusedMachine}. */
+  focusMachineId: number | null = null;
+
+  /** What the last confirmed save recorded, kept on screen so a confirmed success is not only a toast. */
+  lastRecorded: { readonly units: number; readonly entries: number } | null = null;
 
   /**
    * Whether a support session is active (issue #658). While it is, the inventory-writing controls
@@ -329,6 +421,12 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   readonly catalogueRefreshFailedMessage = CATALOGUE_REFRESH_FAILED_MESSAGE;
   readonly machinesLoadFailedMessage = MACHINES_LOAD_FAILED_MESSAGE;
   readonly invalidEntriesPrefix = INVALID_ENTRIES_PREFIX;
+  readonly recordActionLabel = RECORD_REFILL_ACTION_LABEL;
+  readonly readyToRecordLabel = READY_TO_RECORD_LABEL;
+  readonly storageExcessPrefix = STORAGE_EXCESS_PREFIX;
+
+  /** The last {@link unsavedWorkChange} value emitted, so the page hears about real changes only. */
+  private unsavedWorkReported: ManualPickUnsavedWork = { entriesPresent: false, unresolvedSubmission: false };
 
   private readonly sessionActiveSubscription: Subscription;
 
@@ -410,7 +508,15 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /**
+   * The rows on screen. The search and category filters hide rows and change nothing about the
+   * submission; "Show entered products" is the reveal that brings every entered row back, whatever
+   * the other two are set to, so a hidden entry can always be reached.
+   */
   visibleProducts(): Product[] {
+    if (this.onlyEntered) {
+      return this.products.filter((product) => this.entryPresentFor(product.id));
+    }
     const term = this.search.trim().toLowerCase();
     return this.products.filter((product) => {
       if (this.categoryId !== '' && product.category?.id !== this.categoryId) {
@@ -420,16 +526,23 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** Reveals every entered product, or goes back to the ordinary filters; see {@link onlyEntered}. */
+  toggleShowEnteredOnly(): void {
+    this.onlyEntered = !this.onlyEntered;
+  }
+
   takenValue(productId: number): string {
     return this.takenById.get(productId) ?? '';
   }
 
   onTakenChange(productId: number, value: string): void {
-    if (this.saving) {
+    if (!this.entriesEditable) {
       return;
     }
     this.takenById.set(productId, value);
     this.rowErrors.delete(productId);
+    this.lastRecorded = null;
+    this.notifyUnsavedWork();
   }
 
   /** The one message for this row of the "No machine" column: a malformed entry first, else the server's own last refusal. */
@@ -447,11 +560,13 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   }
 
   onCellChange(productId: number, machineId: number, value: string): void {
-    if (this.saving) {
+    if (!this.entriesEditable) {
       return;
     }
     this.cellValues.set(refillCellKey(productId, machineId), value);
     this.cellErrors.delete(refillCellKey(productId, machineId));
+    this.lastRecorded = null;
+    this.notifyUnsavedWork();
   }
 
   /** The one message for this cell: a malformed entry first, else the server's own last per-allocation refusal. */
@@ -466,7 +581,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
 
   /** The accessible name of one cell, which has to name both things it is about. */
   cellAriaLabel(product: Product, machine: LocalMachine): string {
-    return `Taken: ${product.name} at ${machine.name}`;
+    return `Quantity taken: ${product.name} at ${machine.name}`;
   }
 
   /** Every malformed entry, naming the product and - in the matrix - the machine it was typed against. */
@@ -523,7 +638,120 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** How many products with a typed quantity the current filter hides. */
   hiddenProductsWithEntries(): number {
     const visibleIds = this.visibleProductIds();
-    return this.products.filter((product) => !visibleIds.has(product.id) && this.rowTotal(product.id) > 0).length;
+    return this.products.filter((product) => !visibleIds.has(product.id) && this.entryPresentFor(product.id)).length;
+  }
+
+  /** How many entries one Record refill would send, over every product and machine column. */
+  enteredEntryCount(): number {
+    const payload = this.buildPayload();
+    if (payload === null) {
+      return 0;
+    }
+    return payload.kind === 'batch' ? payload.allocations.length : payload.rows.length;
+  }
+
+  /**
+   * One product's storage shortage in units, or `0` while there is none: what the whole submission
+   * takes off that product's shelf - the sum across **every** selected machine, including entries a
+   * filter is hiding - against the storage quantity this page last read. This is the immediate,
+   * blocking check; `PickListRefillPolicy` on the server stays authoritative for a stock change
+   * between that read and the save.
+   */
+  storageExcessFor(product: Product): number {
+    return Math.max(0, this.rowTotal(product.id) - product.quantityInStock);
+  }
+
+  /** The one message a short product's row carries, naming both figures it is about. */
+  storageExcessMessageFor(product: Product): string | null {
+    const excess = this.storageExcessFor(product);
+    return excess === 0 ? null : storageExcessMessage(this.rowTotal(product.id), product.quantityInStock);
+  }
+
+  /** Every product the submission is short of storage for, named, filtered rows included. */
+  get storageExcessMessages(): string[] {
+    return this.products
+      .filter((product) => this.storageExcessFor(product) > 0)
+      .map((product) => `${product.name}: ${storageExcessMessage(this.rowTotal(product.id), product.quantityInStock)}`);
+  }
+
+  /** Whether any product's entries exceed the storage this page read, which blocks a fresh save. */
+  get storageExcessPresent(): boolean {
+    return this.products.some((product) => this.storageExcessFor(product) > 0);
+  }
+
+  /** Whether any quantity has been entered at all, in either mode. */
+  get entriesPresent(): boolean {
+    return this.products.some((product) => this.entryPresentFor(product.id));
+  }
+
+  /**
+   * Whether entries may be changed at all. A save in flight freezes the request that is being
+   * answered, and an **unresolved** outcome freezes it for longer: until that attempt is resolved,
+   * the only request this component may send is the one it already sent, so an edit that could
+   * change it is refused rather than silently ignored at save time.
+   */
+  get entriesEditable(): boolean {
+    return !this.saving && !this.unresolvedSubmission && !this.sessionActive;
+  }
+
+  /** Whether the submission could be recorded right now; the label the summary states beside it. */
+  get readyToRecord(): boolean {
+    return this.canSave && !this.unresolvedSubmission;
+  }
+
+  /** What the last confirmed save recorded, in words, or `null` while nothing has been confirmed. */
+  get recordedSummary(): string | null {
+    return this.lastRecorded === null ? null : recordedTotalsMessage(this.lastRecorded.units, this.lastRecorded.entries);
+  }
+
+  /** Whether Clear is offered: there is something to clear, and nothing in flight or unresolved. */
+  get canClear(): boolean {
+    return this.entriesEditable && this.entriesPresent;
+  }
+
+  /**
+   * Discards every entered quantity, after asking. It is refused outright while an outcome is
+   * unresolved: clearing the form would not clear the submission, and an operator who cannot see
+   * what they sent cannot judge the retry.
+   */
+  clearEntries(): void {
+    if (!this.canClear || !window.confirm(CLEAR_ENTRIES_CONFIRMATION)) {
+      return;
+    }
+    this.takenById.clear();
+    this.cellValues.clear();
+    this.rowErrors.clear();
+    this.cellErrors.clear();
+    this.requestErrors = [];
+    this.lastRecorded = null;
+    this.notifyUnsavedWork();
+  }
+
+  // ----- the narrow layout's machine focus -------------------------------------------------
+
+  /** The machine the product cards enter quantities for, resolved to a selected column. */
+  get focusedMachine(): LocalMachine | null {
+    const columns = this.machineColumns;
+    if (columns.length === 0) {
+      return null;
+    }
+    return columns.find((machine) => machine.id === this.focusMachineId) ?? columns[0];
+  }
+
+  onFocusMachineChange(machineId: number): void {
+    this.focusMachineId = machineId;
+  }
+
+  /** What the focused machine's own column adds up to, stated apart from the whole submission's total. */
+  focusedMachineUnits(): number {
+    const machine = this.focusedMachine;
+    if (machine === null) {
+      return 0;
+    }
+    return this.products.reduce((total, product) => {
+      const parsed = parseTakenEntry(this.cellValue(product.id, machine.id));
+      return 'error' in parsed ? total : total + parsed.quantity;
+    }, 0);
   }
 
   /**
@@ -532,7 +760,9 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
    * request being answered is the request that was built.
    */
   onSelectedMachineIdsChange(machineIds: number[]): void {
-    if (this.saving) {
+    // An unresolved outcome freezes the columns for the same reason it freezes an entry: the kept
+    // payload names machines, and the only request that may be sent is the one already sent.
+    if (this.saving || this.unresolvedSubmission) {
       return;
     }
 
@@ -564,6 +794,10 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     for (const id of removed) {
       this.discardMachineEntries(id);
     }
+    if (this.focusMachineId !== null && !next.includes(this.focusMachineId)) {
+      this.focusMachineId = null;
+    }
+    this.notifyUnsavedWork();
   }
 
   /** Removes one machine's column, asking first when it holds quantities. */
@@ -571,12 +805,20 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     this.onSelectedMachineIdsChange(this.selectedMachineIds.filter((id) => id !== machineId));
   }
 
+  /**
+   * Whether a fresh submission may be recorded. A storage shortage blocks it - that is the
+   * difference between a shortage and a below-suggestion note - and so does a malformed entry, in
+   * either case including one a filter is hiding.
+   */
   get canSave(): boolean {
     if (!this.readyToSend) {
       return false;
     }
     if (this.unresolvedSubmission) {
       return this.lastSubmission !== null;
+    }
+    if (this.storageExcessPresent) {
+      return false;
     }
     const payload = this.buildPayload();
     return payload !== null && !isEmptyPayload(payload);
@@ -602,6 +844,11 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     // pending-resolution check is here for the same reason, and because the machine the link named
     // must not be able to arrive after this request was built: see machineResolutionPending.
     if (!this.readyToSend) {
+      return;
+    }
+    // Enforced here as well as on the button: a shortage the operator can see must actually stop
+    // the request, not merely grey out the control that sends it.
+    if (this.storageExcessPresent) {
       return;
     }
 
@@ -687,6 +934,29 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     return new Set(this.visibleProducts().map((product) => product.id));
   }
 
+  /** Whether one product holds an entry in the current mode - a malformed one included. */
+  private entryPresentFor(productId: number): boolean {
+    if (this.matrixMode) {
+      return this.machineColumns.some((machine) => holdsQuantity(this.cellValue(productId, machine.id)));
+    }
+    return holdsQuantity(this.takenValue(productId));
+  }
+
+  /** Tells the page what leaving would lose, and only when that answer has actually changed. */
+  private notifyUnsavedWork(): void {
+    const next: ManualPickUnsavedWork = {
+      entriesPresent: this.entriesPresent,
+      unresolvedSubmission: this.unresolvedSubmission
+    };
+    if (
+      next.entriesPresent !== this.unsavedWorkReported.entriesPresent ||
+      next.unresolvedSubmission !== this.unsavedWorkReported.unresolvedSubmission
+    ) {
+      this.unsavedWorkReported = next;
+      this.unsavedWorkChange.emit(next);
+    }
+  }
+
   /**
    * Exactly what Save would send now, or `null` while any entry of the current mode is malformed -
    * including one on a row the filter hides, because a hidden entry is still part of the pick.
@@ -740,12 +1010,18 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     this.cellErrors.clear();
     this.saveInFlightChange.emit(true);
 
+    this.notifyUnsavedWork();
+
     this.sendRequest(submission).subscribe({
       next: () => {
         this.saving = false;
         this.lastSubmission = null;
         this.discardRecordedEntries(submission.payload);
+        // Only a confirmed response reports what was recorded, and it reports the whole
+        // submission's totals: an in-flight or uncertain save never shows a success figure.
+        this.lastRecorded = recordedTotals(submission.payload);
         this.saveInFlightChange.emit(false);
+        this.notifyUnsavedWork();
         this.toastService.success(recordedMessage(submission.payload));
         this.refillRecorded.emit();
       },
@@ -753,6 +1029,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
         this.saving = false;
         this.saveInFlightChange.emit(false);
         this.handleSaveError(error, submission.payload);
+        this.notifyUnsavedWork();
       }
     });
   }
@@ -849,6 +1126,15 @@ function payloadsEqual(a: ManualPickPayload, b: ManualPickPayload): boolean {
     return pickListRefillRowsEqual(a.rows, b.rows);
   }
   return false;
+}
+
+/** What one confirmed submission actually recorded: its units and how many entries carried them. */
+function recordedTotals(payload: ManualPickPayload): { units: number; entries: number } {
+  const quantities =
+    payload.kind === 'batch'
+      ? payload.allocations.map((allocation) => allocation.quantityTaken)
+      : payload.rows.map((row) => row.quantityTaken);
+  return { units: quantities.reduce((total, quantity) => total + quantity, 0), entries: quantities.length };
 }
 
 function recordedMessage(payload: ManualPickPayload): string {

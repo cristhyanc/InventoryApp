@@ -1,20 +1,26 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { SupportSessionService } from '../../support-session/support-session.service';
-import { PickListComponent } from './pick-list.component';
+import {
+  LEAVE_WITH_ENTERED_QUANTITIES_WARNING,
+  LEAVE_WITH_PLANNING_WORK_WARNING,
+  LEAVE_WITH_UNRESOLVED_SUBMISSION_WARNING,
+  PickListComponent
+} from './pick-list.component';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
+import { SiteService } from '../../services/site.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import {
   LocalMachine,
   Machine,
   MultiMachinePickListRefillRequest,
-  PickListProduct,
   PickListResult,
-  Product
+  Product,
+  SiteListItem
 } from '../../models/models';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { AccessService } from '../../access/access.service';
@@ -95,49 +101,10 @@ function pickListResult(overrides: Partial<PickListResult> = {}): PickListResult
         storageQuantityInStock: 2,
         totalQuantityToPick: 5,
         storageShortageQuantity: 3,
-        machineQuantities: [
-          { machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }
-        ]
+        machineQuantities: [{ machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
       }
     ],
     ...overrides
-  };
-}
-
-interface PickListProductOverrides {
-  productId: number;
-  productName: string;
-  mdbCode: number | null;
-}
-
-/** Builds a minimal pick list product row for sort tests; machine 10 always has a 1-to-pick cell so the row is actionable. */
-function pickListProduct(overrides: PickListProductOverrides): PickListProduct {
-  return {
-    productId: overrides.productId,
-    productName: overrides.productName,
-    mdbCode: overrides.mdbCode,
-    storageQuantityInStock: 50,
-    totalQuantityToPick: 1,
-    storageShortageQuantity: 0,
-    machineQuantities: [{ machineId: 10, mdbCode: overrides.mdbCode, currentQuantity: 0, targetQuantity: 1, quantityToPick: 1 }]
-  };
-}
-
-/**
- * Five products in a backend order distinct from every sort order below, covering: a
- * case-insensitive name tie ("apple"/"Apple", ids 2 and 3), two missing MDB codes whose relative
- * order must stay name/id order in either sort direction (ids 3 and 5), and numeric MDB codes
- * that are not in string order (2, 5, 10) so a lexicographic bug would be caught.
- */
-function sortDataset(): PickListResult {
-  return {
-    products: [
-      pickListProduct({ productId: 1, productName: 'Banana', mdbCode: 5 }),
-      pickListProduct({ productId: 2, productName: 'apple', mdbCode: 2 }),
-      pickListProduct({ productId: 3, productName: 'Apple', mdbCode: null }),
-      pickListProduct({ productId: 4, productName: 'Cherry', mdbCode: 10 }),
-      pickListProduct({ productId: 5, productName: 'Date', mdbCode: null })
-    ]
   };
 }
 
@@ -145,499 +112,150 @@ interface Harness {
   component: PickListComponent;
   getAllMachines: jest.Mock;
   getAllProducts: jest.Mock;
-  getPickList: jest.Mock;
-  mutationSpies: jest.Mock[];
+  getSiteList: jest.Mock;
   toast: { success: jest.Mock; error: jest.Mock; warning: jest.Mock; info: jest.Mock };
 }
 
+/** The page on its own: it owns the shared reads, the mode and the navigation guard, and no matrix. */
 function createHarness(
-  machines: Machine[] = [machine({ machineID: 10, machineName: 'Machine A' }), machine({ machineID: 20, machineName: 'Machine B' })],
-  products: Product[] = [product({ id: 1, name: 'Coke' }), product({ id: 2, name: 'Chips' })],
-  pickList: jest.Mock = jest.fn(() => of(pickListResult()))
+  options: {
+    machines?: Machine[];
+    products?: Product[];
+    productReads?: jest.Mock;
+    sites?: jest.Mock;
+    queryParams?: Record<string, string>;
+  } = {}
 ): Harness {
-  const getAllMachines = jest.fn(() => of(machines));
-  const getAllProducts = jest.fn(() => of(products));
-  const machineUpdate = jest.fn();
-  const machineApplySyncRestock = jest.fn();
-  const productUpdate = jest.fn();
-  const productDelete = jest.fn();
-
-  const machineService = {
-    getAll: getAllMachines,
-    applySyncRestock: machineApplySyncRestock,
-    syncRestock: machineUpdate
-  } as unknown as MachineService;
-  const productService = {
-    getAll: getAllProducts,
-    update: productUpdate,
-    delete: productDelete
-  } as unknown as ProductService;
-  const pickListService = { get: pickList } as unknown as PickListService;
+  const getAllMachines = jest.fn(() => of(options.machines ?? [machine({ machineID: 10, machineName: 'Machine A' })]));
+  const getAllProducts = options.productReads ?? jest.fn(() => of(options.products ?? [product({ id: 1, name: 'Coke' })]));
+  const getSiteList = options.sites ?? jest.fn(() => of([] as SiteListItem[]));
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 
   const component = new PickListComponent(
-    machineService,
-    productService,
-    pickListService,
+    { getAll: getAllMachines } as unknown as MachineService,
+    { getAll: getAllProducts } as unknown as ProductService,
+    { getList: getSiteList } as unknown as SiteService,
     toast as unknown as ToastService,
     providerAvailabilityDouble(),
-    { snapshot: { queryParamMap: convertToParamMap({}) } } as unknown as ActivatedRoute
+    { snapshot: { queryParamMap: convertToParamMap(options.queryParams ?? {}) } } as unknown as ActivatedRoute
   );
   component.ngOnInit();
 
-  return {
-    component,
-    getAllMachines,
-    getAllProducts,
-    getPickList: pickList,
-    mutationSpies: [machineUpdate, machineApplySyncRestock, productUpdate, productDelete],
-    toast
-  };
+  return { component, getAllMachines, getAllProducts, getSiteList, toast };
 }
 
-/** Stages a machine selection and applies it - the normal "pick machines, then Apply" flow. */
-function applyMachines(component: PickListComponent, machineIds: number[]): void {
-  component.stagedMachineIds = machineIds;
-  component.applyFilters();
-}
+afterEach(() => jest.restoreAllMocks());
 
-describe('PickListComponent loading', () => {
-  it('loads the machine and product catalogues on init and defaults the product filter to every product', () => {
-    const { component, getAllMachines, getAllProducts } = createHarness();
+describe('PickListComponent shared reads', () => {
+  it('reads the machine fleet, the active catalogue and the site list on init', () => {
+    const { component, getAllMachines, getAllProducts, getSiteList } = createHarness({
+      sites: jest.fn(() => of([{ siteId: 5, name: 'Airport', machineCount: 1 }]))
+    });
 
     expect(getAllMachines).toHaveBeenCalledTimes(1);
     expect(getAllProducts).toHaveBeenCalledTimes(1);
-    expect(component.allMachines.map((m) => m.machineID)).toEqual([10, 20]);
-    expect(component.allProducts.map((p) => p.id)).toEqual([1, 2]);
-    expect(component.stagedProductIds).toEqual([1, 2]);
-    expect(component.appliedProductIds).toEqual([1, 2]);
+    expect(getSiteList).toHaveBeenCalledTimes(1);
+    expect(component.allMachines.map((m) => m.machineID)).toEqual([10]);
+    expect(component.allProducts.map((p) => p.id)).toEqual([1]);
+    expect(component.sites.map((s) => s.siteId)).toEqual([5]);
   });
 
-  it('shows no pick list data until a machine selection is applied', () => {
-    const { component, getPickList } = createHarness();
+  it('leaves the sites empty when the site read fails, rather than inventing a site for a machine', () => {
+    const { component } = createHarness({ sites: jest.fn(() => throwError(() => new Error('offline'))) });
 
-    expect(component.appliedMachineIds).toEqual([]);
-    expect(component.pickListProducts).toEqual([]);
-    expect(getPickList).not.toHaveBeenCalled();
-  });
-});
-
-describe('PickListComponent staged vs applied filters', () => {
-  it('staging a machine selection does not fetch or change the applied selection until Apply', () => {
-    const { component, getPickList } = createHarness();
-
-    component.stagedMachineIds = [10];
-
-    expect(component.appliedMachineIds).toEqual([]);
-    expect(getPickList).not.toHaveBeenCalled();
+    expect(component.sites).toEqual([]);
+    expect(component.allMachines).toHaveLength(1);
   });
 
-  it('staging a product selection does not change the applied selection or displayed rows until Apply', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
+  it('reports a failed first catalogue read as a failed read, never as an empty catalogue', () => {
+    const { component, toast } = createHarness({ productReads: jest.fn(() => throwError(() => new Error('offline'))) });
 
-    component.stagedProductIds = [2];
-
-    expect(component.appliedProductIds).toEqual([1, 2]);
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([1, 2]);
+    expect(component.catalogueState).toBe('failed');
+    expect(component.catalogueRefreshFailed).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith('Failed to load the product list.');
   });
 
-  it('Apply applies both staged Products and Machines selections together', () => {
-    const { component, getPickList } = createHarness();
-    component.stagedMachineIds = [10];
-    component.stagedProductIds = [1];
+  it('reports a failed refresh as possibly stale storage quantities, not as lost data', () => {
+    const productReads = jest
+      .fn()
+      .mockReturnValueOnce(of([product({ id: 1, name: 'Coke' })]))
+      .mockReturnValueOnce(throwError(() => new Error('offline')));
+    const { component, toast } = createHarness({ productReads });
 
-    component.applyFilters();
+    component.loadProducts();
 
-    expect(component.appliedMachineIds).toEqual([10]);
-    expect(component.appliedProductIds).toEqual([1]);
-    expect(getPickList).toHaveBeenCalledWith([10]);
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([1]);
-  });
-
-  it('Apply with a changed machine selection performs a fresh Pick List fetch for the newly applied ids', () => {
-    const { component, getPickList } = createHarness();
-    applyMachines(component, [10]);
-    getPickList.mockClear();
-
-    applyMachines(component, [10, 20]);
-
-    expect(getPickList).toHaveBeenCalledTimes(1);
-    expect(getPickList).toHaveBeenCalledWith([10, 20]);
-    expect(component.appliedMachineIds).toEqual([10, 20]);
-  });
-
-  it('Apply with only a product-filter change does not refetch the backend projection', () => {
-    const { component, getPickList } = createHarness();
-    applyMachines(component, [10]);
-    getPickList.mockClear();
-    component.stagedProductIds = [2];
-
-    component.applyFilters();
-
-    expect(getPickList).not.toHaveBeenCalled();
-    expect(component.appliedProductIds).toEqual([2]);
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2]);
-    expect(component.totalToPickUnits()).toBe(5);
-  });
-
-  it('Apply with an unchanged machine selection (re-applying the same ids) does not refetch', () => {
-    const { component, getPickList } = createHarness();
-    applyMachines(component, [10, 20]);
-    getPickList.mockClear();
-
-    applyMachines(component, [20, 10]);
-
-    expect(getPickList).not.toHaveBeenCalled();
-  });
-
-  it('Applying an empty staged machine selection clears the matrix without calling the backend', () => {
-    const { component, getPickList } = createHarness();
-    applyMachines(component, [10]);
-    getPickList.mockClear();
-
-    applyMachines(component, []);
-
-    expect(getPickList).not.toHaveBeenCalled();
-    expect(component.appliedMachineIds).toEqual([]);
-    expect(component.pickListProducts).toEqual([]);
+    expect(component.catalogueState).toBe('loaded');
+    expect(component.catalogueRefreshFailed).toBe(true);
+    expect(component.allProducts).toHaveLength(1);
+    expect(toast.error).toHaveBeenCalledWith('Failed to refresh the product list.');
   });
 });
 
-describe('PickListComponent Selected Machines chip removal', () => {
-  it('removes the machine from both the applied and staged selections and refetches with the remaining ids', () => {
-    const afterRemoval = of(pickListResult({
-      products: [{
-        productId: 2, productName: 'Chips', mdbCode: 10, storageQuantityInStock: 2, totalQuantityToPick: 5, storageShortageQuantity: 3,
-        machineQuantities: [{ machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
-      }]
-    }));
-    const getPickList = jest.fn(() => of(pickListResult()));
-    const { component } = createHarness(undefined, undefined, getPickList);
-    applyMachines(component, [10, 20]);
-    getPickList.mockClear();
-    getPickList.mockReturnValueOnce(afterRemoval);
-
-    component.removeMachine(20);
-
-    expect(getPickList).toHaveBeenCalledWith([10]);
-    expect(component.appliedMachineIds).toEqual([10]);
-    expect(component.stagedMachineIds).toEqual([10]);
-  });
-
-  it('removing the last machine clears the pick list without calling the backend again', () => {
-    const { component, getPickList } = createHarness();
-    applyMachines(component, [10]);
-    getPickList.mockClear();
-
-    component.removeMachine(10);
-
-    expect(getPickList).not.toHaveBeenCalled();
-    expect(component.appliedMachineIds).toEqual([]);
-    expect(component.stagedMachineIds).toEqual([]);
-    expect(component.pickListProducts).toEqual([]);
-  });
-});
-
-describe('PickListComponent product filter and totals', () => {
-  it('the default (all-products) filter shows every product returned for the applied machines', () => {
+describe('PickListComponent navigation guard (issue #996)', () => {
+  it('leaves the page without asking while nothing has been planned or entered', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(true);
     const { component } = createHarness();
-    applyMachines(component, [10]);
 
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([1, 2]);
-    expect(component.totalToPickUnits()).toBe(9);
+    expect(component.unsavedWorkWarning).toBeNull();
+    expect(component.confirmLeave()).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('applying a restricted product selection limits the matrix rows and totals to that selection', () => {
+  it('warns about planning work, and keeps the page when the operator cancels', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component } = createHarness();
-    applyMachines(component, [10]);
-    component.stagedProductIds = [2];
 
-    component.applyFilters();
+    component.onPlanningWorkChange(true);
 
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2]);
-    expect(component.totalToPickUnits()).toBe(5);
+    expect(component.unsavedWorkWarning).toBe(LEAVE_WITH_PLANNING_WORK_WARNING);
+    expect(component.confirmLeave()).toBe(false);
+    expect(confirm).toHaveBeenCalledWith(LEAVE_WITH_PLANNING_WORK_WARNING);
+    // Cancelling changes nothing at all: the work is still there to come back to.
+    expect(component.planningWorkPresent).toBe(true);
   });
-});
 
-describe('PickListComponent picked/unpicked tracking', () => {
-  it('toggles a positive-pick cell between picked and unpicked', () => {
+  it('warns about entered quantities that have not been recorded', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
     const { component } = createHarness();
-    applyMachines(component, [10]);
-    const cokeRow = component.pickListProducts[0];
 
-    component.togglePicked(cokeRow, 10);
-    expect(component.isPicked(1, 10)).toBe(true);
+    component.onManualUnsavedWorkChange({ entriesPresent: true, unresolvedSubmission: false });
 
-    component.togglePicked(cokeRow, 10);
-    expect(component.isPicked(1, 10)).toBe(false);
+    expect(component.unsavedWorkWarning).toBe(LEAVE_WITH_ENTERED_QUANTITIES_WARNING);
+    expect(component.confirmLeave()).toBe(true);
   });
 
-  it('never toggles a zero-pick cell', () => {
+  it('warns about the lost retry context first, ahead of either other kind of work', () => {
     const { component } = createHarness();
-    applyMachines(component, [10, 20]);
-    const cokeRow = component.pickListProducts.find((p) => p.productId === 1)!;
 
-    component.togglePicked(cokeRow, 20);
+    component.onPlanningWorkChange(true);
+    component.onManualUnsavedWorkChange({ entriesPresent: true, unresolvedSubmission: true });
 
-    expect(component.isPicked(1, 20)).toBe(false);
+    expect(component.unsavedWorkWarning).toBe(LEAVE_WITH_UNRESOLVED_SUBMISSION_WARNING);
   });
 
-  it('excludes zero-pick cells from the actionable-cell count', () => {
+  it('warns while a save is still in flight, because its outcome would be unknowable', () => {
     const { component } = createHarness();
-    applyMachines(component, [10, 20]);
 
-    // Coke/machine 20 is a zero-pick cell and Chips has no mapping at all for machine 20, so only
-    // Coke/machine 10 (4 to pick) and Chips/machine 10 (5 to pick) are actionable.
-    expect(component.actionableCellCount()).toBe(2);
+    component.onManualSaveInFlightChange(true);
+
+    expect(component.unsavedWorkWarning).toBe(LEAVE_WITH_UNRESOLVED_SUBMISSION_WARNING);
   });
 
-  it('reports picked progress against only the actionable cells', () => {
+  it('asks the browser to confirm a reload only while there is work to lose', () => {
     const { component } = createHarness();
-    applyMachines(component, [10]);
-    const cokeRow = component.pickListProducts.find((p) => p.productId === 1)!;
+    const quiet = new Event('beforeunload') as BeforeUnloadEvent;
+    const preventQuiet = jest.spyOn(quiet, 'preventDefault');
 
-    component.togglePicked(cokeRow, 10);
+    component.onBeforeUnload(quiet);
+    expect(preventQuiet).not.toHaveBeenCalled();
 
-    expect(component.pickedActionableCellCount()).toBe(1);
-    expect(component.actionableCellCount()).toBe(2);
-    expect(component.progressPercent()).toBe(50);
-  });
+    component.onPlanningWorkChange(true);
+    const loaded = new Event('beforeunload') as BeforeUnloadEvent;
+    const preventLoaded = jest.spyOn(loaded, 'preventDefault');
 
-  it('does not disturb picked state for a staged-but-not-applied filter edit', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-    const cokeRow = component.pickListProducts.find((p) => p.productId === 1)!;
-    component.togglePicked(cokeRow, 10);
-
-    component.stagedProductIds = [2];
-    component.stagedMachineIds = [20];
-
-    expect(component.isPicked(1, 10)).toBe(true);
-  });
-
-  it('drops a stale picked mark once its machine is removed from the applied selection', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-    const cokeRow = component.pickListProducts.find((p) => p.productId === 1)!;
-    component.togglePicked(cokeRow, 10);
-    expect(component.isPicked(1, 10)).toBe(true);
-
-    component.removeMachine(10);
-    applyMachines(component, [10]);
-
-    expect(component.isPicked(1, 10)).toBe(false);
-  });
-
-  it('drops a picked mark that is no longer actionable after Apply refreshes the projection', () => {
-    const getPickList = jest.fn()
-      .mockReturnValueOnce(of(pickListResult()))
-      .mockReturnValueOnce(of(pickListResult({
-        products: [{
-          productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 50, totalQuantityToPick: 0, storageShortageQuantity: 0,
-          machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 10, targetQuantity: 10, quantityToPick: 0 }]
-        }]
-      })));
-    const { component } = createHarness(undefined, undefined, getPickList);
-    applyMachines(component, [10]);
-    const cokeRow = component.pickListProducts.find((p) => p.productId === 1)!;
-    component.togglePicked(cokeRow, 10);
-    expect(component.isPicked(1, 10)).toBe(true);
-
-    applyMachines(component, [10, 20]);
-
-    expect(component.isPicked(1, 10)).toBe(false);
-  });
-});
-
-describe('PickListComponent reset', () => {
-  it('clears staged and applied machine/product selections, matrix data, picked state, and snapshot', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-    const cokeRow = component.pickListProducts.find((p) => p.productId === 1)!;
-    component.togglePicked(cokeRow, 10);
-    component.stagedProductIds = [1];
-    component.applyFilters();
-
-    component.resetAll();
-
-    expect(component.stagedMachineIds).toEqual([]);
-    expect(component.appliedMachineIds).toEqual([]);
-    expect(component.stagedProductIds).toEqual([1, 2]);
-    expect(component.appliedProductIds).toEqual([1, 2]);
-    expect(component.pickListProducts).toEqual([]);
-    expect(component.lastRefreshedAt).toBeNull();
-    expect(component.isPicked(1, 10)).toBe(false);
-  });
-});
-
-describe('PickListComponent sorting', () => {
-  const sortProducts = [1, 2, 3, 4, 5].map((id) => product({ id, name: `Catalogue ${id}` }));
-
-  function createSortHarness(): Harness {
-    return createHarness(undefined, sortProducts, jest.fn(() => of(sortDataset())));
-  }
-
-  it('keeps the backend order and reports aria-sort none on both columns until a header is clicked', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([1, 2, 3, 4, 5]);
-    expect(component.ariaSort('name')).toBe('none');
-    expect(component.ariaSort('mdbCode')).toBe('none');
-    expect(component.sortLabel('Product', 'name')).toBe('Product');
-    expect(component.sortLabel('MDB Code', 'mdbCode')).toBe('MDB Code');
-  });
-
-  it('sorts by product name ascending, case-insensitively, breaking a name tie by product id', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-
-    component.sortBy('name');
-
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 3, 1, 4, 5]);
-    expect(component.ariaSort('name')).toBe('ascending');
-    expect(component.sortLabel('Product', 'name')).toBe('Product (ascending)');
-  });
-
-  it('sorts by product name descending on a second click of the same header', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-
-    component.sortBy('name');
-    component.sortBy('name');
-
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([5, 4, 1, 3, 2]);
-    expect(component.ariaSort('name')).toBe('descending');
-    expect(component.sortLabel('Product', 'name')).toBe('Product (descending)');
-  });
-
-  it('sorts by MDB Code numerically ascending, with 2 before 10, and missing codes last', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-
-    component.sortBy('mdbCode');
-
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 1, 4, 3, 5]);
-    expect(component.ariaSort('mdbCode')).toBe('ascending');
-    expect(component.sortLabel('MDB Code', 'mdbCode')).toBe('MDB Code (ascending)');
-  });
-
-  it('sorts by MDB Code descending on a second click, with missing codes still last', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-
-    component.sortBy('mdbCode');
-    component.sortBy('mdbCode');
-
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([4, 1, 2, 3, 5]);
-    expect(component.ariaSort('mdbCode')).toBe('descending');
-  });
-
-  it('breaks a tie between two missing MDB codes by product name, then product id', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-
-    component.sortBy('mdbCode');
-
-    // Products 3 ("Apple") and 5 ("Date") both have a missing code; 3 sorts before 5 by name.
-    const order = component.visibleProducts().map((p) => p.productId);
-    expect(order.indexOf(3)).toBeLessThan(order.indexOf(5));
-  });
-
-  it('clicking the other sortable header makes it active ascending and clears the previous header', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-    component.sortBy('name');
-    component.sortBy('name');
-
-    component.sortBy('mdbCode');
-
-    expect(component.ariaSort('mdbCode')).toBe('ascending');
-    expect(component.ariaSort('name')).toBe('none');
-    expect(component.sortLabel('Product', 'name')).toBe('Product');
-  });
-
-  it('keeps the active sort applied to the visible rows across a product-filter Apply', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-    component.sortBy('name');
-
-    component.stagedProductIds = [1, 2, 3];
-    component.applyFilters();
-
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 3, 1]);
-  });
-
-  it('keeps the active sort applied to the visible rows across a machine-change refetch', () => {
-    const getPickList = jest.fn(() => of(sortDataset()));
-    const { component } = createHarness(undefined, sortProducts, getPickList);
-    applyMachines(component, [10]);
-    component.sortBy('name');
-
-    applyMachines(component, [10, 20]);
-
-    expect(getPickList).toHaveBeenCalledWith([10, 20]);
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 3, 1, 4, 5]);
-  });
-
-  it('leaves picked marks, Total to Pick, and progress unaffected by sorting', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-    const row = component.pickListProducts.find((p) => p.productId === 1)!;
-    component.togglePicked(row, 10);
-    const totalBefore = component.totalToPickUnits();
-    const pickedBefore = component.pickedActionableCellCount();
-    const actionableBefore = component.actionableCellCount();
-
-    component.sortBy('mdbCode');
-
-    expect(component.isPicked(1, 10)).toBe(true);
-    expect(component.totalToPickUnits()).toBe(totalBefore);
-    expect(component.pickedActionableCellCount()).toBe(pickedBefore);
-    expect(component.actionableCellCount()).toBe(actionableBefore);
-  });
-
-  it('Reset clears the active sort so the next loaded pick list appears in backend order', () => {
-    const { component } = createSortHarness();
-    applyMachines(component, [10]);
-    component.sortBy('name');
-
-    component.resetAll();
-    applyMachines(component, [10]);
-
-    expect(component.ariaSort('name')).toBe('none');
-    expect(component.ariaSort('mdbCode')).toBe('none');
-    expect(component.visibleProducts().map((p) => p.productId)).toEqual([1, 2, 3, 4, 5]);
-  });
-});
-
-describe('PickListComponent storage shortages', () => {
-  it('identifies only the products whose combined pick exceeds physical storage', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-
-    expect(component.shortageProducts().map((p) => p.productId)).toEqual([2]);
-  });
-});
-
-describe('PickListComponent never mutates data', () => {
-  it('calls no mutation-style method on any injected service across a full interaction', () => {
-    const { component, mutationSpies } = createHarness();
-
-    applyMachines(component, [10]);
-    applyMachines(component, [10, 20]);
-    const cokeRow = component.pickListProducts.find((p) => p.productId === 1)!;
-    component.togglePicked(cokeRow, 10);
-    component.togglePicked(cokeRow, 10);
-    component.stagedProductIds = [1];
-    component.applyFilters();
-    component.removeMachine(20);
-    component.resetAll();
-
-    for (const spy of mutationSpies) {
-      expect(spy).not.toHaveBeenCalled();
-    }
+    component.onBeforeUnload(loaded);
+    expect(preventLoaded).toHaveBeenCalled();
+    expect(loaded.returnValue).toBe(true);
   });
 });
 
@@ -647,7 +265,12 @@ describe('PickListComponent rendered structure', () => {
     products: Product[] = [product({ id: 1, name: 'Coke' }), product({ id: 2, name: 'Chips' })],
     pickList: jest.Mock = jest.fn(() => of(pickListResult())),
     nayaxStatus: NayaxConnectionStatusName = 'Ready',
-    options: { localMachines?: LocalMachine[]; recordRefill?: jest.Mock; recordMultiMachineRefill?: jest.Mock } = {}
+    options: {
+      localMachines?: LocalMachine[];
+      recordRefill?: jest.Mock;
+      recordMultiMachineRefill?: jest.Mock;
+      sites?: SiteListItem[];
+    } = {}
   ) {
     await TestBed.configureTestingModule({
       imports: [PickListComponent],
@@ -655,6 +278,7 @@ describe('PickListComponent rendered structure', () => {
         provideRouter([]),
         { provide: MachineService, useValue: { getAll: jest.fn(() => of(machines)) } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of(products)) } },
+        { provide: SiteService, useValue: { getList: jest.fn(() => of(options.sites ?? [])) } },
         {
           provide: PickListService,
           useValue: {
@@ -719,32 +343,65 @@ describe('PickListComponent rendered structure', () => {
       click(target.querySelector('input')!);
     };
     const applyFilters = (): void => click(requireButton('Apply'));
+    /** Stages one machine and applies it, which is how every matrix assertion below gets a plan. */
+    const planFor = (...machineNames: string[]): void => {
+      openDropdown('Machines');
+      machineNames.forEach(checkOption);
+      applyFilters();
+    };
+    /** The desktop matrix' own cells, which are the first of the two layouts in the document. */
+    const matrixRows = (): HTMLTableRowElement[] =>
+      Array.from(requireElement('[data-testid="pick-list-table-scroll"]').querySelectorAll('tbody tr'));
 
-    return { fixture, host, requireElement, button, requireButton, click, dropdownTrigger, openDropdown, checkOption, applyFilters };
+    return {
+      fixture,
+      host,
+      requireElement,
+      button,
+      requireButton,
+      click,
+      dropdownTrigger,
+      openDropdown,
+      checkOption,
+      applyFilters,
+      planFor,
+      matrixRows
+    };
   }
 
   afterEach(() => TestBed.resetTestingModule());
 
-  it('shows the header, top filter panel with Products/Machines dropdowns, and an empty-selection message', async () => {
+  it('names the two views and says planning changes no inventory', async () => {
+    const { host, button } = await render();
+
+    expect(host.querySelector('h1')?.textContent).toContain('Pick List');
+    expect(button('Plan picks')).toBeDefined();
+    expect(button('Record refill')).toBeDefined();
+    expect(host.querySelector('[data-testid="pick-list-inventory-impact"]')?.textContent).toContain(
+      'Planning only. Editing quantities and checking picks does not change inventory.'
+    );
+    expect(host.querySelector('[data-testid="plan-picks-planning-only"]')?.textContent).toContain(
+      'Editing quantities and checking picks does not change inventory'
+    );
+  });
+
+  it('shows the toolbar, an empty selection and no matrix before anything is applied', async () => {
     const { host, dropdownTrigger } = await render();
 
-    expect(host.querySelector('h1')?.textContent).toContain('Pick List (Restock Planning)');
-    expect(host.textContent).toContain('read-only');
-    expect(host.textContent).toContain('Snapshot');
+    expect(host.querySelector('input#plan-picks-search')).not.toBeNull();
+    expect(host.querySelector('select#plan-picks-category')).not.toBeNull();
     expect(dropdownTrigger('Products').textContent).toContain('All products');
     expect(dropdownTrigger('Machines').textContent).toContain('No machines selected');
-    expect(host.textContent).toContain('Selected Machines (0)');
+    expect(host.textContent).toContain('Selected machines (0)');
     expect(host.textContent).toContain('Select at least one machine');
     expect(host.querySelector('table')).toBeNull();
   });
 
-  it('renders the snapshot "As of" time as Australia/Canberra local time during AEST (UTC+10), not raw UTC (issue #232)', async () => {
+  it('renders the snapshot "As of" time as business-local time during AEST (UTC+10), not raw UTC (issue #232)', async () => {
     jest.useFakeTimers({ now: new Date('2026-06-15T00:00:00Z') });
     try {
-      const { host, openDropdown, checkOption, applyFilters } = await render();
-      openDropdown('Machines');
-      checkOption('Machine A');
-      applyFilters();
+      const { host, planFor } = await render();
+      planFor('Machine A');
 
       expect(host.querySelector('[data-testid="pick-list-snapshot"]')?.textContent).toContain('As of 15/06/2026, 10:00 am');
     } finally {
@@ -752,13 +409,11 @@ describe('PickListComponent rendered structure', () => {
     }
   });
 
-  it('renders the snapshot "As of" time as Australia/Canberra local time during AEDT (UTC+11), not raw UTC (issue #232)', async () => {
+  it('renders the snapshot "As of" time as business-local time during AEDT (UTC+11), not raw UTC (issue #232)', async () => {
     jest.useFakeTimers({ now: new Date('2026-01-15T00:00:00Z') });
     try {
-      const { host, openDropdown, checkOption, applyFilters } = await render();
-      openDropdown('Machines');
-      checkOption('Machine A');
-      applyFilters();
+      const { host, planFor } = await render();
+      planFor('Machine A');
 
       expect(host.querySelector('[data-testid="pick-list-snapshot"]')?.textContent).toContain('As of 15/01/2026, 11:00 am');
     } finally {
@@ -766,7 +421,7 @@ describe('PickListComponent rendered structure', () => {
     }
   });
 
-  it('stages a multi-machine selection from the Machines dropdown without changing the matrix until Apply', async () => {
+  it('stages a machine selection without changing the matrix until Apply', async () => {
     const { host, openDropdown, checkOption, dropdownTrigger } = await render();
 
     openDropdown('Machines');
@@ -774,83 +429,41 @@ describe('PickListComponent rendered structure', () => {
     checkOption('Machine B');
 
     expect(dropdownTrigger('Machines').textContent).toContain('All machines');
-    expect(host.textContent).toContain('Selected Machines (0)');
+    expect(host.textContent).toContain('Selected machines (0)');
     expect(host.querySelector('table')).toBeNull();
   });
 
-  it('Apply renders the staged machine selection as matrix columns and Selected Machines chips', async () => {
-    const { host, openDropdown, checkOption, applyFilters } = await render();
+  it('Apply renders the applied machines as matrix columns and removable chips', async () => {
+    const { host, requireElement, click, planFor, dropdownTrigger } = await render();
 
-    openDropdown('Machines');
-    checkOption('Machine A');
-    checkOption('Machine B');
-    applyFilters();
+    planFor('Machine A', 'Machine B');
 
     const headers = Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.trim());
-    expect(headers[0]).toBe('Product');
-    expect(headers[1]).toBe('MDB Code');
-    expect(headers[2]).toBe('Storage Qty');
-    expect(headers[3]).toBe('Total to Pick');
-    expect(headers).toContain('Machine A');
-    expect(headers).toContain('Machine B');
-    expect(host.textContent).toContain('Selected Machines (2)');
+    expect(headers).toEqual(['Product', 'MDB Code', 'Storage Qty', 'Total to Pick', 'Machine A', 'Machine B']);
+    expect(host.textContent).toContain('Selected machines (2)');
 
-    const rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows.length).toBe(2);
-    expect(rows[0].textContent).toContain('Coke');
-    expect(rows[0].textContent).toContain('Pick: 4');
-    expect(rows[0].textContent).toContain('Current: 6 of 10');
+    click(requireElement<HTMLButtonElement>('[aria-label="Remove Machine B"]'));
+
+    expect(host.textContent).toContain('Selected machines (1)');
+    expect(dropdownTrigger('Machines').textContent).toContain('1 machine selected');
   });
 
-  it('shows the Storage Qty column between MDB Code and Total to Pick, with each row matching storageQuantityInStock', async () => {
-    const pickList = jest.fn(() => of(pickListResult()));
-    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
+  it('shows the suggested pick quantity, compact Current/Target, and no MDB code inside a pick cell', async () => {
+    const { host, matrixRows, planFor } = await render();
 
-    // Fixture: Coke has storageQuantityInStock 50, Chips has storageQuantityInStock 2.
-    const storageQtyCells = Array.from(host.querySelectorAll('[data-testid="pick-list-storage-qty"]')).map((td) => td.textContent?.trim());
-    expect(storageQtyCells).toEqual(['50', '2']);
+    planFor('Machine A');
 
-    const storageQtyCell = host.querySelector('[data-testid="pick-list-storage-qty"]');
-    expect(Array.from(storageQtyCell?.classList ?? [])).toEqual(expect.arrayContaining(['table-num']));
-  });
-
-  it('shows a zero or negative storage quantity exactly as returned, without clamping or a dash', async () => {
-    const pickList = jest.fn(() => of(pickListResult({
-      products: [{
-        productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 0, totalQuantityToPick: 4, storageShortageQuantity: 4,
-        machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 0, targetQuantity: 10, quantityToPick: 4 }]
-      }, {
-        productId: 2, productName: 'Chips', mdbCode: 10, storageQuantityInStock: -3, totalQuantityToPick: 5, storageShortageQuantity: 8,
-        machineQuantities: [{ machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
-      }]
-    })));
-    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-
-    const storageQtyCells = Array.from(host.querySelectorAll('[data-testid="pick-list-storage-qty"]')).map((td) => td.textContent?.trim());
-    expect(storageQtyCells).toEqual(['0', '-3']);
-  });
-
-  it('shows the MDB code column, default-sorted so the lower code renders first, and per-machine codes inside each cell', async () => {
-    const pickList = jest.fn(() => of(pickListResult()));
-    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-
-    const rows = Array.from(host.querySelectorAll('tbody tr'));
-    // The fixture returns Coke (MDB 2) before Chips (MDB 10): the backend projection is already
-    // ordered ascending by MDB code, and the page renders rows in that order rather than re-sorting.
-    expect(rows[0].textContent).toContain('Coke');
-    expect(rows[1].textContent).toContain('Chips');
+    const quantities = Array.from(host.querySelectorAll('[data-testid="plan-picks-pick-quantity"]')).map((span) =>
+      span.textContent?.trim()
+    );
+    expect(quantities).toContain('4');
+    const cokeRow = matrixRows()[0];
+    expect(cokeRow.textContent).toContain('Coke');
+    expect(cokeRow.textContent).toContain('Current: 6 of 10');
+    // Issue #996 removes the per-machine MDB code from the pick cells; the row's own column keeps it.
+    expect(cokeRow.textContent).not.toContain('MDB: 2');
     const mdbCells = Array.from(host.querySelectorAll('[data-testid="pick-list-mdb-code"]')).map((td) => td.textContent?.trim());
     expect(mdbCells).toEqual(['2', '10']);
-    expect(rows[0].textContent).toContain('MDB: 2');
   });
 
   it('renders a dash for a missing MDB code instead of leaving the cell blank or showing "null"', async () => {
@@ -860,93 +473,276 @@ describe('PickListComponent rendered structure', () => {
         machineQuantities: [{ machineId: 10, mdbCode: null, currentQuantity: 6, targetQuantity: 10, quantityToPick: 4 }]
       }]
     })));
-    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
+    const { host, planFor } = await render(undefined, undefined, pickList);
 
-    const mdbCell = host.querySelector('[data-testid="pick-list-mdb-code"]');
-    expect(mdbCell?.textContent?.trim()).toBe('—');
+    planFor('Machine A');
+
+    expect(host.querySelector('[data-testid="pick-list-mdb-code"]')?.textContent?.trim()).toBe('—');
     expect(host.textContent).not.toContain('MDB: null');
   });
 
-  it('keeps the whole matrix header row sticky inside a scrollable table area', async () => {
-    const { host, requireElement, openDropdown, checkOption, applyFilters } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    checkOption('Machine B');
-    applyFilters();
+  it('shows each row’s storage quantity exactly as returned, including a zero or negative one', async () => {
+    const pickList = jest.fn(() => of(pickListResult({
+      products: [{
+        productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 0, totalQuantityToPick: 4, storageShortageQuantity: 4,
+        machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 0, targetQuantity: 10, quantityToPick: 4 }]
+      }, {
+        productId: 2, productName: 'Chips', mdbCode: 10, storageQuantityInStock: -3, totalQuantityToPick: 5, storageShortageQuantity: 8,
+        machineQuantities: [{ machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
+      }]
+    })));
+    const { host, planFor } = await render(undefined, undefined, pickList);
 
-    // A bounded height with overflow on both axes: rows scroll vertically under the pinned header,
-    // and many machine columns still scroll horizontally in the same scroll area.
+    planFor('Machine A');
+
+    const storageQtyCells = Array.from(host.querySelectorAll('[data-testid="pick-list-storage-qty"]')).map((td) => td.textContent?.trim());
+    expect(storageQtyCells).toEqual(['0', '-3']);
+  });
+
+  it('keeps the header rows sticky and the product column pinned inside one bounded, focusable scroll area', async () => {
+    const { host, requireElement, planFor } = await render();
+
+    planFor('Machine A', 'Machine B');
+
     const scrollArea = requireElement('[data-testid="pick-list-table-scroll"]');
     expect(scrollArea.contains(requireElement('table'))).toBe(true);
     expect(Array.from(scrollArea.classList)).toEqual(expect.arrayContaining(['max-h-[70vh]', 'overflow-auto']));
+    // Discoverable, and reachable by keyboard: the matrix scrolls sideways, so it has to be focusable.
+    expect(scrollArea.getAttribute('tabindex')).toBe('0');
+    expect(scrollArea.getAttribute('role')).toBe('region');
+    expect(scrollArea.getAttribute('aria-label')).toContain('scrollable');
 
-    const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
-    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'MDB Code', 'Storage Qty', 'Total to Pick', 'Machine A', 'Machine B']);
-    for (const th of headers) {
-      // Every header cell, not just the first two, is pinned and opaque so rows cannot show through.
-      expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-md-gray-100']));
-      // The opaque head surface is the separator: #410 defines no shadow token for a sticky header
-      // rule, so no header cell may carry an arbitrary shadow utility with a raw colour value.
+    for (const th of Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'))) {
+      expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'bg-md-gray-100']));
+      // The opaque head surface is the separator: #410 defines no shadow token for a sticky header.
       expect(Array.from(th.classList).filter((cssClass) => cssClass.startsWith('shadow'))).toEqual([]);
     }
+    const productHeader = host.querySelector<HTMLTableCellElement>('thead th');
+    expect(Array.from(productHeader?.classList ?? [])).toEqual(expect.arrayContaining(['sticky', 'left-0', 'top-0']));
+    const productCell = host.querySelector<HTMLTableCellElement>('tbody th[scope="row"]');
+    expect(Array.from(productCell?.classList ?? [])).toEqual(expect.arrayContaining(['sticky', 'left-0']));
   });
 
-  it('keeps the Product, MDB Code, Storage Qty and Total to Pick columns narrow and gives the spare width to the machine columns', async () => {
-    const pickList = jest.fn(() => of(pickListResult({
-      products: [{
-        productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 1, totalQuantityToPick: 4, storageShortageQuantity: 3,
-        machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 6, targetQuantity: 10, quantityToPick: 4 }]
-      }]
-    })));
-    const { host, requireElement, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
+  it('groups adjacent machine columns under one site header where the site read knows one', async () => {
+    const machines = [
+      machine({ machineID: 10, machineName: 'Machine A', siteId: 5 }),
+      machine({ machineID: 20, machineName: 'Machine B', siteId: null })
+    ];
+    const { requireElement, planFor } = await render(machines, undefined, undefined, undefined, {
+      sites: [{ siteId: 5, name: 'Airport', machineCount: 1 }]
+    });
 
-    // The table fills the card (no w-auto), so there is no empty area to the right of the last machine.
-    expect(Array.from(requireElement('table').classList)).toContain('table');
-    expect(Array.from(requireElement('table').classList)).not.toContain('w-auto');
+    planFor('Machine A', 'Machine B');
 
-    // The four fixed columns keep the compact padding at every breakpoint; machine columns do not.
-    const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
-    const cells = Array.from(host.querySelectorAll<HTMLTableCellElement>('tbody tr:first-child td'));
-    for (const cell of [...headers.slice(0, 4), ...cells.slice(0, 4)]) {
-      expect(Array.from(cell.classList)).toContain('sm:px-3');
-    }
-    expect(Array.from(headers[4].classList)).not.toContain('sm:px-3');
+    const siteRow = requireElement('[data-testid="plan-picks-site-header-row"]');
+    const siteHeaders = Array.from(siteRow.querySelectorAll('th[scope="colgroup"]')).map((th) => ({
+      label: th.textContent?.trim(),
+      colspan: th.getAttribute('colspan')
+    }));
+    expect(siteHeaders).toEqual([
+      { label: 'Airport', colspan: '1' },
+      { label: 'No site recorded', colspan: '1' }
+    ]);
+  });
 
-    // The four fixed columns are pinned to their content (w-px); the machine columns carry no width,
-    // so the spare width is shared between them.
-    for (const header of headers.slice(0, 4)) {
-      expect(Array.from(header.classList)).toContain('w-px');
-    }
-    for (const header of headers.slice(1, 4)) {
-      expect(Array.from(header.classList)).toContain('whitespace-nowrap');
-    }
-    expect(Array.from(headers[4].classList)).not.toContain('w-px');
-    expect(Array.from(cells[4].classList)).not.toContain('sm:px-3');
+  it('draws no site header row at all when no applied machine has a known site', async () => {
+    const { host, planFor } = await render();
 
-    // The product name wraps inside a fixed-width block, with the shortage badge on its own line below it.
-    const nameBlock = requireElement('[data-testid="pick-list-product-name"]');
-    expect(cells[0].contains(nameBlock)).toBe(true);
-    expect(Array.from(nameBlock.classList)).toEqual(expect.arrayContaining(['w-[14rem]']));
-    expect(nameBlock.textContent).toContain('Coke');
-    const badge = requireElement('[data-testid="storage-shortage-badge"]');
-    expect(nameBlock.contains(badge)).toBe(true);
-    expect(badge.textContent?.trim()).toBe('Storage short 3');
-    expect(Array.from(badge.classList)).toEqual(expect.arrayContaining(['badge', 'badge-danger', 'block', 'w-fit']));
-    expect(Array.from(badge.classList)).not.toContain('ml-2');
+    planFor('Machine A');
+
+    expect(host.querySelector('[data-testid="plan-picks-site-header-row"]')).toBeNull();
+  });
+
+  it('points out the horizontal scroll once there are more machine columns than fit', async () => {
+    const machines = [10, 20, 30].map((id) => machine({ machineID: id, machineName: `Machine ${id}` }));
+    const pickList = jest.fn(() => of(pickListResult()));
+    const { host, planFor } = await render(machines, undefined, pickList);
+
+    planFor('Machine 10', 'Machine 20', 'Machine 30');
+
+    expect(host.querySelector('[data-testid="plan-picks-scroll-hint"]')?.textContent).toContain('Scroll sideways');
+  });
+
+  it('edits a pick quantity: the pencil opens a focused, selected value that Enter commits', async () => {
+    const { host, requireElement, click, planFor, fixture } = await render();
+    planFor('Machine A');
+
+    click(requireElement<HTMLButtonElement>('[aria-label="Edit pick quantity: Coke at Machine A"]'));
+
+    const input = requireElement<HTMLInputElement>('[data-testid="plan-picks-edit-input"]');
+    expect(input.value).toBe('4');
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 1]);
+
+    input.value = '6';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="plan-picks-edit-input"]')).toBeNull();
+    const quantities = Array.from(host.querySelectorAll('[data-testid="plan-picks-pick-quantity"]')).map((s) => s.textContent?.trim());
+    expect(quantities).toContain('6');
+    expect(host.querySelector('[data-testid="plan-picks-suggested"]')?.textContent).toContain('Suggested: 4');
+  });
+
+  it('shows an accessible inline message for a malformed quantity and commits nothing', async () => {
+    const { host, requireElement, click, planFor, fixture } = await render();
+    planFor('Machine A');
+    click(requireElement<HTMLButtonElement>('[aria-label="Edit pick quantity: Coke at Machine A"]'));
+
+    const input = requireElement<HTMLInputElement>('[data-testid="plan-picks-edit-input"]');
+    input.value = '2.5';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    click(requireElement<HTMLButtonElement>('[data-testid="plan-picks-commit-edit"]'));
+
+    const error = requireElement('[data-testid="plan-picks-edit-error"]');
+    expect(error.getAttribute('role')).toBe('alert');
+    expect(error.textContent).toContain('whole number of 0 or more');
+    expect(requireElement('[data-testid="plan-picks-edit-input"]').getAttribute('aria-invalid')).toBe('true');
+    expect(host.querySelector('[data-testid="plan-picks-suggested"]')).toBeNull();
+  });
+
+  it('restores the quantity when the edit is cancelled', async () => {
+    const { host, requireElement, click, planFor, fixture } = await render();
+    planFor('Machine A');
+    click(requireElement<HTMLButtonElement>('[aria-label="Edit pick quantity: Coke at Machine A"]'));
+    const input = requireElement<HTMLInputElement>('[data-testid="plan-picks-edit-input"]');
+    input.value = '99';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    click(requireElement<HTMLButtonElement>('[data-testid="plan-picks-cancel-edit"]'));
+
+    expect(host.querySelector('[data-testid="plan-picks-suggested"]')).toBeNull();
+    const quantities = Array.from(host.querySelectorAll('[data-testid="plan-picks-pick-quantity"]')).map((s) => s.textContent?.trim());
+    expect(quantities).toContain('4');
+  });
+
+  it('checks a pick off with a labelled checkbox beside the quantity, with a word for the state', async () => {
+    const { host, requireElement, click, planFor } = await render();
+    planFor('Machine A');
+
+    const checkbox = requireElement<HTMLInputElement>('input[aria-label="Picked: Coke at Machine A"]');
+    expect(checkbox.type).toBe('checkbox');
+    expect(host.querySelector('[data-testid="plan-picks-progress"]')?.textContent).toBe('0 of 2 picks completed');
+
+    click(checkbox);
+
+    expect(host.querySelector('[data-testid="plan-picks-progress"]')?.textContent).toBe('1 of 2 picks completed');
+    // The state is a word as well as a tick, so it is never carried by colour alone.
+    expect(checkbox.closest('label')?.textContent).toContain('Picked');
+  });
+
+  it('offers neither an edit nor a checkbox on a cell with nothing suggested', async () => {
+    const { host, planFor } = await render();
+
+    planFor('Machine A', 'Machine B');
+
+    expect(host.querySelector('[aria-label="Edit pick quantity: Coke at Machine B"]')).toBeNull();
+    expect(host.querySelector('input[aria-label="Picked: Coke at Machine B"]')).toBeNull();
+  });
+
+  it('shows the whole run’s summary beside what the filters leave visible, with no progress bar over the rows', async () => {
+    const { host, planFor } = await render();
+
+    planFor('Machine A');
+
+    expect(host.querySelector('[data-testid="plan-picks-total-units"]')?.textContent).toContain('9');
+    expect(host.querySelector('[data-testid="plan-picks-remaining"]')?.textContent).toContain('2 picks remaining');
+    expect(host.querySelector('[data-testid="plan-picks-visible-summary"]')?.textContent).toContain('Showing 2 of 2 products');
+    expect(host.querySelector('[data-testid="plan-picks-shortage-count"]')?.textContent).toContain('1 product is short of storage');
+    expect(host.querySelector('[data-testid="pick-list-progress-percent"]')).toBeNull();
+  });
+
+  it('shows a visible shortage badge for a product whose pick exceeds physical storage', async () => {
+    const { host, matrixRows, planFor } = await render();
+
+    planFor('Machine A');
+
+    const badge = host.querySelector('[data-testid="storage-shortage-badge"]');
+    expect(badge?.textContent?.trim()).toBe('Storage short 3');
+    expect(matrixRows()[1].contains(badge!)).toBe(true);
+  });
+
+  it('filters to only the remaining picks and only the shortages', async () => {
+    const { host, requireElement, click, planFor, matrixRows } = await render();
+    planFor('Machine A');
+
+    click(requireElement<HTMLInputElement>('[data-testid="plan-picks-only-shortages"]'));
+
+    expect(matrixRows()).toHaveLength(1);
+    expect(matrixRows()[0].textContent).toContain('Chips');
+
+    click(requireElement<HTMLInputElement>('[data-testid="plan-picks-only-shortages"]'));
+    click(requireElement<HTMLInputElement>('input[aria-label="Picked: Coke at Machine A"]'));
+    click(requireElement<HTMLInputElement>('[data-testid="plan-picks-only-remaining"]'));
+
+    expect(matrixRows()).toHaveLength(1);
+    expect(matrixRows()[0].textContent).toContain('Chips');
+    // The run's own figures are unchanged by what the filter hides.
+    expect(host.querySelector('[data-testid="plan-picks-total-units"]')?.textContent).toContain('9');
+    expect(host.querySelector('[data-testid="plan-picks-progress"]')?.textContent).toBe('1 of 2 picks completed');
+  });
+
+  it('offers a Refresh that re-reads the applied selection, separately from Apply', async () => {
+    const pickList = jest.fn(() => of(pickListResult()));
+    const { requireElement, click, planFor } = await render(undefined, undefined, pickList);
+    planFor('Machine A');
+    pickList.mockClear();
+
+    click(requireElement<HTMLButtonElement>('[data-testid="plan-picks-refresh"]'));
+
+    expect(pickList).toHaveBeenCalledTimes(1);
+    expect(pickList).toHaveBeenCalledWith([10]);
+  });
+
+  it('offers a Retry on a failed read and never tells the operator to press Apply again', async () => {
+    const pickList = jest.fn(() => throwError(() => new Error('offline')));
+    const { requireElement, planFor } = await render(undefined, undefined, pickList);
+
+    planFor('Machine A');
+
+    const failure = requireElement('[data-testid="plan-picks-load-failed"]');
+    expect(failure.getAttribute('role')).toBe('alert');
+    expect(failure.textContent).toContain('Use Refresh to try again');
+    expect(failure.textContent).not.toContain('Apply');
+    expect(requireElement('[data-testid="plan-picks-refresh"]').textContent).toContain('Retry');
+  });
+
+  it('asks before Reset discards planning work and keeps everything when refused', async () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { host, requireElement, requireButton, click, planFor } = await render();
+    planFor('Machine A');
+    click(requireElement<HTMLInputElement>('input[aria-label="Picked: Coke at Machine A"]'));
+
+    click(requireButton('Reset'));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(host.textContent).toContain('Selected machines (1)');
+    expect(host.querySelector('[data-testid="plan-picks-progress"]')?.textContent).toBe('1 of 2 picks completed');
+  });
+
+  it('Reset clears the selections, the plan and the planning work once confirmed', async () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { host, requireElement, requireButton, click, planFor, dropdownTrigger } = await render();
+    planFor('Machine A');
+    click(requireElement<HTMLInputElement>('input[aria-label="Picked: Coke at Machine A"]'));
+
+    click(requireButton('Reset'));
+
+    expect(host.textContent).toContain('Selected machines (0)');
+    expect(host.textContent).toContain('Select at least one machine');
+    expect(dropdownTrigger('Machines').textContent).toContain('No machines selected');
+    expect(dropdownTrigger('Products').textContent).toContain('All products');
+    expect(host.querySelector('table')).toBeNull();
   });
 
   it('a product-only Apply filters the visible rows without an extra Pick List request', async () => {
     const pickList = jest.fn(() => of(pickListResult()));
-    const { openDropdown, checkOption, applyFilters, host } = await render(undefined, undefined, pickList);
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
+    const { openDropdown, checkOption, applyFilters, planFor, matrixRows } = await render(undefined, undefined, pickList);
+    planFor('Machine A');
     pickList.mockClear();
 
     openDropdown('Products');
@@ -954,113 +750,16 @@ describe('PickListComponent rendered structure', () => {
     applyFilters();
 
     expect(pickList).not.toHaveBeenCalled();
-    const rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows.length).toBe(1);
-    expect(rows[0].textContent).toContain('Chips');
-  });
-
-  it('shows a removable chip per applied machine and removes it, updating the dropdown and matrix', async () => {
-    const { host, openDropdown, checkOption, applyFilters, requireElement, click, dropdownTrigger } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-
-    expect(host.textContent).toContain('Selected Machines (1)');
-    const chipRemove = requireElement<HTMLButtonElement>('[aria-label="Remove Machine A"]');
-
-    click(chipRemove);
-
-    expect(host.textContent).toContain('Selected Machines (0)');
-    expect(host.textContent).toContain('No machines selected yet.');
-    expect(dropdownTrigger('Machines').textContent).toContain('No machines selected');
-    expect(host.querySelector('table')).toBeNull();
-  });
-
-  it('toggles a positive-pick cell to the picked visual state and back on click', async () => {
-    const { host, openDropdown, checkOption, applyFilters, click } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-
-    const pickButtons = Array.from(host.querySelectorAll<HTMLButtonElement>('tbody button'));
-    const cokeCell = pickButtons.find((b) => b.textContent?.includes('Pick: 4'));
-    if (cokeCell === undefined) {
-      throw new Error('Expected a positive-pick cell for Coke.');
-    }
-    expect(cokeCell.className).toContain('bg-white');
-
-    click(cokeCell);
-
-    expect(cokeCell.className).toContain('bg-md-success/15');
-    expect(cokeCell.textContent).toContain('✓');
-
-    click(cokeCell);
-
-    expect(cokeCell.className).toContain('bg-white');
-  });
-
-  it('never renders a button for a zero-pick cell', async () => {
-    const { host, openDropdown, checkOption, applyFilters } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    checkOption('Machine B');
-    applyFilters();
-
-    const cells = Array.from(host.querySelectorAll('tbody td'));
-    const zeroCell = cells.find((td) => td.textContent?.includes('Pick: 0'));
-    if (zeroCell === undefined) {
-      throw new Error('Expected a zero-pick cell to be rendered.');
-    }
-    expect(zeroCell.querySelector('button')).toBeNull();
-  });
-
-  it('shows a visible shortage badge for a product whose pick exceeds physical storage', async () => {
-    const { host, openDropdown, checkOption, applyFilters } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-
-    const badge = host.querySelector('[data-testid="storage-shortage-badge"]');
-    expect(badge).not.toBeNull();
-    expect(badge?.closest('tr')?.textContent).toContain('Chips');
-  });
-
-  it('shows the bottom summary with total units and actionable-cell progress', async () => {
-    const { host, openDropdown, checkOption, applyFilters } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-
-    expect(host.querySelector('[data-testid="pick-list-total-units"]')?.textContent).toContain('9');
-    expect(host.querySelector('[data-testid="pick-list-progress-count"]')?.textContent).toContain('0/2');
-    expect(host.querySelector('[data-testid="pick-list-progress-percent"]')?.textContent).toContain('0%');
+    expect(matrixRows()).toHaveLength(1);
+    expect(matrixRows()[0].textContent).toContain('Chips');
   });
 
   it('renders no product or machine images anywhere on the page', async () => {
-    const { host, openDropdown, checkOption, applyFilters } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    checkOption('Machine B');
-    applyFilters();
+    const { host, planFor } = await render();
+
+    planFor('Machine A', 'Machine B');
 
     expect(host.querySelectorAll('img').length).toBe(0);
-  });
-
-  it('Reset clears the dropdown selections, chips, and matrix back to their initial state', async () => {
-    const { host, openDropdown, checkOption, applyFilters, requireButton, click, dropdownTrigger } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-    const pickButton = Array.from(host.querySelectorAll<HTMLButtonElement>('tbody button')).find((b) => b.textContent?.includes('Pick: 4'))!;
-    click(pickButton);
-
-    click(requireButton('Reset'));
-
-    expect(host.textContent).toContain('Selected Machines (0)');
-    expect(host.textContent).toContain('Select at least one machine');
-    expect(dropdownTrigger('Machines').textContent).toContain('No machines selected');
-    expect(dropdownTrigger('Products').textContent).toContain('All products');
-    expect(host.querySelector('table')).toBeNull();
   });
 
   it('does not show the Nayax status banner, even when the connection is not Ready', async () => {
@@ -1071,10 +770,9 @@ describe('PickListComponent rendered structure', () => {
   });
 
   it('does not make the Storage Qty header sortable', async () => {
-    const { host, openDropdown, checkOption, applyFilters } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
+    const { host, planFor } = await render();
+
+    planFor('Machine A');
 
     const headers = Array.from(host.querySelectorAll('thead th'));
     const storageQtyHeader = headers.find((th) => th.textContent?.trim() === 'Storage Qty');
@@ -1082,100 +780,63 @@ describe('PickListComponent rendered structure', () => {
     expect(storageQtyHeader?.hasAttribute('aria-sort')).toBe(false);
   });
 
-  it('reports aria-sort none on both sortable headers until one is clicked', async () => {
-    const { host, openDropdown, checkOption, applyFilters } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-
+  it('sorts by the Product and MDB Code headers, reporting aria-sort as it goes', async () => {
+    const { host, requireButton, click, planFor, matrixRows } = await render();
+    planFor('Machine A');
     const headers = Array.from(host.querySelectorAll('thead th'));
     expect(headers[0].getAttribute('aria-sort')).toBe('none');
     expect(headers[1].getAttribute('aria-sort')).toBe('none');
-  });
-
-  it('clicking the Product header sorts rows by name ascending, then descending on a second click', async () => {
-    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-    const headers = Array.from(host.querySelectorAll('thead th'));
 
     click(requireButton('Product'));
 
-    const rowsAscending = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rowsAscending[0].textContent).toContain('Chips');
-    expect(rowsAscending[1].textContent).toContain('Coke');
+    expect(matrixRows()[0].textContent).toContain('Chips');
     expect(headers[0].getAttribute('aria-sort')).toBe('ascending');
     expect(requireButton('Product').textContent?.trim()).toBe('Product (ascending)');
 
     click(requireButton('Product'));
 
-    const rowsDescending = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rowsDescending[0].textContent).toContain('Coke');
-    expect(rowsDescending[1].textContent).toContain('Chips');
+    expect(matrixRows()[0].textContent).toContain('Coke');
     expect(headers[0].getAttribute('aria-sort')).toBe('descending');
-    expect(requireButton('Product').textContent?.trim()).toBe('Product (descending)');
-  });
-
-  it('clicking the MDB Code header sorts rows numerically ascending, then descending on a second click', async () => {
-    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-    const headers = Array.from(host.querySelectorAll('thead th'));
 
     click(requireButton('MDB Code'));
 
-    const rowsAscending = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rowsAscending[0].textContent).toContain('Coke');
-    expect(rowsAscending[1].textContent).toContain('Chips');
-    expect(headers[1].getAttribute('aria-sort')).toBe('ascending');
-    expect(requireButton('MDB Code').textContent?.trim()).toBe('MDB Code (ascending)');
-
-    click(requireButton('MDB Code'));
-
-    const rowsDescending = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rowsDescending[0].textContent).toContain('Chips');
-    expect(rowsDescending[1].textContent).toContain('Coke');
-    expect(headers[1].getAttribute('aria-sort')).toBe('descending');
-    expect(requireButton('MDB Code').textContent?.trim()).toBe('MDB Code (descending)');
-  });
-
-  it('clicking the other sortable header makes it active ascending and clears the previously active one', async () => {
-    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-    const headers = Array.from(host.querySelectorAll('thead th'));
-    click(requireButton('Product'));
-
-    click(requireButton('MDB Code'));
-
+    expect(matrixRows()[0].textContent).toContain('Coke');
     expect(headers[1].getAttribute('aria-sort')).toBe('ascending');
     expect(headers[0].getAttribute('aria-sort')).toBe('none');
     expect(requireButton('Product').textContent?.trim()).toBe('Product');
   });
 
-  it('Reset clears an active sort so a subsequently loaded pick list appears in backend order', async () => {
-    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
-    click(requireButton('Product'));
+  it('offers product cards with a machine focus for the narrow layout, keeping Current/Target on them', async () => {
+    const { host, requireElement, planFor } = await render();
 
-    click(requireButton('Reset'));
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
+    planFor('Machine A', 'Machine B');
 
-    const headers = Array.from(host.querySelectorAll('thead th'));
-    expect(headers[0].getAttribute('aria-sort')).toBe('none');
-    const rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows[0].textContent).toContain('Coke');
-    expect(rows[1].textContent).toContain('Chips');
+    const cards = requireElement('[data-testid="plan-picks-cards"]');
+    expect(cards.querySelectorAll('li').length).toBe(2);
+    expect(cards.textContent).toContain('Current: 6 of 10');
+    expect(requireElement<HTMLSelectElement>('[data-testid="plan-picks-machine-focus"]').options.length).toBe(2);
+    expect(host.querySelector('[data-testid="plan-picks-focus-summary"]')?.textContent).toContain('Machine A');
   });
 
-  it('keeps a manual refill\'s local machine columns out of the calculated list\'s provider machine ids, with a provider in place (issues #794, #904)', async () => {
+  it('hides Plan picks rather than destroying it, so a mode switch loses no planning work', async () => {
+    const pickList = jest.fn(() => of(pickListResult()));
+    const { host, requireElement, requireButton, click, planFor } = await render(undefined, undefined, pickList);
+    planFor('Machine A');
+    click(requireElement<HTMLInputElement>('input[aria-label="Picked: Coke at Machine A"]'));
+    pickList.mockClear();
+
+    click(requireButton('Record refill'));
+    expect((host.querySelector('app-plan-picks') as HTMLElement).hidden).toBe(true);
+    click(requireButton('Plan picks'));
+
+    expect((host.querySelector('app-plan-picks') as HTMLElement).hidden).toBe(false);
+    expect(host.querySelector('[data-testid="plan-picks-progress"]')?.textContent).toBe('1 of 2 picks completed');
+    expect(host.textContent).toContain('Selected machines (1)');
+    // Nothing was re-read: the snapshot the plan was built from is still the one on screen.
+    expect(pickList).not.toHaveBeenCalled();
+  });
+
+  it('keeps a Record refill run’s local machine columns out of the planning view’s provider machine ids (issues #794, #904)', async () => {
     const recordMultiMachineRefill: jest.Mock = jest.fn((request: MultiMachinePickListRefillRequest) =>
       of({
         idempotencyKey: request.idempotencyKey,
@@ -1186,7 +847,7 @@ describe('PickListComponent rendered structure', () => {
       })
     );
     const pickList = jest.fn(() => of(pickListResult()));
-    const { fixture, requireElement, requireButton, click, openDropdown, checkOption, applyFilters } = await render(
+    const { fixture, requireElement, requireButton, click, openDropdown, checkOption, planFor } = await render(
       undefined,
       undefined,
       pickList,
@@ -1194,21 +855,19 @@ describe('PickListComponent rendered structure', () => {
       { localMachines: [localMachine({ id: 5, name: 'Front Lobby' })], recordMultiMachineRefill }
     );
 
-    openDropdown('Machines');
-    checkOption('Machine A');
-    applyFilters();
+    planFor('Machine A');
     expect(pickList).toHaveBeenCalledWith([10]);
 
-    click(requireButton('Enter quantities taken'));
-    // Manual entry's own Machines dropdown is the business's local machines; the calculated view's
+    click(requireButton('Record refill'));
+    // Record refill's own Machines dropdown is the business's local machines; the planning view's
     // is the provider fleet, and neither read ever receives the other's ids.
     openDropdown('Machines');
     checkOption('Front Lobby');
-    const takenInput = requireElement<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]');
+    const takenInput = requireElement<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]');
     takenInput.value = '2';
     takenInput.dispatchEvent(new Event('input'));
     fixture.detectChanges();
-    click(requireButton('Save'));
+    click(requireElement<HTMLButtonElement>('[data-testid="manual-pick-list-record"]'));
 
     expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
     const submitted: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];

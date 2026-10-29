@@ -1,9 +1,9 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { of } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
-import { PickListService } from '../../services/pick-list.service';
+import { SiteService } from '../../services/site.service';
 import { ToastService } from '../../services/toast.service';
 import { Machine, PickListResult, Product } from '../../models/models';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
@@ -82,6 +82,7 @@ interface Harness {
   component: PickListComponent;
   getPickList: jest.Mock;
   provider: ProviderAvailabilityService;
+  toast: ToastService;
 }
 
 function routeStub(queryParams: Record<string, string> = {}): ActivatedRoute {
@@ -110,21 +111,15 @@ function createHarness(
 
   const machineService = { getAll: jest.fn(() => of(machines)) } as unknown as MachineService;
   const productService = { getAll: jest.fn(() => of(products)) } as unknown as ProductService;
-  const pickListService = { get: pickList } as unknown as PickListService;
+  const siteService = { getList: jest.fn(() => of([])) } as unknown as SiteService;
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
 
   const component = new PickListComponent(
-    machineService, productService, pickListService, toast, provider, routeStub(options.queryParams)
+    machineService, productService, siteService, toast, provider, routeStub(options.queryParams)
   );
   component.ngOnInit();
 
-  return { component, getPickList: pickList, provider };
-}
-
-/** Stages and applies a machine selection - the normal "pick machines, then Apply" flow. */
-function applyMachines(component: PickListComponent, machineIds: number[]): void {
-  component.stagedMachineIds = machineIds;
-  component.applyFilters();
+  return { component, getPickList: pickList, provider, toast };
 }
 
 describe('PickListComponent mode selection (issue #744)', () => {
@@ -147,28 +142,28 @@ describe('PickListComponent mode selection (issue #744)', () => {
 
     expect(component.mode).toBe('manual');
     expect(component.calculatedUnavailableReason).toBe(
-      'The calculated pick list is unavailable because Nayax has not granted this application permission to read it.'
+      'Plan picks is unavailable because Nayax has not granted this application permission to read it.'
     );
   });
 
-  it('switches to manual mode once a live Apply discovers the machineStock permission is refused', () => {
-    const getPickList = jest.fn(() => throwError(() => nayaxPermissionNotGranted()));
-    const { component } = createHarness({ pickList: getPickList });
+  it('switches to manual mode once a live snapshot read proves the machineStock permission is refused', () => {
+    const { component } = createHarness();
     expect(component.mode).toBe('calculated');
 
-    applyMachines(component, [10]);
+    component.onPlanLoadFailed(nayaxPermissionNotGranted());
 
     expect(component.mode).toBe('manual');
-    expect(component.calculatedUnavailableReason).toContain('calculated pick list is unavailable');
+    expect(component.calculatedUnavailableReason).toContain('Plan picks is unavailable');
   });
 
-  it('a calculated-mode request failure that is not a stated unavailability does not force manual mode', () => {
-    const getPickList = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 502 })));
-    const { component } = createHarness({ pickList: getPickList });
+  it('a snapshot failure that is not a stated unavailability does not force manual mode', () => {
+    const { component, toast } = createHarness();
 
-    applyMachines(component, [10]);
+    component.onPlanLoadFailed(new HttpErrorResponse({ status: 502 }));
 
     expect(component.mode).toBe('calculated');
+    expect(component.calculatedUnavailableReason).toBe('');
+    expect(toast.error).toHaveBeenCalledWith('Failed to load the pick list.');
   });
 
   it('lets the operator switch to manual mode even when calculated is fully available', () => {
@@ -177,19 +172,6 @@ describe('PickListComponent mode selection (issue #744)', () => {
     component.switchMode('manual');
 
     expect(component.mode).toBe('manual');
-  });
-
-  it('switching back to calculated preserves the already-fetched matrix (calculated mode unchanged)', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-    expect(component.pickListProducts).toHaveLength(1);
-
-    component.switchMode('manual');
-    component.switchMode('calculated');
-
-    expect(component.mode).toBe('calculated');
-    expect(component.pickListProducts).toHaveLength(1);
-    expect(component.appliedMachineIds).toEqual([10]);
   });
 
   it('creates the manual view on first use and keeps it for every later switch', () => {
@@ -260,10 +242,10 @@ describe('PickListComponent mode selection (issue #744)', () => {
     const getAllProducts = jest.fn(() => of([product({ id: 1, name: 'Coke', quantityInStock: 20 })]));
     const machineService = { getAll: jest.fn(() => of([])) } as unknown as MachineService;
     const productService = { getAll: getAllProducts } as unknown as ProductService;
-    const pickListService = { get: jest.fn(() => of(pickListResult())) } as unknown as PickListService;
+    const siteService = { getList: jest.fn(() => of([])) } as unknown as SiteService;
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
     const component = new PickListComponent(
-      machineService, productService, pickListService, toast, providerAvailabilityDouble('Ready'), routeStub()
+      machineService, productService, siteService, toast, providerAvailabilityDouble('Ready'), routeStub()
     );
     component.ngOnInit();
     getAllProducts.mockClear();

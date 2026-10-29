@@ -190,7 +190,9 @@ describe('ManualPickListComponent machine selection (issues #794, #904)', () => 
     component.onSelectedMachineIdsChange([6, 5]);
 
     expect(component.machineColumns.map((machine) => machine.name)).toEqual(['Back Room', 'Front Lobby']);
-    expect(component.cellAriaLabel(component.products[0], component.machineColumns[0])).toBe('Taken: Coke at Back Room');
+    expect(component.cellAriaLabel(component.products[0], component.machineColumns[0])).toBe(
+      'Quantity taken: Coke at Back Room'
+    );
   });
 
   it('hides the selector when the business has no active local machines, and saves unattributed', () => {
@@ -1280,5 +1282,264 @@ describe('ManualPickListComponent during a read-only support session (issue #744
     component.ngOnDestroy();
 
     expect(session.observed).toBe(false);
+  });
+});
+
+describe('ManualPickListComponent storage shortages (issue #996)', () => {
+  it('reports the shortage the moment the entries exceed the storage this page read, and blocks recording', () => {
+    const { component, recordRefill } = createHarness([product({ id: 1, name: 'Coke', quantityInStock: 5 })]);
+
+    component.onTakenChange(1, '7');
+
+    expect(component.storageExcessFor(component.products[0])).toBe(2);
+    expect(component.storageExcessMessageFor(component.products[0])).toBe(
+      'Entered 7 but storage holds 5. Resolve shortage to record.'
+    );
+    expect(component.storageExcessMessages).toEqual(['Coke: Entered 7 but storage holds 5. Resolve shortage to record.']);
+    expect(component.canSave).toBe(false);
+    expect(component.readyToRecord).toBe(false);
+
+    component.save();
+
+    expect(recordRefill).not.toHaveBeenCalled();
+  });
+
+  it('weighs one product’s whole submission across every machine column, hidden rows included', () => {
+    const { component, recordMultiMachineRefill } = createHarness(
+      [product({ id: 1, name: 'Coke', quantityInStock: 5 }), product({ id: 2, name: 'Chips', quantityInStock: 50 })],
+      undefined,
+      undefined,
+      twoMachines()
+    );
+    component.onSelectedMachineIdsChange([5, 6]);
+
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '3');
+    // Hiding the row changes nothing about the submission, so it changes nothing about the shortage.
+    component.search = 'Chips';
+
+    expect(component.visibleProducts().map((p) => p.id)).toEqual([2]);
+    expect(component.storageExcessFor(component.products[0])).toBe(1);
+    expect(component.canSave).toBe(false);
+
+    component.save();
+    expect(recordMultiMachineRefill).not.toHaveBeenCalled();
+  });
+
+  it('records a submission that is below the storage read, with no note about a suggestion it has none of', () => {
+    const { component, recordRefill } = createHarness([product({ id: 1, name: 'Coke', quantityInStock: 5 })]);
+
+    component.onTakenChange(1, '4');
+
+    expect(component.storageExcessFor(component.products[0])).toBe(0);
+    expect(component.storageExcessMessageFor(component.products[0])).toBeNull();
+    expect(component.readyToRecord).toBe(true);
+
+    component.save();
+
+    expect(recordRefill).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps nothing and reallocates nothing: the entries stay exactly as they were typed', () => {
+    const { component } = createHarness([product({ id: 1, name: 'Coke', quantityInStock: 5 })]);
+
+    component.onTakenChange(1, '7');
+
+    expect(component.takenValue(1)).toBe('7');
+    expect(component.rowTotal(1)).toBe(7);
+  });
+});
+
+describe('ManualPickListComponent Clear (issue #996)', () => {
+  it('asks first and discards every entry once confirmed', () => {
+    const confirm = stubConfirm(true);
+    const { component } = createHarness();
+    component.onTakenChange(1, '3');
+    component.onTakenChange(2, '2');
+
+    component.clearEntries();
+
+    expect(confirm).toHaveBeenCalled();
+    expect(component.entriesPresent).toBe(false);
+    expect(component.totalUnitsRequired()).toBe(0);
+  });
+
+  it('keeps every entry when the operator cancels', () => {
+    stubConfirm(false);
+    const { component } = createHarness();
+    component.onTakenChange(1, '3');
+
+    component.clearEntries();
+
+    expect(component.takenValue(1)).toBe('3');
+  });
+
+  it('is not offered while there is nothing to clear', () => {
+    const { component } = createHarness();
+
+    expect(component.canClear).toBe(false);
+  });
+});
+
+describe('ManualPickListComponent hidden entries (issue #996)', () => {
+  it('reveals every entered product, whatever the search and category filters are set to', () => {
+    const { component } = createHarness([
+      product({ id: 1, name: 'Coke', category: category(2, 'Drinks') }),
+      product({ id: 2, name: 'Chips', category: category(1, 'Snacks') })
+    ]);
+    component.onTakenChange(2, '4');
+    component.search = 'Coke';
+
+    expect(component.visibleProducts().map((p) => p.id)).toEqual([1]);
+    expect(component.hiddenProductsWithEntries()).toBe(1);
+    expect(component.hiddenUnitsRequired()).toBe(4);
+
+    component.toggleShowEnteredOnly();
+
+    expect(component.onlyEntered).toBe(true);
+    expect(component.visibleProducts().map((p) => p.id)).toEqual([2]);
+    expect(component.hiddenProductsWithEntries()).toBe(0);
+
+    component.toggleShowEnteredOnly();
+    expect(component.visibleProducts().map((p) => p.id)).toEqual([1]);
+  });
+
+  it('reveals a malformed hidden entry too, which is the one that has to be fixed', () => {
+    const { component } = createHarness();
+    component.onTakenChange(2, 'abc');
+    component.search = 'Coke';
+
+    component.toggleShowEnteredOnly();
+
+    expect(component.visibleProducts().map((p) => p.id)).toEqual([2]);
+    expect(component.invalidEntryMessages).toEqual([`Chips: ${INVALID_TAKEN_QUANTITY_MESSAGE}`]);
+  });
+});
+
+describe('ManualPickListComponent an unresolved submission (issue #996)', () => {
+  /** A save whose outcome the server never answered: the one state only its own retry may resolve. */
+  function uncertainHarness(): Harness {
+    const recordRefill = jest
+      .fn()
+      .mockImplementationOnce(() => throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' })))
+      .mockImplementation((request: PickListRefillRequest) => of(recordedResponse(request)));
+    const harness = createHarness([product({ id: 1, name: 'Coke', quantityInStock: 20 })], recordRefill);
+    harness.component.onTakenChange(1, '3');
+    harness.component.save();
+    return harness;
+  }
+
+  it('freezes the entries, Clear and the machine selection until that attempt is resolved', () => {
+    const { component } = uncertainHarness();
+    expect(component.unresolvedSubmission).toBe(true);
+
+    component.onTakenChange(1, '9');
+    component.onCellChange(1, 5, '9');
+    component.clearEntries();
+    component.onSelectedMachineIdsChange([5]);
+
+    expect(component.entriesEditable).toBe(false);
+    expect(component.canClear).toBe(false);
+    expect(component.takenValue(1)).toBe('3');
+    expect(component.selectedMachineIds).toEqual([]);
+  });
+
+  it('offers only its own retry, and resends the identical key and payload', () => {
+    const { component, recordRefill } = uncertainHarness();
+
+    expect(component.canRetry).toBe(true);
+    component.retry();
+
+    expect(recordRefill).toHaveBeenCalledTimes(2);
+    const first = recordRefill.mock.calls[0][0] as PickListRefillRequest;
+    const second = recordRefill.mock.calls[1][0] as PickListRefillRequest;
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.rows).toEqual(first.rows);
+    expect(component.unresolvedSubmission).toBe(false);
+  });
+
+  it('keeps the retry available even when the latest storage read would now refuse those quantities', () => {
+    const { component, recordRefill } = uncertainHarness();
+
+    // The catalogue refresh after the failed attempt comes back with less storage than was taken.
+    component.products = [product({ id: 1, name: 'Coke', quantityInStock: 1 })];
+
+    expect(component.storageExcessPresent).toBe(true);
+    expect(component.canRetry).toBe(true);
+
+    component.retry();
+
+    expect(recordRefill).toHaveBeenCalledTimes(2);
+    const first = recordRefill.mock.calls[0][0] as PickListRefillRequest;
+    const second = recordRefill.mock.calls[1][0] as PickListRefillRequest;
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.rows).toEqual(first.rows);
+  });
+
+  it('reports nothing as recorded until a response confirms it, and then reports the whole submission', () => {
+    const { component } = uncertainHarness();
+
+    expect(component.recordedSummary).toBeNull();
+
+    component.retry();
+
+    expect(component.recordedSummary).toBe('Recorded 3 units across 1 entry.');
+  });
+});
+
+describe('ManualPickListComponent unsaved work reporting (issue #996)', () => {
+  it('tells the page when an entry appears, when it is recorded, and when an outcome is unresolved', () => {
+    const recordRefill = jest
+      .fn()
+      .mockImplementationOnce(() => throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' })))
+      .mockImplementation((request: PickListRefillRequest) => of(recordedResponse(request)));
+    const { component } = createHarness(undefined, recordRefill);
+    const reported: { entriesPresent: boolean; unresolvedSubmission: boolean }[] = [];
+    component.unsavedWorkChange.subscribe((work) => reported.push(work));
+
+    component.onTakenChange(1, '3');
+    component.save();
+    component.retry();
+
+    expect(reported).toEqual([
+      // The entry is typed; then the save ends uncertain; then the retry is in flight, which resolves
+      // nothing yet but is no longer an unresolved *outcome*; then the response clears the entry.
+      { entriesPresent: true, unresolvedSubmission: false },
+      { entriesPresent: true, unresolvedSubmission: true },
+      { entriesPresent: true, unresolvedSubmission: false },
+      { entriesPresent: false, unresolvedSubmission: false }
+    ]);
+  });
+});
+
+describe('ManualPickListComponent machine focus (issue #996)', () => {
+  it('focuses the first selected machine and reports its column apart from the whole submission', () => {
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+
+    expect(component.focusedMachine?.id).toBe(5);
+    expect(component.focusedMachineUnits()).toBe(3);
+    expect(component.totalUnitsRequired()).toBe(7);
+
+    component.onFocusMachineChange(6);
+
+    expect(component.focusedMachineUnits()).toBe(4);
+    // Switching focus preserves the whole draft: every column's quantities are still there.
+    expect(component.cellValue(1, 5)).toBe('3');
+    expect(component.cellValue(1, 6)).toBe('4');
+    expect(component.totalUnitsRequired()).toBe(7);
+  });
+
+  it('falls back to a column that still exists once the focused machine is removed', () => {
+    stubConfirm(true);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onFocusMachineChange(6);
+
+    component.removeMachineColumn(6);
+
+    expect(component.focusedMachine?.id).toBe(5);
   });
 });

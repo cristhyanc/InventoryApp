@@ -10,6 +10,7 @@ import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ProductService } from '../../services/product.service';
+import { SiteService } from '../../services/site.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
@@ -33,6 +34,7 @@ async function render(machinesResult: Observable<Machine[]> = of([machine(10, 'M
       provideRouter([]),
       { provide: MachineService, useValue: { getAll: jest.fn(() => machinesResult) } },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: PickListService, useValue: { get: jest.fn(() => of(pickListResult())) } },
       { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
@@ -51,40 +53,58 @@ async function render(machinesResult: Observable<Machine[]> = of([machine(10, 'M
 }
 
 /**
- * The filter card, the optional Selected Machines card, and the results card carry no margin of
- * their own (issue #894): the 1.5rem gap between them comes entirely from `.page`'s own
- * `flex flex-col gap-6` (styles.scss), which spaces every one of its direct children by the same
- * amount regardless of which are present. That only holds if these `@if` blocks keep emitting the
- * cards as direct children of `.page` with no wrapping element and no competing margin utility -
- * either of which would silently double the gap or collapse it back to zero.
+ * The 1.5rem gap between cards comes entirely from a `flex flex-col gap-6` parent (styles.scss's
+ * `.page`, and each view component's own wrapper), which spaces every one of its direct children by
+ * the same amount regardless of which are present (issue #894). Since issue #996 Plan picks is a
+ * component of its own, so - exactly like Record refill - its cards are the direct children of one
+ * wrapper **inside** it, and its host element must carry no display utility: the page hides the view
+ * with `[hidden]`, and a `flex` class on the host would compete with that rule.
  */
-describe('PickListComponent calculated-view card spacing (issue #894)', () => {
+describe('PickListComponent view card spacing (issues #894, #996)', () => {
   const marginUtility = /\b(m[tbxy]?-\d|space-y-\d)\b/;
 
-  it('keeps the filter, Selected Machines, and results cards as direct, unmargined children of .page', async () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('keeps the mode toggle and both view components as direct, unmargined children of .page', async () => {
     const { host } = await render(of([machine(10, 'Machine A'), machine(20, 'Machine B')]));
 
     const page = host.querySelector('.page') as HTMLElement;
-    const cards = Array.from(page.children).filter((child) => child.classList.contains('card'));
-
-    expect(cards).toHaveLength(4); // mode toggle, filters, Selected Machines, results
-    cards.forEach((card) => {
+    const toggleCards = Array.from(page.children).filter((child) => child.classList.contains('card'));
+    expect(toggleCards).toHaveLength(1); // the mode toggle; each view owns its own cards
+    toggleCards.forEach((card) => {
       expect(card.parentElement).toBe(page);
       expect(card.className).not.toMatch(marginUtility);
     });
-    expect(page.className).toContain('page');
+
+    const planPicks = page.querySelector('app-plan-picks') as HTMLElement;
+    expect(planPicks.parentElement).toBe(page);
+    expect(planPicks.className).not.toMatch(/\b(flex|grid|block)\b/);
+    expect(planPicks.className).not.toMatch(marginUtility);
   });
 
-  it('keeps a single gap between the filter and results cards when Selected Machines is absent', async () => {
+  it('spaces Plan picks’ own cards with one gap-6 wrapper inside the component', async () => {
+    const { host } = await render(of([machine(10, 'Machine A')]));
+
+    const planPicks = host.querySelector('app-plan-picks') as HTMLElement;
+    expect(planPicks.children).toHaveLength(1);
+    const wrapper = planPicks.firstElementChild as HTMLElement;
+    expect(wrapper.classList).toContain('flex');
+    expect(wrapper.classList).toContain('flex-col');
+    expect(wrapper.classList).toContain('gap-6');
+
+    const cards = Array.from(wrapper.children).filter((child) => child.classList.contains('card'));
+    expect(cards).toHaveLength(3); // toolbar, Selected machines, the matrix
+    cards.forEach((card) => expect(card.className).not.toMatch(marginUtility));
+  });
+
+  it('keeps a single gap when the Selected machines card is absent', async () => {
     const { host } = await render(throwError(() => new HttpErrorResponse({ status: 500 })));
 
-    const page = host.querySelector('.page') as HTMLElement;
-    const cards = Array.from(page.children).filter((child) => child.classList.contains('card'));
+    const planPicks = host.querySelector('app-plan-picks') as HTMLElement;
+    const wrapper = planPicks.firstElementChild as HTMLElement;
+    const cards = Array.from(wrapper.children).filter((child) => child.classList.contains('card'));
 
-    expect(cards).toHaveLength(3); // mode toggle, filters, results - no Selected Machines card
-    cards.forEach((card) => {
-      expect(card.parentElement).toBe(page);
-      expect(card.className).not.toMatch(marginUtility);
-    });
+    expect(cards).toHaveLength(2); // toolbar and the matrix card - no Selected machines card
+    cards.forEach((card) => expect(card.className).not.toMatch(marginUtility));
   });
 });

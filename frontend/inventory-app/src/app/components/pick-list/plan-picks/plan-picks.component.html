@@ -1,0 +1,437 @@
+<!--
+  Plan picks (issue #996). Two layouts over one state: the product-first matrix from md: up, and
+  product cards with a machine focus below it, so a phone never gets a squeezed matrix. Both read
+  the same overrides, marks and totals, so switching width or machine focus loses nothing.
+-->
+<div class="flex flex-col gap-6">
+  <section class="card">
+    <div class="card-body flex flex-col gap-4">
+      <p data-testid="plan-picks-planning-only" class="text-md-body text-md-gray-600">{{ planningOnlyMessage }}</p>
+
+      <div class="flex flex-wrap items-end gap-4">
+        <label class="text-md-body" for="plan-picks-search">
+          <span class="block text-md-table-head font-bold uppercase tracking-wide text-md-gray-600">Search</span>
+          <input
+            id="plan-picks-search"
+            class="mt-1 max-w-[200px]"
+            type="search"
+            [(ngModel)]="search"
+            placeholder="Search products" />
+        </label>
+
+        <label class="text-md-body" for="plan-picks-category">
+          <span class="block text-md-table-head font-bold uppercase tracking-wide text-md-gray-600">Category</span>
+          <select id="plan-picks-category" class="mt-1 max-w-[180px]" [(ngModel)]="categoryId">
+            <option value="">All categories</option>
+            @for (category of categories(); track category.id) {
+              <option [ngValue]="category.id">{{ category.name }}</option>
+            }
+          </select>
+        </label>
+
+        <app-multi-select-dropdown
+          label="Products"
+          itemLabelSingular="product"
+          itemLabelPlural="products"
+          [options]="productOptions()"
+          [selectedIds]="stagedProductIds"
+          (selectedIdsChange)="onStagedProductIdsChange($event)"
+        ></app-multi-select-dropdown>
+
+        @if (machineSelectionShown) {
+          <app-multi-select-dropdown
+            label="Machines"
+            itemLabelSingular="machine"
+            itemLabelPlural="machines"
+            ungroupedGroupLabel="No site recorded"
+            [options]="machineOptions()"
+            [selectedIds]="stagedMachineIds"
+            (selectedIdsChange)="onStagedMachineIdsChange($event)"
+          ></app-multi-select-dropdown>
+        }
+
+        <button type="button" class="btn btn-primary" (click)="applyFilters()">Apply</button>
+        <button type="button" class="btn btn-secondary" (click)="resetAll()">Reset</button>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-4">
+        <div>
+          <span class="block text-md-table-head font-bold uppercase tracking-wide value-muted">Snapshot</span>
+          <span data-testid="pick-list-snapshot" class="text-md-body text-md-gray-800">
+            {{ lastRefreshedAt ? ('As of ' + (lastRefreshedAt | businessDateTime)) : 'Not loaded yet' }}
+          </span>
+        </div>
+        <!--
+          Refresh is deliberately not Apply: Apply only fetches when the machine selection changed,
+          so re-pressing it with the same selection does nothing at all. This re-reads the applied
+          selection whether or not it changed, which is what makes a failed snapshot retryable.
+        -->
+        <button
+          type="button"
+          class="btn btn-secondary"
+          data-testid="plan-picks-refresh"
+          [disabled]="appliedMachineIds.length === 0 || loading"
+          (click)="refresh()">
+          <app-icon name="refresh" [size]="16"></app-icon>
+          {{ loadFailed ? 'Retry' : 'Refresh' }}
+        </button>
+
+        <label class="flex items-center gap-2 text-md-body text-md-gray-600">
+          <input type="checkbox" data-testid="plan-picks-only-remaining" [(ngModel)]="onlyRemaining" />
+          Only remaining
+        </label>
+        <label class="flex items-center gap-2 text-md-body text-md-gray-600">
+          <input type="checkbox" data-testid="plan-picks-only-shortages" [(ngModel)]="onlyShortages" />
+          Only shortages
+        </label>
+      </div>
+    </div>
+  </section>
+
+  @if (machineSelectionShown) {
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-title">Selected machines ({{ appliedMachineIds.length }})</h2>
+      </div>
+      <div class="card-body flex flex-wrap gap-2">
+        @for (group of machineGroups; track group.key) {
+          @for (machineId of group.machineIds; track machineId) {
+            <span class="inline-flex items-center gap-2 rounded-md-badge bg-md-gray-100 px-3 py-1 text-md-body text-md-gray-600">
+              <span>
+                {{ machineLabel(machineId) }}
+                @if (group.siteName) {
+                  <span class="value-muted">&middot; {{ group.siteName }}</span>
+                }
+              </span>
+              <button
+                type="button"
+                class="value-muted hover:text-md-danger-text"
+                [attr.aria-label]="'Remove ' + machineLabel(machineId)"
+                (click)="removeMachine(machineId)">&times;</button>
+            </span>
+          }
+        }
+        @if (appliedMachineIds.length === 0) {
+          <span class="text-md-body value-muted">No machines selected yet.</span>
+        }
+      </div>
+    </section>
+  }
+
+  <section class="card">
+    <div class="card-body">
+      @if (machinesError) {
+        <p data-testid="pick-list-machines-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
+      } @else if (appliedMachineIds.length === 0) {
+        <p class="text-md-body value-muted">Select at least one machine to plan a stock run.</p>
+      } @else if (loadFailed) {
+        <div class="flex flex-wrap items-center gap-4">
+          <p data-testid="plan-picks-load-failed" role="alert" class="text-md-body text-md-danger-text">{{ loadFailedMessage }}</p>
+          <button type="button" class="btn btn-secondary" (click)="refresh()">Retry</button>
+        </div>
+      } @else if (loading) {
+        <p data-testid="plan-picks-loading" role="status" class="text-md-body value-muted">Loading the plan&hellip;</p>
+      } @else if (visibleProducts().length === 0) {
+        <p data-testid="plan-picks-empty" class="text-md-body value-muted">
+          @if (pickListProducts.length > 0 && filtersActive) {
+            No products match the current filters. The plan still holds {{ totalPickCount() }} picks.
+          } @else {
+            No products to pick for the selected machines.
+          }
+        </p>
+        @if (pickListProducts.length > 0 && filtersActive) {
+          <button type="button" class="btn btn-secondary mt-3" data-testid="plan-picks-clear-filters" (click)="clearViewFilters()">
+            Show all products
+          </button>
+        }
+      } @else {
+        @if (horizontalScrollHintShown) {
+          <p data-testid="plan-picks-scroll-hint" class="mb-2 text-md-badge value-muted">
+            {{ machineColumnIds.length }} machine columns. Scroll sideways inside the table to see them all; the product column stays in place.
+          </p>
+        }
+        <!--
+          One bounded scroll area for both axes, focusable so a keyboard can scroll it too: long
+          product lists scroll vertically under the sticky header rows, and many machine columns
+          scroll horizontally while the product column stays pinned to the left. The header cells
+          are sticky individually (rather than the <thead>) with the opaque md-gray-100 table-head
+          surface and a z-index above the body cells, so rows cannot show through. The site header
+          row is `top-0` and the machine row sits directly under it at the site row's own height, so
+          both stay visible together.
+        -->
+        <div
+          data-testid="pick-list-table-scroll"
+          class="hidden max-h-[70vh] overflow-auto md:block"
+          tabindex="0"
+          role="region"
+          aria-label="Plan picks matrix, scrollable">
+          <table class="table">
+            <thead>
+              @if (siteHeaderShown) {
+                <tr data-testid="plan-picks-site-header-row">
+                  <th scope="col" rowspan="2" class="table-cell sm:px-3 w-px sticky left-0 top-0 z-30 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('name')">
+                    <button type="button" class="hover:underline" (click)="sortBy('name')">{{ sortLabel('Product', 'name') }}</button>
+                  </th>
+                  <th scope="col" rowspan="2" class="table-cell sm:px-3 w-px whitespace-nowrap sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
+                    <button type="button" class="hover:underline" (click)="sortBy('mdbCode')">{{ sortLabel('MDB Code', 'mdbCode') }}</button>
+                  </th>
+                  <th scope="col" rowspan="2" class="table-cell sm:px-3 table-num w-px whitespace-nowrap sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Storage Qty</th>
+                  <th scope="col" rowspan="2" class="table-cell sm:px-3 w-px whitespace-nowrap sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
+                  @for (group of machineGroups; track group.key) {
+                    <th
+                      scope="colgroup"
+                      [attr.colspan]="group.machineIds.length"
+                      class="table-cell sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">
+                      {{ group.siteName ?? 'No site recorded' }}
+                    </th>
+                  }
+                </tr>
+                <tr>
+                  @for (machineId of machineColumnIds; track machineId) {
+                    <th scope="col" class="table-cell sticky top-7 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
+                  }
+                </tr>
+              } @else {
+                <tr>
+                  <th scope="col" class="table-cell sm:px-3 w-px sticky left-0 top-0 z-30 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('name')">
+                    <button type="button" class="hover:underline" (click)="sortBy('name')">{{ sortLabel('Product', 'name') }}</button>
+                  </th>
+                  <th scope="col" class="table-cell sm:px-3 w-px whitespace-nowrap sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
+                    <button type="button" class="hover:underline" (click)="sortBy('mdbCode')">{{ sortLabel('MDB Code', 'mdbCode') }}</button>
+                  </th>
+                  <th scope="col" class="table-cell sm:px-3 table-num w-px whitespace-nowrap sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Storage Qty</th>
+                  <th scope="col" class="table-cell sm:px-3 w-px whitespace-nowrap sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
+                  @for (machineId of machineColumnIds; track machineId) {
+                    <th scope="col" class="table-cell sticky top-0 z-20 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
+                  }
+                </tr>
+              }
+            </thead>
+            <tbody>
+              @for (product of visibleProducts(); track product.productId) {
+                <tr class="table-row">
+                  <th scope="row" class="table-cell sm:px-3 sticky left-0 z-10 bg-white text-left font-normal">
+                    <div data-testid="pick-list-product-name" class="w-[14rem]">
+                      {{ product.productName }}
+                      @if (shortageFor(product) > 0) {
+                        <span data-testid="storage-shortage-badge" class="badge badge-danger mt-1 block w-fit">
+                          Storage short {{ shortageFor(product) }}
+                        </span>
+                      }
+                    </div>
+                  </th>
+                  <td data-testid="pick-list-mdb-code" class="table-cell sm:px-3 text-md-gray-800">{{ product.mdbCode ?? '—' }}</td>
+                  <td data-testid="pick-list-storage-qty" class="table-cell sm:px-3 table-num text-md-gray-800">{{ product.storageQuantityInStock }}</td>
+                  <td data-testid="plan-picks-row-total" class="table-cell sm:px-3 font-semibold text-md-gray-800">{{ plannedUnitsFor(product) }}</td>
+                  @for (machineId of machineColumnIds; track machineId) {
+                    @if (cellFor(product, machineId); as cell) {
+                      <td class="table-cell align-top">
+                        @if (isEditing(product.productId, machineId)) {
+                          <!-- The editor: Enter commits, Escape restores, and the value arrives selected. -->
+                          <div class="flex flex-col gap-1">
+                            <input
+                              #editInput
+                              type="text"
+                              inputmode="numeric"
+                              class="max-w-[5.5rem]"
+                              data-testid="plan-picks-edit-input"
+                              [attr.aria-label]="'Pick quantity: ' + product.productName + ' at ' + machineLabel(machineId)"
+                              [attr.aria-invalid]="editError !== '' ? 'true' : null"
+                              [attr.aria-describedby]="editError !== '' ? 'plan-picks-edit-error' : null"
+                              [value]="editValue"
+                              (input)="onEditValueInput($event)"
+                              (keydown)="onEditKeydown($event, product.productId, cell)" />
+                            @if (editError !== '') {
+                              <p id="plan-picks-edit-error" data-testid="plan-picks-edit-error" role="alert" class="text-md-badge text-md-danger-text">{{ editError }}</p>
+                            }
+                            <div class="flex gap-2">
+                              <button type="button" class="btn btn-primary" data-testid="plan-picks-commit-edit" (click)="commitEdit(product.productId, cell)">Confirm</button>
+                              <button type="button" class="btn btn-secondary" data-testid="plan-picks-cancel-edit" (click)="cancelEdit()">Cancel</button>
+                            </div>
+                          </div>
+                        } @else {
+                          <div class="flex items-start gap-2">
+                            @if (isEditable(product.productId, cell)) {
+                              <button
+                                type="button"
+                                class="mt-1 text-md-gray-500 hover:text-md-info-text"
+                                data-testid="plan-picks-edit"
+                                [attr.aria-label]="'Edit pick quantity: ' + product.productName + ' at ' + machineLabel(machineId)"
+                                (click)="startEdit(product.productId, cell)">
+                                <app-icon name="edit" [size]="16"></app-icon>
+                              </button>
+                            }
+                            <div class="min-w-0 flex-1">
+                              <span class="block text-md-stat-value font-semibold text-md-gray-800" data-testid="plan-picks-pick-quantity">
+                                {{ pickQuantity(product.productId, cell) }}
+                              </span>
+                              @if (suggestionShown(product.productId, cell)) {
+                                <span class="block text-md-badge value-muted" data-testid="plan-picks-suggested">Suggested: {{ cell.quantityToPick }}</span>
+                              }
+                              @if (pickQuantity(product.productId, cell) === 0 && isOverridden(product.productId, cell.machineId)) {
+                                <span class="block text-md-badge text-md-warning-text" data-testid="plan-picks-skipped">Skipped</span>
+                              }
+                              <span class="block text-md-badge value-muted">Current: {{ cell.currentQuantity }} of {{ cell.targetQuantity }}</span>
+                              @if (isOverridden(product.productId, cell.machineId)) {
+                                <button
+                                  type="button"
+                                  class="text-md-badge text-md-info-text hover:underline"
+                                  data-testid="plan-picks-reset-override"
+                                  [attr.aria-label]="'Reset to suggested quantity: ' + product.productName + ' at ' + machineLabel(machineId)"
+                                  (click)="resetOverride(product.productId, cell.machineId)">Reset to suggested</button>
+                              }
+                            </div>
+                            @if (isActionable(product.productId, cell)) {
+                              <label class="mt-1 flex shrink-0 items-center gap-1 text-md-badge value-muted">
+                                <input
+                                  type="checkbox"
+                                  data-testid="plan-picks-completed"
+                                  [checked]="isCompleted(product.productId, machineId)"
+                                  [attr.aria-label]="'Picked: ' + product.productName + ' at ' + machineLabel(machineId)"
+                                  (change)="toggleCompleted(product.productId, cell)" />
+                                @if (isCompleted(product.productId, machineId)) {
+                                  <span class="text-md-success-text">Picked</span>
+                                }
+                              </label>
+                            }
+                          </div>
+                        }
+                      </td>
+                    } @else {
+                      <td class="table-cell text-md-gray-300">&mdash;</td>
+                    }
+                  }
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <!--
+          The narrow layout: one card per product for the machine in focus, never a squeezed matrix.
+          The focus only chooses what is shown - every override, mark and total stays whole, so
+          switching machines loses nothing.
+        -->
+        <div class="md:hidden">
+          @if (machineColumnIds.length > 1) {
+            <label class="block text-md-body" for="plan-picks-machine-focus">
+              <span class="block text-md-table-head font-bold uppercase tracking-wide text-md-gray-600">Machine in focus</span>
+              <select
+                id="plan-picks-machine-focus"
+                class="mt-1 w-full"
+                data-testid="plan-picks-machine-focus"
+                [ngModel]="focusedMachineId"
+                (ngModelChange)="onFocusMachineChange($event)">
+                @for (machineId of machineColumnIds; track machineId) {
+                  <option [ngValue]="machineId">{{ machineLabel(machineId) }}</option>
+                }
+              </select>
+            </label>
+          }
+
+          <ul class="m-0 mt-3 flex list-none flex-col gap-3 p-0" data-testid="plan-picks-cards">
+            @for (product of visibleProducts(); track product.productId) {
+              @if (focusedCellFor(product); as cell) {
+                <li class="rounded-md-card border border-md-gray-200 p-3">
+                  <p class="text-md-body font-semibold text-md-gray-800">{{ product.productName }}</p>
+                  <p class="text-md-badge value-muted">
+                    MDB {{ product.mdbCode ?? '—' }} &middot; Storage {{ product.storageQuantityInStock }}
+                  </p>
+                  @if (shortageFor(product) > 0) {
+                    <span class="badge badge-danger mt-1 inline-block">Storage short {{ shortageFor(product) }}</span>
+                  }
+                  @if (isEditing(product.productId, cell.machineId)) {
+                    <div class="mt-2 flex flex-col gap-1">
+                      <input
+                        #cardEditInput
+                        type="text"
+                        inputmode="numeric"
+                        class="w-full"
+                        data-testid="plan-picks-card-edit-input"
+                        [attr.aria-label]="'Pick quantity: ' + product.productName + ' at ' + machineLabel(cell.machineId)"
+                        [attr.aria-invalid]="editError !== '' ? 'true' : null"
+                        [value]="editValue"
+                        (input)="onEditValueInput($event)"
+                        (keydown)="onEditKeydown($event, product.productId, cell)" />
+                      @if (editError !== '') {
+                        <p role="alert" class="text-md-badge text-md-danger-text">{{ editError }}</p>
+                      }
+                      <div class="flex gap-2">
+                        <button type="button" class="btn btn-primary" (click)="commitEdit(product.productId, cell)">Confirm</button>
+                        <button type="button" class="btn btn-secondary" (click)="cancelEdit()">Cancel</button>
+                      </div>
+                    </div>
+                  } @else {
+                    <div class="mt-2 flex items-center justify-between gap-3">
+                      <div>
+                        <span class="block text-md-stat-value font-semibold text-md-gray-800">{{ pickQuantity(product.productId, cell) }}</span>
+                        @if (suggestionShown(product.productId, cell)) {
+                          <span class="block text-md-badge value-muted">Suggested: {{ cell.quantityToPick }}</span>
+                        }
+                        <!-- Kept on a completed card too: what the machine holds is why the pick was planned. -->
+                        <span class="block text-md-badge value-muted">Current: {{ cell.currentQuantity }} of {{ cell.targetQuantity }}</span>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-3">
+                        @if (isEditable(product.productId, cell)) {
+                          <button
+                            type="button"
+                            class="btn btn-secondary"
+                            [attr.aria-label]="'Edit pick quantity: ' + product.productName + ' at ' + machineLabel(cell.machineId)"
+                            (click)="startEdit(product.productId, cell)">
+                            <app-icon name="edit" [size]="16"></app-icon>
+                            Edit
+                          </button>
+                        }
+                        @if (isActionable(product.productId, cell)) {
+                          <label class="flex items-center gap-2 text-md-body text-md-gray-600">
+                            <input
+                              type="checkbox"
+                              class="h-6 w-6"
+                              [checked]="isCompleted(product.productId, cell.machineId)"
+                              [attr.aria-label]="'Picked: ' + product.productName + ' at ' + machineLabel(cell.machineId)"
+                              (change)="toggleCompleted(product.productId, cell)" />
+                            {{ isCompleted(product.productId, cell.machineId) ? 'Picked' : 'Pick' }}
+                          </label>
+                        }
+                      </div>
+                    </div>
+                  }
+                </li>
+              }
+            }
+          </ul>
+        </div>
+
+        <!--
+          The run summary. It is the applied run's, and says so, so a filter or a machine focus can
+          never be mistaken for the whole plan. It is an ordinary block at the end of the card, not a
+          floating bar: nothing may cover a row, a control or the last card.
+        -->
+        <div class="mt-6 flex flex-col gap-2 border-t border-md-gray-200 pt-4 text-md-body text-md-gray-600">
+          <div class="flex flex-wrap items-center gap-6">
+            <span data-testid="plan-picks-progress" class="font-semibold text-md-gray-800">{{ progressText() }}</span>
+            <span data-testid="plan-picks-remaining">{{ remainingPickCount() }} picks remaining</span>
+            <span data-testid="plan-picks-total-units">
+              Total to pick across the whole run: <span class="font-semibold text-md-gray-800">{{ totalUnits() }}</span> units
+            </span>
+            @if (shortageProductCount() > 0) {
+              <span data-testid="plan-picks-shortage-count" class="text-md-danger-text">
+                {{ shortageProductCount() }} {{ shortageProductCount() === 1 ? 'product is' : 'products are' }} short of storage
+              </span>
+            }
+          </div>
+          <div class="flex flex-wrap items-center gap-6 text-md-badge value-muted">
+            <span data-testid="plan-picks-visible-summary">
+              Showing {{ visibleProductCount() }} of {{ pickListProducts.length }} products with the current filters
+            </span>
+            @if (focusedMachineId !== null) {
+              <span data-testid="plan-picks-focus-summary" class="md:hidden">
+                {{ machineLabel(focusedMachineId) }}: {{ focusedMachinePickCount() }} picks, {{ focusedMachineUnits() }} units
+              </span>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </section>
+</div>

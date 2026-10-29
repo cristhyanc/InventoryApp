@@ -2448,6 +2448,84 @@ machine list there was came from the fleet read.
 - **Read-only support sessions are unchanged.** Every write control on these screens is still hidden
   or disabled in a support session, exactly as before.
 
+#### Plan picks and Record refill (issue #996)
+
+The Pick List has two views, and issue #996 is the refresh that named them for what they do:
+**Plan picks**, where you plan a stock run, and **Record refill**, where you record what you
+actually took. Everything the two views already did — the calculated matrix over your machines, the
+manual catalogue entry with or without Nayax, the local machine selection, the deep link from a
+machine's page, the all-or-nothing save and its safe retry — is unchanged. What follows is what the
+refresh adds.
+
+**Plan picks changes no inventory at all**, and says so: *"Planning only. Editing quantities and
+checking picks does not change inventory."*
+
+- **Quantities are editable, as a plan.** Each suggested pick has a pencil beside the quantity.
+  Editing it selects the number so you can type straight over it; Enter or **Confirm** commits it
+  and Escape or **Cancel** puts it back. Only a whole number of 0 or more is accepted — a decimal, a
+  minus sign, an empty box or an impossibly large number is refused on the cell, and nothing is
+  committed until it is valid.
+- **An edit is a local override and nothing else.** It never changes a machine's target, never moves
+  stock and is never saved anywhere: it lives on the page, and leaving the page loses it (you are
+  asked first). The suggestion itself is kept: a changed cell shows **Suggested: N** beneath your
+  number, and **Reset to suggested** puts it back. Committing a **0** is a deliberate skip — the
+  pick drops out of the progress count and the run's total while staying editable.
+- **Checking a pick off is yours too**, with a checkbox separate from the quantity. Changing a
+  quantity clears that cell's tick, because a pick of a different size has not been done yet.
+- **The totals, shortages and progress are the whole applied run's**, with your overrides in place,
+  not just the rows on screen: *"12 of 20 picks completed"*, the picks remaining, the units to pick,
+  and how many products the run is short of storage for. A shortage is the same rule the server
+  uses — the product's total across the run against what storage holds — so raising a quantity can
+  create one and lowering it can clear one. Beside those figures the page says how many products the
+  current filters leave visible, so a filter is never mistaken for the whole plan.
+- **Filters hide rows and change nothing else.** Search, category and the Products and Machines
+  selections are joined by **Only remaining** and **Only shortages**, and your edits and ticks
+  survive every one of them, every sort, and switching machine on a phone.
+- **Refresh is separate from Apply, and it is the retry.** Apply applies the selections you staged;
+  **Refresh** re-reads the machines already applied whether or not the selection changed, which is
+  what makes a failed snapshot retryable — the failure says to use Refresh, never to press Apply
+  again. A refresh rebuilds the plan from the new snapshot, so it asks first when you have edits or
+  ticks to lose, and so do **Reset** and removing a machine column; cancelling changes nothing at
+  all. A slow answer can never overwrite a newer selection or bring back a plan you cleared.
+- **The MDB code stays its own sortable column**, with product-name sorting beside it exactly as
+  before; it is only the per-machine code inside each pick cell that is gone. A product with no code
+  still reads "—" and still sorts last.
+- **Machine columns are grouped by site** where your machines record one: one site heading over its
+  own machines, both in the matrix and in the Machines filter. A machine at no known site keeps its
+  own column and stays selectable — no site is invented for it, and a site list that could not be
+  read simply leaves the columns ungrouped.
+- **On a phone you get product cards and a machine in focus** rather than a squeezed matrix, with
+  Current/Target still on a card you have ticked. Switching the machine in focus changes only what
+  is shown.
+- **There is no transfer from Plan picks into Record refill.** A plan is not a record of what was
+  taken; you record a refill by entering what you took.
+
+**Record refill** keeps every rule it had and adds four:
+
+- **A storage shortage blocks recording, and says so on the row**: *"Entered 7 but storage holds 5.
+  Resolve shortage to record."* It counts each product's whole submission — every machine column,
+  including rows a filter is hiding — against the storage last read, and nothing is capped,
+  reallocated or moved for you: which machine loses units is your decision. The server's own check
+  stays the authority for stock that changes after that read.
+- **An unresolved save freezes the form.** While a save's outcome is unknown the quantities, Clear,
+  the machine columns and a fresh submission are all unavailable, and the one action offered is
+  **Retry save** — the same request under the same key. It stays available even if the storage read
+  since then would refuse those quantities, because leaving a possibly-recorded refill unresolvable
+  is worse.
+- **A hidden entry is always reachable.** Beside the count and units your filters hide,
+  **Show entered products** reveals every row that holds a quantity; **Show all** goes back.
+  **Clear** discards every quantity, after asking.
+- **A success is only ever a confirmed one**, and it reports the whole submission: *"Recorded 12
+  units across 4 entries."* Before saving, the screen says **Entered**, labels each box
+  **Quantity taken**, shows **Ready to record** when it is, and states that *"Recording this refill
+  reduces storage stock by the quantities entered."* — never that anything is written to Nayax.
+
+**Leaving the page is guarded.** Planning edits, entered quantities and — most seriously — an
+unresolved submission's retry context all live on this page and nowhere else, so navigating away or
+reloading asks first, and the warning about an unresolved submission says that leaving loses the
+retry. Cancelling keeps everything exactly as it was. A browser shows its own wording on a reload
+prompt, which nothing in a page can change.
+
 #### Recording a pick without a provider
 
 Issue #744 gives the Pick List a second, machine-free way to record what a worker took out of
@@ -2457,19 +2535,19 @@ that cannot be used.
 
 - **The calculated matrix is offered only when it can actually work.** With a usable connection and
   Nayax granted both the machine fleet read and each machine's own product read, the page opens on
-  the existing calculated matrix exactly as before, with a toggle to **Enter quantities taken**
+  the existing calculated matrix exactly as before, with a toggle to **Record refill**
   alongside it. Without either, the page opens straight into that manual entry screen instead, with
   one sentence saying why the calculated list is unavailable, and the toggle to switch back is not
   offered — there is nothing to switch to.
 - **Manual entry needs no machine, no fleet read and no product read.** It lists the business's
-  active products with a search box, a category filter and a "Taken" quantity box per row, from the
+  active products with a search box, a category filter and a "Quantity taken" box per row, from the
   same catalogue the calculated view's Products filter already reads. With no machine selected,
   saving sends every entered quantity as one request to the batch refill endpoint
   (`POST /api/pick-list/refills`), recording one
   `MachineRefill` stock movement per product in a single all-or-nothing operation — a guarantee the
   machine-detail page's old per-product Restock action, since removed in favour of this screen (see
   [Record refill from a machine's page](#record-refill-from-a-machines-page) below), never had. A
-  malformed "Taken" entry (anything that is not a whole number greater than zero) is reported on its
+  malformed "Quantity taken" entry (anything that is not a whole number greater than zero) is reported on its
   own row before anything is sent, and any refusal the server returns is put back on the row it was
   about.
 - **The page says which of the two it is.** The line under the title describes the view you are
@@ -2483,15 +2561,16 @@ that cannot be used.
   save's outcome could not be confirmed at all** — a dropped connection, a server error — nothing you
   do on screen can send a *different* request: the screen keeps the exact pick it sent and offers
   **Retry save**, which resends precisely that one, so an edited quantity, a removed machine column
-  or a reordered selection cannot turn one physical pick into a second deduction. Only once that
-  attempt is answered does Save start a new pick again.
+  or a reordered selection cannot turn one physical pick into a second deduction (since issue #996
+  the quantities, Clear and the machine columns are unavailable until it is resolved, so only that
+  one request can be sent). Only once that attempt is answered does recording start a new pick again.
 - **An unconfirmed save is not lost by switching views.** A save whose outcome could not be confirmed
-  stays reported on the screen until a later Save settles it, and switching to the calculated view and
+  stays reported on the screen until a later retry settles it, and switching to Plan picks and
   back keeps every quantity you typed — so the retry is still the same request under the same key, not
-  a second pick. While a save is actually being sent, the Calculated button is disabled until it
+  a second pick. While a save is actually being sent, the Plan picks button is disabled until it
   finishes, so an outstanding write always lands where you can see what it did.
-- **Read-only during a support session.** While a support session is active, manual entry still
-  lists the products and their storage quantities, but the "Taken" boxes and Save are hidden and the
+- **Read-only during a support session.** While a support session is active, Record refill still
+  lists the products and their storage quantities, but the quantity boxes and the recording action are hidden and the
   screen says why, so nothing can be recorded on the business's behalf. A refusal the server returns
   is reported as a refusal, not as a save that might need retrying.
 - **A product list that could not be read is never shown as empty.** While the product list is still
@@ -2515,12 +2594,13 @@ An operator preparing one run usually visits several machines. Select them all i
 List's **Machines** dropdown and each one gets its own quantity column, so the whole run is typed
 once and saved once.
 
-- **The row reads Product, Category, Storage Qty, Total Taken, then one column per machine.** Total
-  Taken is that product's own sum across the selected machines — what the pick takes off one shelf —
-  and under the table **Total storage required** is the whole pick's, counting the rows your search
-  or category filter is currently hiding, and saying how many units and products those are. A filter
-  hides rows; it never changes what Save sends.
-- **One Save sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
+- **The row reads Product, Category, Storage available, Entered, then one column per machine**
+  (renamed by issue #996). **Entered** on the row is that product's own sum across the selected
+  machines — what the pick takes off one shelf — and under the table the **Entered** total is the
+  whole submission's, counting the rows your search or category filter is currently hiding, and
+  saying how many units and products those are, with **Show entered products** to reveal them. A
+  filter hides rows; it never changes what is recorded.
+- **One Record refill sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
   see [Recording one pick across several machines (the API)](#recording-one-pick-across-several-machines-the-api-issue-897)
   below) — never one request per machine. That is the point of it: only one request can weigh each
   product's **total** across the machines you allocated it to against the storage it comes off, so
@@ -2528,8 +2608,8 @@ once and saved once.
   half-saved. A refusal keeps everything you typed editable and puts the server's own message on each
   cell it was about. Success reports the whole run — how many entries across how many machines — and
   refreshes the storage quantities once.
-- **With no machine selected, nothing changes.** The screen is exactly the single "Taken" column
-  described above, saved through the existing endpoint as a refill attributed to no machine.
+- **With no machine selected, nothing changes.** The screen is exactly the single "Quantity taken"
+  column described above, saved through the existing endpoint as a refill attributed to no machine.
 - **Quantities are never silently moved, copied or dropped.** A quantity typed against "No machine"
   is never copied into every machine column — that would invent a pick several times the size of the
   one you typed — so selecting machines asks you to confirm discarding it first, and **Cancel keeps
@@ -2539,12 +2619,14 @@ once and saved once.
 - **Nothing moves while a save is being sent.** The machine selection, the column removals and every
   quantity box are locked until the request lands, so what is being answered is what was sent.
 - **A wide run stays inside the table.** The matrix scrolls inside its own bounded area, with the
-  machine headers staying readable, so many machine columns never widen the page — including on a
-  phone. Every quantity box is labelled with both its product and its machine for screen readers.
+  machine headers staying readable, so many machine columns never widen the page. On a phone, since
+  issue #996, the matrix is replaced by product cards with one machine in focus, chosen above them,
+  and switching machine keeps every column's quantities. Every quantity box is labelled with both
+  its product and its machine for screen readers.
 - **Opening the screen from a machine's page** (the **Record refill** link) preselects exactly that
   machine as the only column, and you can add more beside it.
-- **Read-only during a support session**, exactly as before: the quantity boxes and Save are hidden
-  and the screen says why.
+- **Read-only during a support session**, exactly as before: the quantity boxes and the recording
+  action are hidden and the screen says why.
 
 #### Recording one pick across several machines (the API, issue #897)
 

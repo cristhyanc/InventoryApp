@@ -16,6 +16,7 @@ import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
 import { ProviderLockedComponent } from './provider/provider-locked.component';
+import { pickListUnsavedWorkGuard } from './components/pick-list/pick-list-unsaved-work.guard';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
 import { ProductFormComponent } from './components/products/product-form.component';
 import { ProductImportPageComponent } from './components/products/product-import-page.component';
@@ -566,5 +567,25 @@ describe('sign-in routing (issue #711)', () => {
 
     expect(routes.findIndex((candidate) => candidate.path === 'sign-in')).toBeLessThan(wildcard);
     expect(routes.findIndex((candidate) => candidate.path === 'auth')).toBeLessThan(wildcard);
+  });
+});
+
+/**
+ * The Pick List is the one route that guards *leaving* (issue #996). It holds planning edits, typed
+ * quantities and - at worst - an unresolved refill submission's retry context, none of which is
+ * stored anywhere else, so navigating away has to be confirmed. No other page holds work like that,
+ * and a second `canDeactivate` guard would be a deliberate decision rather than a detail.
+ */
+describe('unsaved-work route guard (issue #996)', () => {
+  it('guards leaving the Pick List, and keeps its capability guards unchanged', () => {
+    expect(route('pick-list').canDeactivate).toEqual([pickListUnsavedWorkGuard]);
+    expect(route('pick-list').canActivate).toHaveLength(3);
+    expect((route('pick-list').canActivate ?? [])[0]).toBe(MsalGuard);
+  });
+
+  it('is the only route that guards leaving', () => {
+    const guarded = routes.filter((candidate) => (candidate.canDeactivate ?? []).length > 0).map((candidate) => candidate.path);
+
+    expect(guarded).toEqual(['pick-list']);
   });
 });

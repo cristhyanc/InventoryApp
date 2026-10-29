@@ -6559,11 +6559,12 @@ the page reports on.
 
 **Where it is used, and what each screen hides.**
 
-- **Pick List** (`PickListComponent`) is entirely a live fleet read, so `unavailable` replaces the
-  machine selection, the "Selected Machines" card and the matrix with the one
-  `nayaxUnavailableMessage` sentence for "The pick list". "No machines selected yet" and "Select at
-  least one machine to build a pick list" are claims about this business's *selection*, not about
-  Nayax. A `failed` machine read says so instead.
+- **Pick List → Plan picks** (`PlanPicksComponent`, composed by `PickListComponent`) is entirely a
+  live fleet read, so `unavailable` replaces the machine selection, the "Selected machines" card and
+  the matrix with the one `nayaxUnavailableMessage` sentence for "The pick list" (and, for the
+  permission refusal, for "Plan picks"). "No machines selected yet" and "Select at least one machine
+  to plan a stock run" are claims about this business's *selection*, not about Nayax. A `failed`
+  machine read says so instead. Record refill needs no provider at all and stays offered.
 - **Report filters** (`ReportFiltersComponent` over `ReportPageBase`, plus
   `TransactionSalesReportComponent`, which does not extend it) hide the Machine select when there are
   no machines to filter by and show `machinesError` in its place when the read failed. Apply keeps its
@@ -10411,23 +10412,34 @@ contract, with and without a machine).
 
 #### Pick List frontend page (issue #222)
 
-`PickListComponent` (`frontend/inventory-app/src/app/components/pick-list`, routed at `/pick-list`)
-is a thin, entirely client-side consumer of the read-only `GET /api/pick-list` projection above: it
+**Since issue #996 the planning matrix this section describes lives in its own component,
+`PlanPicksComponent` (`frontend/inventory-app/src/app/components/pick-list/plan-picks/`), and the
+operator-facing view is named **Plan picks**; `PickListComponent` is the page that composes it beside
+Record refill and owns the reads they share. Everything below still describes the matrix's behaviour
+and still holds, in that component, except where [Plan picks and Record refill](#plan-picks-and-record-refill-issue-996)
+states otherwise - read the two together.**
+
+`PlanPicksComponent` (`frontend/inventory-app/src/app/components/pick-list`, routed at `/pick-list`
+through `PickListComponent`) is an entirely client-side consumer of the read-only
+`GET /api/pick-list` projection above: it
 restates none of its arithmetic, including the projection's default ascending-by-MDB-code product
 ordering (issue #496) - until an operator clicks a sortable header, the page renders `pickListProducts`
 in the order the backend returned it rather than re-sorting (see "Client-side Product/MDB Code
 sorting (issue #718)" below). Its row-level MDB Code column shows each product's `mdbCode`, and each
 machine cell additionally shows that machine's own `mdbCode` alongside its Current/Target figures, so
 a product with a different (or repeated) code on another machine stays visible per machine rather
-than being collapsed into the row-level value. Every piece of state the page adds on top of that projection -
-the applied machine/product filter selections, the matrix data for the applied machines, and which
-positive-pick cells the operator has marked picked (`pickedCells`) - lives only in the component
-instance. None of it is written to `localStorage`, a query parameter, or any backend store, so it is
-lost on every page refresh or navigation away, by design: the calculated view is a planning aid, not
-a record of what was actually picked. No selection, filter, or pick/unpick interaction in the
-calculated view ever calls a mutation endpoint, so it can never create a `MachineRefill`, a stock
-adjustment, or any other inventory movement on its own; the page's other view, manual entry, does
-record one - see [Manual pick-list entry and mode selection](#manual-pick-list-entry-and-mode-selection-issue-744)
+than being collapsed into the row-level value. Issue #996 keeps that row-level column and removes
+only the per-machine code *inside* each pick cell. Every piece of state the view adds on top of that
+projection - the applied machine/product filter selections, the matrix data for the applied machines,
+the operator's own planning overrides (`overrides`) and which picks they have checked off
+(`completed`) - lives only in the component instance. None of it is written to `localStorage`, a
+query parameter, or any backend store, so it is lost on every page refresh, by design: planning is an
+aid, not a record of what was actually picked (navigating away within the application now asks first,
+see [Plan picks and Record refill](#plan-picks-and-record-refill-issue-996)). No selection, filter,
+quantity edit or completion mark in this view ever calls a mutation endpoint, so it can never create
+a `MachineRefill`, a stock adjustment, or any other inventory movement on its own; the page's other
+view, Record refill, does record one - see
+[Manual pick-list entry and mode selection](#manual-pick-list-entry-and-mode-selection-issue-744)
 below.
 
 **Staged filter model (issue #226).** Products and Machines are both compact checkbox-style
@@ -10460,35 +10472,44 @@ this rule inside `:where()` for the same reason;
 `src/app/design-system/checkbox-radio-global-sizing.spec.ts` compares the compiled selectors'
 specificity against their pre-#874 values and fails if it changes.
 
-`PickListComponent` keeps two selections per filter: `stagedProductIds`/`stagedMachineIds` (what the
+`PlanPicksComponent` keeps two selections per filter: `stagedProductIds`/`stagedMachineIds` (what the
 dropdowns currently show checked) and `appliedProductIds`/`appliedMachineIds` (what the matrix, chips,
 totals and progress are actually computed from). Every dropdown checkbox change updates only the
-staged arrays; nothing about the displayed matrix or picked/unpicked state changes until the operator
+staged arrays; nothing about the displayed matrix or its planning state changes until the operator
 clicks **Apply**. Apply copies both staged selections into the applied selections together and
 compares the new and previous applied machine ids: only a changed machine selection re-requests
-`GET /api/pick-list` (for the newly applied machine ids) and then reconciles `pickedCells` against the
-response, dropping any picked mark whose product/machine cell no longer exists or no longer has a
-positive quantity to pick. An unchanged machine selection with only a product-filter change never
+`GET /api/pick-list` (for the newly applied machine ids) and then reconciles the planning state against
+the response, dropping any override or completion mark whose product/machine cell no longer exists or
+no longer has a positive quantity to pick. An unchanged machine selection with only a product-filter change never
 re-requests the projection - `visibleProducts()` simply filters the already-fetched
-`pickListProducts` by `appliedProductIds` - so product filtering stays client-side and picked marks
-for filtered-out rows are preserved, not dropped, since the underlying cells are still valid and only
-hidden from view. Applying an empty staged machine selection clears the matrix locally without calling
-the backend, the same as it did before this issue. Products defaults to every product id staged and
-applied (so the initial trigger reads "All products" and the matrix starts unfiltered); Machines
+`pickListProducts` by `appliedProductIds` - so product filtering stays client-side and overrides and
+completion marks for filtered-out rows are preserved, not dropped, since the underlying cells are
+still valid and only hidden from view. Applying an empty staged machine selection clears the matrix
+locally without calling the backend, the same as it did before this issue. Products defaults to every
+product id staged and applied the first time the page's catalogue read answers (so the initial trigger
+reads "All products" and the matrix starts unfiltered); Machines
 defaults to no ids staged or applied, so the page still requires an explicit Apply before it fetches
-anything. The Selected Machines chips remain as a read-only summary of `appliedMachineIds`; removing a
+anything. The Selected machines chips remain as a read-only summary of `appliedMachineIds`; removing a
 chip updates both the applied and staged machine selections (so the dropdown reflects the removal too)
 and re-fetches or clears the matrix exactly as an Apply with a changed machine selection would. Reset
 clears both the staged and applied Products/Machines selections back to those same defaults, along
-with the matrix data, `pickedCells`, and the snapshot timestamp.
+with the matrix data, the planning state, and the snapshot timestamp. Since issue #996 an Apply, a
+chip removal or a Reset that would discard planning work asks first, and a refusal changes nothing at
+all; **Refresh** is the separate action that re-reads an unchanged applied selection.
 
 **Matrix table layout.** The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
 so a long product list scrolls vertically inside the card while many machine columns still scroll
-horizontally in the same area. Every header cell - Product, MDB Code, Storage Qty, Total to Pick and
-each applied machine column (issue #496 added MDB Code; issue #885 added Storage Qty) - is
-individually `sticky top-0` with an opaque background and a z-index above the body cells,
-so the whole header row stays visible while rows scroll under it without showing through. The
-`<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
+horizontally in the same area. Since issue #996 that area is also `tabindex="0"` with
+`role="region"` and an accessible name, so a keyboard can scroll it, and it is the wide layout only
+(`hidden md:block`): below `md:` the product cards described in
+[Plan picks and Record refill](#plan-picks-and-record-refill-issue-996) replace it. Every header cell
+- Product, MDB Code, Storage Qty, Total to Pick and each applied machine column (issue #496 added MDB
+Code; issue #885 added Storage Qty) - is individually `sticky top-0` with an opaque background and a
+z-index above the body cells, so the whole header row stays visible while rows scroll under it
+without showing through; the Product column is additionally `sticky left-0`, in the header and in
+every row, so it stays readable while the machine columns scroll sideways, and issue #996's site
+header row sits above the machine names (`top-0` over `top-7`) when a site is known. The
+`<thead>` element itself, the filter panel and the Selected machines card are deliberately not
 sticky. Sticky positioning does not participate in table column sizing, so header and body keep
 identical column widths. The separator between header and body is the opaque `md-gray-100` table-head
 surface itself, as in every other #410 table: a collapsed border between `<thead>` and `<tbody>`
@@ -10510,7 +10531,8 @@ relative order of two missing-code rows, does not flip with direction, only the 
 non-missing values does. Ties (equal or both-missing codes, or equal names) fall back to
 `productName`, then `productId`, so the order is deterministic. The sort is a derived view computed
 inside `visibleProducts()`: it never mutates `pickListProducts`, composes with the existing applied
-Products filter, and leaves `pickedCells`, totals and progress figures unchanged. `sortColumn`/
+Products filter and issue #996's view filters, and leaves the planning state, totals and progress
+figures unchanged. `sortColumn`/
 `sortDirection` live only on the component instance - the same as every other piece of page state
 here - so the chosen sort survives Apply (including a machine-selection refetch) and chip removal,
 but Reset clears it back to no active column, and the next loaded pick list appears in backend order.
@@ -10521,8 +10543,8 @@ calls an endpoint or introduces a query parameter.
 
 Issue #744 (parent #329 child H2) gives the Pick List a second view - manual entry - and the
 page-level logic that decides which one is offered. It is the frontend of [Batch refill from the
-pick list](#batch-refill-from-the-pick-list-issue-743) above: the read-only calculated matrix never
-called a mutation endpoint, so without a usable provider the page had nothing to offer at all; this
+pick list](#batch-refill-from-the-pick-list-issue-743) above: the calculated matrix calls no
+mutation endpoint at all, so without a usable provider the page had nothing to offer at all; this
 issue is what lets a business with no provider, or whose Nayax account has not granted the
 calculated list's permissions, still record what it took out of storage.
 
@@ -10550,19 +10572,22 @@ server has no way to recognise as the same refill. Two further rules close the r
 uncertain outcome raises `unresolvedSubmission`, an inline notice that stays on screen until a later
 Save resolves it rather than only the toast that fades, and while a save is actually in flight
 (`ManualPickListComponent.saveInFlightChange` → `PickListComponent.manualSaveInFlight`) switching
-back to calculated is refused outright - the Calculated button is disabled and `switchMode
+back to calculated is refused outright - the Plan picks button is disabled and `switchMode
 ('calculated')` is a no-op - so no response can land on a view the operator has already left. A page
 that never enters manual mode never builds it at all, so the calculated-only path is unchanged. The
-calculated matrix needs none of this: it is a read-only projection with nothing to lose, and its
-already-fetched state survives simply because nothing clears it.
+planning matrix is kept alive the same way for a different reason since issue #996: it writes
+nothing, but its overrides and completion marks are the operator's own work and live nowhere else, so
+destroying it on a mode switch would discard them silently.
 
 **The page says what it does to inventory per mode.** The subtitle
-(`data-testid="pick-list-inventory-impact"`) is the calculated view's long-standing "Planning only.
-This is a read-only view … nothing selected or picked here is saved" only while the calculated view
-is showing. In manual mode it says instead that nothing is saved until Save is clicked and that Save
-then records one machine refill per entered quantity and reduces that product's storage quantity.
-Describing a view that writes `MachineRefill` movements as read-only is the one thing that line must
-never do, so both wordings are asserted in `pick-list.component.manual-rendering.spec.ts`.
+(`data-testid="pick-list-inventory-impact"`) is Plan picks' "Planning only. Editing quantities and
+checking picks does not change inventory." only while the planning view is showing (issue #996
+replaced the former "read-only view" wording, because the quantities are now editable - as a plan
+that writes nothing). In Record refill it says instead that recording reduces storage stock by the
+quantities entered, and that nothing is recorded until the operator chooses Record refill. Describing
+a view that writes `MachineRefill` movements as read-only is the one thing that line must never do,
+and promising a Nayax write is the other, so both wordings are asserted in
+`pick-list.component.manual-rendering.spec.ts`.
 
 **When the calculated view is offered, and when it is not.** `PickListComponent.
 calculatedUnavailableReason` is the one sentence saying why - empty while the calculated view is a
@@ -10782,14 +10807,15 @@ outcomes above including the idempotency-key reuse/mint rules and that **no** ke
 outcome is uncertain however the matrix is edited, removed from or reordered, that a save in flight is
 never resent, and which outcomes leave `unresolvedSubmission` set), `pick-list.component.mode.spec.ts`
 (the default calculated mode, both forced-manual triggers -
-up front and live - the generic-failure exception, the manual-mode toggle, that switching back to
-calculated preserves the already-fetched matrix, that the manual view is created once and kept, and
-that manual mode cannot be left while a save is in flight) and
+up front and live - the generic-failure exception, the manual-mode toggle, that the manual view is
+created once and kept, and that manual mode cannot be left while a save is in flight; the live
+trigger is now the page's own `onPlanLoadFailed`, and that switching views preserves the already-built
+plan is proved through the real template in `pick-list.component.spec.ts`) and
 `pick-list.component.manual-rendering.spec.ts` (the toggle and the manual table rendered through the
-real template, including the provider-unavailable case hiding the Calculated option entirely, both
+real template, including the provider-unavailable case hiding the Plan picks option entirely, both
 mode-specific inventory-impact wordings, an uncertain save retried with the identical key and body
-after switching to calculated and back, the toggle refusing to move while a save is in flight, and -
-for the matrix - one labelled column per selected machine with the Total Taken column before them,
+after switching to Plan picks and back, the toggle refusing to move while a save is in flight, and -
+for the matrix - one labelled column per selected machine with the Entered total column before them,
 the bounded scroll container the columns live in, the per-cell error and the product-and-machine
 sentence that blocks Save, the whole-pick storage requirement with the part a filter hides, the
 confirmed and cancelled column removal, the one batch request a Save sends, and the explicit
@@ -10800,6 +10826,128 @@ view's provider machine ids. Not listed above because it predates this section:
 `machineSelectorShown`, `activeMachines` excluding inactive machines and the failed-read fallback; see
 [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
 immediately below for what issue #744's own later phase added on top of it.
+
+#### Plan picks and Record refill (issue #996)
+
+Issue #996 applies the approved Restockroo design to the two Pick List views and names them for what
+they do - **Plan picks** and **Record refill**. It is a frontend-only change over the existing reads
+and the existing write endpoints: no API contract, stock rule, costing rule or migration is touched,
+and `GET /api/pick-list`, `POST /api/pick-list/refills` and
+`POST /api/pick-list/multi-machine-refills` are called exactly as the two sections above describe.
+The view names are presentation; the internal `PickListMode` values (`'calculated' | 'manual'`) and
+the machine-detail deep link's `?mode=manual` are deliberately unchanged, so no stored link breaks.
+
+**Three components, each owning its own workflow.** `PickListComponent` is now only the page: the
+route and query parameters, the three reads every view shares (the provider machine fleet, the light
+site list `GET /api/sites/list`, and the active catalogue) with their load and availability states,
+the mode choice, and the navigation guard. `PlanPicksComponent`
+(`components/pick-list/plan-picks/`) owns planning, and `ManualPickListComponent` owns recording -
+both dedicated feature components under the [page composition boundary](#page-composition-boundary-issue-191)
+rule, because each is a distinct workflow with substantial UI, its own state and its own lifecycle.
+Both are kept alive and **hidden** rather than destroyed on a mode switch: for Record refill that is
+the double-deduction rule the section above states, and for Plan picks it is because the operator's
+planning work lives in that instance and nowhere else. Plan picks is destroyed only when the provider
+turns out not to offer planning at all, and it emits `planningWorkChange(false)` on destruction so
+the page never warns about work that no longer exists.
+
+**Planning state is transient, local, and never a write.** An edited quantity is an entry in
+`overrides` (keyed `productId:machineId`) and a checked pick an entry in `completed`; the fetched
+`pickListProducts` is never mutated, so the backend's own suggestion is always readable and is shown
+as "Suggested: N" whenever the committed quantity differs. A committed `0` is a deliberate skip:
+excluded from the actionable count and the progress figure, still editable, still resettable to the
+suggestion. Committing a *changed* quantity clears that cell's completion mark. The editor is bound
+as a plain `[value]`/`(input)` pair rather than `ngModel`, because it is focused and its value
+selected the instant it appears and `ngModel` applies its first value a microtask later; Enter
+commits, Escape restores, and `parsePlannedQuantity`
+(`components/pick-list/pick-list-quantity.ts`) accepts only a nonnegative whole number within
+`MAXIMUM_PICK_QUANTITY` - the one 32-bit ceiling both views now share - refusing anything else
+inline with `role="alert"` and `aria-invalid`, committing nothing.
+
+**Every figure is the applied run's, with the overrides in place.** Totals, the shortage per product,
+the progress sentence ("12 of 20 picks completed") and the remaining count are taken over
+`pickListProducts` and `appliedMachineIds`, never over the filtered rows, and the visible-row count
+is stated separately so a filter or a mobile machine focus can never be read as the whole plan. The
+shortage is `GetPickList`'s own rule - `max(0, total to pick − storage quantity)` - recomputed
+client-side **because the server cannot know an override**; with nothing overridden it is the figure
+the response already carried, which `plan-picks.component.spec.ts` asserts against
+`storageShortageQuantity` directly. No other backend formula is restated here.
+
+**Apply, Refresh and staleness.** Apply applies the staged selections and fetches only when the
+machine selection changed; **Refresh** re-reads the currently applied selection whether or not it
+changed, which is what makes a failed snapshot retryable - the failure message names Refresh and
+deliberately never asks for an Apply that would do nothing. Every change to the applied machine
+selection bumps `appliedToken`, and a response is accepted only while the token it was requested
+under is still current, so a slow answer can neither overwrite a newer selection nor resurrect a
+cleared plan (clearing bumps the token too). A refresh rebuilds the plan from a new snapshot, so it
+discards the planning work it warned about; Apply with a removed machine and Reset warn the same way
+and a refusal changes nothing at all. A failed read is reported by the view and its *error* is
+emitted to the page as `loadFailure`, which is where the `machineStock` permission refusal is noted
+and planning withdrawn - the same two-stage availability check the section above describes, now
+split along the component boundary so provider availability stays on the page.
+
+**Site-grouped columns, and no invented site.** `machineGroups` places the applied machine columns
+under their site - the site list's own order, each site's machines adjacent, the machines at no known
+site last and unheaded - and `machineOptions()` passes the same grouping to the shared
+`MultiSelectDropdownComponent`, whose optional `MultiSelectOption.group` and `ungroupedGroupLabel`
+inputs issue #996 added (a filter that passes no group renders exactly the flat list it always did).
+A machine whose `siteId` is null, or whose site the site read did not return, keeps its own column
+and stays selectable; an empty or unavailable site read leaves every column ungrouped. The row-level
+sortable **MDB Code** column and product-name sorting are unchanged; only the per-machine code inside
+a pick cell is gone.
+
+**Two layouts, one state.** The matrix is the wide layout (`hidden md:block`, sticky product column,
+sticky header rows, one focusable bounded scroll area with a visible hint once there are more columns
+than fit); below `md:` both views render product cards with one machine in focus. The focus chooses
+what is shown and nothing else: every override, mark, quantity, error and total belongs to the whole
+draft, so switching machine loses nothing. Neither view uses a floating action bar - the summary is
+an ordinary block at the end of the card, so nothing can cover a row, a control or the last card.
+
+**Aggregate client validation in Record refill, with the server still authoritative.**
+`storageExcessFor` weighs each product's **whole** submission - every selected machine column,
+including rows a filter hides - against the storage quantity the catalogue read last reported, and
+`canSave` and `save()` both refuse while any product is short, with "Resolve shortage to record" on
+the row. Nothing is capped, reallocated or redistributed: `PickListRefillPolicy` and the
+multi-machine batch's own storage check remain the authority for a stock change between that read and
+the save, and this check exists only so the operator is not refused by the server for something they
+could see. There is no below-suggestion note in this view, because nothing transfers a plan into a
+recording (explicitly out of scope) and inventing a suggestion is exactly what the criterion forbids.
+
+**An unresolved submission is frozen, and so is the form around it.** The kept payload and
+idempotency key, and the rule that no new key may be minted while an outcome is uncertain, are
+unchanged from the section above. Issue #996 adds that `entriesEditable` is false while one is
+outstanding, so an edited quantity, **Clear**, a column removal and a selection change are all
+refused rather than silently ignored at save time, and the only action offered is **Retry save** -
+which stays available even when the latest catalogue read would now refuse those quantities, because
+leaving a possibly-committed write unresolvable is the worse outcome. A success is written from the
+response and reports the whole submission's units and entries; nothing reports a recorded figure
+before confirmation.
+
+**Navigation protection.** `PickListComponent.confirmLeave` is the one rule behind both the route's
+`canDeactivate` guard (`pickListUnsavedWorkGuard`, the only `canDeactivate` in `app.routes.ts`) and
+the page's own `beforeunload` handler. It covers the three kinds of work this page holds, most
+serious first: an unresolved or in-flight submission (whose retry context would be lost, and whose
+warning says so), entered-but-unrecorded quantities, and planning edits or checked picks. Asking
+changes nothing, so a cancelled departure leaves every entry, override, mark and kept submission
+exactly as it was. A browser's reload/close prompt carries the browser's own wording, which no page
+can change - the explanation lives on the in-app confirmation. Durable cross-reload draft recovery is
+deliberately not implemented (out of scope): the guard is what stands between the operator and a
+loss, not storage.
+
+**Proved by** `plan-picks/plan-picks.component.spec.ts` (the selection and fetch rules, Refresh
+re-reading an unchanged selection, the four stale-response cases, the override lifecycle including
+every refused input, the committed-zero skip, the completion-clearing commit, the totals, shortages
+and progress over the applied run, the view filters, the machine focus, the site grouping with and
+without site data, the sort behaviour, and that no mutation endpoint is called across a whole
+planning interaction), `pick-list.component.spec.ts` (the page's three reads, the guard's three
+warnings and that cancelling changes nothing, and the rendered matrix: the sticky/focusable scroll
+area, the site header row, the edit-focus-select-commit path, the inline refusal, the checkbox with
+its word for the state, the summary without a progress bar, both filters, Refresh and Retry, and that
+switching views hides rather than destroys the plan), `manual-pick-list.component.spec.ts` (the
+storage-excess rules including the cross-machine aggregate with hidden rows, Clear, the reveal of
+hidden entries, the frozen form and the retry that survives a stricter later read, the confirmed
+success figures, the unsaved-work reporting and the machine focus),
+`pick-list-unsaved-work.guard.spec.ts`, `app.routes.spec.ts` (the one `canDeactivate` route) and
+`multi-select-dropdown.component.spec.ts` (the optional grouping).
 
 #### Machine-page consolidation: the "Record refill" link (issue #744)
 
