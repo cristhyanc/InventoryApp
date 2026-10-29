@@ -31,9 +31,15 @@ public interface INayaxRequestCredentialProvider
     /// or <see cref="Domain.Nayax.NayaxConnectionStatus.NeedsAttention"/>, and a caller whose
     /// business could not be resolved all raise <see cref="NayaxNotConnectedException"/>, and the
     /// refused path never decrypts the stored token at all.
+    ///
+    /// Since issue #967 a business whose effective plan does not include the sales provider is
+    /// refused the same way, with the distinct plan reason, before the stored connection is read -
+    /// so every ordinary Nayax call in the application is behind the plan as well as behind the
+    /// status, and no consumer learns that a plan exists either.
     /// </summary>
     /// <exception cref="NayaxNotConnectedException">
-    /// The current business has no usable Nayax connection.
+    /// The current business has no usable Nayax connection, or its plan does not include the sales
+    /// provider (<see cref="NayaxNotConnectedException.RequiredPlan"/> distinguishes the two).
     /// </exception>
     /// <exception cref="SupportSessions.SupportSessionNayaxUnavailableException">
     /// The request is running in a support session (issue #551), which never authenticates to Nayax

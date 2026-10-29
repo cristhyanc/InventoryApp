@@ -1,6 +1,7 @@
 using System.Globalization;
 using Inventory.Application.Access;
 using Inventory.Application.Nayax;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -35,6 +36,20 @@ namespace InventoryApi.Controllers;
 /// <c>GET</c> response would hand a caller a verdict about credentials it never tested. The status
 /// read is the one <c>GET</c>: it is a read of the business's own configuration state and nothing
 /// else.</para>
+///
+/// <para><strong>The plan requirement is declared per action too, on the same three</strong> (issue
+/// #967). These are the only Nayax calls in the application that do not go through
+/// <c>INayaxRequestCredentialProvider</c> - test authenticates with the pasted pair and save and
+/// re-test run the connection check themselves - so the credential gate's plan check cannot cover
+/// them and each declares <see cref="PlanFeature.SalesProviderIntegration"/> itself. It is evaluated
+/// after the Owner capability and before the action, so a refused request makes no Nayax request, no
+/// credential write and no draft: <strong>a refused save leaves the stored credentials exactly as
+/// they were</strong>.</para>
+///
+/// <para><strong>The status read deliberately carries no plan requirement</strong> and stays
+/// available on every plan, to every role that can see it today. It makes no Nayax call, and it is
+/// what tells a business that was downgraded that its saved credentials and their status are still
+/// there - withholding it would make a kept connection look lost.</para>
 /// </summary>
 [ApiController]
 [Route("api/settings/nayax-connection")]
@@ -75,6 +90,7 @@ public sealed class NayaxConnectionController : ControllerBase
     /// </response>
     [HttpPost("test")]
     [RequireCapability(Capability.IntegrationManage)]
+    [RequirePlan(PlanFeature.SalesProviderIntegration)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
@@ -109,6 +125,7 @@ public sealed class NayaxConnectionController : ControllerBase
     /// </response>
     [HttpPost("save")]
     [RequireCapability(Capability.IntegrationManage)]
+    [RequirePlan(PlanFeature.SalesProviderIntegration)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
@@ -143,6 +160,7 @@ public sealed class NayaxConnectionController : ControllerBase
     /// </response>
     [HttpPost("retest")]
     [RequireCapability(Capability.IntegrationManage)]
+    [RequirePlan(PlanFeature.SalesProviderIntegration)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]

@@ -671,7 +671,7 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 
 Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
 
-**Nothing is enforced while the rollout setting is off.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; withholding a *feature* because of a plan is separate, later work (issues #967, #977 and #979). The one limit that **is** implemented is the attachment storage allowance (issue #968, [below](#attachment-storage)), and it too applies only once a plan is being enforced. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**, including uploading attachments.
+**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Supplier price data (#977) and the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
 
 ### The plans
 
@@ -700,6 +700,36 @@ The split is the same one the application already makes for a business with no u
 - **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list).
 
 A paid plan and a usable Nayax connection are separate conditions: a Pro business whose credentials are missing or have stopped working sees exactly today's connection-required pages, and a connected Free or Starter business sees the same "no usable provider" behaviour it would without credentials.
+
+### How a plan is enforced
+
+Once the rollout setting is on, the plan is checked on the server in two places and nowhere else.
+
+**Everything that needs the Nayax connection is refused in one place.** Every ordinary Nayax call in the application resolves the business's credentials through one component, and that component now checks the plan **before it reads the stored connection at all**. So a business whose plan does not include the connection makes **no Nayax request**, however valid the credentials it has saved, and every mixed page behaves exactly as it already does for a business with no usable connection:
+
+| Page or feature | What a Free or Starter business sees |
+| --- | --- |
+| Dashboard | The whole local summary, with the machine refill card marked unavailable |
+| Needs Ordering / low-stock alerts | A real count, labelled **storage stock only** |
+| Machines | The business's own machine records; the live fleet view is unavailable |
+| Pick List | Manual entry, as it does with no connection |
+| Sites, Site Commissions | Unavailable, with the stored agreements and payments untouched |
+| Sync Restock, and its Dashboard reminder | Unavailable; the reminder is not shown |
+| Catalogue review, inventory-cost transition previews | Unavailable, as they are with no connection |
+| Purchases, Suppliers, Inventory, Expenses, manual pick-list entry, Take Inventory | **Completely unchanged** |
+
+Each of those answers carries a **distinct reason** — `PlanRequired`, not "Nayax is not connected" — so a screen can eventually say "needs Pro" rather than sending somebody to reconnect credentials that are working. A Pro business whose connection really is unusable keeps today's connection reason.
+
+**What a plan refuses outright answers `403` with the code `plan_required`** and names the plan the business would need. That applies to:
+
+- **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports.
+- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report, agreements and payments); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
+
+A report and its own download always need the same plan. A refused save or import changes nothing at all — the plan is checked before the request body is read, so no credential is written and no row is imported.
+
+**Reading the connection status stays available on every plan**, to every role that can see it today, and makes no Nayax call. That is deliberate: a business that moves to a plan without the connection keeps its saved credentials and their status, and the Integrations page still shows them. Nothing is deleted or changed by a plan change — sales, costs, product links, history, agreements, payments and attachments are all exactly as they were, and they become readable again the moment the plan includes them.
+
+**A plan is not a permission.** The role check happens first and is unchanged: a member whose role does not grant a feature is refused exactly as before, with no mention of plans, and a plan never gives a role access it does not have. See [Roles and capabilities](#roles-and-capabilities).
 
 ### How a business's plan is decided
 
@@ -2498,41 +2528,44 @@ that cannot be used.
 
 - **The calculated matrix is offered only when it can actually work.** With a usable connection and
   Nayax granted both the machine fleet read and each machine's own product read, the page opens on
-  the existing calculated matrix exactly as before, with a toggle to **Enter quantities taken**
-  alongside it. Without either, the page opens straight into that manual entry screen instead, with
+  calculated matrix, **Plan picks**, with a toggle to **Record refill** (the manual entry screen;
+  until issue #996 these were called "Calculated" and "Enter quantities taken") alongside it. Without
+  either, the page opens straight into Record refill instead, with
   one sentence saying why the calculated list is unavailable, and the toggle to switch back is not
   offered — there is nothing to switch to.
 - **Manual entry needs no machine, no fleet read and no product read.** It lists the business's
-  active products with a search box, a category filter and a "Taken" quantity box per row, from the
+  active products with a search box, a category filter and a "Quantity taken" box per row, from the
   same catalogue the calculated view's Products filter already reads. With no machine selected,
   saving sends every entered quantity as one request to the batch refill endpoint
   (`POST /api/pick-list/refills`), recording one
   `MachineRefill` stock movement per product in a single all-or-nothing operation — a guarantee the
   machine-detail page's old per-product Restock action, since removed in favour of this screen (see
   [Record refill from a machine's page](#record-refill-from-a-machines-page) below), never had. A
-  malformed "Taken" entry (anything that is not a whole number greater than zero) is reported on its
+  malformed "Quantity taken" entry (anything that is not a whole number greater than zero) is reported on its
   own row before anything is sent, and any refusal the server returns is put back on the row it was
   about.
 - **The page says which of the two it is.** The line under the title describes the view you are
-  actually in: the calculated matrix is planning only and saves nothing, while manual entry says that
-  nothing is saved until you click Save and that Save then records one machine refill per quantity
-  entered and reduces that product's storage quantity.
+  actually in: Plan picks is planning only and changes no stock — the quantities you adjust there
+  stay in your browser — while Record refill says that nothing is recorded until you click **Record
+  refill** and that recording then reduces each product's storage quantity by the quantity taken.
 - **A retry never double-deducts.** Each save keeps an exact record of what it last sent. Clicking
-  Save again with nothing changed resends the identical request under the identical idempotency key,
+  Record refill again with nothing changed resends the identical request under the identical idempotency key,
   which the server answers with the result it already recorded rather than taking the stock twice;
   changing any quantity before retrying sends a new key, because it is a different pick. **While a
   save's outcome could not be confirmed at all** — a dropped connection, a server error — nothing you
   do on screen can send a *different* request: the screen keeps the exact pick it sent and offers
   **Retry save**, which resends precisely that one, so an edited quantity, a removed machine column
   or a reordered selection cannot turn one physical pick into a second deduction. Only once that
-  attempt is answered does Save start a new pick again.
+  attempt is answered does Record refill start a new pick again. Since issue #996 the quantity boxes,
+  the machine selection and Clear are locked while that retry is outstanding, and Retry save is the
+  only action offered.
 - **An unconfirmed save is not lost by switching views.** A save whose outcome could not be confirmed
-  stays reported on the screen until a later Save settles it, and switching to the calculated view and
+  stays reported on the screen until a later attempt settles it, and switching to Plan picks and
   back keeps every quantity you typed — so the retry is still the same request under the same key, not
-  a second pick. While a save is actually being sent, the Calculated button is disabled until it
+  a second pick. While a save is actually being sent, the Plan picks button is disabled until it
   finishes, so an outstanding write always lands where you can see what it did.
 - **Read-only during a support session.** While a support session is active, manual entry still
-  lists the products and their storage quantities, but the "Taken" boxes and Save are hidden and the
+  lists the products and their storage quantities, but the quantity boxes and the record button are hidden and the
   screen says why, so nothing can be recorded on the business's behalf. A refusal the server returns
   is reported as a refusal, not as a save that might need retrying.
 - **A product list that could not be read is never shown as empty.** While the product list is still
@@ -2553,15 +2586,16 @@ that cannot be used.
 #### Entering one pick run across several machines (issue #904)
 
 An operator preparing one run usually visits several machines. Select them all in the Manual Pick
-List's **Machines** dropdown and each one gets its own quantity column, so the whole run is typed
-once and saved once.
+List's **Machines** dropdown (Record refill, since issue #996) and each one gets its own quantity
+column, so the whole run is typed once and recorded once.
 
-- **The row reads Product, Category, Storage Qty, Total Taken, then one column per machine.** Total
-  Taken is that product's own sum across the selected machines — what the pick takes off one shelf —
-  and under the table **Total storage required** is the whole pick's, counting the rows your search
-  or category filter is currently hiding, and saying how many units and products those are. A filter
-  hides rows; it never changes what Save sends.
-- **One Save sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
+- **The row reads Product (with its category under it), Storage available, one column per machine,
+  then Total quantity taken** (column order since issue #996). The total is that product's own sum
+  across the selected machines — what the pick takes off one shelf — and the summary beside the table
+  gives the **whole submission**'s total, counting the rows your search or category filter is
+  currently hiding, and saying how many units and products those are. A filter hides rows; it never
+  changes what is sent.
+- **One click of Record refill sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
   see [Recording one pick across several machines (the API)](#recording-one-pick-across-several-machines-the-api-issue-897)
   below) — never one request per machine. That is the point of it: only one request can weigh each
   product's **total** across the machines you allocated it to against the storage it comes off, so
@@ -2569,7 +2603,7 @@ once and saved once.
   half-saved. A refusal keeps everything you typed editable and puts the server's own message on each
   cell it was about. Success reports the whole run — how many entries across how many machines — and
   refreshes the storage quantities once.
-- **With no machine selected, nothing changes.** The screen is exactly the single "Taken" column
+- **With no machine selected, nothing changes.** The screen is exactly the single "Quantity taken" column
   described above, saved through the existing endpoint as a refill attributed to no machine.
 - **Quantities are never silently moved, copied or dropped.** A quantity typed against "No machine"
   is never copied into every machine column — that would invent a pick several times the size of the
@@ -2584,8 +2618,63 @@ once and saved once.
   phone. Every quantity box is labelled with both its product and its machine for screen readers.
 - **Opening the screen from a machine's page** (the **Record refill** link) preselects exactly that
   machine as the only column, and you can add more beside it.
-- **Read-only during a support session**, exactly as before: the quantity boxes and Save are hidden
-  and the screen says why.
+- **Read-only during a support session**, exactly as before: the quantity boxes and the record
+  button are hidden and the screen says why.
+
+#### Plan picks and Record refill (issue #996)
+
+Issue #996 refreshes both Pick List views and renames them after what each is for: **Plan picks**
+(the calculated list, which needs a usable Nayax connection) works out what to take, and **Record
+refill** (the manual entry screen above) records what was actually taken. No API, stored data or
+Nayax call changed; everything below happens in the browser.
+
+**Plan picks**
+
+- **One row per product, one column per machine.** On a desktop the product column and the header
+  rows stay in place while the table scrolls, the machine columns are grouped under their site's name
+  when your machines have sites (two sites with the same name still get a header each), and a "Scroll sideways" hint appears once the run has more than two
+  machines. The MDB code is a sortable column of its own instead of being repeated in every cell.
+- **Each suggested pick can be adjusted.** The pencil on a cell opens its quantity: type a whole number of 0
+  or more (Enter or Confirm keeps it, Escape or Cancel leaves it as it was). An adjusted cell shows
+  "Suggested: N" with **Use suggested** to go back. **0 means skip that machine** for this product;
+  a skipped cell has no checkbox. The adjustment lives only in this browser tab: it is never saved,
+  never sent to Nayax and never changes stock.
+- **Tick each pick as you take it.** Every cell with something to pick has its own checkbox,
+  separate from the pencil, and changing a quantity clears that cell's tick because it is a different
+  pick now. The summary says "12 of 20 picks completed", the units still to pick, and how many
+  products the planned run needs more of than storage holds ("Storage short by N" on the row).
+- **Filters keep your work.** Search (by name or MDB), Category, **Only remaining** and **Only
+  shortages**, sorting and focusing on one machine never discard an adjustment or a tick. Products and
+  Machines are applied with **Apply**; each selected machine is a chip you can remove.
+- **Discarding is always asked first.** **Refresh** (or **Retry** after a failed read) re-reads
+  exactly the same selection from Nayax and **Reset** clears it; if you have adjusted or ticked
+  anything, or typed a quantity you have not yet confirmed, both ask before throwing it away, and so does removing a machine whose cells you changed.
+  Cancel changes nothing. The time of the snapshot you are looking at is shown beside Refresh, and an
+  answer to an earlier, superseded request is ignored rather than replacing a newer one.
+- **On a phone** the matrix becomes one card per product with the machine picks inside it, a
+  machine strip to focus on one stop, larger +/− steppers in the editor, and the progress summary
+  kept above the bottom bar.
+
+**Record refill**
+
+- **The same workflow, clearer totals.** Storage available, a quantity box per selected machine (or
+  the single "Quantity taken" box with no machine), each row's total and the whole submission's total
+  across all machines. Rows are marked **Entered**, **Ready to record** or "Storage short by N".
+- **A shortage blocks recording.** If any product's total across every machine — rows your filters
+  hide included — is more than its storage, the button reads **Resolve shortage to record** and
+  nothing is sent until you fix it. Entering less than a Plan picks suggestion is only noted, never
+  blocked. (Suggestions appear as "/ N suggested" when the same machine is selected in both views.)
+- **Hidden entries are never forgotten.** When a filter hides rows that have quantities, a banner
+  says how many, with **Show entered products** and **Show all**. **Clear** asks before emptying
+  every box. There is no draft: what you type stays only until you leave the page.
+- **An unconfirmed save stays put.** If the outcome of a submission is unknown, a persistent **Retry
+  save** resends exactly the same refill under the same idempotency key and the entries stay locked
+  until it is answered (see above).
+- **Leaving is guarded.** Navigating away from the Pick List, or closing or reloading the tab, while
+  Plan picks has adjustments or ticks, Record refill has entered quantities, or a save is outstanding
+  or unconfirmed asks you to confirm first.
+- **On a phone** Record refill also uses cards, with a machine strip, steppers and the totals and
+  record button kept above the bottom bar.
 
 #### Recording one pick across several machines (the API, issue #897)
 

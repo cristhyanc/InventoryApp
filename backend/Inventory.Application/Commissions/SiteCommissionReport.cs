@@ -76,6 +76,14 @@ public enum SiteCommissionUnavailableReason
     /// connection status.
     /// </summary>
     PermissionNotGranted = 2,
+
+    /// <summary>
+    /// The business's effective plan does not include the sales provider (issue #967), so the
+    /// credential gate refused the fleet read before the stored connection was read and no Nayax
+    /// request was made. Distinct from <see cref="NayaxNotConnected"/>: the credentials may be valid
+    /// and still saved, and the stored agreements and payments are unaffected either way.
+    /// </summary>
+    PlanRequired = 3,
 }
 
 /// <summary>
@@ -92,6 +100,12 @@ public static class SiteCommissionUnavailableReasons
     /// <summary>The published code for <see cref="SiteCommissionUnavailableReason.PermissionNotGranted"/>.</summary>
     public const string PermissionNotGranted = "PermissionNotGranted";
 
+    /// <summary>
+    /// The published code for <see cref="SiteCommissionUnavailableReason.PlanRequired"/> (issue
+    /// #967), spelled exactly as every other per-feature vocabulary spells the same answer.
+    /// </summary>
+    public const string PlanRequired = "PlanRequired";
+
     /// <exception cref="ArgumentOutOfRangeException">
     /// A reason this vocabulary has never heard of - a value cast from an integer, which an enum
     /// cannot prevent. Refused rather than published under a guessed code.
@@ -100,6 +114,7 @@ public static class SiteCommissionUnavailableReasons
     {
         SiteCommissionUnavailableReason.NayaxNotConnected => NayaxNotConnected,
         SiteCommissionUnavailableReason.PermissionNotGranted => PermissionNotGranted,
+        SiteCommissionUnavailableReason.PlanRequired => PlanRequired,
         _ => throw new ArgumentOutOfRangeException(
             nameof(reason), reason, "Unknown site commission unavailability reason."),
     };
@@ -115,6 +130,8 @@ public static class SiteCommissionUnavailableReasons
             "Site commission is unavailable because Nayax is not connected for this business, so no machine can be matched to a site. The amounts shown are not a measured zero.",
         SiteCommissionUnavailableReason.PermissionNotGranted =>
             "Site commission is unavailable because Nayax refused the machine list for lack of permission, so no machine can be matched to a site. The amounts shown are not a measured zero.",
+        SiteCommissionUnavailableReason.PlanRequired =>
+            "Site commission is unavailable because this business's plan does not include the Nayax connection, so no machine can be matched to a site. The stored agreements and payments are unchanged, and the amounts shown are not a measured zero.",
         _ => throw new ArgumentOutOfRangeException(
             nameof(reason), reason, "Unknown site commission unavailability reason."),
     };
