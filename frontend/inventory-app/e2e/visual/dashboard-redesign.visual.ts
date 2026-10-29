@@ -5,17 +5,22 @@ import { join, resolve } from 'node:path';
 /**
  * The visual evidence for issue #972: the Restockroo Dashboard and authenticated navigation at
  * 360, 390, 768 and 1440px, plus the narrow layout's More sheet opened and scrolled to its end. The
- * dashboard captures also show issue #980's machines under their sites and issue #981's Cheapest
- * supplier column in Reorder priorities.
+ * dashboard captures also show issue #987's combined **Site and machine performance** card - each
+ * site expanding to the machines standing at it - and issue #981's Cheapest supplier column in
+ * Reorder priorities.
  *
  * Like the other visual runs this starts no API and no database. Every `/api/` request is answered
  * in the browser with neutral synthetic figures - an Owner's capabilities, a connected business,
- * two sites (one with a deliberately long name), three machines under them, seven reorder products,
- * observed supplier prices for three of them and one pending restock sync - so no business data, account name or credential can appear in a capture.
+ * three sites (one with a deliberately long name and one with no machines), four machines, one of
+ * them at no site, seven reorder products, observed supplier prices for three of them and one
+ * pending restock sync - so no business data, account name or credential can appear in a capture.
  *
- * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule,
- * and the More sheet's modality is exercised in the browser at 390px from both of its openers.
- * It runs once, in the `desktop-1440` project, and sets each width itself.
+ * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule.
+ * Issue #987's own interaction evidence is here too: a collapsed group at 1440 and 390px, the
+ * shared period control switched to Last week, and the keyboard focus ring on a site expander with
+ * the group toggled from the keyboard alone. The More sheet's modality is exercised in the browser
+ * at 390px from both of its openers. It runs once, in the `desktop-1440` project, and sets each
+ * width itself.
  */
 const screenshotDirectory = resolve(__dirname, '..', '..', '..', '..', 'docs', 'screenshots', 'issue-972');
 mkdirSync(screenshotDirectory, { recursive: true });
@@ -101,6 +106,19 @@ const sites = [
     todayRevenue: 171.6,
     currentWeekRevenue: 463.4,
     previousComparableWeekRevenue: 392.0
+  },
+  // A site the fleet read returned no machine for: issue #987 keeps it visible with its own empty
+  // state rather than hiding a site the business has.
+  {
+    siteId: 3,
+    siteName: 'Riverside Depot',
+    machineCount: 0,
+    totalStockPercentage: 94,
+    lowProductCount: 0,
+    emptyProductCount: 0,
+    todayRevenue: 0,
+    currentWeekRevenue: 0,
+    previousComparableWeekRevenue: 0
   }
 ];
 
@@ -129,7 +147,9 @@ function machine(id: number, name: string, today: number, week: number, lastWeek
 const machines = [
   { ...machine(1, 'Harbour Point Plaza - Avenue Hotel VM', 57.6, 123.9, 210, 75.9, 610), siteId: 1 },
   { ...machine(2, 'Pavillion Left (Drinks & Cold)', 79, 210, 240, 166.5, 820), siteId: 2 },
-  { ...machine(3, 'Pavillion Right (Snacks & Confectionery)', 92.6, 253.4, 270, 225.5, 905), siteId: 2 }
+  { ...machine(3, 'Pavillion Right (Snacks & Confectionery)', 92.6, 253.4, 270, 225.5, 905), siteId: 2 },
+  // At no site, so it appears under "Other machines" and still appears exactly once.
+  { ...machine(4, 'Workshop spare unit awaiting placement', 0, 0, 0, 0, 0), siteId: null }
 ];
 
 function product(id: number, name: string, stock: number, need: number, toOrder: number, onOrder = 0) {
@@ -264,8 +284,23 @@ async function openDashboard(page: Page, width: number): Promise<void> {
   });
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   await expect(page.getByText('Restock sync pending')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Site and machine performance' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Reorder priorities' })).toBeVisible();
   await expect(page.locator('[data-testid="cheapest-supplier-cell"]:visible', { hasText: 'Costco' }).first()).toBeVisible();
+}
+
+/** The visible expander for one site group, whichever of the two layouts is the rendered one. */
+function siteExpander(page: Page, key: string): Locator {
+  return page
+    .locator(`[data-testid="performance-expander-${key}"]:visible, [data-testid="performance-card-expander-${key}"]:visible`)
+    .first();
+}
+
+/** The visible machine rows or cards of one site group. */
+function groupMachines(page: Page, key: string): Locator {
+  return page.locator(
+    `tbody#site-machines-${key}:visible tr, ul#site-machine-cards-${key}:visible [data-testid^="performance-machine-card-"]`
+  );
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -308,6 +343,74 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       await page.screenshot({ path: join(screenshotDirectory, `dashboard-${width}px.png`) });
     });
   }
+
+  /**
+   * Issue #987's own evidence. Each one is a real browser interaction, not a styled state: the
+   * group is collapsed by pressing its expander, the period is changed with the shared control,
+   * and the focus capture reaches the expander and toggles it with the keyboard alone.
+   */
+  for (const width of [1440, 390]) {
+    test(`Site and machine performance with a group collapsed at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+
+      await expect(groupMachines(page, 'site-2')).toHaveCount(2);
+      await expect(siteExpander(page, 'site-2')).toHaveAttribute('aria-expanded', 'true');
+      await siteExpander(page, 'site-2').click();
+
+      await expect(siteExpander(page, 'site-2')).toHaveAttribute('aria-expanded', 'false');
+      await expect(groupMachines(page, 'site-2')).toHaveCount(0);
+      // Collapsing one site leaves the others exactly as they were, and the fleet total unchanged.
+      await expect(siteExpander(page, 'site-1')).toHaveAttribute('aria-expanded', 'true');
+      await expect(groupMachines(page, 'site-1')).toHaveCount(1);
+      await expectNoHorizontalOverflow(page);
+
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width, height });
+      await page.screenshot({ path: join(screenshotDirectory, `performance-collapsed-${width}px.png`) });
+    });
+  }
+
+  for (const width of [1440, 390]) {
+    test(`Site and machine performance period control at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+      const control = page.locator('[data-testid="performance-period"]:visible');
+
+      await expect(control.getByRole('button', { name: 'This week' })).toHaveAttribute('aria-pressed', 'true');
+      await control.getByRole('button', { name: 'Last week' }).click();
+
+      await expect(control.getByRole('button', { name: 'Last week' })).toHaveAttribute('aria-pressed', 'true');
+      // The machines keep every period; a site publishes none for this one and says so. The other
+      // layout's copy of the same text is in the document but hidden, so only a visible one counts.
+      await expect(page.getByText('Not published for sites').filter({ visible: true }).first()).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width, height });
+      await page.screenshot({ path: join(screenshotDirectory, `performance-period-last-week-${width}px.png`) });
+    });
+  }
+
+  test('a site expander takes keyboard focus, shows it, and toggles from the keyboard', async ({ page }) => {
+    await openDashboard(page, 1440);
+    const expander = siteExpander(page, 'site-1');
+
+    await expander.focus();
+    await expect(expander).toBeFocused();
+    await page
+      .locator('[data-testid="performance-table"]')
+      .screenshot({ path: join(screenshotDirectory, 'performance-expander-focus-1440px.png') });
+
+    await page.keyboard.press('Enter');
+    await expect(expander).toHaveAttribute('aria-expanded', 'false');
+    await expect(groupMachines(page, 'site-1')).toHaveCount(0);
+    await expect(expander).toBeFocused();
+    // A collapsed group exposes nothing focusable, so the keyboard can never reach into it.
+    await expect(page.locator('tbody#site-machines-site-1 a, tbody#site-machines-site-1 button')).toHaveCount(0);
+
+    await page.keyboard.press(' ');
+    await expect(expander).toHaveAttribute('aria-expanded', 'true');
+    await expect(groupMachines(page, 'site-1')).toHaveCount(1);
+  });
 
   for (const width of [360, 390]) {
     test(`More sheet opened and scrolled at ${width}px`, async ({ page }) => {

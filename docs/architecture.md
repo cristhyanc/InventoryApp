@@ -5708,7 +5708,8 @@ before, and a still-loading or failed summary keeps all four cards for the same 
 knowing a figure yet is a different thing from having been told it is not this member's to see.
 
 **Sites and Machines hide the same figures too, from the capability rather than from the response**
-(issue #699). The Dashboard's own Sites/Machines tables, the Sites list, Site Products and the
+(issue #699). The Dashboard's own Site and machine performance card (its two separate tables until
+issue #987 combined them), the Sites list, Site Products and the
 Machines list/detail all read `AccessService.allows('Dashboard.ViewFinancials')` the same way the
 supplier GST defaults editor reads `Suppliers.ManageGstDefaults` above, each keeping its own
 `canViewFinancials` field (starting `true`, the same fail-open default) and hiding every revenue,
@@ -8450,8 +8451,9 @@ states](#shared-provider-availability-and-error-versus-empty-states-issue-728));
 Ordering keep their own for that reason, and did not change.
 
 **Only `notConnected` hides anything**, and what it hides is everything on the page whose every
-figure is about machines: the "Sales this week" and "Needs refill" cards and the Sites and Machines
-sections (`isLiveFleetShown`). They are hidden rather than rendered empty or "Unavailable" - "No
+figure is about machines: the "Sales this week" and "Needs refill" cards and the Site and machine
+performance card (`isLiveFleetShown`; two separate sections until issue #987 combined them). They
+are hidden rather than rendered empty or "Unavailable" - "No
 sites available yet" is a claim about the business, not about Nayax. "Needs ordering" and
 "Inventory" are shown as usual, so the reorder alerts become the page's main section without the
 page having to reorder anything. `PendingPermissions` with a read ungranted is **not** this state:
@@ -8463,7 +8465,7 @@ success or failure - then calls `refreshSalesDashboard`, which is where `POST /a
 and the Sites and Machines loads live. Without that order the synchronization would already have
 been sent by the time the answer arrived, and "sales sync is not called when the provider is not
 usable" cannot be satisfied after the fact. A business with a usable provider gets the same three
-calls in the same order as before, one summary later; the two sections start in their loading state
+calls in the same order as before, one summary later; both reads start in their loading state
 so a pending decision is never rendered as an empty one. A **failed** summary says nothing about the
 provider, so it leaves `unknown` and keeps the connected behaviour - a transient failure must not
 hide a connected business's live sections.
@@ -8706,25 +8708,12 @@ renders it as five parts:
    pending work or a failed read, so the badge can never disagree with the tiles. The reminder's
    14-day window and its `restockFrom` link to the oldest pending date (#948/#949) are unchanged.
    The only actions are the existing Pick List and Needs Ordering routes.
-3. **Site performance** and 4. **Machine performance**, with machines grouped under their sites
-   (issue #980). `GET /api/machines` carries each machine's `siteId` - the provider's
-   `NayaxMachine.CustomerID`, the same key `ListSites`/`GetSiteSummaries` group by; it is appended
-   after `localMachineId`, nullable, and kept in the redacted (no-financials) projection because it
-   is identity, not a figure; no other field, endpoint or capability changed - and
-   `groupMachinesBySite` (in `dashboard.component.ts`) pairs it with the sites read: one group per
-   site in the Sites order, sites without machines skipped, and machines whose site is `null` or not
-   listed last under "Other machines". When there is no site group (the sites read failed, or no
-   machine has a listed site) the single group has no heading, so the list reads as before. Each
-   group is its own `tbody` with a `scope="rowgroup"` heading row on a wide screen and its own `h3`
-   and list on a narrow one; the totals row still sums every machine. Every period stays; the
-   machine list shows all of them in a table on a wide screen and one chosen period
-   (`machinePeriod`) on a narrow one. A part-week comparison is labelled "vs same time last week". A
-   period total is shown only when every machine returned that
-period's figure, and otherwise says "Unavailable". One pre-existing inconsistency is reported, not
-changed (calculations are out of scope): the fleet total's week comparison falls back to a machine's
-full `lastWeekGrossRevenue` when its `previousComparableWeekGrossRevenue` is `null`, mixing a full
-week into a part-week comparison.
-5. **Reorder priorities**: `reorderPriorities` is the first `REORDER_PRIORITY_LIMIT` (5) rows of the
+3. **Site and machine performance**, one card composed from `SiteMachinePerformanceComponent` and
+   described in [its own section](#site-and-machine-performance-issue-987) below. It replaced the
+   separate **Site performance** and **Machine performance** cards this issue shipped, and the
+   machines-under-their-sites grouping of issue #980 that followed them, on the owner's decision of
+   29 October 2026.
+4. **Reorder priorities**: `reorderPriorities` is the first `REORDER_PRIORITY_LIMIT` (5) rows of the
    authoritative low-stock list in its own order, and `reorderViewAllLabel` names the list's real
    length. The purchase-cost read (#788/#789) is requested only for those rows and still only with
    `Dashboard.ViewFinancials`. Last and Cheapest purchase remain labelled as historical costs from
@@ -8771,7 +8760,79 @@ dismisses the sheet, and Escape and Close return focus to the opener.
 Tailwind utilities in their own templates. No global class changed meaning and no other
 authenticated page changed; `design-tokens.contrast.spec.ts` covers the new text/background pairs.
 Visual evidence at 360, 390, 768 and 1440px, with a no-horizontal-overflow assertion, is
-`e2e/visual/dashboard-redesign.visual.ts`, written to `docs/screenshots/issue-972/`.
+`e2e/visual/dashboard-redesign.visual.ts`, written to `docs/screenshots/issue-972/`. Issue #987's
+collapsed-group, period-control and keyboard-focus captures are written beside them by the same run.
+
+#### Site and machine performance (issue #987)
+
+The owner reviewed #972/#980 on 29 October 2026 and asked for the original Stitch arrangement: one
+**Site and machine performance** card whose site summary rows expand to the machines standing at
+that site, rather than a Site performance card and a Machine performance card beside it. Issue #987
+is that correction. It is composition and presentation only - no endpoint, DTO, calculation,
+capability, guard, route or provider lock changed, both reads are the existing `GET /api/sites` and
+`GET /api/machines`, and the page still never turns `null` into `0`.
+
+**Where it lives.** `SiteMachinePerformanceComponent`
+(`components/dashboard/site-machine-performance/`) is a dedicated feature component under the
+[page composition boundary](#page-composition-boundary-issue-191): it has substantial UI plus its
+own state - the shared period selection and one expansion state per site - while `DashboardComponent`
+keeps owning the two reads, their loading/failed states, the `Dashboard.ViewFinancials` answer and
+the provider-optional decision, and hands all of them over as `@Input`s. It calculates nothing: the
+figures are the responses', `trendLabel`/`trendClass` and `siteStockClass` are the existing shared
+helpers, and the only arithmetic is the direct margin and the per-period fleet sums the former
+Machine performance card already displayed, moved across unchanged.
+
+**The hierarchy.** `groupSitesAndMachines(sites, machines)` pairs the sites read with the `siteId`
+issue #980 added to the machine read (the provider's `NayaxMachine.CustomerID`, the same key
+`ListSites`/`GetSiteSummaries` group by): one group per site, in the sites order, holding the
+machines whose `siteId` is that site's in the machine read's order; then every remaining machine -
+at no site, or at a site the read did not return - under "Other machines". Each machine lands in
+exactly one group. Two cases differ from #980's grouping, both deliberately: a site with **no**
+returned machine keeps its own group and shows an empty state, because it is a site the business has
+and the Sites page lists it; and when no site is available at all - an empty or failed sites read -
+the whole fleet is one unheaded, non-collapsible group, so the machines stay readable without the
+sites. Sites start expanded; `collapsedKeys` remembers what the reader *closed*, so a site that
+arrives in a later read starts expanded and a refresh returning the same site ids keeps exactly the
+groups that were closed. Each group's machines are their own `tbody` (and `ul` on a narrow screen)
+whose `id` the expander's `aria-controls` names; collapsing renders no row at all, so a collapsed
+group exposes no focusable descendant.
+
+**One set of columns, one period.** Site and machine rows share Site / machine, Stock, Low / empty,
+the selected period's sales, the applicable comparison and Actions. One `<fieldset>` of Today / This
+week / Last week / Month to date buttons - shared by both layouts, defaulting to This week - chooses
+the period, and the sales heading names it (`Sales · This week`), so no figure is shown under a
+heading that does not say which period it is. The comparison column is "vs same time last week" only
+while This week is selected, because that published part-week comparison is the only one either
+response carries; the other periods get a neutral heading and say there is no comparison for them
+rather than borrowing one. Sites publish sales for Today and This week only, so a site row says
+`Not published for sites` for the other two, with a note in the card; the machines keep all four, so
+no period or comparison was lost to the layout.
+
+**Stock stays a site figure.** The stock percentage, the bar and the low/empty counts come from the
+sites read, which is the only authoritative source for them. A machine row reports them as
+unavailable and the card says why: a site's percentage is never repeated down its machines and
+nothing derives a machine stock level in Angular, which is the boundary issue #987 names. The
+badge's level is also written in words (Critically low / Low / Well stocked, read from the existing
+`siteStockClass` thresholds), so the state is not carried by colour alone.
+
+**Actions and totals.** The Actions column holds the existing destinations only: a site's
+`['/sites', siteId, 'products']` and a machine's `['/machines', localMachineId]`. A machine with no
+`localMachineId` gets no link at all - the existing fallback - rather than a fabricated local URL,
+and the machine name keeps being the row's real anchor with issue #494's row-link behaviour. One
+totals row covers the machine fleet, summed over `machines` rather than over the groups, so
+collapsing a group cannot change it and a site figure is never added into a machine total; a period
+total appears only when every machine's figure for that period is known, and is "Unavailable"
+otherwise. The pre-existing inconsistency #972 reported is carried across unchanged and is still not
+fixed here (a comparison change is out of scope): the fleet total's week comparison falls back to a
+machine's full `lastWeekGrossRevenue` when its `previousComparableWeekGrossRevenue` is `null`,
+mixing a full week into a part-week comparison.
+
+**Independent read states.** The sites and the machines are still two reads with two states. The
+card shows its skeleton only while **both** are outstanding; after that each contributes its own
+line - a failure notice carrying that read's own message, a "Loading…" line, or the existing "No
+sites available yet." / "No machines available yet." sentence for a genuinely empty result - and the
+other half stays visible. A failed read is never rendered as an empty business, and an expanded
+group with no machines says the machines could not be loaded rather than that the site has none.
 
 #### Home dashboard coordinated Sites/Machines sales sync (issue #187)
 

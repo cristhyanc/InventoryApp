@@ -1826,10 +1826,6 @@ video {
   width: 8rem;
 }
 
-.w-36 {
-  width: 9rem;
-}
-
 .w-4 {
   width: 1rem;
 }
@@ -2589,10 +2585,6 @@ video {
   padding-bottom: 2rem;
 }
 
-.pb-0 {
-  padding-bottom: 0px;
-}
-
 .pb-1 {
   padding-bottom: 0.25rem;
 }
@@ -2643,6 +2635,10 @@ video {
 
 .pl-5 {
   padding-left: 1.25rem;
+}
+
+.pl-8 {
+  padding-left: 2rem;
 }
 
 .pr-3 {
@@ -3175,6 +3171,11 @@ img {
 .hover\:bg-rr-surface:hover {
   --tw-bg-opacity: 1;
   background-color: rgb(242 243 255 / var(--tw-bg-opacity, 1));
+}
+
+.hover\:bg-rr-surface-strong:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(234 237 255 / var(--tw-bg-opacity, 1));
 }
 
 .hover\:bg-rr-teal-tint:hover {

@@ -419,14 +419,31 @@ changed, and every "Unavailable" still means unavailable, never zero.
   and the panel is hidden when there is none. It is two columns on a wide screen and one on a phone,
   and it offers only the two existing actions, **Open pick list** and **View needs ordering**. The
   reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
-- **Site performance** lists your sites with their stock levels and sales. **Machine performance**
-  lists every machine **under its site** (issue #980): each site with machines gets a heading row
-  naming it and how many machines it has, in the same order as Site performance, and machines with
-  no site - or at a site that is not listed - come last under **Other machines**. If the site list
-  cannot be read, the machines are simply listed without headings. The totals row still covers every
-  machine. Every period is kept (Today, This week, Last week, Month to date and the comparisons); a
-  part-week comparison is labelled "vs same time last week". On a phone the machines show one period
-  at a time, chosen with the period buttons, and keep their site headings.
+- **Site and machine performance** is one card (issue #987): each site is a summary row - its name,
+  how many machines it has, its stock level in words as well as in colour, its low and empty
+  selections and its sales - and an expand button under the site's name reveals that site's machines
+  indented directly beneath it. Sites start expanded, collapsing one leaves the others alone, and a
+  refresh keeps whichever groups you closed. Machines with no site, or at a site that was not
+  returned, come last under **Other machines**, and a site the fleet read returned no machine for
+  stays visible saying so. Every machine appears exactly once.
+  - **One period at a time, shared by both layouts.** The Today / This week / Last week / Month to
+    date buttons above the table choose the period for every row, and the sales column names it. The
+    comparison column shows the published "vs same time last week" figure while This week is
+    selected and says there is no comparison for the other periods, because that is the only
+    comparison these reads publish. Sites publish sales for Today and This week only; for the other
+    two a site row says so instead of showing a figure.
+  - **Stock is a site figure.** The stock level and the low/empty counts come from the sites read,
+    which is the only place they exist. A machine row shows them as unavailable - never the site's
+    percentage repeated, and never a percentage worked out in the browser - and the card says why.
+  - **Actions are the existing ones**: **Products** opens that site's products, **Details** opens
+    that machine, and a machine this business has no local record of gets no Details link at all
+    rather than an invented one.
+  - **One totals row for the fleet**, over every machine the read returned, so collapsing a group
+    never changes it and no site figure is ever added into it. A period total is shown only when
+    every machine's figure for that period is known, and is "Unavailable" otherwise.
+  - The sites and the machines are still read separately: if one read fails the card keeps the
+    other's results and says which one is unavailable, and a failed read is never shown as an empty
+    business. On a phone the same hierarchy is expandable site cards holding machine cards.
 - **Reorder priorities** shows the first five products of the reorder list, in the list's own order,
   and a link naming how many there really are ("View all 7 products needing ordering") to Products →
   Needs Ordering. Its columns are product, storage stock, machine need, need to order, the last and
@@ -2057,11 +2074,11 @@ reorder alerts and its ordering figures, calculated from the data this applicati
 The dashboard presents those states (issue #727). Without a usable Nayax connection it is a
 storage-management dashboard, and it says what the business has rather than what it is missing:
 
-- **"Sales this week" and "Needs refill" are not shown, and neither are the Sites and Machines
-  sections.** Every figure on them comes from Nayax, so they are hidden rather than shown empty or
-  "Unavailable" — an empty Sites section would say the business has no sites, which is a different
-  claim. **"Needs ordering" and "Inventory" are shown as usual**, and the reorder alerts are then
-  the page's main section.
+- **"Sales this week" and "Needs refill" are not shown, and neither is the Site and machine
+  performance card.** Every figure on them comes from Nayax, so they are hidden rather than shown
+  empty or "Unavailable" — an empty site list would say the business has no sites, which is a
+  different claim. **"Needs ordering" and "Inventory" are shown as usual**, and the reorder alerts
+  are then the page's main section.
 - **The storage-only figures say so.** The "Needs ordering" card and the reorder-alert list each
   carry a label — "Storage stock only: these figures do not include the machines' current
   replenishment need, because Nayax is not connected" — and the list drops its "Machine need"
@@ -2082,7 +2099,8 @@ storage-management dashboard, and it says what the business has rather than what
   request that fails says so ("The Sites section could not be loaded. Reload the page to try
   again."). It is never shown as "No sites available yet" or "No reorder alerts. Everything looks
   good!", which are statements about data the page was never given. A genuinely empty answer still
-  shows those messages.
+  shows those messages. The sites and the machines are read separately, so the Site and machine
+  performance card keeps whichever of the two succeeded and reports only the one that did not.
 
 **Products → Needs Ordering** works the same way in storage-only mode: the full page, with its
 filters, sorting and "Mark as ordered", over the storage-only alerts, labelled with the mode and

@@ -41,12 +41,12 @@ import {
 } from '../shared/cheapest-supplier/cheapest-suppliers.component';
 import { CheapestSupplierCellComponent } from '../shared/cheapest-supplier/cheapest-supplier-cell.component';
 import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
-import { trendLabel, trendClass } from '../../formatting/revenue-trend';
-import { siteStockClass } from '../../formatting/site-stock-status';
+import { plural } from '../../formatting/plural';
 import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
 import { MachineRestockSyncReminderComponent } from './machine-restock-sync-reminder/machine-restock-sync-reminder.component';
+import { SiteMachinePerformanceComponent } from './site-machine-performance/site-machine-performance.component';
 import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
@@ -82,13 +82,6 @@ export type DashboardProviderAvailability =
 export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
 
 /**
- * The four sales periods every machine already carries (issue #972). The desktop table shows all
- * four side by side; a narrow screen shows one at a time and switches between them, so no period
- * is lost to the smaller layout.
- */
-export type MachinePeriod = 'today' | 'week' | 'lastWeek' | 'monthToDate';
-
-/**
  * One alert in the Needs attention panel (issue #972), built only from figures the summary already
  * published. The panel renders one of these per alert that actually applies, never a fixed set.
  */
@@ -103,43 +96,6 @@ export interface AttentionAlert {
 /** How many products the Reorder priorities overview shows before linking to the full list. */
 export const REORDER_PRIORITY_LIMIT = 5;
 
-/**
- * One site's machines in Machine performance (issue #980). `label` is the site's name, "Other
- * machines" for machines at no listed site, or `null` when no machine could be placed at a site at
- * all - then the list is one group with no heading, because a lone "Other machines" says nothing.
- */
-export interface MachineSiteGroup {
-  readonly key: string;
-  readonly label: string | null;
-  readonly machines: readonly Machine[];
-}
-
-export const OTHER_MACHINES_LABEL = 'Other machines';
-
-/**
- * Places each machine under its site (issue #980): the sites in the order the Sites section lists
- * them, each with the machines whose `siteId` is that site's, then every remaining machine - at no
- * site, or at a site the site list did not return - under "Other machines". Each machine lands in
- * exactly one group and keeps the API's order inside it; a site with no listed machine gets no
- * group. Nothing is summed here: the fleet totals still come from the whole machine list.
- */
-export function groupMachinesBySite(machines: readonly Machine[], sites: readonly Site[]): readonly MachineSiteGroup[] {
-  const placed = new Set<Machine>();
-  const groups: MachineSiteGroup[] = [];
-  for (const site of sites) {
-    const atSite = machines.filter((machine) => machine.siteId != null && machine.siteId === site.siteId);
-    if (atSite.length > 0) {
-      atSite.forEach((machine) => placed.add(machine));
-      groups.push({ key: `site-${site.siteId}`, label: site.siteName, machines: atSite });
-    }
-  }
-  const others = machines.filter((machine) => !placed.has(machine));
-  if (others.length > 0) {
-    groups.push({ key: 'other', label: groups.length > 0 ? OTHER_MACHINES_LABEL : null, machines: others });
-  }
-  return groups;
-}
-
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -151,7 +107,8 @@ export function groupMachinesBySite(machines: readonly Machine[], sites: readonl
     MachineRestockSyncReminderComponent,
     BusinessDateTimePipe,
     CheapestSuppliersComponent,
-    CheapestSupplierCellComponent
+    CheapestSupplierCellComponent,
+    SiteMachinePerformanceComponent
   ],
   templateUrl: './dashboard.component.html'
 })
@@ -163,16 +120,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   @ViewChild(MachineRestockSyncReminderComponent, { static: true })
   private readonly restockSyncReminder?: MachineRestockSyncReminderComponent;
-
-  /** The period a narrow screen shows machine sales for (issue #972); the table shows all four. */
-  machinePeriod: MachinePeriod = 'week';
-
-  readonly machinePeriods: readonly { readonly id: MachinePeriod; readonly label: string }[] = [
-    { id: 'today', label: 'Today' },
-    { id: 'week', label: 'This week' },
-    { id: 'lastWeek', label: 'Last week' },
-    { id: 'monthToDate', label: 'Month to date' }
-  ];
 
   /**
    * Said beside the inventory card's unit count (issue #972): the card's value is every unit the
@@ -196,30 +143,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   cheapestSuppliers: CheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
 
-  private machineGroupsOf?: {
-    readonly machines: readonly Machine[];
-    readonly sites: readonly Site[];
-    readonly groups: readonly MachineSiteGroup[];
-  };
-
   /**
-   * Machine performance's rows, under their sites (issue #980). Recomputed only when either list is
-   * replaced, so change detection hands the template the same groups and re-renders nothing.
-   */
-  get machineGroups(): readonly MachineSiteGroup[] {
-    const cached = this.machineGroupsOf;
-    if (cached?.machines === this.machines && cached.sites === this.sites) {
-      return cached.groups;
-    }
-    const groups = groupMachinesBySite(this.machines, this.sites);
-    this.machineGroupsOf = { machines: this.machines, sites: this.sites, groups };
-    return groups;
-  }
-
-  /**
-   * The Sites and Machines sections start as loading, not as empty: whether they are loaded at all
-   * is decided by the summary (see {@link refreshSummary}), and an outstanding decision must not
-   * show as "No sites available yet".
+   * The two reads behind the Site and machine performance card start as loading, not as empty:
+   * whether they are made at all is decided by the summary (see {@link refreshSummary}), and an
+   * outstanding decision must not show as "No sites available yet". They stay two separate states
+   * because the card reports them separately (issue #987).
    */
   isLoadingSites = true;
   isLoadingMachines = true;
@@ -423,7 +351,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * persisted figures are still loaded, flagged as not synchronized rather than as failed.
    *
    * For a business with no usable provider (issue #727) none of this runs: there is nothing to
-   * synchronize, the call could only be refused, and the two sections it refreshes are not
+   * synchronize, the call could only be refused, and the card its two reads feed is not
    * rendered. No notice is shown either - a sync that was never attempted neither failed nor
    * succeeded, and the page says what the business *does* have instead.
    *
@@ -640,8 +568,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Whether to render the Sites and Machines sections and the "Needs refill" card - everything on
-   * this page whose every figure is a figure about machines. Without a provider they are not shown
+   * Whether to render the Site and machine performance card and the "Needs refill" card -
+   * everything on this page whose every figure is a figure about machines or the sites they stand
+   * at. Without a provider they are not shown
    * at all rather than shown as empty or unavailable: there is no fleet to report on, and the page
    * is about what the business does have.
    */
@@ -985,230 +914,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return product.quantityInStock <= 0 ? 'badge-danger' : 'badge-warning';
   }
 
-  machineCountLabel(count: number): string {
-    return plural(count, 'machine');
-  }
-
-  get machinePeriodLabel(): string {
-    return this.machinePeriods.find((period) => period.id === this.machinePeriod)?.label ?? '';
-  }
-
-  /** One machine's sales for a period, or `Unavailable` for a figure that is withheld or unknown. */
-  periodSalesText(machine: Machine, period: MachinePeriod): string {
-    const { sales } = machinePeriodFigures(machine, period);
-    return sales == null ? 'Unavailable' : `${money(sales)} sales`;
-  }
-
-  /** One machine's direct profit and direct margin for a period, never a `0` for an unknown one. */
-  periodProfitText(machine: Machine, period: MachinePeriod): string {
-    const { sales, profit } = machinePeriodFigures(machine, period);
-    if (sales == null || profit == null) return 'Profit unavailable';
-    return `${money(profit)} direct profit · ${this.margin(profit, sales).toFixed(1)}% direct margin`;
-  }
-
-  /** The fleet's sales for a period, only while every machine's figure for it is known. */
-  totalSalesText(period: MachinePeriod): string {
-    const totals = this.periodTotals(period);
-    return totals.isRevenueComplete ? `${money(totals.sales)} sales` : 'Unavailable';
-  }
-
-  totalProfitText(period: MachinePeriod): string {
-    const totals = this.periodTotals(period);
-    if (!totals.isRevenueComplete || !totals.isProfitComplete) return 'Profit unavailable';
-    return `${money(totals.profit)} direct profit · ${this.margin(totals.profit, totals.sales).toFixed(1)}% direct margin`;
-  }
-
-  /** The existing per-period totals and completeness flags below, by period. */
-  private periodTotals(period: MachinePeriod): {
-    sales: number;
-    profit: number;
-    isRevenueComplete: boolean;
-    isProfitComplete: boolean;
-  } {
-    switch (period) {
-      case 'today':
-        return {
-          sales: this.totalTodaySales,
-          profit: this.totalTodayDirectProfit,
-          isRevenueComplete: this.isTodayRevenueComplete,
-          isProfitComplete: this.isTodayProfitComplete
-        };
-      case 'week':
-        return {
-          sales: this.totalCurrentWeekSales,
-          profit: this.totalCurrentWeekDirectProfit,
-          isRevenueComplete: this.isCurrentWeekRevenueComplete,
-          isProfitComplete: this.isCurrentWeekProfitComplete
-        };
-      case 'lastWeek':
-        return {
-          sales: this.totalLastWeekSales,
-          profit: this.totalLastWeekDirectProfit,
-          isRevenueComplete: this.isLastWeekRevenueComplete,
-          isProfitComplete: this.isLastWeekProfitComplete
-        };
-      case 'monthToDate':
-        return {
-          sales: this.totalMonthToDateSales,
-          profit: this.totalMonthToDateDirectProfit,
-          isRevenueComplete: this.isMonthToDateRevenueComplete,
-          isProfitComplete: this.isMonthToDateProfitComplete
-        };
-    }
-  }
-
-  trendLabel(current: number | null | undefined, previous: number | null | undefined): string {
-    return trendLabel(current, previous);
-  }
-
-  trendClass(current: number | null | undefined, previous: number | null | undefined): string {
-    return trendClass(current, previous);
-  }
-
-  get totalTodaySales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.todayGrossRevenue ?? 0), 0);
-  }
-
-  /**
-   * Whether every machine's today's gross revenue is known (issue #699): a fleet that includes a
-   * withheld/unknown figure must not have the Totals row read its `?? 0` fallback as a real zero
-   * and report a fabricated `$0.00`, the same rule {@link isTodayProfitComplete} already follows
-   * for direct profit.
-   */
-  get isTodayRevenueComplete(): boolean {
-    return this.machines.every(m => m.todayGrossRevenue != null);
-  }
-
-  get totalTodayDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.todayDirectProfit ?? 0), 0);
-  }
-
-  get isTodayProfitComplete(): boolean {
-    return this.machines.every(m => m.todayDirectProfit != null);
-  }
-
-  get totalCurrentWeekSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
-  }
-
-  get isCurrentWeekRevenueComplete(): boolean {
-    return this.machines.every(m => m.currentWeekGrossRevenue != null);
-  }
-
-  get totalCurrentWeekDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.currentWeekDirectProfit ?? 0), 0);
-  }
-
-  get isCurrentWeekProfitComplete(): boolean {
-    return this.machines.every(m => m.currentWeekDirectProfit != null);
-  }
-
-  get totalPreviousComparableWeekSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.previousComparableWeekGrossRevenue ?? m.lastWeekGrossRevenue ?? 0), 0);
-  }
-
-  get totalLastWeekSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.lastWeekGrossRevenue ?? 0), 0);
-  }
-
-  get isLastWeekRevenueComplete(): boolean {
-    return this.machines.every(m => m.lastWeekGrossRevenue != null);
-  }
-
-  get totalLastWeekDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.lastWeekDirectProfit ?? 0), 0);
-  }
-
-  get isLastWeekProfitComplete(): boolean {
-    return this.machines.every(m => m.lastWeekDirectProfit != null);
-  }
-
-  get totalMonthToDateSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.monthToDateGrossRevenue ?? 0), 0);
-  }
-
-  get isMonthToDateRevenueComplete(): boolean {
-    return this.machines.every(m => m.monthToDateGrossRevenue != null);
-  }
-
-  get totalMonthToDateDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.monthToDateDirectProfit ?? 0), 0);
-  }
-
-  get isMonthToDateProfitComplete(): boolean {
-    return this.machines.every(m => m.monthToDateDirectProfit != null);
-  }
-
-  private margin(profit: number, sales: number): number {
-    return sales === 0 ? 0 : (profit / sales) * 100;
-  }
-
-  siteStockClass(site: Site): string {
-    return siteStockClass(site);
-  }
-
-  /** The stock bar's fill, on the same thresholds as {@link siteStockClass}'s badge beside it. */
-  siteStockBarClass(site: Site): string {
-    switch (siteStockClass(site)) {
-      case 'badge-danger':
-        return 'bg-rr-danger-text';
-      case 'badge-warning':
-        return 'bg-rr-warn-text';
-      default:
-        return 'bg-rr-ok-text';
-    }
-  }
-
-  /** The bar's width, held to 0-100 so a stray figure can never overflow its track. */
-  stockBarWidth(site: Site): number {
-    return Math.min(100, Math.max(0, site.totalStockPercentage));
-  }
-
-  /**
-   * Extends the Machines row's real anchor link to the rest of the row (issue #494), the same
-   * pattern `SiteListComponent.followRowLink` already uses: the anchor - not the row - owns
-   * focus, Enter activation, and ctrl/cmd/middle-click, so this only activates it for a click or
-   * Enter elsewhere in the row. A click on a control inside the row - the anchor included, which
-   * would otherwise navigate twice - and a modified or non-primary click are left to the browser.
-   */
-  followMachineRowLink(rowEvent: Event): void {
-    const event = rowEvent as MouseEvent | KeyboardEvent;
-    const ownControl = (event.target as Element | null)?.closest(
-      'a, button, input, select, textarea, label, [role="button"]'
-    );
-    const browserHandlesIt =
-      event.defaultPrevented ||
-      (event instanceof MouseEvent && event.button !== 0) ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey;
-    if (ownControl || browserHandlesIt) return;
-
-    (event.currentTarget as Element).querySelector<HTMLAnchorElement>('a.table-row-anchor')?.click();
-  }
-}
-
-/** `1 machine`, `3 machines`: a count with its noun, for the Dashboard's sentences. */
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
-}
-
-/** One machine's published sales and direct profit for a period, exactly as the API sent them. */
-function machinePeriodFigures(
-  machine: Machine,
-  period: MachinePeriod
-): { sales: number | null | undefined; profit: number | null | undefined } {
-  switch (period) {
-    case 'today':
-      return { sales: machine.todayGrossRevenue, profit: machine.todayDirectProfit };
-    case 'week':
-      return { sales: machine.currentWeekGrossRevenue, profit: machine.currentWeekDirectProfit };
-    case 'lastWeek':
-      return { sales: machine.lastWeekGrossRevenue, profit: machine.lastWeekDirectProfit };
-    case 'monthToDate':
-      return { sales: machine.monthToDateGrossRevenue, profit: machine.monthToDateDirectProfit };
-  }
 }
 
 /** What a purchase-cost cell says while its one request is outstanding or has not been issued. */
