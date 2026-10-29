@@ -69,4 +69,21 @@ internal sealed class InMemoryDocumentBlobContainer : IDocumentBlobContainer
         DeleteAttempts++;
         return Task.FromResult(_blobs.Remove(blobName));
     }
+
+    /// <summary>
+    /// The blobs under one prefix, as the attachment storage reconciliation lists them
+    /// (issue #968). Ordinal prefix matching, which is what the Blob service does.
+    /// </summary>
+    public Task<IReadOnlyList<BlobDocumentListing>> ListAsync(string prefix, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<BlobDocumentListing> listings =
+        [
+            .. _blobs
+                .Where(blob => blob.Key.StartsWith(prefix, StringComparison.Ordinal))
+                .OrderBy(blob => blob.Key, StringComparer.Ordinal)
+                .Select(blob => new BlobDocumentListing(blob.Key, blob.Value.Length)),
+        ];
+
+        return Task.FromResult(listings);
+    }
 }

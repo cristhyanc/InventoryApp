@@ -303,7 +303,7 @@ public class PurchaseUseCaseTests
 
     private static PurchaseUseCases CreateUseCases(AppDbContext db, IDocumentStorage documents, IRebuildProductCost? rebuild = null)
     {
-        var store = new EfPurchaseStore(db, rebuild ?? TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, rebuild ?? TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
         return new PurchaseUseCases(
             new ListPurchases(store),
             new GetPurchase(store),

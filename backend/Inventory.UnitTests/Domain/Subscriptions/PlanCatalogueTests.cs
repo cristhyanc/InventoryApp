@@ -14,7 +14,12 @@ namespace Inventory.UnitTests.Domain.Subscriptions;
 /// </summary>
 public class PlanCatalogueTests
 {
-    private const long Gigabyte = 1024L * 1024L * 1024L;
+    /// <summary>
+    /// The decimal gigabyte the allowances are counted in: 1 GB is 1,000,000,000 bytes, fixed by
+    /// issue #968's quota decision of 29 October 2026 and adopted here so the allowance and the
+    /// enforcement count the same multiple.
+    /// </summary>
+    private const long Gigabyte = 1_000_000_000L;
 
     [Fact]
     public void Free_is_free_with_one_gigabyte_and_no_connected_machines()

@@ -135,7 +135,7 @@ public sealed class CompletedSupplierOrderCorrectionConcurrencyTests : IDisposab
 
         await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
         {
-            Assert.NotNull(await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).UpdateAsync(
+            Assert.NotNull(await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).UpdateAsync(
                 purchaseId,
                 new PurchaseFields("Weekly restock", null, null, null, null, FirstDeliveryDate, SupplierId),
                 [new PurchaseItemInput(ProductId, CorrectedDelivery, UnitCost)],
@@ -172,7 +172,7 @@ public sealed class CompletedSupplierOrderCorrectionConcurrencyTests : IDisposab
 
         await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
         {
-            Assert.NotNull(await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).DeleteAsync(
+            Assert.NotNull(await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).DeleteAsync(
                 purchaseId, CancellationToken.None));
         }
 
@@ -281,7 +281,7 @@ public sealed class CompletedSupplierOrderCorrectionConcurrencyTests : IDisposab
     private async Task EditAsync(int purchaseId, decimal quantity)
     {
         await using var db = TestAppDbContext.For(Options(), BusinessA);
-        await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).UpdateAsync(
+        await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).UpdateAsync(
             purchaseId,
             new PurchaseFields("Weekly restock", null, null, null, null, FirstDeliveryDate, SupplierId),
             [new PurchaseItemInput(ProductId, quantity, UnitCost)],
@@ -291,7 +291,7 @@ public sealed class CompletedSupplierOrderCorrectionConcurrencyTests : IDisposab
     private async Task DeleteAsync(int purchaseId)
     {
         await using var db = TestAppDbContext.For(Options(), BusinessA);
-        await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).DeleteAsync(
+        await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).DeleteAsync(
             purchaseId, CancellationToken.None);
     }
 
@@ -363,7 +363,7 @@ public sealed class CompletedSupplierOrderCorrectionConcurrencyTests : IDisposab
         string? fingerprint)
     {
         await using var db = TestAppDbContext.For(options, BusinessA);
-        var purchase = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).CreateAsync(
+        var purchase = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).CreateAsync(
             new PurchaseFields("Weekly restock", null, null, null, null, purchaseDate, SupplierId),
             [new PurchaseItemInput(ProductId, quantity, UnitCost)],
             new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
@@ -375,6 +375,7 @@ public sealed class CompletedSupplierOrderCorrectionConcurrencyTests : IDisposab
                     TestPurchaseUseCases.Operator.ObjectId,
                     DecidedAt)
                 : null,
+            attachmentReservation: null,
             CancellationToken.None);
         return purchase.Id;
     }

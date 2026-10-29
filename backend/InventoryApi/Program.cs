@@ -95,6 +95,15 @@ if (BusinessPlanGrandfatheringCommand.Matches(args))
     return await BusinessPlanGrandfatheringCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Reconciling stored attachment files against the records that refer to them is the seventh
+// human-invoked command (issue #968). A document's bytes live outside the database, so the two can
+// drift in three ways the application cannot see from inside; this is the operator's read of that,
+// and it never deletes a file - an apply fills in sizes that were never recorded and nothing else.
+if (AttachmentStorageReconciliationCommand.Matches(args))
+{
+    return await AttachmentStorageReconciliationCommand.RunAsync(args, CancellationToken.None);
+}
+
 // Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
 // something normal startup performs (issue #331). It is callable manually for one-off
 // verification and by the scheduled backup job (issue #333) against the same configured database.

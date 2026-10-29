@@ -189,11 +189,12 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).CreateAsync(
+            await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).CreateAsync(
                 new PurchaseFields("Restock", null, null, null, null, PurchaseDate, null),
                 [new PurchaseItemInput(FreshProduct, 10m, 2.50m)],
                 new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
                 supplierOrderCompletion: null,
+                attachmentReservation: null,
                 CancellationToken.None);
         }
 
@@ -219,11 +220,12 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
             var refusal = await Assert.ThrowsAsync<InventoryCostDataQualityException>(() =>
-                new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).CreateAsync(
+                new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).CreateAsync(
                     new PurchaseFields("Restock", null, null, null, null, PurchaseDate, null),
                     [new PurchaseItemInput(FreshProduct, 10m, 2.50m)],
                     new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
                     supplierOrderCompletion: null,
+                    attachmentReservation: null,
                     CancellationToken.None));
             Assert.Contains($"Product New product ({FreshProduct}) stored physical quantity 20 does not reconcile to its movement history (10).", refusal.Message);
         }
@@ -258,11 +260,12 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
         }
 
         await using var db = TestAppDbContext.For(_options, BusinessA);
-        var purchase = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).CreateAsync(
+        var purchase = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).CreateAsync(
             new PurchaseFields("Restock", null, null, null, null, PurchaseDate, null),
             [new PurchaseItemInput(CostedProduct, 4m, 1.50m)],
             new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
             supplierOrderCompletion: null,
+            attachmentReservation: null,
             CancellationToken.None);
         return (purchase.Id, purchase.Items.Single().Id);
     }
@@ -270,7 +273,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
     private async Task UpdateAsync(int purchaseId, params PurchaseItemInput[] items)
     {
         await using var db = TestAppDbContext.For(_options, BusinessA);
-        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
         await store.UpdateAsync(
             purchaseId, new PurchaseFields("Restock", null, null, null, null, PurchaseDate, null), items, CancellationToken.None);
     }

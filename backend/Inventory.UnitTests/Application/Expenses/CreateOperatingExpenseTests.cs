@@ -2,6 +2,7 @@ using Inventory.Application.Expenses;
 using Inventory.Application.Documents;
 using Inventory.Application.Machines;
 using Inventory.Domain.Expenses;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Machines;
 using Xunit;
 
@@ -28,7 +29,7 @@ public class CreateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(Fields(description: ""), null, CancellationToken.None);
 
@@ -42,7 +43,7 @@ public class CreateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(Fields(description: "  Monthly insurance  "), null, CancellationToken.None);
 
@@ -57,7 +58,7 @@ public class CreateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
         var attachment = AttachmentInput("invoice.pdf", new byte[ExpenseAttachmentPolicy.MaxFileSizeBytes + 1]);
 
         var result = await useCase.Handle(Fields(), attachment, CancellationToken.None);
@@ -72,7 +73,7 @@ public class CreateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(Fields(), AttachmentInput("invoice.exe"), CancellationToken.None);
 
@@ -86,7 +87,7 @@ public class CreateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(Fields(), AttachmentInput("invoice.pdf"), CancellationToken.None);
 
@@ -104,7 +105,7 @@ public class CreateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore { ThrowOnAdd = true };
         var documents = new FakeDocumentStorage();
-        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => useCase.Handle(Fields(), AttachmentInput("invoice.pdf"), CancellationToken.None));
@@ -125,7 +126,7 @@ public class CreateOperatingExpenseTests
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
         var machines = new FakeLocalMachineStore([new LocalMachineRecord(41, "Lobby", IsActive: true)]);
-        var useCase = new CreateOperatingExpense(store, documents, machines);
+        var useCase = new CreateOperatingExpense(store, documents, machines, FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(Fields(machineId: 41), null, CancellationToken.None);
 
@@ -146,7 +147,7 @@ public class CreateOperatingExpenseTests
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
         var machines = new FakeLocalMachineStore([new LocalMachineRecord(41, "Lobby", IsActive: true)]);
-        var useCase = new CreateOperatingExpense(store, documents, machines);
+        var useCase = new CreateOperatingExpense(store, documents, machines, FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(
             Fields(machineId: 42), AttachmentInput("invoice.pdf"), CancellationToken.None);
@@ -168,7 +169,7 @@ public class CreateOperatingExpenseTests
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
         var machines = new FakeLocalMachineStore([new LocalMachineRecord(41, "Retired", IsActive: false)]);
-        var useCase = new CreateOperatingExpense(store, documents, machines);
+        var useCase = new CreateOperatingExpense(store, documents, machines, FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(Fields(machineId: 41), null, CancellationToken.None);
 

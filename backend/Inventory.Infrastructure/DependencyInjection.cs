@@ -1,5 +1,6 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
@@ -223,6 +224,11 @@ public static class InfrastructureServiceCollectionExtensions
         // request's own context and inside the decision's transaction on it, which is also the only
         // way that lease can be taken at all.
         services.AddScoped<IPlatformPlanGrantStore, EfPlatformPlanGrantStore>();
+
+        // The attachment storage accounting of issue #968: the business's own usage, and the
+        // reservation an upload takes before it writes a byte. Scoped like every adapter here, so
+        // it runs on the request's own context and inside its resolved business.
+        services.AddScoped<IAttachmentQuotaStore, EfAttachmentQuotaStore>();
         // The one provisioning write of issue #849: the copies of those presets a business receives
         // when its application is approved. A separate one-method adapter rather than a method on
         // the directory store above, because this is the only platform-admin path that writes a

@@ -1,4 +1,5 @@
 using Inventory.Application.Access;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
@@ -182,6 +183,12 @@ public static class ApplicationServiceCollectionExtensions
         // one BEGIN IMMEDIATE transaction on that same context, and the business it decides about is
         // named by the route - the subject of the decision rather than a tenancy scope.
         services.AddScoped<ManageBusinessPlanGrant>();
+
+        // The attachment storage quota of issue #968, which reads the entitlement above for its
+        // allowance. Scoped for the same reason: both the guard every upload path reserves through
+        // and the figures the access read reports belong to one request's resolved business.
+        services.AddScoped<AttachmentQuotaGuard>();
+        services.AddScoped<GetAttachmentStorageStatus>();
 
         // The one place every enforcement point asks whether the request's business includes a
         // feature (issue #967). Scoped and memoising that one entitlement read, so a bounded Nayax

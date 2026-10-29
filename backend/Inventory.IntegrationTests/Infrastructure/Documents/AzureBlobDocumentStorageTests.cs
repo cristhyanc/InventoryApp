@@ -387,6 +387,22 @@ public sealed class AzureBlobDocumentStorageTests
             _requested.Add(blobName);
             return Task.FromResult(_blobs.Remove(blobName));
         }
+
+        /// <summary>The blobs under one prefix (issue #968), with the prefix recorded as requested.</summary>
+        public Task<IReadOnlyList<BlobDocumentListing>> ListAsync(string prefix, CancellationToken cancellationToken)
+        {
+            _requested.Add(prefix);
+
+            IReadOnlyList<BlobDocumentListing> listings =
+            [
+                .. _blobs
+                    .Where(blob => blob.Key.StartsWith(prefix, StringComparison.Ordinal))
+                    .OrderBy(blob => blob.Key, StringComparer.Ordinal)
+                    .Select(blob => new BlobDocumentListing(blob.Key, blob.Value.Length)),
+            ];
+
+            return Task.FromResult(listings);
+        }
     }
 
     #endregion

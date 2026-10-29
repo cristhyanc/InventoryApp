@@ -310,8 +310,9 @@ public class ApiLayerOwnershipTests
     ///
     /// <c>Bootstrap</c> is the documented operator-only boundary (issue #309): the schema decision
     /// and the human-invoked <c>migrate-database</c>, <c>bootstrap-business</c>,
-    /// <c>migrate-documents</c> and backup commands, reachable only from the argument branches
-    /// before the web host is built. Three of them are the only code in the repository permitted to
+    /// <c>migrate-documents</c>, <c>reconcile-attachment-storage</c> (issue #968) and backup
+    /// commands, reachable only from the argument branches
+    /// before the web host is built. Four of them are the only code in the repository permitted to
     /// pass <c>UnscopedBusinessScope.Instance</c>, and keeping them in the project no request is
     /// served from is what keeps that opt-in visibly exceptional (AGENTS.md § Tenant ownership and
     /// data isolation). <c>Http.HealthChecks</c> is the readiness probe, which proves database

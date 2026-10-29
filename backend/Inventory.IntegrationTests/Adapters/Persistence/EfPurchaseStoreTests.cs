@@ -73,7 +73,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
         }
 
         await using var db = TestAppDbContext.Unrestricted(_options);
-        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
 
         Assert.Equal(
             (2L, "Chips", cutoff.AddDays(1)),
@@ -104,12 +104,13 @@ public sealed class EfPurchaseStoreTests : IDisposable
 
         await using (var db = TestAppDbContext.Unrestricted(_options))
         {
-            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
             await store.CreateAsync(
                 new PurchaseFields("Restock", null, null, null, null, new DateTime(2026, 1, 3), 1),
                 [new PurchaseItemInput(1, 12m, 1m)],
                 FileMetadata(),
                 supplierOrderCompletion: null,
+                attachmentReservation: null,
                 CancellationToken.None);
         }
 
@@ -151,12 +152,13 @@ public sealed class EfPurchaseStoreTests : IDisposable
 
         await using (var db = TestAppDbContext.Unrestricted(_options))
         {
-            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
             await store.CreateAsync(
                 new PurchaseFields("Box of 300", null, enteredLineTotal, null, null, DateTime.UtcNow, null),
                 [new PurchaseItemInput(1, quantity, submittedUnitCost)],
                 FileMetadata(),
                 supplierOrderCompletion: null,
+                attachmentReservation: null,
                 CancellationToken.None);
         }
 
@@ -208,7 +210,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
             failingRebuild
                 .Setup(x => x.RebuildAsync(It.IsAny<long>(), It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new InvalidOperationException("rebuild failure"));
-            var store = new EfPurchaseStore(db, failingRebuild.Object);
+            var store = new EfPurchaseStore(db, failingRebuild.Object, TestClocks.Fixed);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => store.DeleteAsync(purchaseId, CancellationToken.None));
         }

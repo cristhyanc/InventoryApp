@@ -1,4 +1,6 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
+using Inventory.Domain.Attachments;
 using Inventory.Domain.Purchases;
 
 namespace Inventory.Application.Purchases;
@@ -17,6 +19,13 @@ public enum AttachPurchaseDocumentOutcome
 
     /// <summary>That purchase already has a document; replacing one is out of scope.</summary>
     AlreadyHasDocument,
+
+    /// <summary>
+    /// The document would take the business past its attachment storage allowance (issue #968).
+    /// The purchase is untouched and keeps having no document, which is a state it is allowed to
+    /// stay in.
+    /// </summary>
+    StorageFull,
 }
 
 /// <summary>
@@ -54,11 +63,14 @@ public sealed class AttachPurchaseDocument
 {
     private readonly IPurchaseStore _store;
     private readonly IDocumentStorage _documents;
+    private readonly AttachmentQuotaGuard _quota;
 
-    public AttachPurchaseDocument(IPurchaseStore store, IDocumentStorage documents)
+    public AttachPurchaseDocument(
+        IPurchaseStore store, IDocumentStorage documents, AttachmentQuotaGuard quota)
     {
         _store = store;
         _documents = documents;
+        _quota = quota;
     }
 
     public async Task<AttachPurchaseDocumentResult> Handle(
@@ -73,6 +85,14 @@ public sealed class AttachPurchaseDocument
         if (!PurchaseDocumentPolicy.IsExtensionAllowed(extension))
             return Refused(AttachPurchaseDocumentOutcome.InvalidDocument, PurchaseDocumentPolicy.ExtensionErrorMessage);
 
+        // Reserved before the bytes are written (issue #968). The purchase is named so the
+        // reservation is computed against what that purchase currently holds - which for an
+        // attach-only-if-empty write is nothing, so the whole file is charged.
+        var quota = await _quota.ReserveAsync(
+            DocumentCategory.PurchaseDocument, id, file.Length, cancellationToken);
+        if (quota.Refused)
+            return Refused(AttachPurchaseDocumentOutcome.StorageFull, AttachmentStorageQuotaPolicy.StorageFullMessage);
+
         var storedFileName = $"{Guid.NewGuid()}{extension}";
         await using (var source = file.OpenReadStream())
         {
@@ -86,25 +106,41 @@ public sealed class AttachPurchaseDocument
                 id,
                 new PurchaseFileMetadata(
                     storedFileName, file.ContentType ?? string.Empty, file.FileName, file.Length),
+                quota.Reservation,
                 cancellationToken);
+        }
+        catch (AttachmentStorageQuotaExceededException)
+        {
+            // The reservation had expired and the re-validation inside the write transaction found
+            // the upload no longer fits. Nothing was recorded, so the bytes and the reservation go.
+            await CleanUpAsync(storedFileName, quota, cancellationToken);
+            return Refused(AttachPurchaseDocumentOutcome.StorageFull, AttachmentStorageQuotaPolicy.StorageFullMessage);
         }
         catch
         {
-            await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
+            await CleanUpAsync(storedFileName, quota, cancellationToken);
             throw;
         }
 
         if (attachment.Outcome == PurchaseDocumentAttachOutcome.Attached)
             return new AttachPurchaseDocumentResult(AttachPurchaseDocumentOutcome.Attached, attachment.Purchase, null);
 
-        // Nothing was recorded, so the bytes nothing refers to go too.
-        await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
+        // Nothing was recorded, so the bytes nothing refers to go too, and the storage they had
+        // reserved stops being held against the business.
+        await CleanUpAsync(storedFileName, quota, cancellationToken);
 
         return attachment.Outcome == PurchaseDocumentAttachOutcome.AlreadyHasDocument
             ? Refused(
                 AttachPurchaseDocumentOutcome.AlreadyHasDocument,
                 PurchaseDocumentPolicy.AlreadyHasDocumentMessage)
             : Refused(AttachPurchaseDocumentOutcome.PurchaseNotFound, null);
+    }
+
+    private async Task CleanUpAsync(
+        string storedFileName, AttachmentQuotaDecision quota, CancellationToken cancellationToken)
+    {
+        await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
+        await _quota.ReleaseAsync(quota, cancellationToken);
     }
 
     private static AttachPurchaseDocumentResult Refused(AttachPurchaseDocumentOutcome outcome, string? message) =>

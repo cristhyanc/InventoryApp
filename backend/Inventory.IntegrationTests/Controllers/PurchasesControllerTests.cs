@@ -163,12 +163,14 @@ public class PurchasesControllerTests
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
                 It.IsAny<PurchaseFileMetadata?>(),
                 It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
                 It.IsAny<CancellationToken>()))
             .Callback((
                 PurchaseFields _,
                 IReadOnlyList<PurchaseItemInput> _,
                 PurchaseFileMetadata? file,
                 Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? _,
+                Inventory.Application.Attachments.AttachmentUploadReservation? _,
                 CancellationToken _) => captured = file)
             .ReturnsAsync(Record(withDocument: false));
         var documents = new Mock<IDocumentStorage>();
@@ -238,6 +240,7 @@ public class PurchasesControllerTests
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
                 It.IsAny<PurchaseFileMetadata>(),
                 It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Record(totalAmount: 30m));
         var documents = new Mock<IDocumentStorage>();
@@ -286,12 +289,14 @@ public class PurchasesControllerTests
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
                 It.IsAny<PurchaseFileMetadata>(),
                 It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
                 It.IsAny<CancellationToken>()))
             .Callback((
                 PurchaseFields _,
                 IReadOnlyList<PurchaseItemInput> _,
                 PurchaseFileMetadata _,
                 Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? decision,
+                Inventory.Application.Attachments.AttachmentUploadReservation? _,
                 CancellationToken _) => captured = decision)
             .ReturnsAsync(Record(totalAmount: 30m));
 
@@ -421,7 +426,11 @@ public class PurchasesControllerTests
     public async Task AddFile_returns_the_purchase_when_the_document_is_attached()
     {
         var store = new Mock<IPurchaseStore>();
-        store.Setup(s => s.AttachDocumentAsync(7, It.IsAny<PurchaseFileMetadata>(), It.IsAny<CancellationToken>()))
+        store.Setup(s => s.AttachDocumentAsync(
+                7,
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.Attached, Record()));
         var documents = new Mock<IDocumentStorage>();
 
@@ -438,7 +447,11 @@ public class PurchasesControllerTests
     public async Task AddFile_returns_conflict_when_the_purchase_already_has_a_document()
     {
         var store = new Mock<IPurchaseStore>();
-        store.Setup(s => s.AttachDocumentAsync(7, It.IsAny<PurchaseFileMetadata>(), It.IsAny<CancellationToken>()))
+        store.Setup(s => s.AttachDocumentAsync(
+                7,
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.AlreadyHasDocument, null));
 
         var result = await CreateController(store.Object).AddFile(7, CreateFile("scan.jpg"));
@@ -452,7 +465,11 @@ public class PurchasesControllerTests
     public async Task AddFile_returns_not_found_for_a_purchase_that_is_not_the_callers()
     {
         var store = new Mock<IPurchaseStore>();
-        store.Setup(s => s.AttachDocumentAsync(7, It.IsAny<PurchaseFileMetadata>(), It.IsAny<CancellationToken>()))
+        store.Setup(s => s.AttachDocumentAsync(
+                7,
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.PurchaseNotFound, null));
 
         var result = await CreateController(store.Object).AddFile(7, CreateFile("scan.jpg"));
@@ -475,7 +492,11 @@ public class PurchasesControllerTests
             Inventory.Domain.Purchases.PurchaseDocumentPolicy.MissingDocumentMessage,
             Assert.IsType<BadRequestObjectResult>(result.Result).Value);
         store.Verify(
-            s => s.AttachDocumentAsync(It.IsAny<int>(), It.IsAny<PurchaseFileMetadata>(), It.IsAny<CancellationToken>()),
+            s => s.AttachDocumentAsync(
+                It.IsAny<int>(),
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

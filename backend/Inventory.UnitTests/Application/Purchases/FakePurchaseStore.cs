@@ -1,3 +1,4 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Purchases;
 using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Gst;
@@ -20,6 +21,23 @@ public sealed class FakePurchaseStore : IPurchaseStore
     public (long ProductId, string? ProductName, DateTime CutoffAt)? ConflictingBaseline { get; set; }
     public bool ThrowOnCreate { get; set; }
     public bool ThrowOnAttach { get; set; }
+
+    /// <summary>
+    /// Makes the write refuse the upload the way a commit does when it finds its reservation
+    /// expired and the quota no longer satisfied (issue #968), so a use-case test can see what the
+    /// orchestration does with that answer.
+    /// </summary>
+    public bool QuotaExceededOnCreate { get; set; }
+
+    /// <summary>The same, for the attach-a-document-later path.</summary>
+    public bool QuotaExceededOnAttach { get; set; }
+
+    /// <summary>The storage reservation each write was handed, or <c>null</c> when it was handed none.</summary>
+    public AttachmentUploadReservation? LastCreateReservation { get; private set; }
+
+    /// <summary>The storage reservation the attach was handed.</summary>
+    public AttachmentUploadReservation? LastAttachReservation { get; private set; }
+
     public PurchaseRecord? LastCreated { get; private set; }
 
     /// <summary>The metadata the attach use case handed the store, so a test can see the stored name it generated.</summary>
@@ -76,9 +94,12 @@ public sealed class FakePurchaseStore : IPurchaseStore
         IReadOnlyList<PurchaseItemInput> items,
         PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
+        AttachmentUploadReservation? attachmentReservation,
         CancellationToken cancellationToken)
     {
         LastCompletionDecision = supplierOrderCompletion;
+        LastCreateReservation = attachmentReservation;
+        if (QuotaExceededOnCreate) throw new AttachmentStorageQuotaExceededException();
         if (ThrowOnCreate) throw new InvalidOperationException("store failure");
 
         var id = _nextId++;
@@ -111,9 +132,14 @@ public sealed class FakePurchaseStore : IPurchaseStore
     /// here is the three outcomes and the record an attach produces.
     /// </summary>
     public Task<PurchaseDocumentAttachment> AttachDocumentAsync(
-        int id, PurchaseFileMetadata document, CancellationToken cancellationToken)
+        int id,
+        PurchaseFileMetadata document,
+        AttachmentUploadReservation? attachmentReservation,
+        CancellationToken cancellationToken)
     {
         LastAttachedDocument = document;
+        LastAttachReservation = attachmentReservation;
+        if (QuotaExceededOnAttach) throw new AttachmentStorageQuotaExceededException();
         if (ThrowOnAttach) throw new InvalidOperationException("store failure");
 
         if (!_records.TryGetValue(id, out var existing))
