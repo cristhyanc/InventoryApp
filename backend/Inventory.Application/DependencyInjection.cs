@@ -1,4 +1,5 @@
 using Inventory.Application.Access;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
@@ -183,6 +184,12 @@ public static class ApplicationServiceCollectionExtensions
         // business a caller named.
         services.AddScoped<IConnectedMachineSnapshotRecorder, RecordConnectedMachineSnapshot>();
 
+        // The attachment storage quota of issue #968, which reads the entitlement above for its
+        // allowance. Scoped for the same reason: both the guard every upload path reserves through
+        // and the figures the access read reports belong to one request's resolved business.
+        services.AddScoped<AttachmentQuotaGuard>();
+        services.AddScoped<GetAttachmentStorageStatus>();
+
         // The one place every enforcement point asks whether the request's business includes a
         // feature (issue #967). Scoped and memoising that one entitlement read, so a bounded Nayax
         // fan-out that resolves credentials once per machine still reads the plan once per request.
@@ -200,6 +207,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<RecordPriceCollectorResults>();
         services.AddScoped<AnswerPriceCollectorSearch>();
         services.AddScoped<CompletePriceCollectorRun>();
+
+        // And what that run thinks the products it searched for are (issue #941), on the same terms
+        // again: one use case over one narrow transactional port, which decides the obvious matches
+        // itself and leaves everything else to the Super Admin.
+        services.AddScoped<RecordCollectorProductMatches>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are

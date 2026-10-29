@@ -95,7 +95,16 @@ if (BusinessPlanGrandfatheringCommand.Matches(args))
     return await BusinessPlanGrandfatheringCommand.RunAsync(args, CancellationToken.None);
 }
 
-// Counting each counted business's connected machines is the seventh, and the first that a schedule
+// Reconciling stored attachment files against the records that refer to them is the seventh
+// human-invoked command (issue #968). A document's bytes live outside the database, so the two can
+// drift in three ways the application cannot see from inside; this is the operator's read of that,
+// and it never deletes a file - an apply fills in sizes that were never recorded and nothing else.
+if (AttachmentStorageReconciliationCommand.Matches(args))
+{
+    return await AttachmentStorageReconciliationCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Counting each counted business's connected machines is the eighth, and the first that a schedule
 // rather than a person normally starts (issue #978). It is the daily job of that issue: one bounded
 // pass that records today's snapshot for every business whose plan has its machines counted and that
 // has not been counted yet today. It applies no migration, writes nothing but append-only evidence,

@@ -95,6 +95,11 @@ public sealed record MeAccessResponse(
 /// <c>null</c> when it has no recorded end - which is what a grandfathered grant has until an owner
 /// sets one. It is that one record's end, never a combination of both records' dates.
 /// </param>
+/// <param name="AttachmentStorage">
+/// The business's purchase and expense attachment storage (issue #968), or an explicit <c>null</c>
+/// while nothing is enforced - because then there is no allowance, nothing is counted and nothing
+/// is refused. See <see cref="MeAttachmentStorageResponse"/>.
+/// </param>
 /// <param name="ConnectedMachines">
 /// What the business's connected machines cost it (issue #978), or <c>null</c> while nothing is
 /// enforced - which is the shipped state, where nothing about the business is read at all. Being over
@@ -105,7 +110,43 @@ public sealed record MeEntitlementResponse(
     string? Plan,
     string Source,
     DateTime? EndsAtUtc,
+    MeAttachmentStorageResponse? AttachmentStorage,
     MeConnectedMachinesResponse? ConnectedMachines);
+
+/// <summary>
+/// How much of its attachment storage allowance a business is using, as
+/// <c>GET /api/me/access</c> reports it (issue #968).
+///
+/// <para>It is reported here rather than from an endpoint of its own for the reason the
+/// entitlement is: the warning a page shows at 80% and the explanation it gives for a refused
+/// upload at 100% have to come from the same answer as the plan they are about. There is no
+/// caller-supplied business id and no cache: the figures are the resolved business's own, read per
+/// request.</para>
+///
+/// <para>It <strong>withholds nothing</strong>. At or over the allowance only new attachment
+/// <em>uploads</em> are refused: viewing, downloading and deleting attachments, and recording
+/// purchases and expenses without a document, keep working exactly as they do under it, and no
+/// attachment is ever deleted automatically - including after a downgrade that leaves a business
+/// above its new allowance.</para>
+/// </summary>
+/// <param name="UsedBytes">
+/// The recorded sizes of the attachments the business's purchases and expenses refer to, plus the
+/// uploads it currently has in progress. A stored file no record refers to is not charged to the
+/// business, and an attachment whose size was never recorded counts as nothing rather than as a
+/// guess; the reconciliation command reports both.
+/// </param>
+/// <param name="LimitBytes">
+/// The effective plan's allowance, from <c>Inventory.Domain.Subscriptions.PlanCatalogue</c>. 1 GB
+/// is 1,000,000,000 bytes.
+/// </param>
+/// <param name="WarningLevel">
+/// The published <c>Inventory.Domain.Attachments.AttachmentStorageWarningLevel</c> name -
+/// <c>Normal</c> under 80% of the allowance, <c>Warning</c> from 80%, <c>Full</c> at or over it -
+/// rather than a number a client would have to map, and rather than a percentage each client would
+/// round its own way.
+/// </param>
+public sealed record MeAttachmentStorageResponse(
+    long UsedBytes, long LimitBytes, string WarningLevel);
 
 /// <summary>
 /// The business's connected machines, as <c>GET /api/me/access</c> reports them beside the plan

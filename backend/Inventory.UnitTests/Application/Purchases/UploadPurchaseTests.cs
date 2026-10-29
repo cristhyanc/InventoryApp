@@ -1,9 +1,11 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Expenses;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
@@ -26,8 +28,16 @@ public class UploadPurchaseTests
     private static readonly ActorIdentity Operator = Actor("44444444-4444-4444-4444-444444444444");
 
     private static UploadPurchase UseCase(
-        IPurchaseStore store, IDocumentStorage documents, IAuthenticatedActorAccessor? actors = null) =>
-        new(store, documents, actors ?? FakeAuthenticatedActorAccessor.Identified(Operator), Clock);
+        IPurchaseStore store,
+        IDocumentStorage documents,
+        IAuthenticatedActorAccessor? actors = null,
+        AttachmentQuotaGuard? quota = null) =>
+        new(
+            store,
+            documents,
+            actors ?? FakeAuthenticatedActorAccessor.Identified(Operator),
+            Clock,
+            quota ?? FakeAttachmentQuota.NotEnforced());
 
     private static ActorIdentity Actor(string objectId)
     {

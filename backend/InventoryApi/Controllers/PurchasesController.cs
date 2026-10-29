@@ -187,6 +187,9 @@ public class PurchasesController : ControllerBase
             AttachPurchaseDocumentOutcome.Attached => Ok(ToResponseDto(result.Purchase!, visibility)),
             AttachPurchaseDocumentOutcome.AlreadyHasDocument => Conflict(result.Message),
             AttachPurchaseDocumentOutcome.InvalidDocument => BadRequest(result.Message),
+            // The business is out of attachment storage (issue #968). A refused document, not a
+            // refused purchase: the purchase keeps having none, which it is allowed to.
+            AttachPurchaseDocumentOutcome.StorageFull => BadRequest(result.Message),
             _ => NotFound(),
         };
     }

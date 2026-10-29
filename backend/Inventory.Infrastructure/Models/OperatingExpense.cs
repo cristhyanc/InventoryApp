@@ -36,6 +36,21 @@ public class OperatingExpense : IBusinessOwned
     public string? AttachmentStoredFileName { get; set; }
     public string? AttachmentContentType { get; set; }
     public long? AttachmentFileSizeBytes { get; set; }
+
+    /// <summary>
+    /// How many times this expense's attachment has been set or replaced (issue #968). It starts
+    /// at <c>0</c>, including on every expense that already existed when the column was added, and
+    /// the write that records an attachment increments it inside its own transaction.
+    ///
+    /// <para>It exists so two concurrent replacements of one attachment cannot both take credit for
+    /// the same old file: each upload reserves its storage against the version it read, and the
+    /// commit writes only while the expense is still at that version. The loser is refused with a
+    /// conflict, its reservation is released and its file is removed, so exactly one replacement
+    /// wins and the business's usage ends up equal to the winning file's size. Nothing else reads
+    /// it - it is not a row version for the expense's other fields, which are last-write-wins
+    /// exactly as they were.</para>
+    /// </summary>
+    public int AttachmentVersion { get; set; }
     public DateTime? ServicePeriodStart { get; set; }
     public DateTime? ServicePeriodEnd { get; set; }
     public string? Notes { get; set; }

@@ -45,12 +45,50 @@ export interface Entitlement {
   readonly endsAtUtc: string | null;
 
   /**
+   * How much of the business's purchase and expense attachment allowance it is using (issue #968),
+   * or `null` while nothing is enforced - because then there is no allowance, nothing is counted
+   * and no upload is refused.
+   *
+   * It is `undefined` for an API that does not report it at all, which is the same "not known"
+   * this whole type uses, and nothing is withheld on either answer.
+   */
+  readonly attachmentStorage?: AttachmentStorage | null;
+
+  /**
    * What the business's connected machines cost it (issue #978), or `null` while nothing is
    * enforced - which is the shipped state, where nothing about the business's machines is read at
    * all. `undefined` means the answer is not known, by the same fail-open rule as the rest of this
    * type.
    */
   readonly connectedMachines?: ConnectedMachines | null;
+}
+
+/**
+ * The business's attachment storage, as `GET /api/me/access` reported it beside the plan
+ * (issue #968).
+ *
+ * It **withholds nothing**. At or over the allowance only new attachment *uploads* are refused:
+ * viewing, downloading and deleting attachments, and recording purchases and expenses without a
+ * document, keep working exactly as they do under it - and no attachment is ever deleted
+ * automatically, including after a downgrade that leaves a business above its new allowance.
+ */
+export interface AttachmentStorage {
+  /**
+   * The recorded sizes of the attachments the business's purchases and expenses refer to, plus the
+   * uploads it currently has in progress. A stored file no record refers to is not charged to the
+   * business, and an attachment whose size was never recorded counts as nothing rather than as a
+   * guess.
+   */
+  readonly usedBytes: number;
+
+  /** The effective plan's allowance in bytes. 1 GB is 1,000,000,000 bytes. */
+  readonly limitBytes: number;
+
+  /**
+   * The API's published warning name: `Normal` under 80% of the allowance, `Warning` from 80%, and
+   * `Full` at or over it. A name rather than a percentage each screen would round its own way.
+   */
+  readonly warningLevel: string;
 }
 
 /**

@@ -1,3 +1,4 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.Subscriptions;
@@ -50,6 +51,7 @@ public sealed class GetCurrentAccess
     private readonly GetCurrentBusiness _getCurrentBusiness;
     private readonly GetOptionVisibility _optionVisibility;
     private readonly GetEffectiveEntitlement _entitlement;
+    private readonly GetAttachmentStorageStatus _attachmentStorage;
 
     public GetCurrentAccess(
         ICurrentBusinessProvider currentBusiness,
@@ -57,7 +59,8 @@ public sealed class GetCurrentAccess
         ISupportSessionAccessor supportSession,
         GetCurrentBusiness getCurrentBusiness,
         GetOptionVisibility optionVisibility,
-        GetEffectiveEntitlement entitlement)
+        GetEffectiveEntitlement entitlement,
+        GetAttachmentStorageStatus attachmentStorage)
     {
         _currentBusiness = currentBusiness;
         _capabilities = capabilities;
@@ -65,6 +68,7 @@ public sealed class GetCurrentAccess
         _getCurrentBusiness = getCurrentBusiness;
         _optionVisibility = optionVisibility;
         _entitlement = entitlement;
+        _attachmentStorage = attachmentStorage;
     }
 
     /// <exception cref="BusinessAccessDeniedException">
@@ -87,6 +91,12 @@ public sealed class GetCurrentAccess
         // which inside a support session is the business being viewed, so the plan reported is that
         // business's own. Read after the resolutions above for the same reason the options are.
         var entitlement = await _entitlement.Handle(cancellationToken).ConfigureAwait(false);
+        // And, only while that entitlement enforces a plan, how much of its attachment storage the
+        // business has used (issue #968). With nothing enforced there is no allowance to report and
+        // no aggregate runs, so the shipped state's cost per request is unchanged.
+        var attachmentStorage = await _attachmentStorage
+            .Handle(entitlement, cancellationToken)
+            .ConfigureAwait(false);
 
         // The role is read only for a member. A support session resolves none - the administrator
         // holds no membership in the business at all - and asking for one would deny the request
@@ -104,6 +114,7 @@ public sealed class GetCurrentAccess
                 ? new CurrentSupportSession(business.Name, expiresAtUtc, ReadOnly: true)
                 : null,
             options.HistoricalGstClassificationVisible,
-            entitlement);
+            entitlement,
+            attachmentStorage);
     }
 }

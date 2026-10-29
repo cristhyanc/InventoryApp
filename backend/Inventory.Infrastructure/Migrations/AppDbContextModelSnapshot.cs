@@ -17,6 +17,48 @@ namespace Inventory.Infrastructure.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.AttachmentStorageReservation", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Category")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ChargeableBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("LimitBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RecordId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RecordVersion")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("UploadBytes")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "ExpiresAtUtc");
+
+                    b.ToTable("AttachmentStorageReservations", (string)null);
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Business", b =>
                 {
                     b.Property<int>("Id")
@@ -67,7 +109,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Businesses");
+                    b.ToTable("Businesses", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessBackfillAudit", b =>
@@ -108,7 +150,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("RunId");
 
-                    b.ToTable("BusinessBackfillAudits");
+                    b.ToTable("BusinessBackfillAudits", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessBillingSubscription", b =>
@@ -140,7 +182,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId")
                         .IsUnique();
 
-                    b.ToTable("BusinessBillingSubscriptions");
+                    b.ToTable("BusinessBillingSubscriptions", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessConnectedMachineSnapshot", b =>
@@ -233,7 +275,7 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"IsActive\" = 1");
 
-                    b.ToTable("BusinessMemberships");
+                    b.ToTable("BusinessMemberships", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessNayaxConnection", b =>
@@ -283,7 +325,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId")
                         .IsUnique();
 
-                    b.ToTable("BusinessNayaxConnections");
+                    b.ToTable("BusinessNayaxConnections", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessPlanGrant", b =>
@@ -322,7 +364,7 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"Source\" = 10");
 
-                    b.ToTable("BusinessPlanGrants");
+                    b.ToTable("BusinessPlanGrants", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Category", b =>
@@ -355,7 +397,7 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"ExternalCategoryId\" IS NOT NULL");
 
-                    b.ToTable("Categories");
+                    b.ToTable("Categories", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.CategoryExternalId", b =>
@@ -390,7 +432,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "Provider", "ExternalId")
                         .IsUnique();
 
-                    b.ToTable("CategoryExternalIds");
+                    b.ToTable("CategoryExternalIds", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.CommissionPayment", b =>
@@ -432,7 +474,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SiteId", "PeriodStart", "PeriodEnd");
 
-                    b.ToTable("CommissionPayments");
+                    b.ToTable("CommissionPayments", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedDevicePayment", b =>
@@ -477,7 +519,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ImportedReimbursementId");
 
-                    b.ToTable("ImportedDevicePayments");
+                    b.ToTable("ImportedDevicePayments", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedFee", b =>
@@ -528,7 +570,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ImportedReimbursementId");
 
-                    b.ToTable("ImportedFees");
+                    b.ToTable("ImportedFees", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedFile", b =>
@@ -558,7 +600,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "FileHash")
                         .IsUnique();
 
-                    b.ToTable("ImportedFiles");
+                    b.ToTable("ImportedFiles", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedPaymentMethod", b =>
@@ -606,7 +648,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ImportedReimbursementId");
 
-                    b.ToTable("ImportedPaymentMethods");
+                    b.ToTable("ImportedPaymentMethods", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedReimbursement", b =>
@@ -684,7 +726,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ImportedFileId");
 
-                    b.ToTable("ImportedReimbursements");
+                    b.ToTable("ImportedReimbursements", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedReimbursementDevice", b =>
@@ -759,7 +801,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ImportedReimbursementId");
 
-                    b.ToTable("ImportedReimbursementDevices");
+                    b.ToTable("ImportedReimbursementDevices", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.InventoryCostRepair", b =>
@@ -809,7 +851,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "ProductId", "EffectiveAt");
 
-                    b.ToTable("InventoryCostRepairs");
+                    b.ToTable("InventoryCostRepairs", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.InventoryCostTransitionBaseline", b =>
@@ -867,7 +909,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "ProductId")
                         .IsUnique();
 
-                    b.ToTable("InventoryCostTransitionBaselines");
+                    b.ToTable("InventoryCostTransitionBaselines", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.InventoryCostTransitionMachineStock", b =>
@@ -901,7 +943,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("InventoryCostTransitionBaselineId");
 
-                    b.ToTable("InventoryCostTransitionMachineStocks");
+                    b.ToTable("InventoryCostTransitionMachineStocks", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.InventoryCostTransitionPreviewDraft", b =>
@@ -933,7 +975,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId");
 
-                    b.ToTable("InventoryCostTransitionPreviewDrafts");
+                    b.ToTable("InventoryCostTransitionPreviewDrafts", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.LocalMachine", b =>
@@ -1008,7 +1050,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "MachineId", "ProductId", "CountedAtUtc");
 
-                    b.ToTable("MachineStockCounts");
+                    b.ToTable("MachineStockCounts", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.MasterProduct", b =>
@@ -1049,7 +1091,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("NormalisedKey")
                         .IsUnique();
 
-                    b.ToTable("MasterProducts", t =>
+                    b.ToTable("MasterProducts", null, t =>
                         {
                             t.HasCheckConstraint("CK_MasterProducts_SizeValuePositive", "\"SizeValue\" > 0");
                         });
@@ -1111,7 +1153,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "TokenHash")
                         .IsUnique();
 
-                    b.ToTable("MemberInvites");
+                    b.ToTable("MemberInvites", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxConnectionTestDraft", b =>
@@ -1158,7 +1200,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId")
                         .IsUnique();
 
-                    b.ToTable("NayaxConnectionTestDrafts");
+                    b.ToTable("NayaxConnectionTestDrafts", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxMachineStockEvent", b =>
@@ -1244,7 +1286,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "MachineId", "ProcessingStatus");
 
-                    b.ToTable("NayaxMachineStockEvents");
+                    b.ToTable("NayaxMachineStockEvents", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxProcessingFeeRate", b =>
@@ -1272,7 +1314,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "EffectiveFrom")
                         .IsUnique();
 
-                    b.ToTable("NayaxProcessingFeeRates");
+                    b.ToTable("NayaxProcessingFeeRates", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleProductConflict", b =>
@@ -1306,7 +1348,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "NayaxSaleId")
                         .IsUnique();
 
-                    b.ToTable("NayaxSaleProductConflicts");
+                    b.ToTable("NayaxSaleProductConflicts", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleProductResolution", b =>
@@ -1350,7 +1392,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "NayaxSaleId");
 
-                    b.ToTable("NayaxSaleProductResolutions");
+                    b.ToTable("NayaxSaleProductResolutions", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleTimestampRepair", b =>
@@ -1407,7 +1449,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "TransactionId", "AppliedAt");
 
-                    b.ToTable("NayaxSaleTimestampRepairs");
+                    b.ToTable("NayaxSaleTimestampRepairs", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleTimestampRepairPreviewDraft", b =>
@@ -1436,7 +1478,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId");
 
-                    b.ToTable("NayaxSaleTimestampRepairPreviewDrafts");
+                    b.ToTable("NayaxSaleTimestampRepairPreviewDrafts", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSales", b =>
@@ -1532,6 +1574,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("AttachmentStoredFileName")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("AttachmentVersion")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
@@ -1589,7 +1634,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "MachineId");
 
-                    b.ToTable("OperatingExpenses");
+                    b.ToTable("OperatingExpenses", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>
@@ -1630,7 +1675,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "MachineId");
 
-                    b.ToTable("PickListRefills");
+                    b.ToTable("PickListRefills", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefillLine", b =>
@@ -1667,7 +1712,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "RefillId", "Id");
 
-                    b.ToTable("PickListRefillLines");
+                    b.ToTable("PickListRefillLines", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PlatformOptionVisibility", b =>
@@ -1683,7 +1728,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("PlatformOptionVisibility");
+                    b.ToTable("PlatformOptionVisibility", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorResultRow", b =>
@@ -1730,7 +1775,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("PriceCollectorRunId", "PriceCollectorWorkItemId", "SupplierProductId")
                         .IsUnique();
 
-                    b.ToTable("PriceCollectorResultRows");
+                    b.ToTable("PriceCollectorResultRows", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PriceCollectorRun", b =>
@@ -1781,7 +1826,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("Status");
 
-                    b.ToTable("PriceCollectorRuns", t =>
+                    b.ToTable("PriceCollectorRuns", null, t =>
                         {
                             t.HasCheckConstraint("CK_PriceCollectorRuns_CountsNotNegative", "\"ListingsCheckedCount\" >= 0 AND \"ObservationsRecordedCount\" >= 0 AND \"FailureCount\" >= 0");
 
@@ -1839,7 +1884,7 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"WaitingKey\" IS NOT NULL");
 
-                    b.ToTable("PriceCollectorWorkItems", t =>
+                    b.ToTable("PriceCollectorWorkItems", null, t =>
                         {
                             t.HasCheckConstraint("CK_PriceCollectorWorkItems_OneProduct", "(\"MasterProductId\" IS NOT NULL AND \"WaitingKey\" IS NULL) OR (\"MasterProductId\" IS NULL AND \"WaitingKey\" IS NOT NULL)");
 
@@ -1918,7 +1963,7 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"ExternalProductId\" IS NOT NULL");
 
-                    b.ToTable("Products");
+                    b.ToTable("Products", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProductExternalId", b =>
@@ -1953,7 +1998,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "Provider", "ProductId")
                         .IsUnique();
 
-                    b.ToTable("ProductExternalIds");
+                    b.ToTable("ProductExternalIds", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProductMatchSuggestion", b =>
@@ -2012,7 +2057,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("WaitingKey", "Status");
 
-                    b.ToTable("ProductMatchSuggestions", t =>
+                    b.ToTable("ProductMatchSuggestions", null, t =>
                         {
                             t.HasCheckConstraint("CK_ProductMatchSuggestions_ConfidenceIsAProportion", "\"Confidence\" >= 0 AND \"Confidence\" <= 1");
 
@@ -2077,7 +2122,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "ProductId")
                         .IsUnique();
 
-                    b.ToTable("ProductPriceTrackings");
+                    b.ToTable("ProductPriceTrackings", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueFieldDecision", b =>
@@ -2113,7 +2158,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "ProductId", "Field")
                         .IsUnique();
 
-                    b.ToTable("ProviderCatalogueFieldDecisions");
+                    b.ToTable("ProviderCatalogueFieldDecisions", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReview", b =>
@@ -2146,7 +2191,7 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"AppliedAtUtc\" IS NULL");
 
-                    b.ToTable("ProviderCatalogueReviews");
+                    b.ToTable("ProviderCatalogueReviews", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReviewItem", b =>
@@ -2207,7 +2252,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "ReviewId", "Kind");
 
-                    b.ToTable("ProviderCatalogueReviewItems");
+                    b.ToTable("ProviderCatalogueReviewItems", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderDataCoverage", b =>
@@ -2240,7 +2285,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "Provider", "Source", "FromUtc");
 
-                    b.ToTable("ProviderDataCoverages");
+                    b.ToTable("ProviderDataCoverages", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>
@@ -2394,7 +2439,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "SiteId", "EffectiveFrom")
                         .IsUnique();
 
-                    b.ToTable("SiteCommissionAgreements");
+                    b.ToTable("SiteCommissionAgreements", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.StockAdjustment", b =>
@@ -2464,7 +2509,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "MachineId");
 
-                    b.ToTable("StockAdjustments");
+                    b.ToTable("StockAdjustments", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SubscriptionGrandfathering", b =>
@@ -2483,7 +2528,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("SubscriptionGrandfatherings");
+                    b.ToTable("SubscriptionGrandfatherings", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Supplier", b =>
@@ -2542,7 +2587,7 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"SupplierPresetId\" IS NOT NULL");
 
-                    b.ToTable("Suppliers");
+                    b.ToTable("Suppliers", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierListing", b =>
@@ -2630,7 +2675,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("SupplierPresetId", "SupplierProductId")
                         .IsUnique();
 
-                    b.ToTable("SupplierListings", t =>
+                    b.ToTable("SupplierListings", null, t =>
                         {
                             t.HasCheckConstraint("CK_SupplierListings_BarcodeAndScopeTogether", "(\"Barcode\" IS NULL AND \"BarcodeScope\" IS NULL) OR (\"Barcode\" IS NOT NULL AND \"BarcodeScope\" IS NOT NULL)");
 
@@ -2739,7 +2784,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("SupplierListingId")
                         .IsUnique();
 
-                    b.ToTable("SupplierListingPendingObservations", t =>
+                    b.ToTable("SupplierListingPendingObservations", null, t =>
                         {
                             t.HasCheckConstraint("CK_SupplierListingPendingObservations_BarcodeAndScopeTogether", "(\"Barcode\" IS NULL AND \"BarcodeScope\" IS NULL) OR (\"Barcode\" IS NOT NULL AND \"BarcodeScope\" IS NOT NULL)");
 
@@ -2807,7 +2852,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SupplierId", "Status", "OrderDate");
 
-                    b.ToTable("SupplierOrders");
+                    b.ToTable("SupplierOrders", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierOrderLine", b =>
@@ -2845,7 +2890,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ProductId", "SupplierOrderId");
 
-                    b.ToTable("SupplierOrderLines");
+                    b.ToTable("SupplierOrderLines", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierOrderReceiptAllocation", b =>
@@ -2877,7 +2922,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SupplierOrderLineId");
 
-                    b.ToTable("SupplierOrderReceiptAllocations");
+                    b.ToTable("SupplierOrderReceiptAllocations", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierPreset", b =>
@@ -2937,7 +2982,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("NormalisedName")
                         .IsUnique();
 
-                    b.ToTable("SupplierPresets", t =>
+                    b.ToTable("SupplierPresets", null, t =>
                         {
                             t.HasCheckConstraint("CK_SupplierPresets_PriceCheckFreshnessHoursInRange", "\"PriceCheckFreshnessHours\" > 0 AND \"PriceCheckFreshnessHours\" <= 720");
                         });
@@ -3001,7 +3046,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SupplierListingId", "ObservedAtUtc");
 
-                    b.ToTable("SupplierPriceObservations", t =>
+                    b.ToTable("SupplierPriceObservations", null, t =>
                         {
                             t.HasCheckConstraint("CK_SupplierPriceObservations_CurrencyIsAud", "\"Currency\" = 'AUD'");
 
@@ -3060,7 +3105,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ActorDirectoryTenantId", "ActorObjectId");
 
-                    b.ToTable("SupportSessions");
+                    b.ToTable("SupportSessions", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>

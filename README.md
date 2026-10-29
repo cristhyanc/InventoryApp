@@ -158,6 +158,29 @@ own setting: the running API reads the same `DocumentStorage:Provider`, so switc
 persistently would move live document reads to the container before anything had been copied or
 verified.
 
+### Reconciling attachment storage against the records (issue #968)
+
+A document's bytes live outside the database, so storage and records can disagree in three ways
+that nothing inside the application can see. `reconcile-attachment-storage` is the operator's read
+of that, per business, against whichever storage the deployment is configured with:
+
+```bash
+dotnet run --project backend/InventoryApi -- reconcile-attachment-storage --dry-run
+dotnet run --project backend/InventoryApi -- reconcile-attachment-storage --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll reconcile-attachment-storage --dry-run` /
+`--apply` instead. Exactly one of the two flags must be given; a dry run writes nothing.
+
+It reports, for each business, the records whose file is **missing**, the records whose attachment
+size was **never recorded**, and the stored files **no record refers to**. An `--apply` writes one
+thing and one thing only: a size filled in from the stored file itself. **It never deletes
+anything** — an orphan file is reported for a human to decide about, because deleting a business's
+receipt cannot be undone — and it never guesses: a size that cannot be read from storage stays
+unknown and is reported as a missing file. It exits `0` when nothing needs attention and `1` when
+something does, so an apply can be gated on a clean dry run. Running it again is safe and changes
+nothing new.
+
 The dry run writes nothing and reports what an apply would do. An apply copies each document to
 `tenants/{businessId}/purchases|expenses/{storedFileName}`, where the business is read from the
 record that owns the document, and verifies the copy by size and SHA-256 before counting it as
@@ -517,15 +540,18 @@ connected-machine charge only starts once paid plans and the Nayax connection ar
 treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
 asserted here until it is decided.
 
-**Plan limits are described as future behaviour, because none of them is enforced yet.** Attachment
-quota enforcement (issue #968) and recording a purchase without attaching a document (issue #976)
-have not shipped: today attachment storage is unrestricted and a purchase still requires its file.
-So the section's lead paragraph says the storage allowances and the connected-machine charge start
-when the paid plans launch and that nothing is limited today, the Free card repeats it for its 1 GB
-allowance, and the storage FAQ describes the 80% warning and the 100% upload pause only as what will
-happen from launch. The page must never present a limit, a paused upload, a per-machine charge or a
-document-free purchase as today's behaviour; `landing-page.component.spec.ts` holds that as a copy
-regression.
+**Plan limits are still described as future behaviour, because none of them applies to a visitor
+today.** The attachment quota is implemented (issue #968) but applies only once a deployment
+switches plan enforcement on, which the shipped state does not; the extra connected-machine charge
+needs billing (issue #969) that is not live. So the section's lead paragraph says the storage
+allowances and the connected-machine charge start when the paid plans launch and that nothing is
+limited today, the Free card repeats it for its 1 GB allowance, and the storage FAQ describes the
+80% warning and the 100% upload pause only as what will happen from launch — which is exactly what
+[Attachment storage](#attachment-storage) does once enforcement is on. The page must never present a
+limit, a paused upload or a per-machine charge as today's behaviour;
+`landing-page.component.spec.ts` holds that as a copy regression. (Recording a purchase without
+attaching a document has since shipped, issue #976, and the page claims nothing about it either
+way.)
 
 ## The dashboard and the menu
 
@@ -674,7 +700,7 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 
 Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
 
-**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below). Supplier price data (#977) and the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything and no extra query is made.
+**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Supplier price data (#977) and the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
 
 ### The plans
 
@@ -692,7 +718,7 @@ Prices are AUD per business per month, as agreed on issue #965. Whether the adve
 
 A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**. How that count is taken, how old it may be, and what happens when the Nayax account changes are in [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978).
 
-Storage limits cover purchase and expense attachments combined — not transaction records — and attachments are **never deleted automatically** on a downgrade.
+Storage limits cover purchase and expense attachments combined — not transaction records — 1 GB means 1,000,000,000 bytes, and attachments are **never deleted automatically** on a downgrade. See [Attachment storage](#attachment-storage) for exactly what happens as a business fills it up.
 
 ### What is local and what needs a connected plan
 
@@ -750,6 +776,21 @@ From those, one rule decides what the business may use:
 - Grants and paid periods are **UTC instants**: a period applies from its start instant inclusive and stops at its end instant exclusive.
 
 `GET /api/me/access` publishes the answer beside the capability set — `entitlement.enforced`, the plan, where it came from (`ManualGrant`, `BillingSubscription`, `NoActiveRecord`, or the two unrestricted states), when that record ends, and `entitlement.connectedMachines` with the machine allowance, the last recorded count and how old it is (`null` while nothing is enforced; see [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)). It is computed per request with no server cache, there is no separate endpoint and no request names a business. Inside a [support session](#super-admin-support-sessions) it reports the **viewed** business's own plan, and a [role preview](#previewing-the-app-as-a-role-issues-720-and-721) narrows role capabilities only and never changes the plan.
+
+Beside it, `entitlement.attachmentStorage` carries the business's attachment storage: how much it is using, its plan's allowance, and whether that is `Normal`, `Warning` (80% and over) or `Full`. It is `null` while nothing is enforced, because then there is no allowance and nothing is counted.
+
+### Attachment storage
+
+Each plan includes an amount of purchase and expense attachment storage, and that allowance is enforced once plans are being enforced (issue #968). It is about **documents only**: nothing here ever stops a purchase, an expense or any other record being saved.
+
+- **What counts.** The sizes of the attachments the business's purchases and expenses actually refer to, plus any upload it has in progress. A file left in storage that no record refers to is **not** charged to the business, and neither is an attachment whose size was never recorded — both are reported by [`reconcile-attachment-storage`](#reconciling-attachment-storage-against-the-records-issue-968) instead.
+- **Deleting frees it immediately.** Deleting a purchase, an expense or an attachment releases its bytes as soon as that change is saved, whether or not the stored file is removed successfully.
+- **At 80% the business is warned**, and the warning state travels with the plan in the access read above, so the app can say so before anything is refused.
+- **At 100% only new uploads pause.** Viewing, downloading and deleting attachments keep working, and so does recording purchases and expenses — a purchase can be saved [without a receipt](#a-purchase-without-a-receipt) and the document added later. An upload that does not fit is refused with a sentence that says the record can still be saved without it, and nothing is written to storage.
+- **Replacing a file when storage is full works, as long as it does not grow.** Replacing an expense's attachment is charged only the **difference**: a smaller or same-size file succeeds even at or over the allowance, and a larger one needs room for the difference alone. The old file's bytes stop counting the moment the record points at the new file.
+- **If two people replace the same attachment at once, exactly one wins.** The other is refused with "This attachment was replaced by someone else while the upload was in progress. Reload the record and try again." — its file is removed, nothing about the record changed, and retrying from the reloaded record is safe.
+- **An abandoned or crashed upload stops holding storage on its own**, within 30 minutes, without anybody having to clean anything up.
+- **After a downgrade a business can be above its new allowance, and nothing is deleted.** Every existing attachment stays viewable, downloadable and deletable; only new uploads that would add bytes are refused, until enough has been freed or the plan is upgraded again.
 
 ### Grandfathering, in one sentence
 
@@ -816,13 +857,17 @@ Uploaded purchase and expense documents are stored outside the API web root, und
 
 ## The scheduled price collector (issue #924)
 
-The shared supplier price catalogue is collected by a scheduled GitHub Actions workflow, and it signs in to this API **without a person and without a stored password**. This section is the human setup that makes that possible; the boundary itself is [docs/architecture.md § The price collector's app-only path](docs/architecture.md#the-price-collectors-app-only-path-issue-924) and [§ Collector work list](docs/architecture.md#collector-work-list-issue-924).
+The shared supplier price catalogue is collected by a scheduled GitHub Actions workflow, and it signs in to this API **without a person and without a stored password**. This section is the human setup that makes that possible; the boundary itself is [docs/architecture.md § The price collector's app-only path](docs/architecture.md#the-price-collectors-app-only-path-issue-924), [§ Collector work list](docs/architecture.md#collector-work-list-issue-924), [§ Collector results](docs/architecture.md#collector-results-issue-937) and [§ Collector product matching](docs/architecture.md#collector-product-matching-issue-941).
 
 ```text
-GET /api/price-collector/work   issues one run and answers the work it is to do
+GET  /api/price-collector/work                          issues one run and answers the work it is to do
+POST /api/price-collector/results                       one batch of what it read off a shelf
+POST /api/price-collector/matches                       what it thinks each waiting product is
+POST /api/price-collector/work-items/{id}/outcome       finishes one search
+POST /api/price-collector/runs/{id}/complete            closes the run
 ```
 
-**What has shipped.** The authentication path and the work list. The results endpoint (#937), the matches endpoint (#941), the workflow itself (#929) and the collector prompt and scripts (#926, #927) are separate tasks.
+**What has shipped.** The authentication path, the work list, the results endpoints (#937) and the matches endpoint (#941). The workflow itself (#929) and the collector prompt and scripts (#926, #927) are separate tasks.
 
 **The shipped state trusts no collector.** `PriceCollector__TenantId` and `PriceCollector__ClientId` are **empty** in `appsettings.json`, which is both the fail-closed state and the rollback lever: with them empty the collector endpoint answers `401` to every request, issues nothing, and no other endpoint is affected in any way. A half-filled or malformed section means the same thing and is logged as a startup error. Neither identifier is a credential — the API validates with Entra's published signing keys and the collector holds no secret either — so they are ordinary application settings with no Key Vault reference, and no real identifier may be committed. Supply them with `dotnet user-secrets` locally or application settings in Azure; see [Configuration and secrets](#configuration-and-secrets).
 
@@ -839,7 +884,7 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 
 **How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
 
-**What the collector can and cannot reach.** One route. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. The response carries no business id, business name, business product id or price. The two tables it writes, the collector runs and their work items, belong to no business. Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
+**What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
 
 ## Platform diagnostics API
 

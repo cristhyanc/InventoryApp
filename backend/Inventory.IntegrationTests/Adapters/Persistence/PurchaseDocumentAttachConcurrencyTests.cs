@@ -98,8 +98,8 @@ public sealed class PurchaseDocumentAttachConcurrencyTests : IDisposable
 
         await using (var db = TestAppDbContext.For(OptionsWith(competing), BusinessA))
         {
-            var attachment = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).AttachDocumentAsync(
-                purchaseId, Document("first"), CancellationToken.None);
+            var attachment = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).AttachDocumentAsync(
+                purchaseId, Document("first"), attachmentReservation: null, CancellationToken.None);
 
             Assert.Equal(PurchaseDocumentAttachOutcome.Attached, attachment.Outcome);
         }
@@ -145,11 +145,12 @@ public sealed class PurchaseDocumentAttachConcurrencyTests : IDisposable
     private async Task<int> SeedUndocumentedPurchaseAsync()
     {
         await using var db = TestAppDbContext.For(Options(), BusinessA);
-        var purchase = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).CreateAsync(
+        var purchase = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).CreateAsync(
             new PurchaseFields("No receipt", null, null, null, null, PurchaseDate, null),
             [],
             file: null,
             supplierOrderCompletion: null,
+            attachmentReservation: null,
             CancellationToken.None);
         return purchase.Id;
     }
@@ -160,8 +161,8 @@ public sealed class PurchaseDocumentAttachConcurrencyTests : IDisposable
         await using var db = TestAppDbContext.For(options, BusinessA);
         try
         {
-            var attachment = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db)).AttachDocumentAsync(
-                purchaseId, Document(name), CancellationToken.None);
+            var attachment = await new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed).AttachDocumentAsync(
+                purchaseId, Document(name), attachmentReservation: null, CancellationToken.None);
             return new AttachAnswer(attachment.Outcome, null);
         }
         catch (Exception failure)

@@ -136,13 +136,23 @@ public class EndpointAuthorizationClassificationTests
     /// supplier's shelf and the run's own issued work, and none of them carries a business id, a
     /// business name, a business product id or anything a business owns in either direction
     /// (docs/architecture.md § Collector results). They write six platform tables and nothing
-    /// tenant-owned, under the same denied <c>BusinessScope</c>. The matches endpoint of #941 is
-    /// the next, on its own reviewed issue.</para>
+    /// tenant-owned, under the same denied <c>BusinessScope</c>.</para>
+    ///
+    /// <para>The fifth is issue #941's matches endpoint, reviewed on that issue: the collector says
+    /// what it thinks each waiting <em>key</em> is, and the backend decides. Its request and its
+    /// response are about product descriptions - a folded search key, a master product id, a
+    /// suggestion id - and carry no business id, business name, business product id or even a count of
+    /// the mappings a match moved, which would be a count of the businesses tracking the product. It
+    /// is the one collector endpoint that writes anything tenant-owned, and what it may write is three
+    /// columns and an instant of a price-tracking mapping, inside the narrow matching window
+    /// <c>BusinessOwnershipEnforcer</c> bounds (docs/architecture.md § Collector product
+    /// matching).</para>
     /// </summary>
     internal static readonly PriceCollectorEndpoint[] PriceCollectorAllowlist =
     [
         new("api/price-collector/work", "GET"),
         new("api/price-collector/results", "POST"),
+        new("api/price-collector/matches", "POST"),
         new("api/price-collector/work-items/{workItemId:long}/outcome", "POST"),
         new("api/price-collector/runs/{runId:long}/complete", "POST"),
     ];
@@ -793,6 +803,7 @@ public class EndpointAuthorizationClassificationTests
     [Theory]
     [InlineData("api/price-collector/work", "GET")]
     [InlineData("api/price-collector/results", "POST")]
+    [InlineData("api/price-collector/matches", "POST")]
     [InlineData("api/price-collector/work-items/{workItemId:long}/outcome", "POST")]
     [InlineData("api/price-collector/runs/{runId:long}/complete", "POST")]
     public void The_collector_endpoints_are_class_five_and_nothing_else(string route, string httpMethod)

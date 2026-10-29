@@ -55,6 +55,7 @@
        Linking the source keeps either test project from referencing the other. -->
   <ItemGroup>
     <Compile Include="..\Inventory.UnitTests\Application\Access\FakeRolePreviewAccessor.cs" Link="Application\Access\FakeRolePreviewAccessor.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Attachments\FakeAttachmentQuota.cs" Link="Application\Attachments\FakeAttachmentQuota.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" Link="Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Categories\FakeCategoryStore.cs" Link="Application\Categories\FakeCategoryStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\ConnectedMachines\FakeConnectedMachineStores.cs" Link="Application\ConnectedMachines\FakeConnectedMachineStores.cs" />

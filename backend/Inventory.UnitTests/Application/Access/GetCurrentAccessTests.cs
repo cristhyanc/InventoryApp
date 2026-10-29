@@ -1,4 +1,5 @@
 using Inventory.Application.Access;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.Subscriptions;
@@ -7,6 +8,7 @@ using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.ConnectedMachines;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Nayax;
@@ -38,7 +40,8 @@ public class GetCurrentAccessTests
         ISupportSessionAccessor? supportSession = null,
         IOptionVisibilityStore? options = null,
         IRolePreviewAccessor? rolePreview = null,
-        GetEffectiveEntitlement? entitlement = null)
+        GetEffectiveEntitlement? entitlement = null,
+        IAttachmentQuotaStore? attachmentQuota = null)
     {
         var session = supportSession ?? new FakeSupportSessionAccessor();
 
@@ -48,7 +51,8 @@ public class GetCurrentAccessTests
             session,
             new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()),
             new GetOptionVisibility(options ?? new FakeOptionVisibilityStore()),
-            entitlement ?? Unrestricted());
+            entitlement ?? Unrestricted(),
+            new GetAttachmentStorageStatus(attachmentQuota ?? new FakeAttachmentQuotaStore()));
 
     }
 

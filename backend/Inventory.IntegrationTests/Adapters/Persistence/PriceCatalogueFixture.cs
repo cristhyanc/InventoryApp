@@ -161,6 +161,52 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         new EfPriceCollectorResultStore(Track(TestAppDbContext.Denied(_options)));
 
     /// <summary>
+    /// The collector match store as a collector request reaches it (issue #941): the real adapter on
+    /// a context whose caller has no business at all, which is the scope
+    /// <c>POST api/price-collector/matches</c> actually has - and the whole reason that adapter needs
+    /// the reviewed read and the narrow matching write it has.
+    ///
+    /// <para>A new context each time, for the reason the results store gets one: every call the
+    /// collector makes is its own request.</para>
+    /// </summary>
+    public IPriceCollectorMatchStore DeniedMatchStore() =>
+        new EfPriceCollectorMatchStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>
+    /// Every price-tracking mapping of both businesses, from outside the boundary, for verifying what
+    /// a match did and did not change.
+    /// </summary>
+    public async Task<IReadOnlyList<ProductPriceTracking>> AllTrackingsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.ProductPriceTrackings
+            .AsNoTracking()
+            .OrderBy(tracking => tracking.Id)
+            .ToListAsync();
+    }
+
+    /// <summary>One collector run's status, on the same terms: an expiry is a write like any other.</summary>
+    public async Task<PriceCollectorRunStatus> RunStatusAsync(long runId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.PriceCollectorRuns
+            .AsNoTracking()
+            .Where(run => run.Id == runId)
+            .Select(run => run.Status)
+            .SingleAsync();
+    }
+
+    /// <summary>Every master product, on the same terms: a match may never create one.</summary>
+    public async Task<IReadOnlyList<MasterProduct>> AllMasterProductsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.MasterProducts.AsNoTracking().OrderBy(master => master.Id).ToListAsync();
+    }
+
+    /// <summary>
     /// One listing with the identity issue #937 checks a submitted row against, in whatever match
     /// status the test is about. Written directly, because the only writer of a confirmed or
     /// refused listing is #928 and that is out of scope here.

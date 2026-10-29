@@ -104,6 +104,26 @@ public sealed class AzureBlobContainer : IDocumentBlobContainer
         }
     }
 
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<BlobDocumentListing>> ListAsync(
+        string prefix, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+
+        var listings = new List<BlobDocumentListing>();
+
+        // The prefix is server-derived from one business and one category, so this enumerates one
+        // business's own documents and cannot be widened from outside. A missing container
+        // propagates, for the reason a missing container propagates on every other call here.
+        await foreach (var blob in _container.GetBlobsAsync(
+            BlobTraits.None, BlobStates.None, prefix, cancellationToken))
+        {
+            listings.Add(new BlobDocumentListing(blob.Name, blob.Properties.ContentLength ?? 0));
+        }
+
+        return listings;
+    }
+
     /// <summary>
     /// Whether a failed create-if-absent means the destination blob is already there.
     ///

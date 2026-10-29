@@ -71,10 +71,17 @@ public static class PlanCatalogue
     public const string Currency = "AUD";
 
     /// <summary>
-    /// A gigabyte, as the attachment limits below count one: 2^30 bytes. Stated once, because "1 GB"
-    /// and "20 GB" have to mean the same multiple everywhere a quota is measured or reported.
+    /// A gigabyte, as the attachment limits below count one: 1,000,000,000 bytes, the decimal SI
+    /// gigabyte. Stated once, because "1 GB" and "20 GB" have to mean the same multiple everywhere a
+    /// quota is measured or reported.
+    ///
+    /// <para>It was 2^30 when this catalogue was written for issue #966, and issue #968 - the
+    /// quota's own enforcement, decided 29 October 2026 - fixed 1 GB at 1,000,000,000 bytes. The
+    /// two had to agree before anything measured a business against this number, so the catalogue
+    /// adopted the decimal multiple rather than letting the enforcement count differently from the
+    /// allowance it enforces. Nothing had been enforced or charged against the binary one.</para>
     /// </summary>
-    private const long Gigabyte = 1024L * 1024L * 1024L;
+    private const long Gigabyte = 1_000_000_000L;
 
     private static readonly PlanDefinition FreeDefinition = new(
         SubscriptionPlan.Free,

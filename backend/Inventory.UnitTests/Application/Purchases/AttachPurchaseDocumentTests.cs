@@ -1,6 +1,8 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
 using Inventory.Domain.Purchases;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Expenses;
 using Xunit;
 
@@ -18,8 +20,9 @@ namespace InventoryApi.Tests.Application.Purchases;
 /// </summary>
 public class AttachPurchaseDocumentTests
 {
-    private static AttachPurchaseDocument UseCase(IPurchaseStore store, IDocumentStorage documents) =>
-        new(store, documents);
+    private static AttachPurchaseDocument UseCase(
+        IPurchaseStore store, IDocumentStorage documents, AttachmentQuotaGuard? quota = null) =>
+        new(store, documents, quota ?? FakeAttachmentQuota.NotEnforced());
 
     private static PurchaseFileInput FileInput(string fileName = "scan.jpg", long length = 3) =>
         new(fileName, "image/jpeg", length, () => new MemoryStream([1, 2, 3]));

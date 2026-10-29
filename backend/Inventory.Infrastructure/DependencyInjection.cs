@@ -1,5 +1,6 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
@@ -221,6 +222,11 @@ public static class InfrastructureServiceCollectionExtensions
         // load records on the request's own context and the daily job on the one it opened for that
         // business.
         services.AddScoped<IConnectedMachineSnapshotStore, EfConnectedMachineSnapshotStore>();
+
+        // The attachment storage accounting of issue #968: the business's own usage, and the
+        // reservation an upload takes before it writes a byte. Scoped like every adapter here, so
+        // it runs on the request's own context and inside its resolved business.
+        services.AddScoped<IAttachmentQuotaStore, EfAttachmentQuotaStore>();
         // The one provisioning write of issue #849: the copies of those presets a business receives
         // when its application is approved. A separate one-method adapter rather than a method on
         // the directory store above, because this is the only platform-admin path that writes a
@@ -249,6 +255,13 @@ public static class InfrastructureServiceCollectionExtensions
         // method one transaction on that same denied-scope context, so the authoritative read, the
         // comparison and the write are one operation. See EfPriceCollectorResultStore.
         services.AddScoped<IPriceCollectorResultStore, EfPriceCollectorResultStore>();
+        // And the collector's match proposals (issue #941): the match suggestions, the listings a
+        // matched key had already collected, and the four match columns of the mappings that carry
+        // that key - the one tenant-owned write a denied scope may make here, inside the narrow
+        // matching window AppDbContext grants and BusinessOwnershipEnforcer bounds. Scoped on the
+        // request's own context like every adapter above, so nothing can hand it an unscoped one.
+        // See EfPriceCollectorMatchStore and docs/architecture.md § Collector product matching.
+        services.AddScoped<IPriceCollectorMatchStore, EfPriceCollectorMatchStore>();
         // The cheapest-supplier summary (issue #930): the read behind the Cheapest supplier column.
         // It reaches the platform catalogue only through the caller's own matched mappings and the
         // supplier records the caller holds a copy of, on the request's own scoped context like the
