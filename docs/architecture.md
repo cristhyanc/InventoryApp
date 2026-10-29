@@ -1430,7 +1430,7 @@ Authentication/authorization is an `InventoryApi`/frontend boundary concern (iss
 
 - **Backend.** `Program.cs` calls `AddInventoryApiAuthentication(...)`, which registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` for every environment except the dedicated end-to-end testing host (see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46) below) — and, when and only when a customer identity tenant is configured, a second named bearer scheme pinned to that tenant behind an issuer-selecting policy scheme (see [Trusted issuers and the two bearer schemes](#trusted-issuers-and-the-two-bearer-schemes-issue-710) below) — and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. Every business endpoint additionally declares the capability their caller's role must grant, enforced by the same middleware — see [Capability authorization](#capability-authorization-issue-525) and [Capability authorization on the Manager and Owner endpoints](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526); the only endpoints that declare none are `GET /api/me/access`, `GET /api/me/account-state` and the platform diagnostics surface, each for its own recorded reason — and `UseAuthorization()` deliberately runs before `BusinessScopeMiddleware`, which is why the capability handler resolves membership itself rather than waiting for the scope that middleware publishes. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
 - **Frontend.** The Angular SPA authenticates through MSAL (`@azure/msal-angular`, `@azure/msal-browser`). `frontend/inventory-app/src/app/auth-config.ts` defines the SPA/API Entra application IDs, the delegated `access_as_user` scope (`loginRequest`), and `buildProtectedResourceMap(apiBaseUrl, authority)`, which keys MSAL's protected-resource map off `ConfigService.apiBaseUrl` rather than a hard-coded host. `src/app/auth/browser-auth-providers.ts` wires `MsalInterceptor` (attaches `Authorization: Bearer <token>` to matching requests), `MsalGuard` (redirect-based route protection), and `MSAL_INTERCEPTOR_CONFIG` (built from that dynamic map), and `app.config.ts` spreads those providers into the application config, so the bearer token is attached correctly whether `ConfigService.apiBaseUrl` resolves to the local dev proxy (`/api`) or the deployed Azure API's absolute URL — see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts). `app.routes.ts` applies `MsalGuard` to every application route except the public ones: the `/auth` callback route (`AuthCallbackComponent`), which must stay reachable without authentication so the Entra redirect can complete, the `/sign-in` authority chooser of issue #711 (`SignInComponent`), which is what replaces the automatic redirect when a second authority is configured — see [The sign-in choice and the Google journey](#the-sign-in-choice-and-the-google-journey-issue-711) below — and, since issue #954, the Restockroo landing page at `/` for a signed-out visitor and at `/home` for everyone, which makes no request at all — see [The public landing page](#the-public-landing-page-issue-954). `AppComponent` drives sign-in/sign-out (`MsalService.loginRedirect`/`logoutRedirect`) and reflects the active account in the header.
-- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/purchases/{id}/file` or `GET /api/operating-expenses/{id}/attachment` — the sole, canonical OperatingExpense attachment route; the legacy `GET /api/operating-expenses/{id}/receipt` alias was removed (issue #61) once verification confirmed no in-repository or external caller used it, with no deprecation period. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (the adapter falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
+- **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/purchases/{id}/file` or `GET /api/operating-expenses/{id}/attachment` — the sole, canonical OperatingExpense attachment route; the legacy `GET /api/operating-expenses/{id}/receipt` alias was removed (issue #61) once verification confirmed no in-repository or external caller used it, with no deprecation period. A purchase may have no document at all (issue #976), and then its file route answers `404` — the same answer a purchase that does not exist gets — while `POST /api/purchases/{id}/file` adds one to a purchase that has none, once. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (the adapter falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
 - **A second trusted issuer, when one is configured: customer identity through Microsoft Entra External ID.** [docs/identity-provider-decision.md](identity-provider-decision.md) is the approved design (issue #709, under #708); issue #710 implemented its § 5 token-validation half, issue #711 the SPA's Google journey against it, and issue #712 the local email-and-password journey through the same hosted user flow. The API validates bearer tokens from one configured External ID tenant beside workforce Microsoft sign-in — see [Trusted issuers and the two bearer schemes](#trusted-issuers-and-the-two-bearer-schemes-issue-710) below — and the SPA offers that tenant's hosted journey as **Continue with Google or an email address** — see [The sign-in choice and the Google journey](#the-sign-in-choice-and-the-google-journey-issue-711) and [The local email and password journey](#the-local-email-and-password-journey-issue-712). Identity linking is deferred (#713 — a person signing in a different way is a different actor with no membership), and issue #714 is the consolidated security, staging and rollback validation: its automated half is in place — see [Verifying the customer identity rollout](#verifying-the-customer-identity-rollout-issue-714) below — while every hosted-provider check remains a human staging step that blocks production activation. Both configuration sections — the API's `ExternalId` and the SPA's `externalIdSettings` — are **empty in source control**, so a deployment that has not been configured by a human behaves exactly as the bullets above describe, with no second authority anywhere.
 - **Authentication is not ownership.** Accepting users from multiple Microsoft Entra tenants (`TenantId: "common"`) establishes *who* the caller is. *Whose data they may see* is decided separately by business ownership, described below, and *what they may do with it* by their membership role's capabilities — see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521) and [Capability authorization](#capability-authorization-issue-525).
 
@@ -1579,7 +1579,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the five structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share. The invite token hash *is* scoped this way — `(BusinessId, TokenHash)` — even though the invite table is now non-tenant-owned too, because that value is not an identity: a global constraint over it would let one business's row deny another's, and 256 bits of cryptographic randomness is what makes a token unambiguous. The support-session id hash of issue #550 is deliberately the other way round — unique across the whole table — and that is not an exception either: the rule is about values a *business* supplies, and a session id is generated by this server, supplied by nobody, and matched by a request that carries no business to narrow the lookup with, so global uniqueness is what makes "which session is this?" have one answer.
 
-**Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
+**Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. Adding a purchase document (`POST /api/purchases/{id}/file`, issue #976) resolves it the same way and writes the stored name the server generated, so another business's purchase id is simply not found and the bytes that request had written are removed again. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
 **The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). `resolve-nayax-sale-products` (issue #758) is a fifth, on the same pattern: it enumerates businesses through a denied-scope context and reads and writes every sale, product and audit row through a context scoped to the one business that sale belongs to (see [The sale's own product](#the-sales-own-product-issue-758)). `grandfather-business-plans` (issue #966) is a sixth and does the same again: the businesses and the one platform grandfathering row are read under a denied scope, and each business's plan grant is written through a context scoped to that business (see [Business subscriptions and plan entitlements](#business-subscriptions-and-plan-entitlements-issue-966)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context, and issue #544 extended that test to the platform-admin store below — it is registered scoped and its only constructor dependency is the request's own `AppDbContext`, so nothing can hand it anything else. Issue #550's support-session store is held to the same three things, for the same reason: it is the second adapter a platform administrator's denied-scope request reaches. **A support session is not unrestricted either, and is narrower than a membership rather than wider** (issue #551): `BusinessScopeState.SupportReadOnly` names exactly one business and is compared by the same filter expression as `Resolved`, so such a request reads that one business and — because `BusinessOwnershipEnforcer` refuses every `SaveChanges` in that state — writes nothing at all. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551). The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
 
@@ -1811,7 +1811,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `Inventory.Operate` | `GET api/products/{id}/price-history`, `GET api/products/{productId}/stock/restock-cost-suggestion` | none — supplier unit costs and the suggested restock unit cost | Already safe (unit cost, kept visible by the decision) |
 | `Inventory.Operate` | `GET api/categories`, `GET api/categories/{id}`, `POST api/categories`, `PUT`/`DELETE api/categories/{id}` (the three category writes of issue #736), `POST api/products/{productId}/inventory-count/apply`, `GET`/`PUT api/products/{id}/gst-rule`, `PUT`/`DELETE api/products/{id}` | none — status codes, a category's name and description, and the refusal sentences | Already safe |
 | `Inventory.Operate` | `POST api/machines/{id}/sync-restock` and its `apply`/`resolve-duplicate`/`resolve-manual` actions, `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts` | none — machine-stock quantities, discrepancies and per-event outcomes | Already safe |
-| `Purchasing.Operate` | `GET api/purchases`, `GET api/purchases/{id}`, `POST api/purchases`, `PUT api/purchases/{id}` | each line's nested product `inventoryValue` | **Redacted here**. The purchase's own `totalAmount`, `deliveryCost`, `packageCost`, line `unitCost`, `lineTotal` and the input-GST block stay visible by the decision |
+| `Purchasing.Operate` | `GET api/purchases`, `GET api/purchases/{id}`, `POST api/purchases`, `PUT api/purchases/{id}`, `POST api/purchases/{id}/file` (issue #976) | each line's nested product `inventoryValue` | **Redacted here**. The purchase's own `totalAmount`, `deliveryCost`, `packageCost`, line `unitCost`, `lineTotal` and the input-GST block stay visible by the decision |
 | `Purchasing.Operate` | `GET api/supplierorders`, `GET api/supplierorders/{id}`, `POST api/supplierorders` | each line's nested product `inventoryValue` | **Redacted here**. `quantityOrdered`, `quantityReceived`, `unitPrice`, `outstandingQuantity` and (issue #974) `undeliveredQuantity`/`completedWithUndeliveredAt` stay visible |
 | `Purchasing.Operate` | `GET api/purchases/{id}/file`, `DELETE api/purchases/{id}`, `POST api/supplierorders/{id}/cancel`, `POST api/supplierorders/{id}/completion-preview` (issue #974), the whole of `api/suppliers` including `GET .../gst-defaults` | none — a stored document stream, status codes, supplier contact detail, GST classifications, and the completion preview's ordered/received/outstanding quantities and its opaque decision fingerprint | Already safe |
 | *(none — reachable by any signed-in caller)* | `GET api/me/access`, `GET api/me/account-state`, `POST api/invites/redeem`, `POST api/onboarding/business-applications` | none | Already safe |
@@ -4069,11 +4069,15 @@ file name already held on the tenant-owned purchase or operating-expense record,
 URL, no `IWebHostEnvironment`, and no business identifier: ownership is resolved before a call
 reaches the port, by loading the parent record through the tenant-filtered `AppDbContext`, so the
 #64 boundary is what decides whether a document may be touched at all.
-`Inventory.Application.Purchases.UploadPurchase`/`DeletePurchase` (issue #281) and, since the
-operating-expenses slice (issue #50),
+`Inventory.Application.Purchases.UploadPurchase`/`AttachPurchaseDocument`/`DeletePurchase` (issues
+#281 and #976) and, since the operating-expenses slice (issue #50),
 `Inventory.Application.Expenses.CreateOperatingExpense`/`UpdateOperatingExpense`/`DeleteOperatingExpense`
 compose `SaveAsync` and `DeleteAsync` around their own database work to replace a document, which
 is what keeps cleanup-on-failure ordering visible at the call site rather than hidden in storage.
+A purchase may have **no** document at all since issue #976, and then it reaches this port not at
+all: `SaveAsync` is called only when there is something to store, and the purchase's four document
+values are stored as `NULL` together (see
+[A purchase's document is optional](#a-purchases-document-is-optional-issue-976)).
 
 `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` writes new documents to
 `{ContentRoot}/protected-files/{category}/`, reads them back from there or, failing that, from
@@ -4914,7 +4918,10 @@ the backend's read-only method rule is still what would refuse the write if a pa
 or disable it.
 
 **What changed, page by page.** `PurchaseListComponent` hides Add Purchase and Delete (`remove`
-checks the flag itself before confirming). `PurchaseUploadComponent` (`/purchases/new`, reached
+checks the flag itself before confirming). Issue #976's "Add document" joined that list on the same
+terms and for the same reason: adding a purchase's document is a write on `Purchasing.Operate`,
+which a session grants, so the page hides the control while still reporting that the purchase has no
+document (see [A purchase's document is optional](#a-purchases-document-is-optional-issue-976)). `PurchaseUploadComponent` (`/purchases/new`, reached
 both directly and from a supplier order's Receive action) disables Add Purchase and `upload()`
 returns before calling the API. `PurchaseEditFormComponent` - a presentational child with no
 service of its own - takes `sessionActive` as an `@Input` exactly as it already takes `saving` and
@@ -9870,6 +9877,114 @@ A failed save clears the settled choice, so the next attempt re-previews rather 
 fingerprint the server already refused, and the "order completed" toast fires only after the server stored
 it.
 
+#### A purchase's document is optional (issue #976)
+
+A purchase is a **business record**; its receipt is **paperwork about that record**. Until this change the
+two were the same thing: `POST /api/purchases` required an `IFormFile`, `UploadPurchase` refused a zero-length
+one, and `Purchase.StoredFileName` was a required column, so a business with no receipt to attach - or no
+storage left to put one in - could not record what it bought at all. The decision recorded on parent #965
+(29 October 2026) is that recording the purchase must never be the thing that is blocked, so **the document
+is optional, and it can be added later**.
+
+**What a purchase with no document is.** All four document values are `NULL` together, and they are never
+half present: `AllowPurchaseWithoutDocument` makes `Receipts.FileName`, `StoredFileName`, `ContentType` and
+`FileSizeBytes` nullable and adds the `CK_Receipts_DocumentMetadataAllOrNothing` check constraint, with
+`Inventory.Domain.Purchases.PurchaseDocumentPolicy.IsMetadataConsistent` stating the same rule for the
+application. The constraint is in the database because a half-recorded document is not recoverable - a stored
+name with no content type names bytes nothing can serve, and a content type with no stored name claims a
+document nothing can find - and because "this purchase has no document" is the answer the `404`, the lists'
+"No document" and the attach-only-if-empty write all rest on. `StoredFileName` being `NULL` is therefore the
+single authoritative question, which is what the API, the adapter and the frontend each ask.
+
+The migration changes **no data**: every purchase that already exists keeps its document metadata exactly as
+it stands, nothing is nulled, blanked or backfilled, and what changes is only what the schema permits. SQLite
+cannot drop a `NOT NULL` or add a table constraint in place, so the table every purchase line hangs off is
+rebuilt - created afresh, copied into, dropped, renamed, indexes recreated - and both directions are written
+out as SQL rather than as model-driven operations, for the reason
+[`AddSupplierOrderPartialCompletion`](#completing-a-partially-delivered-supplier-order-issue-974) sets out at
+length: EF hands a `Down` the *preceding* migration's recorded model, several migrations in this history
+deliberately record none, and the provider's rebuild cannot run without one.
+`AllowPurchaseWithoutDocumentMigrationTests` asserts the whole column set, both indexes, the preserved
+purchase with its line, its restock movement and its product's costing position, and that neither direction
+needs a point-in-time model. Rolling **back** needs every purchase to have a document, because no value a
+restored `NOT NULL` column could hold would be true of one that has none; the rollback refuses by name rather
+than inventing a stored name or dropping the purchase.
+
+**Nothing about money changed.** A document is paperwork, so the stock movements, the costing quantity, the
+inventory value, the weighted-average cost, the GST classification and the supplier-order allocation a
+purchase produces are identical with and without one - `UploadPurchase` runs every one of its existing
+validations in the same order either way, and the only thing it cannot do without a file is fall back to the
+file's name for the purchase title, which is refused by name
+(`PurchaseDocumentPolicy.TitleRequiredWithoutDocumentMessage`) rather than stored as an empty title.
+`PurchaseWithoutDocumentApiTests` asserts the two purchases' effect on the product's whole costing position,
+their restock movements and the server's own input-GST block are the same.
+
+**Adding one later is "attach only if empty".** `POST /api/purchases/{id}/file` takes a `multipart/form-data`
+body with one `file` part and answers the purchase envelope on success, `404` for a purchase that is not the
+caller's business's, `409` when that purchase already has a document, and `400` for a document the rules
+refuse. Replacing an existing document is deliberately **out of scope**, and the refusal is not merely a
+policy choice: deleting a receipt is not recoverable by rolling a transaction back, so a second attach must
+never discard the first one's bytes.
+
+| Concern | Where it is decided |
+| --- | --- |
+| What an uploaded document may be - the 10 MiB ceiling and the allowed types | `Inventory.Domain.Purchases.PurchaseDocumentPolicy` |
+| Whether a stored document's four values are coherent | `PurchaseDocumentPolicy.IsMetadataConsistent`, with `CK_Receipts_DocumentMetadataAllOrNothing` underneath |
+| Whether the purchase still has no document, and the write that follows | `Inventory.Infrastructure.Persistence.EfPurchaseStore.AttachDocumentAsync`, inside one `BEGIN IMMEDIATE` transaction |
+| Storing the bytes, and removing them again when the write does not happen | `Inventory.Application.Purchases.AttachPurchaseDocument` |
+
+**Concurrency.** The authoritative read, the emptiness check and the write are one operation:
+`AttachDocumentAsync` opens `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) **before** it reads, the same
+lock issue #974's completion and issue #896's machine delete take, so a second attach waits, then reads the
+first one's committed document and is refused with
+`PurchaseDocumentPolicy.AlreadyHasDocumentMessage` instead of overwriting it. Without the lock both requests
+read a purchase with no document and the second one's stored name replaces the first's, orphaning bytes
+nothing can ever reach again while their uploader was told the attach succeeded.
+`PurchaseDocumentAttachConcurrencyTests` proves it over a real SQLite file: one test drives a competing attach
+from a command interceptor at the exact instant of the first one's read and asserts it cannot even begin,
+and one releases both at a barrier and asserts exactly one attaches, exactly one is refused, and neither
+answers a provider lock error.
+
+**Cleanup is at the call site, not in storage.** `AttachPurchaseDocument` writes the bytes, then asks the
+store, then deletes them again whenever the answer is not "attached" - an unknown purchase, a purchase that
+already has one, or a persistence failure - which is the same composition `UploadPurchase` and the
+operating-expense use cases already use (see [Document storage](#document-storage)). The bytes are written
+first because the only honest emptiness check is the one taken with the write lock held; a refusal therefore
+leaves no document recorded **and** no file behind.
+
+**The file endpoint answers `404` for a purchase with no document**, which is the same answer it already gave
+for a purchase that does not exist and for one whose stored bytes had gone missing:
+`EfPurchaseStore.FindFileMetadataAsync` returns `null` for all three, and `GetPurchaseFile` never
+distinguishes them.
+
+**Authorization.** The attach is one more action on `PurchasesController`, which already declares
+`Purchasing.Operate` (authorization class 1); no new capability, no new endpoint class. It is a `POST`, so a
+read-only support session and a Super Admin's role preview each refuse it by their own central `GET`/`HEAD`
+method rule rather than by anything written for it - and document storage would refuse the write a second
+time in a session even if they did not (see
+[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551)). The purchase is
+reached through the ordinary tenant query filters, so another business's purchase id is simply not found, and
+the request carries only a file: the stored name is the server's own, and the uploaded name is recorded for
+display only.
+
+**Contract change.** `fileSizeBytes` is now nullable on the published `Purchase` schema; the other three were
+already published as nullable. Emitting `0` for a purchase with no document was rejected as a false statement
+about a document's size that no client could tell from a real one - the same reasoning as the never-zero rule
+in [Report availability model](#report-availability-model-issue-730). `PublishedResponseSchemaContractTests`
+records that as the second movement of its baselines since issue #304.
+
+**The frontend.** Add Purchase saves with no file - the field is labelled optional and sends no `file` part at
+all rather than an empty one - and the Purchases list reports "No document" as a state rather than leaving the
+cell blank, with no control to open a document that is not there. The offer to add one is its own feature
+component, `PurchaseDocumentAttachComponent`
+(`components/purchases/purchase-document-attach/`), composed into the list through one input and one output
+rather than grown into the routed page: it has its own file, saving and error lifecycle on one row out of many
+(see [Page composition boundary](#page-composition-boundary-issue-191)). It shows the API's own refusal
+sentence, and it is hidden while a support session is active for exactly the reason Delete is - a session
+grants `Purchasing.Operate`, so this page hides its own writes (see
+[Extending write-control hiding to Purchases and Suppliers](#extending-write-control-hiding-to-purchases-and-suppliers-issue-657)).
+Replacing a document is still not offered anywhere, so the Edit Purchase page is unchanged.
+
 #### Reorder-alert machine-product fan-out (issue #47)
 
 The low-stock endpoints (`GET /api/products/alerts/low-stock`, and
@@ -10895,7 +11010,10 @@ boundary](#page-composition-boundary-issue-191):
   an absent charge submits no classification, and an unchanged purchase date is resubmitted as the
   stored instant. The GST figures are still the API's alone and are still displayed on the list; this
   page performs no GST arithmetic. Editing a purchase still cannot replace its uploaded document -
-  `PUT /api/purchases/{id}` never accepted a file, and this page adds no way to send one.
+  `PUT /api/purchases/{id}` never accepted a file, and this page adds no way to send one. Issue #976
+  did not change that: a purchase with **no** document can be given one, but from the Purchases list
+  and through its own endpoint, and replacing an existing document stays out of scope (see
+  [A purchase's document is optional](#a-purchases-document-is-optional-issue-976)).
 - **Breadcrumb.** `/purchases/:id/edit` is a static `Purchases > Edit purchase` entry in
   `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)); the page
   renders no breadcrumb markup of its own and contributes no live label.
@@ -11211,7 +11329,7 @@ supplier order still reference it (see
 | `InventoryApi.DTOs` | `PurchaseItemDto`, `PurchaseCreateMetaDto`, `PurchaseValidationDto`, `PurchaseGstSummaryDto`, `PurchaseResponseDto` (JSON keys `purchase`/`validation`/`gst`), and since issue #304 the API-owned `PurchaseResponse`/`PurchaseItemResponse` the `purchase` key carries | — | The `receipt`/`validation` wrapper existed only for old clients; `PurchaseResponseDto`'s property is now named `Purchase`. The `gst` key is issue #431's additive input-GST summary. `PurchaseItemResponse.ReceiptId` keeps the persistence-facing JSON name, as the entity's did. |
 | Frontend `models.ts`/`purchase.service.ts` | `Purchase`, `PurchaseItem`, `PurchaseValidation`, `PurchaseGstSummary`, `PurchaseResponse` (`purchase` field), `PurchaseService` (canonical `/purchases` base URL), `PurchaseUploadPayload`/`PurchaseItemPayload`/`PurchaseUpdatePayload` | JSON-bound field `receiptId` on `PurchaseItem` | `receiptId` matches the backend `PurchaseItem.ReceiptId` persistence/JSON contract above, which is out of this issue's scope. |
 | Frontend routing | `/purchases`, `/purchases/new`, `/purchases/orders` (issue #387) and `/purchases/:id/edit` (issue #475) are the supported purchase routes | `/products/on-order` redirects to `/purchases/orders` (issue #387) | The `/receipts` and `/receipts/new` redirect aliases were removed; there is no supported bookmark to preserve. `/products/on-order` keeps its old bookmark working instead of a second supplier-order listing. |
-| Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record. |
+| Supporting documents | Not renamed: `Purchase.FileName`/`StoredFileName`/`ContentType`/`FileSizeBytes`, the "Receipt or invoice" upload copy, `OperatingExpense` receipt-attachment naming | — | A purchase's attached scan/photo, and an operating expense's attachment, are supporting *documents*, a distinct concept from the Purchase business record — which is exactly why issue #976 made the purchase's four columns nullable: the record can exist without the paperwork (see [A purchase's document is optional](#a-purchases-document-is-optional-issue-976)). |
 
 Out of scope for the Purchase/Products contract cleanup (per issues #60 and #127): changing purchase
 accounting/inventory behaviour, the purchase GST/BAS model, any destructive migration/table rename,

@@ -9,6 +9,11 @@ namespace Inventory.Application.Purchases;
 /// Each of the two purchase-level charges carries its own persisted GST classification and
 /// provenance (issue #429); they are never nullable here, because a read always has a stored state,
 /// and that state is <c>Unknown</c>/<c>Unknown</c> for everything nobody has classified.
+///
+/// <para>The four document values <em>are</em> nullable since issue #976: a purchase may have no
+/// supporting document at all, and then all four are <c>null</c> together rather than blank. They
+/// are never half present - <c>Inventory.Domain.Purchases.PurchaseDocumentPolicy</c> states that
+/// rule and a database <c>CHECK</c> constraint enforces it.</para>
 /// </summary>
 public sealed record PurchaseRecord(
     int Id,
@@ -26,10 +31,10 @@ public sealed record PurchaseRecord(
     int? SupplierId,
     PurchaseSupplierRecord? Supplier,
     IReadOnlyList<PurchaseItemRecord> Items,
-    string FileName,
-    string StoredFileName,
-    string ContentType,
-    long FileSizeBytes,
+    string? FileName,
+    string? StoredFileName,
+    string? ContentType,
+    long? FileSizeBytes,
     DateTime CreatedAt);
 
 /// <summary>The supplier detail carried on a purchase, as the Application layer sees it.</summary>
@@ -79,5 +84,10 @@ public sealed record PurchaseProductSummaryRecord(
     DateTime UpdatedAt,
     long? CategoryId);
 
-/// <summary>The stored-document metadata needed to open, persist, or delete a purchase's supporting document.</summary>
+/// <summary>
+/// The stored-document metadata needed to open, persist, or delete a purchase's supporting
+/// document. It describes a document that <em>is</em> there, so its four values are all required;
+/// a purchase with no document is a <c>null</c> <see cref="PurchaseFileMetadata"/>, never one with
+/// blank values (issue #976).
+/// </summary>
 public sealed record PurchaseFileMetadata(string StoredFileName, string ContentType, string FileName, long FileSizeBytes);

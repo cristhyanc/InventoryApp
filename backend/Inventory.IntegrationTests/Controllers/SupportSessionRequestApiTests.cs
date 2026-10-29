@@ -190,6 +190,31 @@ public class SupportSessionRequestApiTests
     }
 
     /// <summary>
+    /// The same criterion for the two purchase writes that take a <c>multipart/form-data</c> body
+    /// (issue #976's "add a document" and the purchase create it exists beside). They are tested
+    /// separately rather than as rows above because the body's content type is part of reaching the
+    /// endpoint at all: a JSON body is answered <c>415</c> during action selection, before any
+    /// authorization runs, which would prove nothing about the session.
+    ///
+    /// <para>Neither declares a rule of its own: the central <c>GET</c>/<c>HEAD</c> method rule is
+    /// what refuses them, under the capability the session <em>does</em> grant. The purchase named
+    /// is not one of either business's, so a refusal that reached the endpoint would be a
+    /// <c>404</c>.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("/api/purchases")]
+    [InlineData("/api/purchases/999999/file")]
+    public async Task A_multipart_purchase_write_is_refused_as_read_only(string route)
+    {
+        var client = await _factory.InSupportSessionAsync();
+
+        var response = await client.PostAsync(route, MultipartDocument());
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(SupportSessionErrorCodes.ReadOnly, await CodeAsync(response));
+    }
+
+    /// <summary>
     /// The criterion: the two excluded capabilities are refused even for a read. The members list
     /// carries people's names and email addresses, and a supporter from outside the business does
     /// not see those in v1.
@@ -801,6 +826,20 @@ public class SupportSessionRequestApiTests
     /// is about the access decision, which is taken before an action binds a body, so nothing here
     /// may be a request the endpoint would act on.
     /// </summary>
+    /// <summary>
+    /// A minimal <c>multipart/form-data</c> body carrying one document part, which is what the
+    /// purchase create and the "add a document" write of issue #976 accept.
+    /// </summary>
+    private static MultipartFormDataContent MultipartDocument()
+    {
+        var content = new MultipartFormDataContent();
+        var file = new ByteArrayContent([1, 2, 3]);
+        file.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        content.Add(file, "file", "scan.jpg");
+        content.Add(new StringContent("Weekly restock"), "title");
+        return content;
+    }
+
     private static HttpRequestMessage Request(string method, string route)
     {
         var request = new HttpRequestMessage(new HttpMethod(method), route);
