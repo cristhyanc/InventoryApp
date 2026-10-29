@@ -9,6 +9,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,6 +25,16 @@ namespace InventoryApi.Controllers;
 /// shares the capability of the report it exports rather than carrying one of its own - a file is
 /// the same figures in another container, and a separate capability would be a way to read a report
 /// that is otherwise refused.
+///
+/// <para><strong>Every action also declares the plan feature it belongs to</strong> (issue #967).
+/// Bookkeeping and the GST accounting aid are
+/// <see cref="PlanFeature.BookkeepingAndGstReports"/> - the two reports that need no sales provider,
+/// which a Starter business includes - and the other six are
+/// <see cref="PlanFeature.ProviderSalesReports"/>. The export declares
+/// <c>[RequirePlanPerReport]</c> for the same reason it shares the capability: it is the same
+/// figures in another container, so it must need the same plan as the report it exports, and its
+/// one route serves every family. A plan is evaluated after the capability, so a role refusal is
+/// unchanged and a plan never grants a role more access.</para>
 /// </summary>
 [ApiController]
 [Route("api/reports")]
@@ -65,24 +76,33 @@ public sealed class ReportsController : ControllerBase
     }
 
     [HttpGet("bookkeeping")]
+    [RequirePlan(PlanFeature.BookkeepingAndGstReports)]
     public Task<BookkeepingReportDto> Bookkeeping([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getBookkeepingReport.Handle(filter, ct);
     [HttpGet("daily")]
+    [RequirePlan(PlanFeature.ProviderSalesReports)]
     public Task<DailyReportDto> Daily([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getDailyReport.Handle(filter, ct);
     [HttpGet("reconciliation")]
+    [RequirePlan(PlanFeature.ProviderSalesReports)]
     public Task<ReconciliationReportDto> Reconciliation([FromQuery] ReportingFilterDto filter, [FromQuery] decimal tolerance = 0.01m, CancellationToken ct = default) => _getReconciliationReport.Handle(filter, tolerance, ct);
     [HttpGet("machine-profitability")]
+    [RequirePlan(PlanFeature.ProviderSalesReports)]
     public Task<MachineProfitabilityReportDto> MachineProfitability([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getMachineProfitabilityReport.Handle(filter, ct);
     [HttpGet("product-profitability")]
+    [RequirePlan(PlanFeature.ProviderSalesReports)]
     public Task<ProductProfitabilityReportDto> ProductProfitability([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getProductProfitabilityReport.Handle(filter, ct);
     [HttpGet("gst")]
+    [RequirePlan(PlanFeature.BookkeepingAndGstReports)]
     public Task<GstAccountingAidDto> Gst([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getGstAccountingAid.Handle(filter, ct);
     [HttpGet("dashboard")]
+    [RequirePlan(PlanFeature.ProviderSalesReports)]
     public Task<DashboardReportDto> Dashboard([FromQuery] ReportingFilterDto filter, CancellationToken ct) => _getDashboardReport.Handle(filter, ct);
     [HttpGet("transactions")]
+    [RequirePlan(PlanFeature.ProviderSalesReports)]
     public Task<TransactionSalesReportDto> Transactions([FromQuery] TransactionSalesFilterDto filter, CancellationToken ct) =>
         _getTransactionSalesReport.Handle(filter, ct);
 
     [HttpGet("{report}/export")]
+    [RequirePlanPerReport]
     public async Task<IActionResult> Export(string report, [FromQuery] string format = "csv",
         [FromQuery] ReportingFilterDto? filter = null, [FromQuery] TransactionSalesFilterDto? transactionFilter = null,
         CancellationToken ct = default)

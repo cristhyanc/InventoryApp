@@ -4,6 +4,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
@@ -54,6 +55,28 @@ public class GetDashboardSummaryProviderOptionalTests
         Assert.False(needsRefill.Available);
         Assert.Equal("NayaxNotConnected", needsRefill.Reason);
         Assert.Equal("StorageOnly", summary.NeedsOrdering.Mode);
+    }
+
+    /// <summary>
+    /// Issue #967: a business whose plan does not include the sales provider is told the same thing
+    /// under its own code - the refill card is withheld rather than counted over a fleet nobody
+    /// read, and the local ordering count is still a real figure.
+    /// </summary>
+    [Fact]
+    public async Task A_business_whose_plan_excludes_the_provider_is_told_the_plan_is_why()
+    {
+        var summary = Assert.IsType<DashboardSummaryDto>(
+            await UseCase(FleetRefusing(NayaxNotConnectedException.PlanRequired(SubscriptionPlan.Pro)))
+                .Handle(CancellationToken.None));
+
+        var needsRefill = Assert.IsType<UnavailableDashboardSectionDto>(summary.NeedsRefill);
+        Assert.False(needsRefill.Available);
+        Assert.Equal("PlanRequired", needsRefill.Reason);
+        Assert.Equal("StorageOnly", summary.NeedsOrdering.Mode);
+        // The local sections are untouched, which is the criterion "Free keeps everything else
+        // unchanged": the week's sales and the inventory card are reads of this business's own data.
+        Assert.NotNull(summary.SalesThisWeek);
+        Assert.NotNull(summary.Inventory);
     }
 
     /// <summary>

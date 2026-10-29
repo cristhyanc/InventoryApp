@@ -1,5 +1,6 @@
 using Inventory.Application.Access;
 using Inventory.Application.Imports;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -22,6 +23,15 @@ namespace InventoryApi.Controllers;
 /// (issue #736). <c>CatalogueReviewController</c> replaced it for every business - the same import,
 /// previewed as a review and decided per entry - and carries the same <c>Imports.Run</c>
 /// capability.</para>
+///
+/// <para><strong>The Nayax sales file import additionally requires
+/// <see cref="PlanFeature.SalesFileImport"/></strong> (issue #967, decided on #965's review of 29
+/// October 2026). It reads an uploaded file rather than the Nayax API, so the credential gate never
+/// sees it and the requirement is declared here, on that one action. The reimbursement XML import
+/// beside it carries no plan requirement: it is a settlement statement the business was sent, and
+/// the fee and reimbursement figures it records are read by the Bookkeeping and GST reports a
+/// Starter business includes. A refused import stores nothing - the plan is evaluated before the
+/// multipart body is read at all - and nothing already imported is deleted or altered.</para>
 /// </summary>
 [ApiController]
 [Route("api/imports")]
@@ -42,6 +52,7 @@ public sealed class ImportsController : ControllerBase
     }
 
     [HttpPost("nayax-sales")]
+    [RequirePlan(PlanFeature.SalesFileImport)]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
     public async Task<ActionResult<NayaxSalesImportResult>> ImportNayaxSales(

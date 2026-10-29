@@ -96,6 +96,15 @@ public enum MachineLatestSalesUnavailableReason
     /// status.
     /// </summary>
     PermissionNotGranted = 3,
+
+    /// <summary>
+    /// The business's effective plan does not include the sales provider (issue #967), so the
+    /// credential gate refused before the stored connection was read and no Nayax request was made.
+    /// Distinct from <see cref="NayaxNotConnected"/> and from <see cref="NoSalesProvider"/>: the
+    /// business may have valid credentials saved and a provider claimed, and what would show these
+    /// sales again is the plan.
+    /// </summary>
+    PlanRequired = 4,
 }
 
 /// <summary>
@@ -116,6 +125,12 @@ public static class MachineLatestSalesUnavailableReasons
     /// <summary>The published code for <see cref="MachineLatestSalesUnavailableReason.PermissionNotGranted"/>.</summary>
     public const string PermissionNotGranted = "PermissionNotGranted";
 
+    /// <summary>
+    /// The published code for <see cref="MachineLatestSalesUnavailableReason.PlanRequired"/> (issue
+    /// #967), spelled exactly as every other per-feature vocabulary spells the same answer.
+    /// </summary>
+    public const string PlanRequired = "PlanRequired";
+
     /// <exception cref="ArgumentOutOfRangeException">
     /// A reason this vocabulary has never heard of - a value cast from an integer, which an enum
     /// cannot prevent. Refused rather than published under a guessed code.
@@ -125,6 +140,7 @@ public static class MachineLatestSalesUnavailableReasons
         MachineLatestSalesUnavailableReason.NoSalesProvider => NoSalesProvider,
         MachineLatestSalesUnavailableReason.NayaxNotConnected => NayaxNotConnected,
         MachineLatestSalesUnavailableReason.PermissionNotGranted => PermissionNotGranted,
+        MachineLatestSalesUnavailableReason.PlanRequired => PlanRequired,
         _ => throw new ArgumentOutOfRangeException(
             nameof(reason), reason, "Unknown machine latest-sales unavailability reason."),
     };
@@ -141,6 +157,8 @@ public static class MachineLatestSalesUnavailableReasons
             "Latest sales are unavailable because Nayax is not connected for this business. Reconnect this business's Nayax account to see them. This is not a report that the machine made no sales.",
         MachineLatestSalesUnavailableReason.PermissionNotGranted =>
             "Latest sales are unavailable because Nayax refused this machine's sales for lack of permission. Check the Nayax account's permissions for this feature. This is not a report that the machine made no sales.",
+        MachineLatestSalesUnavailableReason.PlanRequired =>
+            "Latest sales are unavailable because this business's plan does not include the Nayax connection. Any credentials this business has saved are unchanged. This is not a report that the machine made no sales.",
         _ => throw new ArgumentOutOfRangeException(
             nameof(reason), reason, "Unknown machine latest-sales unavailability reason."),
     };
