@@ -401,11 +401,12 @@ public class PriceCollectorMatchTests
     }
 
     /// <summary>
-    /// A pair that already has a suggestion gets no second row: a reviewer looking at one decision
-    /// must not be handed the same evidence once per run. The existing row is reported instead - and
-    /// it is stamped with the run that decided the key, because that row is the only record there is
-    /// of what this run decided (see the retry regressions below). The matcher's own evidence, the
-    /// reason and the confidence the row was first stored with, is left exactly as it was.
+    /// A pair that already has a suggestion gets no second <em>proposal</em>: a reviewer looking at
+    /// one decision must not be handed the same evidence once per run. The row they are looking at is
+    /// left exactly as it was - its label, its status, its pair, its reason, its confidence and its
+    /// instants are all still the reviewer's - and this run records its own decision about the key on
+    /// a <c>Repeated</c> row of its own, which is what a repeat request is answered with (see the
+    /// retry regressions below).
     /// </summary>
     [Fact]
     public async Task A_pair_that_already_has_a_suggestion_is_not_suggested_twice()
@@ -430,18 +431,32 @@ public class PriceCollectorMatchTests
         var tentative = Assert.Single(receipt!.Tentative);
         Assert.Equal(AutomaticProductMatchPolicy.AlreadySuggestedReason, tentative.Reason);
 
-        var suggestion = Assert.Single(await fixture.AllSuggestionsAsync());
-        Assert.Equal(ProductMatchSuggestionPolicy.CollectorRunFor(runId), suggestion.CollectorRun);
-        Assert.Equal(Now, suggestion.UpdatedAtUtc);
-        Assert.Equal(suggestion.Id, tentative.SuggestionId);
+        var suggestions = await fixture.AllSuggestionsAsync();
 
-        // Reused, not rewritten: the status, the pair and the evidence the row already held are the
-        // reviewer's, and the stamp above is the run's own record of having decided the key.
-        Assert.Equal(ProductMatchSuggestionStatus.Tentative, suggestion.Status);
-        Assert.Equal(cola, suggestion.MasterProductId);
-        Assert.Equal("Seeded by the fixture.", suggestion.Reason);
-        Assert.Equal(0.9m, suggestion.Confidence);
-        Assert.Equal(PriceCatalogueFixture.CreatedAt, suggestion.CreatedAtUtc);
+        // The deduplication: still exactly one row of that pair awaiting a reviewer's decision, and
+        // it is untouched - not relabelled, not restamped, not re-reasoned. Which run decided a key
+        // is recorded on that run's own row, never by taking the record off somebody else's.
+        var waiting = Assert.Single(
+            suggestions.Where(s => ProductMatchSuggestionPolicy.AwaitsReview(s.Status)));
+        Assert.Equal(ProductMatchSuggestionStatus.Tentative, waiting.Status);
+        Assert.Equal(cola, waiting.MasterProductId);
+        Assert.Equal("fixture", waiting.CollectorRun);
+        Assert.Equal("Seeded by the fixture.", waiting.Reason);
+        Assert.Equal(0.9m, waiting.Confidence);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, waiting.CreatedAtUtc);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, waiting.UpdatedAtUtc);
+
+        // And beside it, this run's own record of what it decided about the key: the matcher's own
+        // evidence, this run's label, and a status that is nobody's decision to make.
+        var recorded = Assert.Single(
+            suggestions.Where(s => s.Status == ProductMatchSuggestionStatus.Repeated));
+        Assert.Equal(ProductMatchSuggestionPolicy.CollectorRunFor(runId), recorded.CollectorRun);
+        Assert.Equal(WaitingKey, recorded.WaitingKey);
+        Assert.Equal(cola, recorded.MasterProductId);
+        Assert.Equal(MatchReason, recorded.Reason);
+        Assert.Equal(Now, recorded.CreatedAtUtc);
+        Assert.Equal(recorded.Id, tentative.SuggestionId);
+        Assert.Equal(2, suggestions.Count);
     }
 
     #endregion
@@ -674,8 +689,8 @@ public class PriceCollectorMatchTests
     }
 
     /// <summary>
-    /// A proposal answered with a suggestion an <em>earlier</em> run left is just as idempotent: the
-    /// reused row records this run's decision, so a second request of the same run and key is
+    /// A proposal answered with a suggestion an <em>earlier</em> run left is just as idempotent: this
+    /// run records its own decision beside that row, so a second request of the same run and key is
     /// answered with the outcome that was recorded even though its confidence is now high enough to
     /// have been applied. Without that record the key would be decided afresh and the match applied,
     /// which is two different answers to one run and one key.
@@ -714,9 +729,18 @@ public class PriceCollectorMatchTests
         Assert.Equal(cola, repeat.MasterProductId);
         Assert.Equal(first.SuggestionId, repeat.SuggestionId);
 
-        // Still one suggestion, still tentative, and nothing a match would have changed has moved.
-        var suggestion = Assert.Single(await fixture.AllSuggestionsAsync());
-        Assert.Equal(ProductMatchSuggestionStatus.Tentative, suggestion.Status);
+        // Still one proposal waiting for a reviewer, beside this run's one record of the key, and
+        // nothing a match would have changed has moved.
+        var suggestions = await fixture.AllSuggestionsAsync();
+        Assert.Equal(2, suggestions.Count);
+        Assert.Equal(
+            ProductMatchSuggestionStatus.Tentative,
+            Assert.Single(suggestions.Where(s => ProductMatchSuggestionPolicy.AwaitsReview(s.Status)))
+                .Status);
+        Assert.Equal(
+            ProductMatchSuggestionPolicy.CollectorRunFor(runId),
+            Assert.Single(suggestions.Where(s => s.Status == ProductMatchSuggestionStatus.Repeated))
+                .CollectorRun);
 
         var mapping = Assert.Single(await fixture.AllTrackingsAsync());
         Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
@@ -766,9 +790,19 @@ public class PriceCollectorMatchTests
         Assert.Equal(pepsi, repeat.MasterProductId);
         Assert.Equal(first.SuggestionId, repeat.SuggestionId);
 
-        var suggestion = Assert.Single(await fixture.AllSuggestionsAsync());
-        Assert.Equal(pepsi, suggestion.MasterProductId);
-        Assert.Equal(ProductMatchSuggestionStatus.Tentative, suggestion.Status);
+        var suggestions = await fixture.AllSuggestionsAsync();
+        Assert.Equal(2, suggestions.Count);
+
+        var waiting = Assert.Single(
+            suggestions.Where(s => ProductMatchSuggestionPolicy.AwaitsReview(s.Status)));
+        Assert.Equal(pepsi, waiting.MasterProductId);
+        Assert.Equal("fixture", waiting.CollectorRun);
+
+        // The run's own record names the pair it decided, which is the one it proposed first.
+        var recorded = Assert.Single(
+            suggestions.Where(s => s.Status == ProductMatchSuggestionStatus.Repeated));
+        Assert.Equal(pepsi, recorded.MasterProductId);
+        Assert.Equal(ProductMatchSuggestionPolicy.CollectorRunFor(runId), recorded.CollectorRun);
 
         var mapping = Assert.Single(await fixture.AllTrackingsAsync());
         Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
@@ -830,6 +864,137 @@ public class PriceCollectorMatchTests
         var mapping = Assert.Single(await fixture.AllTrackingsAsync());
         Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
         Assert.Null(mapping.MasterProductId);
+    }
+
+    /// <summary>
+    /// <strong>Two runs open at once, and one proposal already waiting for a reviewer.</strong> Run A
+    /// decides the key, run B then makes the same proposal, and run A's retry - at the confidence
+    /// every other condition of "obvious" agrees with - is still answered with run A's own recorded
+    /// outcome, with nothing applied.
+    ///
+    /// <para>This is the regression the record exists for: a run's decision has to be a row of that
+    /// run's own, because recording it by relabelling the waiting proposal would hand the record to
+    /// whichever run last touched it and take it away from the run that decided first.</para>
+    /// </summary>
+    [Fact]
+    public async Task Another_runs_repeat_does_not_take_away_the_first_runs_recorded_outcome()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.SeedWaitingListingAsync(WaitingKey, "SKU-COLA-30");
+        await fixture.SeedMatchSuggestionAsync(
+            WaitingKey,
+            cola,
+            ProductMatchSuggestionStatus.Tentative);
+
+        var runA = await fixture.SeedRunAsync(RunStarted, Expires);
+        await fixture.SeedWorkItemAsync(runA, masterProductId: null, WaitingKey);
+        var runB = await fixture.SeedRunAsync(RunStarted, Expires);
+        await fixture.SeedWorkItemAsync(runB, masterProductId: null, WaitingKey);
+
+        var proposal = Proposal(WaitingKey, cola, ProductMatchConfidence.Low);
+
+        var inA = Assert.Single((await SubmitAsync(fixture, runA, proposal))!.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadySuggestedReason, inA.Reason);
+
+        // Run B repeats the proposal a reviewer is already looking at. It records its own decision
+        // and leaves both the waiting row and run A's record exactly as they are.
+        var inB = Assert.Single((await SubmitAsync(fixture, runB, proposal))!.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadySuggestedReason, inB.Reason);
+
+        // Run A again, now at the confidence that would otherwise have applied the match.
+        var receipt = await SubmitAsync(fixture, runA, Proposal(WaitingKey, cola));
+
+        Assert.Empty(receipt!.AutoMatched);
+        var answered = Assert.Single(receipt.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadyDecidedInThisRunReason, answered.Reason);
+        Assert.Equal(cola, answered.MasterProductId);
+        Assert.Equal(inA.SuggestionId, answered.SuggestionId);
+        Assert.NotEqual(inA.SuggestionId, inB.SuggestionId);
+
+        // One proposal still waiting for a reviewer, and one record per run - each under its own
+        // label, so neither run's decision is readable as the other's.
+        var suggestions = await fixture.AllSuggestionsAsync();
+        Assert.Equal(3, suggestions.Count);
+
+        var waiting = Assert.Single(
+            suggestions.Where(s => ProductMatchSuggestionPolicy.AwaitsReview(s.Status)));
+        Assert.Equal("fixture", waiting.CollectorRun);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, waiting.UpdatedAtUtc);
+
+        Assert.Equal(
+            [
+                ProductMatchSuggestionPolicy.CollectorRunFor(runA),
+                ProductMatchSuggestionPolicy.CollectorRunFor(runB),
+            ],
+            suggestions
+                .Where(s => s.Status == ProductMatchSuggestionStatus.Repeated)
+                .Select(s => s.CollectorRun));
+
+        // And nothing a match would have changed has moved, in either run.
+        var mapping = Assert.Single(await fixture.AllTrackingsAsync());
+        Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
+        Assert.Null(mapping.MasterProductId);
+        Assert.Null(mapping.MatchSource);
+
+        var listing = Assert.Single(await fixture.AllListingsAsync());
+        Assert.Null(listing.MasterProductId);
+        Assert.Equal(WaitingKey, listing.WaitingKey);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, listing.UpdatedAtUtc);
+    }
+
+    /// <summary>
+    /// And the same sequence cannot change its mind about <em>which</em> master product the key is:
+    /// after another run has repeated the proposal, run A's retry naming the master product that is
+    /// in fact the single suitable candidate is still answered with run A's recorded decision.
+    /// </summary>
+    [Fact]
+    public async Task Another_runs_repeat_does_not_let_the_first_run_name_another_master_product()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var pepsi = await fixture.SeedMasterProductAsync("Pepsi", "Max");
+
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.SeedWaitingListingAsync(WaitingKey, "SKU-COLA-30");
+        await fixture.SeedMatchSuggestionAsync(
+            WaitingKey,
+            pepsi,
+            ProductMatchSuggestionStatus.Tentative);
+
+        var runA = await fixture.SeedRunAsync(RunStarted, Expires);
+        await fixture.SeedWorkItemAsync(runA, masterProductId: null, WaitingKey);
+        var runB = await fixture.SeedRunAsync(RunStarted, Expires);
+        await fixture.SeedWorkItemAsync(runB, masterProductId: null, WaitingKey);
+
+        var inA = Assert.Single((await SubmitAsync(fixture, runA, Proposal(WaitingKey, pepsi)))!.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadySuggestedReason, inA.Reason);
+        Assert.Equal(pepsi, inA.MasterProductId);
+
+        Assert.Single((await SubmitAsync(fixture, runB, Proposal(WaitingKey, pepsi)))!.Tentative);
+
+        var receipt = await SubmitAsync(fixture, runA, Proposal(WaitingKey, cola));
+
+        Assert.Empty(receipt!.AutoMatched);
+        var answered = Assert.Single(receipt.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadyDecidedInThisRunReason, answered.Reason);
+        Assert.Equal(pepsi, answered.MasterProductId);
+        Assert.Equal(inA.SuggestionId, answered.SuggestionId);
+
+        // No suggestion of the cola pair at all, and nothing applied.
+        var suggestions = await fixture.AllSuggestionsAsync();
+        Assert.Equal(3, suggestions.Count);
+        Assert.All(suggestions, suggestion => Assert.Equal(pepsi, suggestion.MasterProductId));
+
+        var mapping = Assert.Single(await fixture.AllTrackingsAsync());
+        Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
+        Assert.Null(mapping.MasterProductId);
+
+        var listing = Assert.Single(await fixture.AllListingsAsync());
+        Assert.Null(listing.MasterProductId);
+        Assert.Equal(WaitingKey, listing.WaitingKey);
     }
 
     /// <summary>
