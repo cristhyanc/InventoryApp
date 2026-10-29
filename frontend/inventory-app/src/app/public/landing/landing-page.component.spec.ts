@@ -69,22 +69,25 @@ describe('LandingPageComponent (issue #954)', () => {
       expect(text(headings[0])).toBe('Know your stock. Understand your costs.');
     });
 
-    it('keeps the approved section order, with the section labels of the approved mobile design', async () => {
+    it('keeps the approved section order, with the section labels of the approved mobile design, plus pricing (issue #971)', async () => {
       const { host } = await render();
 
       const sectionIds = Array.from(host.querySelectorAll('main section[id]')).map((section) => section.id);
-      expect(sectionIds).toEqual(['features', 'nayax', 'how-it-works', 'faqs']);
+      expect(sectionIds).toEqual(['features', 'nayax', 'how-it-works', 'pricing', 'faqs']);
 
       const eyebrows = Array.from(host.querySelectorAll('main section p:first-child'))
         .map((label) => text(label))
         .filter((label) =>
-          ['Practical inventory management', 'Features', 'Optional integration', 'How it works', 'Frequently asked questions'].includes(label)
+          ['Practical inventory management', 'Features', 'Optional integration', 'How it works', 'Pricing', 'Frequently asked questions'].includes(
+            label
+          )
         );
       expect(eyebrows).toEqual([
         'Practical inventory management',
         'Features',
         'Optional integration',
         'How it works',
+        'Pricing',
         'Frequently asked questions'
       ]);
     });
@@ -108,7 +111,7 @@ describe('LandingPageComponent (issue #954)', () => {
         'Stock on hand and stock movements',
         'Purchases and receipts',
         'Machines and sites',
-        'Inventory and cost reporting',
+        'Inventory value at cost',
         'Suppliers and ordering'
       ]);
     });
@@ -123,6 +126,14 @@ describe('LandingPageComponent (issue #954)', () => {
       expect(text(host.querySelector('#faqs'))).toContain('No. Core inventory features work without connecting a sales provider.');
     });
 
+    it('says Nayax will be a Pro feature once paid plans are live, without claiming that today (issue #971)', async () => {
+      const { host } = await render();
+      const nayaxSection = text(host.querySelector('#nayax'));
+
+      expect(nayaxSection).toContain('Nayax will be a Pro plan feature once paid plans are live');
+      expect(nayaxSection).toContain('Nayax will be a Pro feature once paid plans launch, and connecting it stays optional');
+    });
+
     it('lists the three workflow steps in order', async () => {
       const { host } = await render();
 
@@ -134,7 +145,7 @@ describe('LandingPageComponent (issue #954)', () => {
       ]);
     });
 
-    it('answers the four FAQs without claiming a native app', async () => {
+    it('answers the FAQs without claiming a native app, including the new pricing and storage questions (issue #971)', async () => {
       const { host } = await render();
 
       const questions = Array.from(host.querySelectorAll('[data-testid="landing-faqs"] h3')).map(text);
@@ -142,9 +153,16 @@ describe('LandingPageComponent (issue #954)', () => {
         'Do I need Nayax?',
         'Is Restockroo suitable for vending businesses?',
         'Can I manage purchases and suppliers?',
-        'Can I use Restockroo on my phone?'
+        'Can I use Restockroo on my phone?',
+        'When can I subscribe to Starter or Pro?',
+        'What happens if I reach my storage limit?',
+        'Will connecting Nayax cost extra?'
       ]);
-      expect(text(host.querySelector('[data-testid="landing-faqs"]'))).toContain('There is no app to install.');
+      const faqText = text(host.querySelector('[data-testid="landing-faqs"]'));
+      expect(faqText).toContain('There is no app to install.');
+      expect(faqText).toContain('Starter and Pro are coming soon');
+      expect(faqText).toContain("From then on you'll see a warning at 80% of your plan's attachment storage");
+      expect(faqText).toContain('5 connected machines');
     });
 
     it('makes none of the claims the issue rules out', async () => {
@@ -159,11 +177,11 @@ describe('LandingPageComponent (issue #954)', () => {
         'net profit',
         'partner',
         'free trial',
-        'pricing',
-        'per month',
         'add-on',
         'testimonial',
-        'abn'
+        'abn',
+        'waitlist',
+        'checkout'
       ]) {
         expect(page).not.toContain(claim);
       }
@@ -176,7 +194,132 @@ describe('LandingPageComponent (issue #954)', () => {
       expect(text(footer)).not.toMatch(/privacy|terms|contact/i);
       expect(text(footer)).toContain(`© ${new Date().getFullYear()} Restockroo. All rights reserved.`);
       for (const link of Array.from(footer.querySelectorAll('a'))) {
-        expect(link.getAttribute('href')).toMatch(/^#(features|how-it-works|nayax|faqs)$/);
+        expect(link.getAttribute('href')).toMatch(/^#(features|how-it-works|nayax|pricing|faqs)$/);
+      }
+    });
+  });
+
+  describe('pricing (issue #971)', () => {
+    it('shows Free, Starter and Pro with their approved prices and badges', async () => {
+      const { host } = await render();
+
+      const cards = Array.from(host.querySelectorAll('[data-testid="landing-plans"] > li'));
+      expect(cards).toHaveLength(3);
+
+      const summaries = cards.map((card) => ({
+        name: text(card.querySelector('h3')),
+        price: text(card.querySelector('.text-3xl')),
+        badge: text(card.querySelector('span'))
+      }));
+      expect(summaries).toEqual([
+        { name: 'Free', price: 'A$0', badge: 'Available now' },
+        { name: 'Starter', price: 'A$7', badge: 'Coming soon' },
+        { name: 'Pro', price: 'A$15', badge: 'Coming soon' }
+      ]);
+    });
+
+    it('shows the 1 GB / 20 GB / 20 GB attachment allowances and the manual, comparison and report entitlements', async () => {
+      const { host } = await render();
+
+      expect(text(host.querySelector('[data-testid="landing-plan-free"]'))).toContain('1 GB of purchase and expense attachments');
+      expect(text(host.querySelector('[data-testid="landing-plan-free"]'))).toContain('Manual Pick List entry');
+
+      const starter = text(host.querySelector('[data-testid="landing-plan-starter"]'));
+      expect(starter).toContain('20 GB of purchase and expense attachments');
+      expect(starter).toContain('Daily cheapest-supplier comparisons');
+      expect(starter).toContain('Bookkeeping and GST reports');
+
+      const pro = text(host.querySelector('[data-testid="landing-plan-pro"]'));
+      expect(pro).toContain('20 GB of purchase and expense attachments');
+      expect(pro).toContain('Connect your Nayax account');
+      expect(pro).toContain('5 connected machines included, then A$2/month per additional connected machine');
+    });
+
+    it("distinguishes Pro's plan entitlement from needing a usable Nayax connection", async () => {
+      const { host } = await render();
+
+      expect(text(host.querySelector('[data-testid="landing-plan-pro"]'))).toContain(
+        'Plan entitlement and a usable Nayax connection are separate'
+      );
+    });
+
+    it('sends every plan card through the existing business application journey, never a checkout', async () => {
+      const { host, navigateByUrl } = await render();
+
+      byTestId(host, 'landing-plan-cta-free')!.click();
+      byTestId(host, 'landing-plan-cta-starter')!.click();
+      byTestId(host, 'landing-plan-cta-pro')!.click();
+
+      expect(navigateByUrl.mock.calls).toEqual([['/apply'], ['/apply'], ['/apply']]);
+    });
+
+    /**
+     * Copy regression for the plan limits that have not shipped: attachment quota enforcement
+     * (issue #968) and recording a purchase without its document (issue #976) are both still to
+     * come, and current develop refuses a purchase with no file. The page may therefore describe
+     * the allowances only as what happens once the paid plans launch, and must never present
+     * either as today's behaviour.
+     */
+    it('presents the storage allowances as future behaviour, and promises no document-free purchase', async () => {
+      const { host } = await render();
+
+      expect(text(host.querySelector('#pricing'))).toContain(
+        'The storage allowances and the connected-machine charge start when the paid plans launch - nothing is limited today.'
+      );
+      expect(text(byTestId(host, 'landing-plan-free'))).toContain(
+        'Attachment storage is not limited today. The 1 GB allowance starts when the paid plans launch.'
+      );
+
+      const storage = Array.from(host.querySelectorAll('[data-testid="landing-faqs"] li')).find(
+        (item) => text(item.querySelector('h3')) === 'What happens if I reach my storage limit?'
+      );
+      expect(text(storage?.querySelector('p'))).toBe(
+        'Nothing is limited today: attachment storage is unrestricted while Free is the only plan, and the allowances above ' +
+          "start when the paid plans launch. From then on you'll see a warning at 80% of your plan's attachment storage, and " +
+          'at 100% new uploads will pause until you free up space or upgrade, while existing attachments stay available to ' +
+          'view, download and delete.'
+      );
+
+      // Nothing anywhere on the page may say a limit, a paused upload or a per-machine charge
+      // applies now, or that a purchase or expense can be recorded with no document attached.
+      const page = text(host);
+      expect(page).not.toMatch(/without attaching/i);
+      expect(page).not.toMatch(/uploads pause/i);
+      expect(page).not.toMatch(/are A\$2\/month/i);
+    });
+
+    /**
+     * Keyboard reachability of the new section, as far as jsdom can carry it: every plan card's
+     * action is a native control, in card order, with no `tabindex` and no disabled state of its
+     * own, so it stays in the page's natural tab sequence and takes the shared `:focus-visible`
+     * outline. Rendered-layout and focus-ring checks at 360/390/768/1440px still need a browser.
+     */
+    it('makes every plan card action a native, keyboard-reachable control in card order', async () => {
+      const { host } = await render();
+
+      const actions = Array.from(
+        host.querySelectorAll<HTMLElement>('[data-testid="landing-plans"] [data-testid^="landing-plan-cta-"]')
+      );
+      expect(actions.map((action) => action.dataset['testid'])).toEqual([
+        'landing-plan-cta-free',
+        'landing-plan-cta-starter',
+        'landing-plan-cta-pro'
+      ]);
+      for (const action of actions) {
+        expect(action.tagName).toBe('BUTTON');
+        expect(action.getAttribute('type')).toBe('button');
+        expect(action.hasAttribute('tabindex')).toBe(false);
+        expect(action.hasAttribute('disabled')).toBe(false);
+      }
+    });
+
+    it('offers Open app from every plan card to a signed-in person, instead of Get started', async () => {
+      const { host } = await render({ signedIn: true });
+
+      for (const id of ['free', 'starter', 'pro']) {
+        const cta = byTestId<HTMLAnchorElement>(host, `landing-plan-cta-${id}`)!;
+        expect(text(cta)).toBe('Open app');
+        expect(cta.getAttribute('href')).toBe('/');
       }
     });
   });
@@ -288,6 +431,22 @@ describe('LandingPageComponent (issue #954)', () => {
       link.click();
 
       expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: 'start' }));
+      expect(document.activeElement).toBe(section);
+      host.remove();
+    });
+
+    it('scrolls to Pricing and moves focus to it from the header link (issue #971)', async () => {
+      const { host } = await render();
+      const section = host.querySelector<HTMLElement>('#pricing')!;
+      const scrollIntoView = jest.fn();
+      section.scrollIntoView = scrollIntoView;
+      document.body.appendChild(host);
+
+      const link = Array.from(host.querySelectorAll<HTMLAnchorElement>('header nav a')).find((a) => text(a) === 'Pricing')!;
+      link.click();
+
+      expect(scrollIntoView).toHaveBeenCalledWith(expect.objectContaining({ block: 'start' }));
+      expect(section.getAttribute('tabindex')).toBe('-1');
       expect(document.activeElement).toBe(section);
       host.remove();
     });

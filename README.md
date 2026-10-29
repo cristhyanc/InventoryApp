@@ -432,8 +432,8 @@ The journey a second live business needs is now complete end to end. The applica
 
 A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
 application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
-integration, a three-step workflow and FAQs. It makes no request to the API at all, so opening or
-refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+integration, a three-step workflow, pricing and FAQs. It makes no request to the API at all, so
+opening or refreshing it never asks for a sign-in or reads any business, account or Nayax data.
 
 - **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
   is configured, otherwise a redirect straight to Microsoft that returns to `/`.
@@ -449,6 +449,51 @@ the page presents Nayax only as an optional connection for supported sales data 
 built on it. The page has **no Privacy Policy, Terms of Service or Contact link**, because none of
 those pages exists yet; add them to its footer once they do. The approved design and every wording
 change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
+
+### Pricing on the landing page (issue #971)
+
+A **Pricing** link in the header, mobile menu and footer navigation scrolls to a section before the
+FAQs with three static plan cards - `landing-content.ts`'s `LANDING_PLANS`, read only by the page,
+never fetched - matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
+agreed: **Free** (A$0, 1 GB of purchase/expense attachments, every manual feature - Dashboard,
+Machines, Inventory, Purchases, Supplier orders, Suppliers, Expenses and manual Pick List entry -
+with no supplier comparisons and no reports), **Starter** (A$7 per business per month; Free plus
+20 GB of attachments, daily cheapest-supplier comparisons, and the Bookkeeping and GST reports with
+their CSV/XLSX export) and **Pro** (A$15 per business per month; Starter plus the Nayax connection
+and everything that needs it today - Sites, Site Commissions, the Daily, Transactions,
+Reconciliation, Machines and Products reports, machine latest sales, Sync Restock, dashboard sales
+refresh, the Nayax sales file import and the calculated Pick List matrix - with 5 connected
+machines included and A$2/month per additional connected machine).
+
+**Coming soon, not purchasable.** Paid enforcement, billing and the plan catalogue API (issue #965's
+other child tasks) are not live. Free carries an "Available now" badge; Starter and Pro carry a
+"Coming soon" badge. Every plan card's action is the same **Get started**/**Open app** as the rest
+of the page - the existing business application journey - so there is no checkout, trial promise or
+waitlist, nothing a visitor could mistake for a live purchase. The Pro card also states explicitly
+that plan entitlement and a *usable* Nayax connection are separate: Pro will include the Nayax
+connection, but connected features still need the business's own working Nayax credentials, exactly
+as today.
+
+**Existing copy reconciled with the plan catalogue.** The "Optional sales connection" and "Optional
+integration" facts in the Nayax section now say Nayax will be a Pro plan feature once paid plans go
+live (it stays open to every business today, and connecting it stays optional even on Pro), and the
+former "Inventory and cost reporting" feature card is "Inventory value at cost" naming the dashboard
+figure it actually shows, so it does not read as the gated Reports area. The FAQ "Do I need Nayax?"
+is unchanged and stays true either way. Three FAQs were added covering when Starter/Pro become
+purchasable, what the storage allowances will do once the paid plans launch, and that the extra
+connected-machine charge only starts once paid plans and the Nayax connection are both live. GST tax
+treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
+asserted here until it is decided.
+
+**Plan limits are described as future behaviour, because none of them is enforced yet.** Attachment
+quota enforcement (issue #968) and recording a purchase without attaching a document (issue #976)
+have not shipped: today attachment storage is unrestricted and a purchase still requires its file.
+So the section's lead paragraph says the storage allowances and the connected-machine charge start
+when the paid plans launch and that nothing is limited today, the Free card repeats it for its 1 GB
+allowance, and the storage FAQ describes the 80% warning and the 100% upload pause only as what will
+happen from launch. The page must never present a limit, a paused upload, a per-machine charge or a
+document-free purchase as today's behaviour; `landing-page.component.spec.ts` holds that as a copy
+regression.
 
 ## The dashboard and the menu
 

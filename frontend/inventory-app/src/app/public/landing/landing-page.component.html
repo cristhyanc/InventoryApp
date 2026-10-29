@@ -171,6 +171,66 @@
       </div>
     </section>
 
+    <!-- Pricing -->
+    <section id="pricing" tabindex="-1" class="scroll-mt-20 bg-white px-4 py-16 outline-none sm:px-8 sm:py-24" aria-labelledby="landing-pricing-title">
+      <div class="mx-auto max-w-6xl">
+        <div class="sm:text-center">
+          <p class="m-0 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-rr-teal sm:justify-center">
+            <app-icon name="attach_money" [size]="16" />
+            Pricing
+          </p>
+          <h2 id="landing-pricing-title" class="mb-3 mt-2 text-2xl font-semibold tracking-tight text-rr-navy sm:text-3xl">
+            Plans that grow from manual tracking to a connected Nayax fleet
+          </h2>
+          <p class="m-0 max-w-2xl text-base text-rr-muted sm:mx-auto">
+            Prices are in Australian dollars (AUD), per business. Starter and Pro are coming soon; Free is available today. The
+            storage allowances and the connected-machine charge start when the paid plans launch - nothing is limited today.
+          </p>
+        </div>
+
+        <ul class="m-0 mt-10 grid list-none gap-6 p-0 md:grid-cols-3" data-testid="landing-plans">
+          @for (plan of plans; track plan.id) {
+            <li class="flex flex-col gap-5 rounded-2xl border border-rr-line bg-rr-surface p-6" [attr.data-testid]="'landing-plan-' + plan.id">
+              <div class="flex items-start justify-between gap-2">
+                <h3 class="m-0 text-lg font-semibold text-rr-navy">{{ plan.name }}</h3>
+                @if (plan.badge) {
+                  <span class="rounded-full border border-rr-line bg-white px-2 py-0.5 text-xs font-semibold text-rr-muted">{{ plan.badge }}</span>
+                }
+              </div>
+              <div>
+                <p class="m-0 text-3xl font-bold tracking-tight text-rr-navy">{{ plan.price }}</p>
+                <p class="m-0 text-sm text-rr-muted">{{ plan.billingNote }}</p>
+              </div>
+              <p class="m-0 text-sm text-rr-muted">{{ plan.description }}</p>
+              <ul class="m-0 flex grow list-none flex-col gap-2 p-0 text-sm text-rr-muted">
+                @for (feature of plan.features; track feature) {
+                  <li class="flex items-start gap-2">
+                    <span class="shrink-0 text-rr-teal"><app-icon name="check" [size]="18" /></span>
+                    {{ feature }}
+                  </li>
+                }
+              </ul>
+              @if (plan.note) {
+                <p class="m-0 rounded-xl border border-rr-line bg-white px-3 py-2 text-xs text-rr-muted">{{ plan.note }}</p>
+              }
+              @if (isSignedIn) {
+                <a [routerLink]="appEntry" class="rr-button-secondary justify-center" [attr.data-testid]="'landing-plan-cta-' + plan.id">
+                  Open app
+                </a>
+              } @else {
+                <button
+                  type="button"
+                  class="rr-button-secondary justify-center"
+                  [attr.data-testid]="'landing-plan-cta-' + plan.id"
+                  (click)="getStarted()"
+                >Get started</button>
+              }
+            </li>
+          }
+        </ul>
+      </div>
+    </section>
+
     <!-- FAQs -->
     <section id="faqs" tabindex="-1" class="scroll-mt-20 px-4 py-16 outline-none sm:px-8 sm:py-24" aria-labelledby="landing-faqs-title">
       <div class="mx-auto max-w-3xl">
