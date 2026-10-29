@@ -5,7 +5,12 @@ import { GstClassification, Purchase, PurchaseGstSummary, PurchaseResponse, Purc
 import { ConfigService } from './config.service';
 
 export interface PurchaseUploadPayload {
-  file: File;
+  /**
+   * The supporting document, or `null` when there is none (issue #976). `null` sends no `file` part
+   * at all, which the API records as a purchase with no document; a document can be added later
+   * through `attachDocument`.
+   */
+  file: File | null;
   title: string;
   notes?: string | null;
   totalAmount?: number | null;
@@ -116,7 +121,10 @@ export class PurchaseService {
 
   upload(payload: PurchaseUploadPayload): Observable<Purchase> {
     const formData = new FormData();
-    formData.append('file', payload.file);
+    // Omitted entirely rather than sent empty when there is no document (issue #976): an empty part
+    // is a document that cannot be read, which the API correctly refuses, while no part at all is a
+    // purchase with no document.
+    if (payload.file) formData.append('file', payload.file);
     this.appendPurchaseFormFields(formData, payload);
     formData.append('items', JSON.stringify(payload.items ?? []));
     // Only on a create, and only as a pair (issue #974). An edit never carries a completion choice:
@@ -127,6 +135,24 @@ export class PurchaseService {
     }
 
     return this.http.post<PurchaseResponse>(this.baseUrl, formData).pipe(
+      map(response => {
+        this.lastValidation = response.validation ?? null;
+        this.rememberEnvelope(response);
+        return response.purchase;
+      })
+    );
+  }
+
+  /**
+   * Adds a supporting document to a purchase that has none (issue #976). It is deliberately not a
+   * replace: the API answers `409` when the purchase already has one, so a client cannot discard
+   * stored bytes by uploading over them.
+   */
+  attachDocument(id: number, file: File): Observable<Purchase> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return this.http.post<PurchaseResponse>(`${this.baseUrl}/${id}/file`, formData).pipe(
       map(response => {
         this.lastValidation = response.validation ?? null;
         this.rememberEnvelope(response);

@@ -2209,7 +2209,6 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("ContentType")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
@@ -2225,10 +2224,9 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("FileName")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<long>("FileSizeBytes")
+                    b.Property<long?>("FileSizeBytes")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Notes")
@@ -2247,7 +2245,6 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("StoredFileName")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("SupplierId")
@@ -2266,7 +2263,10 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SupplierId");
 
-                    b.ToTable("Receipts", (string)null);
+                    b.ToTable("Receipts", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Receipts_DocumentMetadataAllOrNothing", "(\"StoredFileName\" IS NULL AND \"ContentType\" IS NULL AND \"FileName\" IS NULL AND \"FileSizeBytes\" IS NULL) OR (\"StoredFileName\" IS NOT NULL AND \"ContentType\" IS NOT NULL AND \"FileName\" IS NOT NULL AND \"FileSizeBytes\" IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PurchaseItem", b =>

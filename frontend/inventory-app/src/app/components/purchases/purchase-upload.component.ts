@@ -290,10 +290,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       return;
     }
 
-    if (!this.selectedFile) {
-      this.error = 'Please select a receipt or invoice (PDF/image).';
-      return;
-    }
+    // No document at all is the ordinary case since issue #976: a business with no receipt to
+    // attach, or no storage left to put one in, still has to be able to record what it bought, and
+    // the document can be added to the saved purchase later.
     if (!this.form.title.trim()) {
       this.error = 'Please enter a purchase title.';
       return;

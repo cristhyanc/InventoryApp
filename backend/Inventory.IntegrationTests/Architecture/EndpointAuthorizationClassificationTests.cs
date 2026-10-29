@@ -419,6 +419,11 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/Sites/list", "GET", Capability.InventoryOperate)]
     [InlineData("api/purchases", "POST", Capability.PurchasingOperate)]
     [InlineData("api/purchases/{id:int}/file", "GET", Capability.PurchasingOperate)]
+    // Issue #976's "add a document" declares no capability of its own: the controller's existing
+    // Purchasing.Operate is the capability recording the purchase already needs, because attaching
+    // the receipt for a purchase you may record is the same purchasing work. Which also means a
+    // read-only support session and a role preview are refused it by the central GET/HEAD rules.
+    [InlineData("api/purchases/{id:int}/file", "POST", Capability.PurchasingOperate)]
     [InlineData("api/SupplierOrders", "POST", Capability.PurchasingOperate)]
     [InlineData("api/Suppliers", "GET", Capability.PurchasingOperate)]
     [InlineData("api/Suppliers/{id:int}/gst-defaults", "PUT", Capability.SuppliersManageGstDefaults)]

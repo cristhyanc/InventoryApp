@@ -64,12 +64,15 @@ public sealed class EfPurchaseStore : IPurchaseStore
         return purchase is null ? null : ToRecord(purchase);
     }
 
+    /// <summary>
+    /// A purchase that does not exist and a purchase with no document are the same <c>null</c>
+    /// (issue #976), which is what makes <c>GET api/purchases/{id}/file</c> answer <c>404</c> for
+    /// both. The four values are read together because the database guarantees they move together.
+    /// </summary>
     public async Task<PurchaseFileMetadata?> FindFileMetadataAsync(int id, CancellationToken cancellationToken)
     {
         var purchase = await _db.Receipts.FindAsync([id], cancellationToken);
-        return purchase is null
-            ? null
-            : new PurchaseFileMetadata(purchase.StoredFileName, purchase.ContentType, purchase.FileName, purchase.FileSizeBytes);
+        return ToFileMetadata(purchase);
     }
 
     public Task<bool> SupplierExistsAsync(int supplierId, CancellationToken cancellationToken) =>
@@ -107,7 +110,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
     public async Task<PurchaseRecord> CreateAsync(
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
-        PurchaseFileMetadata file,
+        PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
         CancellationToken cancellationToken)
     {
@@ -120,10 +123,12 @@ public sealed class EfPurchaseStore : IPurchaseStore
             PackageCost = fields.PackageCost,
             PurchaseDate = fields.PurchaseDate ?? DateTime.UtcNow,
             SupplierId = fields.SupplierId,
-            FileName = file.FileName,
-            StoredFileName = file.StoredFileName,
-            ContentType = file.ContentType,
-            FileSizeBytes = file.FileSizeBytes,
+            // All four together, or all four null (issue #976): there is no half-documented
+            // purchase, and the table's own check constraint refuses one.
+            FileName = file?.FileName,
+            StoredFileName = file?.StoredFileName,
+            ContentType = file?.ContentType,
+            FileSizeBytes = file?.FileSizeBytes,
         };
         ApplyChargeClassifications(purchase, fields, GstClassificationState.Unclassified, GstClassificationState.Unclassified);
         purchase.Items = items.Select(x =>
@@ -178,6 +183,51 @@ public sealed class EfPurchaseStore : IPurchaseStore
         if (writeLock is not null) await writeLock.CommitAsync(cancellationToken);
 
         return ToRecord(purchase);
+    }
+
+    /// <summary>
+    /// Records a document on a purchase that has none, and only while it has none (issue #976).
+    ///
+    /// <para><strong>Why the write lock.</strong> "Attach only if empty" is a check-then-write rule,
+    /// and its authoritative read, its comparison and its write have to be one operation - the same
+    /// reasoning as issue #974's completion decision and issue #896's machine delete, and the same
+    /// <see cref="SqliteWriteLockTransaction"/>. A deferred transaction takes SQLite's write lock at
+    /// the first write, which is <em>after</em> the read the decision rests on, so two concurrent
+    /// attaches would both read a purchase with no document and the second would overwrite the
+    /// first's stored name - orphaning bytes that nothing can ever reach again. With
+    /// <c>BEGIN IMMEDIATE</c> the second caller waits, then reads the first one's committed document
+    /// and is refused.</para>
+    ///
+    /// <para>The purchase is reached through the ordinary tenant query filters, so one belonging to
+    /// another business is simply not found, and the write goes through <c>SaveChanges</c> - never a
+    /// bulk update - so the central ownership stamp, the read-only support-session refusal and the
+    /// business-immutability enforcement all stay in force.</para>
+    /// </summary>
+    public async Task<PurchaseDocumentAttachment> AttachDocumentAsync(
+        int id, PurchaseFileMetadata document, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
+        var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
+        if (purchase is null)
+            return new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.PurchaseNotFound, null);
+
+        // The stored name is the authoritative "has a document": the check constraint guarantees the
+        // other three move with it, so one column decides.
+        if (purchase.StoredFileName is not null)
+            return new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.AlreadyHasDocument, null);
+
+        purchase.FileName = document.FileName;
+        purchase.StoredFileName = document.StoredFileName;
+        purchase.ContentType = document.ContentType;
+        purchase.FileSizeBytes = document.FileSizeBytes;
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.Attached, ToRecord(purchase));
     }
 
     /// <summary>
@@ -746,6 +796,16 @@ public sealed class EfPurchaseStore : IPurchaseStore
         purchase.ContentType,
         purchase.FileSizeBytes,
         purchase.CreatedAt);
+
+    /// <summary>
+    /// The purchase's document metadata, or <c>null</c> when there is no purchase or it has no
+    /// document (issue #976). The stored name decides; the check constraint is what lets it.
+    /// </summary>
+    private static PurchaseFileMetadata? ToFileMetadata(Purchase? purchase) =>
+        purchase is { StoredFileName: not null, ContentType: not null, FileName: not null, FileSizeBytes: not null }
+            ? new PurchaseFileMetadata(
+                purchase.StoredFileName, purchase.ContentType, purchase.FileName, purchase.FileSizeBytes.Value)
+            : null;
 
     private static PurchaseSupplierRecord ToSupplierRecord(Supplier supplier) => new(
         supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address,

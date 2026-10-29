@@ -167,7 +167,8 @@ public class UploadPurchaseTests
 
         Assert.NotNull(record);
         Assert.Single(documents.SavedFileNames);
-        Assert.True(documents.Contains(DocumentCategory.PurchaseDocument, record!.StoredFileName));
+        Assert.True(documents.Contains(
+            DocumentCategory.PurchaseDocument, Assert.IsType<string>(record!.StoredFileName)));
         Assert.Equal(store.LastCreated, record);
     }
 
@@ -204,6 +205,101 @@ public class UploadPurchaseTests
 
         Assert.Equal(suppliedDate, record!.PurchaseDate);
         Assert.Equal(suppliedDate, store.LastConflictCheckedPurchaseDate);
+    }
+
+    /// <summary>
+    /// Issue #976: no document at all is the ordinary case, not a refusal. Nothing is stored in
+    /// document storage, all four metadata values are recorded as absent together, and the purchase
+    /// itself is saved exactly as it is with a document.
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_with_no_document_is_saved_and_stores_no_file()
+    {
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = UseCase(store, documents);
+
+        var record = await useCase.Handle(
+            file: null, Fields(), [new PurchaseItemInput(1, 2m, 1.5m)], CancellationToken.None);
+
+        Assert.NotNull(record);
+        Assert.Empty(documents.SavedFileNames);
+        Assert.Empty(documents.DeletedFileNames);
+        Assert.Equal(
+            (null, null, null, (long?)null),
+            (record!.FileName, record.StoredFileName, record.ContentType, record.FileSizeBytes));
+        Assert.Equal("Weekly restock", record.Title);
+        Assert.Equal(store.LastCreated, record);
+    }
+
+    /// <summary>
+    /// The one thing a purchase with no document cannot do is take its title from the uploaded file's
+    /// name, because there is no uploaded file. It is refused by name rather than stored with an
+    /// empty title, and nothing is written - not even the empty-document case below, because the
+    /// refusal comes before any store call at all.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_blank_title_with_no_document_is_refused(string? title)
+    {
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = UseCase(store, documents);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => useCase.Handle(
+            file: null,
+            new PurchaseFields(title, null, null, null, null, null, null),
+            [new PurchaseItemInput(1, 1, 1)],
+            CancellationToken.None));
+
+        Assert.Equal(PurchaseDocumentPolicy.TitleRequiredWithoutDocumentMessage, exception.Message);
+        Assert.Null(store.LastCreated);
+        Assert.Empty(documents.SavedFileNames);
+    }
+
+    /// <summary>
+    /// Every other validation is reached and answered exactly as it is with a document, so recording
+    /// no receipt is not a way past the supplier, item or cost-transition rules.
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_with_no_document_is_still_subject_to_the_other_validation()
+    {
+        var unknownSupplier = new FakePurchaseStore { SupplierExists = false };
+        Assert.Null(await UseCase(unknownSupplier, new FakeDocumentStorage()).Handle(
+            file: null, Fields(supplierId: 99), [], CancellationToken.None));
+
+        var malformedItems = new FakePurchaseStore();
+        var malformed = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => UseCase(malformedItems, new FakeDocumentStorage()).Handle(
+                file: null, Fields(), [new PurchaseItemInput(1, 0, 1)], CancellationToken.None));
+        Assert.Equal(PurchaseItemFormatPolicy.InvalidItemsMessage, malformed.Message);
+
+        var cutoff = new DateTime(2026, 1, 1);
+        var beforeCutoff = new FakePurchaseStore { ConflictingBaseline = (1, "Coke", cutoff) };
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => UseCase(beforeCutoff, new FakeDocumentStorage()).Handle(
+                file: null, Fields(purchaseDate: cutoff), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
+        Assert.Equal(
+            PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(cutoff, 1, "Coke"), refused.Message);
+    }
+
+    /// <summary>
+    /// A failed save with no document has no bytes to clean up, so the cleanup must not run at all -
+    /// a delete of a null stored name would be a call nothing asked for.
+    /// </summary>
+    [Fact]
+    public async Task When_persistence_fails_with_no_document_nothing_is_deleted()
+    {
+        var store = new FakePurchaseStore { ThrowOnCreate = true };
+        var documents = new FakeDocumentStorage();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => UseCase(store, documents).Handle(
+            file: null, Fields(), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
+
+        Assert.Empty(documents.SavedFileNames);
+        Assert.Empty(documents.DeletedFileNames);
     }
 
     [Fact]

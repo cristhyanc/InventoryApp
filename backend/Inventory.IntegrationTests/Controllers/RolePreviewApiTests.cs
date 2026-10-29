@@ -205,6 +205,34 @@ public class RolePreviewApiTests : IClassFixture<RolePreviewApiTests.ApiFactory>
     }
 
     /// <summary>
+    /// The same criterion for the two purchase writes that take a <c>multipart/form-data</c> body
+    /// (issue #976's "add a document" and the purchase create it exists beside). They are tested
+    /// separately rather than as rows above because the body's content type is part of reaching the
+    /// endpoint at all: a JSON body is answered <c>415</c> during action selection, before
+    /// <c>RolePreviewMiddleware</c>'s refusal would even be visible.
+    ///
+    /// <para>The preview is <c>Owner</c>, the caller's own role, so nothing was narrowed away, and
+    /// the purchase named is not one of their business's - so a refusal that reached the endpoint
+    /// would be a <c>404</c>.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("/api/purchases")]
+    [InlineData("/api/purchases/999999/file")]
+    public async Task A_previewed_multipart_purchase_write_is_refused_as_read_only(string route)
+    {
+        var content = new MultipartFormDataContent();
+        var file = new ByteArrayContent([1, 2, 3]);
+        file.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        content.Add(file, "file", "scan.jpg");
+        content.Add(new StringContent("Weekly restock"), "title");
+
+        var response = await _factory.Previewing("Owner").PostAsync(route, content);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(RolePreviewErrorCodes.ReadOnly, await CodeAsync(response));
+    }
+
+    /// <summary>
     /// The same criterion on the Super Admin's own write surface, with the assertion the issue asks
     /// for: the pending application is still pending afterwards, so nothing was written.
     /// </summary>

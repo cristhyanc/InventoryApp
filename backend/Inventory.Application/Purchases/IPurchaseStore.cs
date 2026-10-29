@@ -9,6 +9,11 @@ public interface IPurchaseStore
 
     Task<PurchaseRecord?> FindByIdAsync(int id, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The purchase's stored-document metadata, or <c>null</c> when no purchase with
+    /// <paramref name="id"/> exists <em>or</em> that purchase has no document at all (issue #976).
+    /// The two are deliberately the same answer, so a caller cannot tell them apart.
+    /// </summary>
     Task<PurchaseFileMetadata?> FindFileMetadataAsync(int id, CancellationToken cancellationToken);
 
     Task<bool> SupplierExistsAsync(int supplierId, CancellationToken cancellationToken);
@@ -39,13 +44,32 @@ public interface IPurchaseStore
     /// <see cref="InvalidOperationException"/> and persists none of the purchase, its movements, its
     /// costing or the completion. It never changes a quantity, a cost or a stock movement for goods
     /// that were not received.</para>
+    ///
+    /// <para><paramref name="file"/> is <c>null</c> when the purchase has no supporting document
+    /// (issue #976), and then all four of the purchase's document values are stored as <c>null</c>
+    /// together. Nothing else about the write changes: the items, the allocations, the stock
+    /// movements and the cost rebuild are identical with and without a document.</para>
     /// </summary>
     Task<PurchaseRecord> CreateAsync(
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
-        PurchaseFileMetadata file,
+        PurchaseFileMetadata? file,
         SupplierOrderCompletionDecision? supplierOrderCompletion,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records <paramref name="document"/> on the purchase <paramref name="id"/> names, but
+    /// <strong>only while that purchase has no document at all</strong> (issue #976).
+    ///
+    /// <para>The authoritative read, the emptiness check and the write are one operation: the
+    /// implementation takes SQLite's write lock before it reads, so two concurrent attaches are
+    /// serialised and the second one sees the first one's committed document and is refused with
+    /// <see cref="PurchaseDocumentAttachOutcome.AlreadyHasDocument"/> rather than overwriting it.
+    /// Replacing an existing document is out of scope, and a refusal writes nothing: the caller
+    /// removes the bytes it had already stored.</para>
+    /// </summary>
+    Task<PurchaseDocumentAttachment> AttachDocumentAsync(
+        int id, PurchaseFileMetadata document, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns <c>null</c> when no purchase with <paramref name="id"/> exists, or when
