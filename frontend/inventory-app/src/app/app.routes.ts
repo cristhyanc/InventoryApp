@@ -25,6 +25,7 @@ import { requireProvider } from './provider/provider-lock.guard';
 import { PUBLIC_HOME_ROUTE } from './public/landing/landing-routes';
 import { PUBLIC_LAYOUT_DATA } from './public/public-layout';
 import { signedOutVisitorGuard } from './public/signed-out-visitor.guard';
+import { confirmPickListLeave } from './components/pick-list/pick-list-leave.guard';
 
 /**
  * Every authenticated route carries `MsalGuard`, then, since issue #529, `accountStateGuard`, then
@@ -376,6 +377,8 @@ export const routes: Routes = [
   {
     path: 'pick-list',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('PickList.View')],
+    // Typed refill quantities, planning work and an unconfirmed save all ask before a departure (issue #996).
+    canDeactivate: [confirmPickListLeave],
     loadComponent: () => import('./components/pick-list/pick-list.component').then((m) => m.PickListComponent)
   },
   {

@@ -183,6 +183,11 @@ public static class ApplicationServiceCollectionExtensions
         // business a caller named.
         services.AddScoped<IConnectedMachineSnapshotRecorder, RecordConnectedMachineSnapshot>();
 
+        // The one place every enforcement point asks whether the request's business includes a
+        // feature (issue #967). Scoped and memoising that one entitlement read, so a bounded Nayax
+        // fan-out that resolves credentials once per machine still reads the plan once per request.
+        services.AddScoped<CurrentPlan>();
+
         // Issuing the price collector's work list (issue #924, parent #817). Scoped like the
         // platform-admin surfaces above, and for the same reason: it reads and writes through the
         // request's own AppDbContext, which for a collector request carries a denied business scope

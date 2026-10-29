@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { SiteService } from '../../services/site.service';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
@@ -114,7 +115,8 @@ function createHarness(
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
 
   const component = new PickListComponent(
-    machineService, productService, pickListService, toast, provider, routeStub(options.queryParams)
+    machineService, productService, pickListService, toast, provider, routeStub(options.queryParams),
+    { getList: jest.fn(() => of([])) } as unknown as SiteService
   );
   component.ngOnInit();
 
@@ -263,7 +265,8 @@ describe('PickListComponent mode selection (issue #744)', () => {
     const pickListService = { get: jest.fn(() => of(pickListResult())) } as unknown as PickListService;
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
     const component = new PickListComponent(
-      machineService, productService, pickListService, toast, providerAvailabilityDouble('Ready'), routeStub()
+      machineService, productService, pickListService, toast, providerAvailabilityDouble('Ready'), routeStub(),
+      { getList: jest.fn(() => of([])) } as unknown as SiteService
     );
     component.ngOnInit();
     getAllProducts.mockClear();
