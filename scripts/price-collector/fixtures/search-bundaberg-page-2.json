@@ -1,0 +1,36 @@
+{
+  "data": {
+    "products": {
+      "total_count": 3,
+      "page_info": {
+        "current_page": 2,
+        "page_size": 2,
+        "total_pages": 2
+      },
+      "items": [
+        {
+          "sku": "KB",
+          "name": "Bundaberg Lemon Lime & Bitters 375ml Bottle",
+          "url_key": "bundaberg-lemon-lime-bitters-375ml-bottle",
+          "url_suffix": ".html",
+          "stock_status": "IN_STOCK",
+          "price_range": {
+            "minimum_price": {
+              "final_price": { "value": 38.5, "currency": "AUD" },
+              "regular_price": { "value": 38.5, "currency": "AUD" }
+            }
+          },
+          "custom_attributesV2": {
+            "items": [
+              { "code": "pickamntsoldas", "value": "30" },
+              { "code": "gst", "value": "10" },
+              { "code": "innerbarcode", "value": "09300675024235" },
+              { "code": "outerbarcode", "value": "" }
+            ],
+            "errors": []
+          }
+        }
+      ]
+    }
+  }
+}
