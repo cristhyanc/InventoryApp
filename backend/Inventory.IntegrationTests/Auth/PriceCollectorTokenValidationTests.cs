@@ -567,12 +567,20 @@ public sealed class PriceCollectorTokenValidationTests
             _connection.Open();
         }
 
+        /// <summary>
+        /// This host's own database, for a test that has to seed more than one business and one
+        /// member - the same-run test of issue #941 does. Reading it from the factory keeps that test
+        /// on the <em>same</em> host and the same connection the requests run against, which is the
+        /// whole point of an end-to-end test of one run.
+        /// </summary>
+        internal DbContextOptions<AppDbContext> DatabaseOptions =>
+            new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connection).Options;
+
         public async Task SeedAsync()
         {
             _ = Services;
 
-            await using var db = TestAppDbContext.Unrestricted(
-                new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connection).Options);
+            await using var db = TestAppDbContext.Unrestricted(DatabaseOptions);
 
             if (_seeded)
             {
@@ -609,8 +617,7 @@ public sealed class PriceCollectorTokenValidationTests
         /// </summary>
         public async Task<int> RunCountAsync()
         {
-            await using var db = TestAppDbContext.Unrestricted(
-                new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connection).Options);
+            await using var db = TestAppDbContext.Unrestricted(DatabaseOptions);
 
             return await db.PriceCollectorRuns.CountAsync();
         }

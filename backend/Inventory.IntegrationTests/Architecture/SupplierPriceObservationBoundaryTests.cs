@@ -135,8 +135,14 @@ public class SupplierPriceObservationBoundaryTests
         "InventoryApi/Controllers/CheapestSuppliersController.cs",
         "InventoryApi/DTOs/CheapestSupplierDtos.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCatalogueWorkListStore.cs",
+        // Issue #941's matches endpoint: the adapter that decides and stores a match, and the shared
+        // "is this run still open?" gate it and the results adapter both ask. Neither reads a price -
+        // a match is about which product a description is - but both name a collector run, which is
+        // exactly the kind of mention this list is deliberately strict about.
+        "Inventory.Infrastructure/Persistence/EfPriceCollectorMatchStore.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCollectorResultStore.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCollectorRunStore.cs",
+        "Inventory.Infrastructure/Persistence/PriceCollectorOpenRun.cs",
         "Inventory.Infrastructure/Persistence/PriceCollectorRunClosure.cs",
         "InventoryApi/Adapters/PriceCatalogue/ConfiguredPriceCollectorRunSettings.cs",
         "InventoryApi/Auth/PriceCollector/PriceCollectorOptions.cs",

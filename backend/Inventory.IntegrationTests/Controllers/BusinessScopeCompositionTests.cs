@@ -1,5 +1,6 @@
 using System.Net;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure.Data;
@@ -34,7 +35,8 @@ namespace InventoryApi.Tests.Controllers;
 /// context, and no registration anywhere offers a request path an unscoped one. Issue #550's
 /// support-session store is held to the same three things for the same reason: it is the second
 /// adapter a platform administrator's denied-scope request reaches, and issue #849's provisioning
-/// store is the third - the only one of them that writes a tenant-owned row.</para>
+/// store is the third. Two adapters write a tenant-owned row from a denied scope, each through its
+/// own narrow, reviewed window: that provisioning store, and issue #941's collector match store.</para>
 /// </summary>
 public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeCompositionTests.ApiFactory>
 {
@@ -206,6 +208,39 @@ public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeC
         Assert.True(db.TenantFilteringEnabled);
         Assert.Null(db.CurrentBusinessId);
         Assert.Empty(db.Suppliers.ToList());
+    }
+
+    /// <summary>
+    /// The collector's match store of issue #941 is held to the same three things, for the same
+    /// sharpest version of the reason: it is the second adapter a denied-scope request may write a
+    /// <em>tenant-owned</em> row through - three columns and an instant of a price-tracking mapping -
+    /// so where it gets its context from is the whole of what bounds it. The port is satisfied by the
+    /// Infrastructure adapter as a <em>scoped</em> registration, its only constructor dependency is
+    /// <see cref="AppDbContext"/> - so nothing can hand it a scope, a context factory, options or an
+    /// unscoped context - and the context it therefore receives is the request's own, which starts
+    /// denied and filters every tenant-owned read, the mappings included.
+    /// </summary>
+    [Fact]
+    public void The_collector_match_store_gets_the_request_scoped_context_and_nothing_else()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var store = scope.ServiceProvider.GetRequiredService<IPriceCollectorMatchStore>();
+
+        Assert.IsType<EfPriceCollectorMatchStore>(store);
+
+        var dependencies = typeof(EfPriceCollectorMatchStore)
+            .GetConstructors()
+            .SelectMany(constructor => constructor.GetParameters())
+            .Select(parameter => parameter.ParameterType)
+            .ToArray();
+
+        Assert.Equal([typeof(AppDbContext)], dependencies);
+
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.True(db.TenantFilteringEnabled);
+        Assert.Null(db.CurrentBusinessId);
+        Assert.Empty(db.ProductPriceTrackings.ToList());
     }
 
     /// <summary>
