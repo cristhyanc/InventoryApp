@@ -104,11 +104,10 @@ const sites = [
   }
 ];
 
-function machine(id: number, siteId: number, name: string, today: number, week: number, lastWeek: number, comparable: number, mtd: number) {
+function machine(id: number, name: string, today: number, week: number, lastWeek: number, comparable: number, mtd: number) {
   return {
     machineID: id,
     localMachineId: 500 + id,
-    siteId,
     machineName: name,
     machineNumber: `M${id}`,
     todayGrossRevenue: today,
@@ -128,9 +127,9 @@ function machine(id: number, siteId: number, name: string, today: number, week: 
 }
 
 const machines = [
-  machine(1, 1, 'Harbour Point Plaza - Avenue Hotel VM', 57.6, 123.9, 210, 75.9, 610),
-  machine(2, 2, 'Pavillion Left (Drinks & Cold)', 79, 210, 240, 166.5, 820),
-  machine(3, 2, 'Pavillion Right (Snacks & Confectionery)', 92.6, 253.4, 270, 225.5, 905)
+  { ...machine(1, 'Harbour Point Plaza - Avenue Hotel VM', 57.6, 123.9, 210, 75.9, 610), siteId: 1 },
+  { ...machine(2, 'Pavillion Left (Drinks & Cold)', 79, 210, 240, 166.5, 820), siteId: 2 },
+  { ...machine(3, 'Pavillion Right (Snacks & Confectionery)', 92.6, 253.4, 270, 225.5, 905), siteId: 2 }
 ];
 
 function product(id: number, name: string, stock: number, need: number, toOrder: number, onOrder = 0) {
