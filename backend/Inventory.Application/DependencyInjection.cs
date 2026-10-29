@@ -22,6 +22,7 @@ using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -174,6 +175,13 @@ public static class ApplicationServiceCollectionExtensions
         // that ends or a subscription that is cancelled applies on the next request rather than when
         // something expires a cache.
         services.AddScoped<GetEffectiveEntitlement>();
+
+        // And the Super Admin's manual grant on one business (issue #982). Scoped like the
+        // platform-admin surfaces above and for the same reasons: the business read, the revision
+        // comparison and the grant and audit write all run on the request's own AppDbContext, inside
+        // one BEGIN IMMEDIATE transaction on that same context, and the business it decides about is
+        // named by the route - the subject of the decision rather than a tenancy scope.
+        services.AddScoped<ManageBusinessPlanGrant>();
 
         // Issuing the price collector's work list (issue #924, parent #817). Scoped like the
         // platform-admin surfaces above, and for the same reason: it reads and writes through the

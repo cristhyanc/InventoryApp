@@ -62,6 +62,35 @@ public static class SubscriptionPlans
     public static bool IsDeclared(SubscriptionPlan plan) => All.Contains(plan);
 
     /// <summary>
+    /// Parses a plan <em>name</em>, case-insensitively - the form every API contract here publishes
+    /// and accepts (issue #982, which is the first caller that takes one inwards).
+    ///
+    /// <para>A numeric string is deliberately refused, which
+    /// <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/> alone would not do: it happily
+    /// turns <c>"30"</c> into <see cref="SubscriptionPlan.Pro"/> and <c>"99"</c> into an undeclared
+    /// plan. A caller names a plan; it does not get to supply a stored representation, which is also
+    /// what keeps the spacing of the declared values an implementation detail.</para>
+    /// </summary>
+    public static bool TryParse(string? name, out SubscriptionPlan plan)
+    {
+        plan = default;
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        var trimmed = name.Trim();
+
+        // No declared plan is the enum's default (0), so "no match" comes back as an undeclared
+        // value and fails the same IsDeclared check every stored plan has to pass.
+        plan = All.FirstOrDefault(candidate =>
+            string.Equals(candidate.ToString(), trimmed, StringComparison.OrdinalIgnoreCase));
+
+        return IsDeclared(plan);
+    }
+
+    /// <summary>
     /// The more entitled of two plans - the "higher of" rule the effective-entitlement policy
     /// applies to an active manual grant and an active paid plan.
     ///

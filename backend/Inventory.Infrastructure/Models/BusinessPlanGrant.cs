@@ -70,4 +70,17 @@ public class BusinessPlanGrant : IBusinessOwned
 
     /// <summary>When the grant was written, from the application clock.</summary>
     public DateTime GrantedAtUtc { get; set; }
+
+    /// <summary>
+    /// How many times the Super Admin surface of #982 has written this grant, starting at <c>0</c>
+    /// for a row it never wrote - the grandfathered grant included.
+    ///
+    /// <para>It is the whole of that surface's optimistic concurrency check: every write presents the
+    /// revision it read, the comparison happens inside the write transaction, and a write carrying
+    /// any other value is refused with <c>409</c> rather than overwriting a decision somebody else
+    /// committed in between. It is never a timestamp and never a row version the provider maintains:
+    /// an integer this application increments is comparable, loggable and identical on every
+    /// provider.</para>
+    /// </summary>
+    public int Revision { get; set; }
 }

@@ -65,6 +65,12 @@ public sealed class CrossBusinessAccessException : Exception
 /// lease, a denied scope may create <em>new <see cref="Supplier"/> rows of that one business</em> -
 /// the copies a newly approved business gets of the platform supplier presets that serve it - and
 /// nothing else. See <see cref="EnforceSupplierProvisioning"/>.
+///
+/// Since issue #982 there is a second, on the same terms and reviewed the same way: while
+/// <c>AppDbContext.BeginPlanGrantWrite</c> holds a lease, a denied scope may create or change
+/// <em>one business's <see cref="BusinessPlanGrant"/> row</em> and append the
+/// <see cref="BusinessPlanGrantAudit"/> row beside it - the Super Admin's manual plan grant - and
+/// nothing else. See <see cref="EnforcePlanGrantWrite"/>.
 /// </summary>
 internal static class BusinessOwnershipEnforcer
 {
@@ -103,6 +109,12 @@ internal static class BusinessOwnershipEnforcer
             if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
             {
                 EnforceSupplierProvisioning(context, provisionedBusinessId);
+                return;
+            }
+
+            if (context.PlanGrantWriteBusinessId is { } grantedBusinessId)
+            {
+                EnforcePlanGrantWrite(context, grantedBusinessId);
                 return;
             }
 
@@ -172,6 +184,54 @@ internal static class BusinessOwnershipEnforcer
                         $"{entry.Metadata.ClrType.Name} cannot be written while provisioning a "
                             + "business: the provisioning path may only create that business's own "
                             + "Supplier rows.");
+
+                default:
+                    break;
+            }
+        }
+
+        EnforceRelationships(context, businessId);
+    }
+
+    /// <summary>
+    /// The manual plan grant window of <c>AppDbContext.BeginPlanGrantWrite</c> (issue #982): on a
+    /// denied scope, <em>one business's <see cref="BusinessPlanGrant"/> row and the
+    /// <see cref="BusinessPlanGrantAudit"/> row beside it</em> may be written, and every other
+    /// tenant-owned write is refused exactly as it is without a lease.
+    ///
+    /// <para>It is the second exception to "a denied scope writes nothing tenant-owned", reviewed on
+    /// its own issue, and it is deliberately smaller than that rule in three directions at once: two
+    /// entity types, two states (an insert, and an update of the grant row - never a delete, because
+    /// a grant that was given is never unsaid), and one business, whose id the decision's own write
+    /// transaction read rather than a request supplying it. The audit row may only be inserted: an
+    /// audit trail that could be updated is not one.</para>
+    ///
+    /// <para>Stamping and ownership go through the same <see cref="StampOrVerifyNewRow"/> and
+    /// <see cref="VerifyUnchangedOwnership"/> every ordinary write uses, so a row carrying some
+    /// <em>other</em> business's key is refused here too rather than silently re-owned, and
+    /// <see cref="EnforceRelationships"/> still runs.</para>
+    /// </summary>
+    private static void EnforcePlanGrantWrite(AppDbContext context, int businessId)
+    {
+        foreach (var entry in context.ChangeTracker.Entries<IBusinessOwned>().ToList())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added when entry.Entity is BusinessPlanGrant or BusinessPlanGrantAudit:
+                    StampOrVerifyNewRow(entry, businessId);
+                    break;
+
+                case EntityState.Modified when entry.Entity is BusinessPlanGrant:
+                    VerifyUnchangedOwnership(entry, businessId);
+                    break;
+
+                case EntityState.Added:
+                case EntityState.Modified:
+                case EntityState.Deleted:
+                    throw new CrossBusinessAccessException(
+                        $"{entry.Metadata.ClrType.Name} cannot be written while deciding a business's "
+                            + "plan grant: that path may only create or change that business's own "
+                            + "plan grant and append its audit row.");
 
                 default:
                     break;
