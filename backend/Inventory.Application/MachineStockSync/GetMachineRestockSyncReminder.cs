@@ -1,7 +1,9 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 
 namespace Inventory.Application.MachineStockSync;
 
@@ -30,11 +32,15 @@ namespace Inventory.Application.MachineStockSync;
 /// (issue #499) rather than 72 elapsed hours - see
 /// <see cref="MachineRestockSyncReminderPolicy"/>, which owns every rule here.</para>
 ///
-/// <para><strong>Three businesses are shown nothing at all</strong>, each with its own stable
+/// <para><strong>Four businesses are shown nothing at all</strong>, each with its own stable
 /// reason: a support session (issue #551 resolves no Nayax credentials, and a reader may take no
-/// action), a business with no credentials the status gate allows, and a business whose provider
+/// action), a business whose plan does not include the sales provider (issue #967 - the sync itself
+/// is refused by the credential gate, so reminding anybody to run it would name work the application
+/// will not do), a business with no credentials the status gate allows, and a business whose provider
 /// names none of its machines. None of those is an empty reminder, because an empty reminder would
-/// read as "every machine is up to date".</para>
+/// read as "every machine is up to date". The plan is asked about before the connection is read, for
+/// the reason the credential gate asks in that order: nothing about a business's credentials decides
+/// this answer, and nothing here changes them.</para>
 ///
 /// <para><strong>It acknowledges nothing and writes nothing.</strong> Reading it leaves every
 /// pending event pending, applies no restock, resolves no duplicate and changes no inventory
@@ -45,6 +51,7 @@ public sealed class GetMachineRestockSyncReminder
     private readonly IClock _clock;
     private readonly IBusinessCalendar _businessCalendar;
     private readonly IBusinessScope _businessScope;
+    private readonly CurrentPlan _plan;
     private readonly INayaxConnectionStore _connections;
     private readonly IMachineRestockSyncCoverageStore _coverage;
 
@@ -52,12 +59,14 @@ public sealed class GetMachineRestockSyncReminder
         IClock clock,
         IBusinessCalendar businessCalendar,
         IBusinessScope businessScope,
+        CurrentPlan plan,
         INayaxConnectionStore connections,
         IMachineRestockSyncCoverageStore coverage)
     {
         _clock = clock;
         _businessCalendar = businessCalendar;
         _businessScope = businessScope;
+        _plan = plan;
         _connections = connections;
         _coverage = coverage;
     }
@@ -72,6 +81,17 @@ public sealed class GetMachineRestockSyncReminder
         if (_businessScope.State == BusinessScopeState.SupportReadOnly)
         {
             return HiddenMachineRestockSyncReminderDto.SupportView;
+        }
+
+        // And then the plan, before the connection is read at all (issue #967): the sync this banner
+        // reminds an operator to run is itself refused by the credential gate, so a business that has
+        // not bought the provider is told the reminder does not apply rather than sent to an action
+        // the application will refuse.
+        if (!await _plan
+                .AllowsAsync(PlanFeature.SalesProviderIntegration, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return HiddenMachineRestockSyncReminderDto.PlanRequired;
         }
 
         var connection = await _connections.FindAsync(cancellationToken).ConfigureAwait(false);

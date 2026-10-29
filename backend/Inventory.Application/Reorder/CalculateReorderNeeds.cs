@@ -111,11 +111,17 @@ public sealed class CalculateReorderNeeds
         {
             machines = await _nayax.GetMachinesAsync(cancellationToken);
         }
-        catch (NayaxNotConnectedException)
+        catch (NayaxNotConnectedException exception)
         {
-            // No usable connection for this business, and no request reached Nayax: the credential
-            // provider refuses before the stored connection is read.
-            return await StorageOnlyAsync(MachineNeedUnavailableReason.NayaxNotConnected, cancellationToken);
+            // No usable connection for this business, or a plan that does not include the provider
+            // at all (issue #967), and no request reached Nayax either way: the credential provider
+            // refuses before the stored connection is read. Both answer storage-only - the same
+            // complete answer about storage - under their own distinct reason.
+            return await StorageOnlyAsync(
+                exception.RequiredPlan is not null
+                    ? MachineNeedUnavailableReason.PlanRequired
+                    : MachineNeedUnavailableReason.NayaxNotConnected,
+                cancellationToken);
         }
         catch (NayaxPermissionNotGrantedException)
         {

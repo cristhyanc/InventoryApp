@@ -2,6 +2,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Application.SupportSessions;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Tests.Application.Nayax;
 using Moq;
 using Xunit;
@@ -58,6 +59,28 @@ public class CalculateReorderNeedsProviderOptionalTests
 
         Assert.Equal(ReorderMode.StorageOnly, result.Mode);
         Assert.Equal(MachineNeedUnavailableReason.NayaxNotConnected, result.MachineNeedUnavailableReason);
+    }
+
+    /// <summary>
+    /// Issue #967: a business whose plan does not include the sales provider is answered in
+    /// storage-only mode too - the same complete answer about storage - under its own reason. It is
+    /// not "not connected": the business may have perfectly valid credentials saved, so telling an
+    /// operator to reconnect them would send them to a page with nothing wrong on it.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_without_the_provider_is_storage_only_with_its_own_reason()
+    {
+        var result = await Handle(
+            FleetRefusing(NayaxNotConnectedException.PlanRequired(SubscriptionPlan.Pro)));
+
+        Assert.Equal(ReorderMode.StorageOnly, result.Mode);
+        Assert.Equal(MachineNeedUnavailableReason.PlanRequired, result.MachineNeedUnavailableReason);
+        Assert.Empty(result.MachineReplenishmentNeedByProductId);
+        Assert.Empty(result.MachineIds);
+        Assert.Empty(result.MachineSelections);
+        // The local facts are still in it, which is the whole point of the storage-only mode: a
+        // downgrade withholds nothing a business was doing with its own records.
+        Assert.Equal(OutstandingOrderQuantity, result.OnOrderQuantityByProductId[OutstandingOrderProductId]);
     }
 
     /// <summary>

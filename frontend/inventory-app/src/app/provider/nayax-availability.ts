@@ -17,6 +17,14 @@ import { HttpErrorResponse } from '@angular/common/http';
  * is per feature: in `PendingPermissions` the connection as a whole is usable and Nayax has simply
  * not granted this one read, so one page can carry a permission message for one card and real
  * figures beside it.
+ *
+ * **Since issue #967 the backend publishes a third reason, `PlanRequired`**, for a business whose
+ * plan does not include the sales provider, beside the unchanged `nayax_not_connected` error code
+ * and in the same per-feature reason fields. This file deliberately does **not** recognise it yet:
+ * the functions below answer `null` for a code they have never heard of, which reports the feature
+ * as unavailable without claiming why, and a "needs Pro" lock is issue #979's work. Adding it here
+ * is that task, not a gap in this one - saying "Nayax is not connected" for a business whose
+ * credentials are stored and working is exactly the wording #967 made distinguishable.
  */
 export type NayaxUnavailability = 'NayaxNotConnected' | 'PermissionNotGranted';
 

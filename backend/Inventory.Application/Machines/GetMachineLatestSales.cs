@@ -51,14 +51,20 @@ public sealed class GetMachineLatestSales
         }
         catch (NayaxNotConnectedException exception)
         {
-            // NotConfigured is the state of a business with nothing stored, so it is the state of a
-            // business with no sales provider (issue #759). Any other refused status - today
-            // NeedsAttention, including the one a 401 has just written - is a provider that is
+            // The plan is asked about first, because a plan refusal reads no connection at all and
+            // so carries no status to classify (issue #967): a business that has not bought the
+            // provider is not a business with none configured.
+            //
+            // Otherwise, NotConfigured is the state of a business with nothing stored, so it is the
+            // state of a business with no sales provider (issue #759). Any other refused status -
+            // today NeedsAttention, including the one a 401 has just written - is a provider that is
             // configured and currently unusable, which is a different sentence for the operator.
             return MachineLatestSales.Unavailable(
-                exception.Status == NayaxConnectionStatus.NotConfigured
-                    ? MachineLatestSalesUnavailableReason.NoSalesProvider
-                    : MachineLatestSalesUnavailableReason.NayaxNotConnected);
+                exception.RequiredPlan is not null
+                    ? MachineLatestSalesUnavailableReason.PlanRequired
+                    : exception.Status == NayaxConnectionStatus.NotConfigured
+                        ? MachineLatestSalesUnavailableReason.NoSalesProvider
+                        : MachineLatestSalesUnavailableReason.NayaxNotConnected);
         }
         catch (NayaxPermissionNotGrantedException)
         {

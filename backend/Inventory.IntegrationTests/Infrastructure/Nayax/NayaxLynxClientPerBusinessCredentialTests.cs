@@ -9,6 +9,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 using InventoryApi.Tests.Http;
 using Microsoft.Data.Sqlite;
@@ -353,7 +354,10 @@ public class NayaxLynxClientPerBusinessCredentialTests
         public INayaxLynxClient ClientFor(int businessId, HttpMessageHandler handler) =>
             CreateClient(
                 new NayaxRequestCredentialProvider(
-                    StoreFor(businessId), ResolvedScope(businessId), new FakeClock(Now)),
+                    StoreFor(businessId),
+                    ResolvedScope(businessId),
+                    TestCurrentPlan.Unrestricted(),
+                    new FakeClock(Now)),
                 handler);
 
         /// <summary>
@@ -380,6 +384,7 @@ public class NayaxLynxClientPerBusinessCredentialTests
                         StoreFor(businessId),
                         () => SaveCredentialAsync(businessId, operatorId, accessToken)),
                     ResolvedScope(businessId),
+                    TestCurrentPlan.Unrestricted(),
                     new FakeClock(Now)),
                 handler);
 
@@ -388,6 +393,7 @@ public class NayaxLynxClientPerBusinessCredentialTests
                 new NayaxRequestCredentialProvider(
                     StoreForContext(TestAppDbContext.Denied(_options)),
                     new BusinessScope(),
+                    TestCurrentPlan.Unrestricted(),
                     new FakeClock(Now)),
                 handler);
 
