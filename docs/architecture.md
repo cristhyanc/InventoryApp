@@ -9610,7 +9610,18 @@ deliberately neither `Cancelled` - goods really were delivered and are recorded 
 the order never came - and no existing order is ever reclassified into it: `AddSupplierOrderPartialCompletion`
 is three additive nullable columns on `SupplierOrders` (`CompletedWithUndeliveredAt`,
 `CompletedByDirectoryTenantId`, `CompletedByObjectId`) and nothing else. The status column needs no schema
-change at all, for the reason `Businesses.Status` carries no `CHECK` constraint. The actor is the validated
+change at all, for the reason `Businesses.Status` carries no `CHECK` constraint. Its `Down` drops the three
+columns in place with `ALTER TABLE ... DROP COLUMN`, the form
+[`AddBusinessLifecycleStatusAndProfile`](#business-lifecycle-status-and-profile-issue-540) uses and for the
+same reason — `SupplierOrders` is the table every order line and receipt allocation hangs off, and rebuilding
+it to drop three nullable audit columns is risk the rollback does not need — plus one this migration cannot
+avoid: the provider's `DropColumn` rebuilds from the **preceding** migration's recorded target model, and
+several migrations in this history are hand-written and record none at all (`AddPriceCollectorResults` says so
+in its own designer file), so with `DropColumn` whichever migration happened to precede this one after a merge
+would decide whether rolling back worked at all. The in-place form needs no model.
+`AddSupplierOrderPartialCompletionMigrationTests` asserts both directions generate with no point-in-time
+model, which is that condition stated directly rather than left to the shape of the migration history. The
+actor is the validated
 Entra `(tid, oid)` pair, following `InventoryCostRepairs.CreatedByDirectoryTenantId`/`CreatedByObjectId`: no
 email address and no display name, and it is never published - `SupplierOrderResponse` carries the instant
 and nothing about who.
@@ -9644,7 +9655,9 @@ calculates nothing: it subtracts no receipt from any order.
 **Concurrency.** When - and only when - a completion decision rides along, `CreateAsync` opens
 `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) instead of the deferred transaction a purchase save has
 always used, so SQLite's write lock is held *before* the authoritative read the decision is checked against
-rather than at the first write after it. The ordinary purchase save is unchanged. A competing receipt, a
+rather than at the first write after it. The ordinary purchase *creation* is unchanged; a purchase edit and a
+purchase delete do take that lock, because what has to be serialised against a completion is the correction
+guard below. A competing receipt, a
 cancellation, a completion or an edited order landing between the preview and the save changes the
 fingerprint and is refused with `SupplierOrderCompletionPolicy.StaleDecisionMessage`; an order that is no
 longer open is refused with `NotEligibleMessage`; and a purchase that turns out to receive the order in full
@@ -9675,8 +9688,22 @@ a completed order is **refused whole**, with a message naming the order
 (`SupplierOrderCompletionPolicy.LinkedToCompletedOrderMessage`). Reopening a completed order is out of scope,
 and the two alternatives are each worse than refusing: detaching the allocations would leave the order
 recording deliveries no purchase holds, and re-allocating onto it would make a closed order accept a receipt.
-The check runs before the correction's transaction opens, so a refusal writes nothing. A purchase linked to
-an order that is still open, or to no order at all, is completely unaffected and still editable.
+A purchase linked to an order that is still open, or to no order at all, is completely unaffected and still
+editable.
+
+**That refusal is serialised against the completion, which is the only thing that makes it a rule.**
+`EfPurchaseStore.UpdateAsync` and `DeleteAsync` open `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) as their
+first act and hold it through their commit, so the guard's read and the correction it permits are one
+operation against the completion path's own write lock. The guard used to answer *before* the correction's
+transaction opened at all, and a purchase save carrying a completion decision could close the linked order in
+that window: the correction then rewrote or removed the very receipts the order was closed on, while the
+status rollup - which deliberately preserves `ClosedPartiallyDelivered` - left it reading completed. A refusal
+still writes nothing; it is now the transaction rolling back rather than there being no transaction yet.
+`CompletedSupplierOrderCorrectionConcurrencyTests` proves it over a real SQLite file: two tests drive a
+competing completion from a command/transaction interceptor at the exact instant after the guard has read,
+for the edit and for the delete, and assert it cannot even begin; two more release both writers at a barrier
+and assert the pair resolves to one of exactly two coherent outcomes with neither side answering a provider
+lock error. All four fail on the code before this repair.
 
 **Authorization.** Both endpoints are on controllers that already declare `Purchasing.Operate`
 (authorization class 1); nothing was added to `EndpointAuthorizationClassificationTests`. The preview is a

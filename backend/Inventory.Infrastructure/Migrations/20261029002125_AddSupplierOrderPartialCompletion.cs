@@ -24,6 +24,19 @@ namespace Inventory.Infrastructure.Migrations
     /// nullable rather than required because the overwhelming majority of rows legitimately have no
     /// value; the write path sets all three together or none, and the column pair is never read as
     /// an identity for anything but the audit trail.</para>
+    ///
+    /// <para><strong>Why <c>Down</c> uses <c>ALTER TABLE ... DROP COLUMN</c>.</strong> The same
+    /// reason <c>AddBusinessLifecycleStatusAndProfile</c> does, plus one this migration cannot avoid.
+    /// SQLite has dropped an unindexed, unconstrained column in place since 3.35, which is what the
+    /// bundled library this application runs on provides, and <c>SupplierOrders</c> is the table the
+    /// order lines, the receipt allocations and therefore every recorded delivery hang off: rebuilding
+    /// it - create a copy, move every row, drop the original, rename - is risk a rollback of three
+    /// nullable audit columns does not need. The reason it is not merely preferable here is that the
+    /// provider's <c>DropColumn</c> <em>cannot</em> rebuild without a model, and the model it would
+    /// rebuild from is the <em>preceding</em> migration's recorded one: several migrations in this
+    /// history are hand-written and record none at all (<c>AddPriceCollectorResults</c> says so in
+    /// its own designer file), so whichever one ends up in front of this migration would decide
+    /// whether rolling back works. The in-place form needs no model and so does not care.</para>
     /// </summary>
     /// <inheritdoc />
     public partial class AddSupplierOrderPartialCompletion : Migration
@@ -53,17 +66,16 @@ namespace Inventory.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropColumn(
-                name: "CompletedByDirectoryTenantId",
-                table: "SupplierOrders");
-
-            migrationBuilder.DropColumn(
-                name: "CompletedByObjectId",
-                table: "SupplierOrders");
-
-            migrationBuilder.DropColumn(
-                name: "CompletedWithUndeliveredAt",
-                table: "SupplierOrders");
+            // In place, so the table every order line and receipt allocation refers to is never
+            // dropped and rebuilt, and so the rollback needs no point-in-time model at all. The
+            // orders, their lines, their allocations and their indexes are untouched; only the three
+            // columns and the values in them go, which is what a rollback of this migration means.
+            migrationBuilder.Sql(
+                "ALTER TABLE \"SupplierOrders\" DROP COLUMN \"CompletedByDirectoryTenantId\";");
+            migrationBuilder.Sql(
+                "ALTER TABLE \"SupplierOrders\" DROP COLUMN \"CompletedByObjectId\";");
+            migrationBuilder.Sql(
+                "ALTER TABLE \"SupplierOrders\" DROP COLUMN \"CompletedWithUndeliveredAt\";");
         }
     }
 }

@@ -271,6 +271,15 @@ public sealed class EfPurchaseStore : IPurchaseStore
     public async Task<PurchaseRecord?> UpdateAsync(
         int id, PurchaseFields fields, IReadOnlyList<PurchaseItemInput>? items, CancellationToken cancellationToken)
     {
+        // The write lock first, before anything is read (issue #974). The completed-order guard below
+        // is a check-then-write rule, and the write it protects is this whole correction: the guard
+        // used to answer before the transaction opened at all, so a purchase save carrying a
+        // completion decision could close the linked order in between - and the correction would then
+        // rewrite the very receipts that order was closed on, while the rollup, which deliberately
+        // preserves ClosedPartiallyDelivered, left it reading completed. This is the same lock the
+        // completion path takes, which is what serialises the two against each other.
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
         var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
         if (purchase is null) return null;
@@ -282,13 +291,15 @@ public sealed class EfPurchaseStore : IPurchaseStore
         var originalSupplierId = purchase.SupplierId;
         var originalItems = purchase.Items.ToList();
 
-        // Decided before anything is written, and before the transaction even opens: a submission
-        // whose lines cannot be identified safely must leave every persisted row untouched.
+        // Decided before anything is written: a submission whose lines cannot be identified safely
+        // must leave every persisted row untouched, which is now the transaction above rolling back
+        // rather than there being no transaction yet.
         var lineMatch = items is null ? default : MatchSubmittedLines(originalItems, items);
         if (lineMatch.Error is { } identityError) throw new InvalidOperationException(identityError);
 
-        // Also before the transaction opens: a purchase a completed supplier order was closed on
-        // cannot be corrected at all (issue #974), so the refusal must not have written anything.
+        // A purchase a completed supplier order was closed on cannot be corrected at all (issue
+        // #974). Read with the write lock held, so no completion can commit between this answer and
+        // the correction it permits; the refusal still writes nothing.
         await EnsureNoCompletedSupplierOrderAsync(originalItems.Select(item => item.Id), cancellationToken);
 
         var storedDeliveryGst = new GstClassificationState(
@@ -308,7 +319,6 @@ public sealed class EfPurchaseStore : IPurchaseStore
         var affected = new Dictionary<long, DateTime>();
         var physicalChanges = new Dictionary<long, int>();
 
-        await using var transaction = await BeginTransactionAsync();
         if (requiresFulfillmentReconciliation)
             await RemoveSupplierOrderFulfillmentAsync(originalItems.Select(item => item.Id), cancellationToken);
 
@@ -429,12 +439,18 @@ public sealed class EfPurchaseStore : IPurchaseStore
             await AllocateSupplierOrderFulfillmentAsync(purchase, cancellationToken);
         await RebuildAffectedAsync(affected.Select(item => (item.Key, item.Value)), cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return ToRecord(purchase);
     }
 
     public async Task<string?> DeleteAsync(int id, CancellationToken cancellationToken)
     {
+        // The write lock first, for the reason UpdateAsync takes it there (issue #974): the
+        // completed-order guard below and the removal it permits have to be one operation against a
+        // purchase save that is completing the very order this purchase delivered. A delete is the
+        // worse half - it would leave a completed order recording a delivery no purchase holds.
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
         var purchase = await _db.Receipts.Include(r => r.Items).FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
         if (purchase is null) return null;
 
@@ -450,7 +466,6 @@ public sealed class EfPurchaseStore : IPurchaseStore
         foreach (var movement in movements)
             AddPhysicalChange(physicalChanges, movement.ProductId, -movement.QuantityChange);
 
-        await using var transaction = await BeginTransactionAsync();
         await RemoveSupplierOrderFulfillmentAsync(purchase.Items.Select(item => item.Id), cancellationToken);
         _db.StockAdjustments.RemoveRange(movements);
         await StagePhysicalStockAsync(physicalChanges, cancellationToken);
@@ -458,7 +473,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         await _db.SaveChangesAsync(cancellationToken);
         await RebuildAffectedAsync(affected, cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return storedFileName;
     }
 
