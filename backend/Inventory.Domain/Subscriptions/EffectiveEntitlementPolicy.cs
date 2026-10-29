@@ -195,14 +195,20 @@ public static class EffectiveEntitlementPolicy
     /// open-ended period does; otherwise the later end does; an equal end does not, which is what
     /// makes the paid record win a genuine tie.
     /// </summary>
-    private static bool EntitlesForLonger(EntitlementPeriod first, EntitlementPeriod second) =>
-        (first.EndsAtUtc, second.EndsAtUtc) switch
+    private static bool EntitlesForLonger(EntitlementPeriod first, EntitlementPeriod second)
+    {
+        if (first.EndsAtUtc is null)
         {
-            (null, null) => false,
-            (null, not null) => true,
-            (not null, null) => false,
-            var (mine, theirs) => mine > theirs,
-        };
+            return second.EndsAtUtc is not null;
+        }
+
+        if (second.EndsAtUtc is null)
+        {
+            return false;
+        }
+
+        return first.EndsAtUtc.Value > second.EndsAtUtc.Value;
+    }
 
     private static EffectiveEntitlement FromGrant(ManualPlanGrantState grant) =>
         new(Enforced: true, grant.Plan, EntitlementSource.ManualGrant, grant.Period.EndsAtUtc);

@@ -152,12 +152,7 @@ public static class BusinessPlanGrandfatheringCommand
         }
 
         output.WriteLine(
-            $"Cutoff (UTC)         : {Describe(report.CutoffUtc)}"
-                + (report.CutoffWasAlreadyRecorded
-                    ? "   <- already recorded; this run grants by it and never moves it"
-                    : report.DryRun
-                        ? "   <- not recorded yet; an apply would fix this instant"
-                        : "   <- recorded by this run"));
+            $"Cutoff (UTC)         : {Describe(report.CutoffUtc)}{CutoffAnnotation(report)}");
         output.WriteLine($"Granted plan         : {GrandfatheringEligibilityPolicy.GrandfatheredPlan}");
 
         if (report.Outcome == BusinessPlanGrandfatheringOutcome.AlreadyComplete)
@@ -224,4 +219,16 @@ public static class BusinessPlanGrandfatheringCommand
         instant is null ? "none" : instant.Value.ToString("u", CultureInfo.InvariantCulture);
 
     private static string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+    private static string CutoffAnnotation(BusinessPlanGrandfatheringReport report)
+    {
+        if (report.CutoffWasAlreadyRecorded)
+        {
+            return "   <- already recorded; this run grants by it and never moves it";
+        }
+
+        return report.DryRun
+            ? "   <- not recorded yet; an apply would fix this instant"
+            : "   <- recorded by this run";
+    }
 }
