@@ -2561,7 +2561,7 @@ Nayax call changed; everything below happens in the browser.
 
 - **One row per product, one column per machine.** On a desktop the product column and the header
   rows stay in place while the table scrolls, the machine columns are grouped under their site's name
-  when your machines have sites, and a "Scroll sideways" hint appears once the run has more than two
+  when your machines have sites (two sites with the same name still get a header each), and a "Scroll sideways" hint appears once the run has more than two
   machines. The MDB code is a sortable column of its own instead of being repeated in every cell.
 - **Each suggested pick can be adjusted.** The pencil on a cell opens its quantity: type a whole number of 0
   or more (Enter or Confirm keeps it, Escape or Cancel leaves it as it was). An adjusted cell shows
@@ -2577,7 +2577,7 @@ Nayax call changed; everything below happens in the browser.
   Machines are applied with **Apply**; each selected machine is a chip you can remove.
 - **Discarding is always asked first.** **Refresh** (or **Retry** after a failed read) re-reads
   exactly the same selection from Nayax and **Reset** clears it; if you have adjusted or ticked
-  anything, both ask before throwing it away, and so does removing a machine whose cells you changed.
+  anything, or typed a quantity you have not yet confirmed, both ask before throwing it away, and so does removing a machine whose cells you changed.
   Cancel changes nothing. The time of the snapshot you are looking at is shown beside Refresh, and an
   answer to an earlier, superseded request is ignored rather than replacing a newer one.
 - **On a phone** the matrix becomes one card per product with the machine picks inside it, a

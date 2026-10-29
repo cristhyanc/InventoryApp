@@ -56,8 +56,17 @@ export const UNRESOLVED_SAVE_LEAVE_WARNING =
   "A refill save could not be confirmed. If you leave, its retry is lost and you will not be able to safely resend it. Leave anyway?";
 
 /** The planning state of the one cell being edited: its key, the raw text in its box, and that text's error. */
+/** One run of matrix columns under a shared site header; `siteId` is the grouping key, `siteName` only its label. */
+export interface ColumnGroup {
+  siteId: number | null;
+  siteName: string | null;
+  machineIds: number[];
+}
+
 interface PickEdit {
   readonly key: string;
+  /** The committed quantity the editor opened with, as text; the edit is unsaved work only once `value` differs from it. */
+  readonly initial: string;
   value: string;
   error: string | null;
 }
@@ -385,24 +394,27 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
 
   /**
    * The applied machines as matrix columns, grouped so machines at the same site are adjacent under
-   * one shared header. A group's `siteName` is `null` for machines with no known site; nothing is
-   * invented for them. Groups keep the order their first machine was selected in.
+   * one shared header. Groups are keyed by the site's id, so two sites that happen to share a name
+   * stay separate; the name is only what the header shows. A group's `siteId` and `siteName` are
+   * `null` for machines with no known site; nothing is invented for them. Groups keep the order
+   * their first machine was selected in.
    */
-  columnGroups(): { siteName: string | null; machineIds: number[] }[] {
-    const groups: { siteName: string | null; machineIds: number[] }[] = [];
+  columnGroups(): ColumnGroup[] {
+    const groups: ColumnGroup[] = [];
     for (const machineId of this.appliedMachineIds) {
       const machine = this.allMachines.find((m) => m.machineID === machineId);
-      const siteName = machine ? this.siteName(machine) ?? null : null;
-      const group = groups.find((g) => g.siteName === siteName);
+      const site = machine ? this.siteFor(machine) : undefined;
+      const siteId = site?.siteId ?? null;
+      const group = groups.find((g) => g.siteId === siteId);
       if (group) {
         group.machineIds.push(machineId);
       } else {
-        groups.push({ siteName, machineIds: [machineId] });
+        groups.push({ siteId, siteName: site?.name ?? null, machineIds: [machineId] });
       }
     }
-    const named = groups.filter((g) => g.siteName !== null);
-    const unnamed = groups.filter((g) => g.siteName === null);
-    return [...named, ...unnamed];
+    const sited = groups.filter((g) => g.siteId !== null);
+    const unsited = groups.filter((g) => g.siteId === null);
+    return [...sited, ...unsited];
   }
 
   /** The applied machines in column order: {@link columnGroups}, flattened. */
@@ -412,7 +424,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
 
   /** Whether any applied machine has a known site, so the matrix shows a site header row. */
   get siteHeadersShown(): boolean {
-    return this.columnGroups().some((g) => g.siteName !== null);
+    return this.columnGroups().some((g) => g.siteId !== null);
   }
 
   /**
@@ -596,7 +608,8 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
       return;
     }
     const key = planCellKey(product.productId, machineId);
-    this.edit = { key, value: String(this.plannedQuantity(product.productId, cell)), error: null };
+    const initial = String(this.plannedQuantity(product.productId, cell));
+    this.edit = { key, initial, value: initial, error: null };
     setTimeout(() => {
       const input = document.getElementById(this.editInputId(product.productId, machineId)) as HTMLInputElement | null;
       input?.focus();
@@ -732,9 +745,17 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     }, 0);
   }
 
-  /** Whether the plan holds anything an operator would mind losing: an edited quantity or a checked pick. */
+  /**
+   * Whether the plan holds anything an operator would mind losing: an edited quantity, a checked
+   * pick, or an open quantity editor whose text was changed but not yet committed.
+   */
   hasPlanningWork(): boolean {
-    return this.overrides.size > 0 || this.pickedCells.size > 0;
+    return this.overrides.size > 0 || this.pickedCells.size > 0 || this.editIsDirty();
+  }
+
+  /** Whether the open quantity editor holds text other than the quantity it opened with; an untouched editor loses nothing. */
+  editIsDirty(): boolean {
+    return this.edit !== null && this.edit.value.trim() !== this.edit.initial;
   }
 
   /** The departure warning that applies right now, or `null` when leaving loses nothing. */
@@ -784,10 +805,15 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   }
 
   private siteName(machine: Machine): string | undefined {
+    return this.siteFor(machine)?.name;
+  }
+
+  /** The machine's site from the site list, or `undefined` when it has none or the list does not know it. */
+  private siteFor(machine: Machine): SiteListItem | undefined {
     if (machine.siteId == null) {
       return undefined;
     }
-    return this.sites.find((s) => s.siteId === machine.siteId)?.name;
+    return this.sites.find((s) => s.siteId === machine.siteId);
   }
 
   private productCategoryId(productId: number): number | undefined {
@@ -817,7 +843,8 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   }
 
   private machineHasPlanningWork(machineId: number): boolean {
-    return [...this.overrides.keys(), ...this.pickedCells].some((key) => planCellMachineId(key) === machineId);
+    const dirtyEditKeys = this.edit && this.editIsDirty() ? [this.edit.key] : [];
+    return [...this.overrides.keys(), ...this.pickedCells, ...dirtyEditKeys].some((key) => planCellMachineId(key) === machineId);
   }
 
   /**

@@ -10950,7 +10950,9 @@ total, shortage and progress figure (`productPlannedTotal`, `productShortage`, `
 `parsePickQuantity` is the one input rule: digits only, 0 to `MAXIMUM_PICK_QUANTITY` (int32 max),
 blank refused. Only a cell with a positive suggestion can be edited. 0 is a skip - the cell has no checkbox and counts as no pick. Committing a value
 that differs from the cell's previous planned quantity removes its `pickedCells` mark, because it is
-a different pick. Like the rest of the page's state, none of this reaches `localStorage`, a query
+a different pick. An open editor whose text differs from the quantity it opened with (`editIsDirty`)
+is planning work too, for every discard confirmation and the departure guard below; an untouched
+editor, or one closed with Cancel, is not. Like the rest of the page's state, none of this reaches `localStorage`, a query
 parameter or any request.
 
 **Discarding is explicit and snapshot-scoped.** Overrides and ticks belong to the snapshot they were
@@ -10968,8 +10970,9 @@ is applied only while both are still current, so an older read finishing after a
 Reset, can neither replace the newer snapshot nor show a failure over it.
 
 **Site grouping is optional.** The machine dropdown (`MultiSelectOption.group`) and the matrix's
-site header row group machines by the site name from `SiteService.getList()`, read only when some
-machine carries a `siteId`; machines with no known site fall under "Other machines", and a failed
+site header row group machines by site from `SiteService.getList()`, read only when some
+machine carries a `siteId`. The matrix groups by `siteId` (`ColumnGroup`), using the name only as the
+header label, so two sites that share a name are never merged; machines with no known site fall under "Other machines", and a failed
 site read falls back to the ungrouped layout rather than an error.
 
 **Record refill validates the whole submission client-side.** `ManualPickListComponent` computes

@@ -245,9 +245,9 @@
             @if (siteHeadersShown) {
               <tr>
                 <th scope="colgroup" colspan="4" class="table-cell sticky top-0 z-20 h-9 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Product and totals</th>
-                @for (group of columnGroups(); track group.siteName) {
+                @for (group of columnGroups(); track group.siteId) {
                   <th scope="colgroup" [attr.colspan]="group.machineIds.length" class="table-cell sticky top-0 z-10 h-9 border-l border-rr-line bg-rr-teal-tint text-md-table-head font-bold uppercase tracking-wide text-rr-teal" data-testid="pick-list-site-header">
-                    @if (group.siteName !== null) { {{ group.siteName }} } @else { <span class="sr-only">No known site</span> }
+                    @if (group.siteId !== null) { {{ group.siteName }} } @else { <span class="sr-only">No known site</span> }
                   </th>
                 }
               </tr>

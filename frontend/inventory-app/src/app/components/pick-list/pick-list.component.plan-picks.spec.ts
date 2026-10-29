@@ -479,6 +479,173 @@ describe('Plan picks quantity overrides (issue #996)', () => {
   });
 });
 
+/**
+ * Text typed into an open quantity editor is planning work too, until it is committed or cancelled:
+ * every transition that would throw it away asks first, exactly as it does for a committed override.
+ * An editor that was opened but not changed, or that was explicitly cancelled, loses nothing and
+ * never asks.
+ */
+describe('Plan picks guards an open, changed quantity editor (issue #996)', () => {
+  /** Opens the Chips cell at machine 20 (suggestion 3) and types a different, uncommitted quantity. */
+  function typeWithoutCommitting(component: PickListComponent, value = '1'): void {
+    component.startEdit(row(component, 2), 20);
+    component.onEditInput(value);
+  }
+
+  it('an editor that was opened but not changed is not planning work', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    component.startEdit(row(component, 2), 20);
+
+    expect(component.editIsDirty()).toBe(false);
+    expect(component.hasPlanningWork()).toBe(false);
+    expect(component.leaveWarning()).toBeNull();
+  });
+
+  it('typing back the quantity the editor opened with is not a change', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component, '7');
+    component.onEditInput(' 3 ');
+
+    expect(component.editIsDirty()).toBe(false);
+  });
+
+  it('changed, uncommitted text is planning work; an explicit Cancel discards it without any warning', () => {
+    const confirm = jest.spyOn(window, 'confirm');
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+
+    expect(component.hasPlanningWork()).toBe(true);
+
+    component.cancelEdit();
+
+    expect(component.hasPlanningWork()).toBe(false);
+    expect(component.confirmLeave()).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it('asks before Refresh discards the typed text; Cancel keeps the editor and its text and reads nothing', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component, getPickList } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+    getPickList.mockClear();
+
+    component.refresh();
+
+    expect(confirm).toHaveBeenCalledWith(DISCARD_PLAN_ON_REFRESH_CONFIRMATION);
+    expect(getPickList).not.toHaveBeenCalled();
+    expect(component.isEditing(2, 20)).toBe(true);
+    expect(component.edit?.value).toBe('1');
+  });
+
+  it('a confirmed Refresh discards the typed text and closes the editor', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component, getPickList } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+
+    component.refresh();
+
+    expect(getPickList).toHaveBeenCalledTimes(2);
+    expect(component.edit).toBeNull();
+    expect(component.isOverridden(2, 20)).toBe(false);
+  });
+
+  it('Refresh with an untouched editor open asks nothing', () => {
+    const confirm = jest.spyOn(window, 'confirm');
+    const { component, getPickList } = createHarness();
+    applyMachines(component, [10, 20]);
+    component.startEdit(row(component, 2), 20);
+
+    component.refresh();
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(getPickList).toHaveBeenCalledTimes(2);
+  });
+
+  it('asks before Reset discards the typed text; Cancel keeps it, and confirming clears it', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+
+    component.resetAll();
+
+    expect(confirm).toHaveBeenCalledWith(DISCARD_PLAN_ON_RESET_CONFIRMATION);
+    expect(component.edit?.value).toBe('1');
+    expect(component.appliedMachineIds).toEqual([10, 20]);
+
+    confirm.mockReturnValue(true);
+    component.resetAll();
+
+    expect(component.edit).toBeNull();
+    expect(component.appliedMachineIds).toEqual([]);
+  });
+
+  it('asks before removing the machine whose cell holds typed text, by name; Cancel keeps it', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+
+    component.removeMachine(20);
+
+    expect(confirm).toHaveBeenCalledWith(discardPlanMachineConfirmation('Snacks'));
+    expect(component.appliedMachineIds).toEqual([10, 20]);
+    expect(component.edit?.value).toBe('1');
+
+    confirm.mockReturnValue(true);
+    component.removeMachine(20);
+
+    expect(component.appliedMachineIds).toEqual([10]);
+    expect(component.edit).toBeNull();
+  });
+
+  it('removing a different machine neither asks nor touches the typed text', () => {
+    const confirm = jest.spyOn(window, 'confirm');
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+
+    component.removeMachine(10);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(component.appliedMachineIds).toEqual([20]);
+    expect(component.edit?.value).toBe('1');
+  });
+
+  it('the same check applies when Apply removes the machine', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+
+    applyMachines(component, [10]);
+
+    expect(confirm).toHaveBeenCalledWith(discardPlanMachineConfirmation('Snacks'));
+    expect(component.appliedMachineIds).toEqual([10, 20]);
+    expect(component.edit?.value).toBe('1');
+  });
+
+  it('guards leaving the page and reloading or closing the tab, and a cancelled departure keeps the text', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeWithoutCommitting(component);
+
+    expect(component.confirmLeave()).toBe(false);
+    expect(confirm).toHaveBeenCalledWith(UNSAVED_WORK_LEAVE_WARNING);
+    expect(component.edit?.value).toBe('1');
+
+    const unload = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    component.onBeforeUnload(unload);
+    expect(unload.defaultPrevented).toBe(true);
+  });
+});
+
 describe('Plan picks filters and machine focus preserve the plan (issue #996)', () => {
   it('Only remaining shows rows with an unchecked pick; Only shortages shows rows storage cannot cover', () => {
     const { component } = createHarness();
@@ -563,11 +730,35 @@ describe('Plan picks site grouping (issue #996)', () => {
     applyMachines(component, [10, 40, 30, 20]);
 
     expect(component.columnGroups()).toEqual([
-      { siteName: 'Harbour Point', machineIds: [10, 20] },
-      { siteName: 'Pavilion', machineIds: [30] },
-      { siteName: null, machineIds: [40] }
+      { siteId: 1, siteName: 'Harbour Point', machineIds: [10, 20] },
+      { siteId: 2, siteName: 'Pavilion', machineIds: [30] },
+      { siteId: null, siteName: null, machineIds: [40] }
     ]);
     expect(component.columnMachineIds()).toEqual([10, 20, 30, 40]);
+  });
+
+  it('keeps two different sites apart even when they share a name, and shows that name on each header', () => {
+    const machines = [machine(10, 'Drinks', { siteId: 1 }), machine(20, 'Snacks', { siteId: 2 }), machine(30, 'Combo', { siteId: 1 })];
+    const sameName = of([{ siteId: 1, name: 'Westfield', machineCount: 2 }, { siteId: 2, name: 'Westfield', machineCount: 1 }]);
+    const { component } = createHarness({ machines, sites: sameName });
+    applyMachines(component, [10, 20, 30]);
+
+    expect(component.columnGroups()).toEqual([
+      { siteId: 1, siteName: 'Westfield', machineIds: [10, 30] },
+      { siteId: 2, siteName: 'Westfield', machineIds: [20] }
+    ]);
+    expect(component.siteHeadersShown).toBe(true);
+  });
+
+  it('treats a machine whose site the list does not know as having no known site', () => {
+    const machines = [machine(10, 'Drinks', { siteId: 1 }), machine(20, 'Snacks', { siteId: 99 })];
+    const { component } = createHarness({ machines, sites });
+    applyMachines(component, [20, 10]);
+
+    expect(component.columnGroups()).toEqual([
+      { siteId: 1, siteName: 'Harbour Point', machineIds: [10] },
+      { siteId: null, siteName: null, machineIds: [20] }
+    ]);
   });
 
   it('lists machines flat when no machine has a known site, and never reads the site list for them', () => {
