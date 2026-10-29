@@ -9,7 +9,7 @@
     discovered by a refusal.
   -->
   @if (hiddenProductsWithEntries() > 0) {
-    <div data-testid="manual-pick-list-hidden-entries" role="status" class="flex flex-wrap items-center gap-3 rounded-lg border border-rr-line bg-rr-surface px-4 py-3 text-sm text-rr-navy">
+    <output data-testid="manual-pick-list-hidden-entries" class="flex flex-wrap items-center gap-3 rounded-lg border border-rr-line bg-rr-surface px-4 py-3 text-sm text-rr-navy">
       <span class="flex-1">
         <strong>{{ hiddenProductsWithEntries() }} {{ hiddenProductsWithEntries() === 1 ? 'product' : 'products' }}</strong>
         with entered quantities ({{ hiddenUnitsRequired() }} units) {{ hiddenProductsWithEntries() === 1 ? 'is' : 'are' }} hidden by the current filters.
@@ -19,7 +19,7 @@
       </span>
       <button type="button" class="rr-button-secondary" (click)="showEnteredProducts()">Show entered products</button>
       <button type="button" class="rr-button-ghost" (click)="showAllProducts()">Show all</button>
-    </div>
+    </output>
   }
 
   <section class="card" aria-label="Record refill machines and filters">
@@ -36,7 +36,7 @@
             natively. onSelectedMachineIdsChange refuses as well, so the rule is enforced and not
             merely rendered.
           -->
-          <fieldset class="m-0 border-0 p-0" [disabled]="entriesLocked">
+          <fieldset class="min-w-0 m-0 border-0 p-0" [disabled]="entriesLocked">
             <app-multi-select-dropdown
               label="Machines"
               itemLabelSingular="machine"
@@ -68,9 +68,9 @@
         </div>
 
         @if (machineResolutionPending) {
-          <p data-testid="manual-pick-list-machine-resolution-pending" role="status" class="m-0 text-md-body value-muted">
+          <output data-testid="manual-pick-list-machine-resolution-pending" class="block m-0 text-md-body value-muted">
             {{ machineResolutionPendingMessage }}
-          </p>
+          </output>
         }
 
         @if (machineAttributionFailed) {
@@ -101,11 +101,12 @@
         </label>
 
         @if (!sessionActive) {
-          <div class="flex flex-wrap items-center gap-2" role="group" aria-label="Show">
+          <fieldset class="min-w-0 flex flex-wrap items-center gap-2">
+            <legend class="sr-only">Show</legend>
             <button type="button" class="rounded-full border px-3 py-1.5 text-sm font-semibold" [ngClass]="entryFilter === 'all' ? 'border-rr-teal bg-rr-teal-tint text-rr-teal' : 'border-rr-line bg-white text-rr-navy'" [attr.aria-pressed]="entryFilter === 'all'" (click)="entryFilter = 'all'">All items ({{ products.length }})</button>
             <button type="button" class="rounded-full border px-3 py-1.5 text-sm font-semibold" [ngClass]="entryFilter === 'entered' ? 'border-rr-teal bg-rr-teal-tint text-rr-teal' : 'border-rr-line bg-white text-rr-navy'" [attr.aria-pressed]="entryFilter === 'entered'" (click)="entryFilter = 'entered'">Entered ({{ enteredProductCount() }})</button>
             <button type="button" class="inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-sm font-semibold" [ngClass]="entryFilter === 'shortages' ? 'border-rr-danger-text bg-rr-danger-bg text-rr-danger-text' : 'border-rr-line bg-white text-rr-navy'" [attr.aria-pressed]="entryFilter === 'shortages'" (click)="entryFilter = 'shortages'"><app-icon name="warning" [size]="16" />Storage shortages ({{ shortageProducts().length }})</button>
-          </div>
+          </fieldset>
         }
       </div>
     </div>
@@ -133,7 +134,8 @@
 
     @if (compact && matrixMode && !sessionActive) {
       <!-- A phone takes entries for one machine at a time; switching machines keeps the whole draft. -->
-      <div class="card-body relative flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Machine to enter for">
+      <fieldset class="min-w-0 card-body relative flex gap-2 overflow-x-auto pb-1">
+        <legend class="sr-only">Machine to enter for</legend>
         @for (machine of machineColumns; track machine.id) {
           <button
             type="button"
@@ -145,13 +147,13 @@
             <span class="text-xs">{{ machineEntryCount(machine.id) }} entered &middot; {{ machineUnits(machine.id) }} units</span>
           </button>
         }
-      </div>
+      </fieldset>
     }
 
     <div class="card-body p-0">
       <!-- Only a successful read may be described as having no products; see ManualPickListCatalogueState. -->
       @if (catalogueState === 'loading') {
-        <p data-testid="manual-pick-list-catalogue-loading" role="status" class="p-4 text-md-body value-muted">Loading products&hellip;</p>
+        <output data-testid="manual-pick-list-catalogue-loading" class="block p-4 text-md-body value-muted">Loading products&hellip;</output>
       } @else if (catalogueState === 'failed') {
         <div class="p-4 flex flex-wrap items-center gap-4">
           <p data-testid="manual-pick-list-catalogue-failed" role="alert" class="text-md-body text-md-danger-text">{{ catalogueLoadFailedMessage }}</p>
@@ -189,7 +191,7 @@
           sticky header row, a wide machine selection scrolls horizontally inside this container,
           and the Product column stays pinned on the left.
         -->
-        <div data-testid="manual-pick-list-table-scroll" class="relative max-h-[70vh] overflow-auto" tabindex="0" aria-label="Record refill entries">
+        <div data-testid="manual-pick-list-table-scroll" class="relative max-h-[70vh] overflow-auto" role="region" aria-label="Record refill entries">
           <table class="table">
             <thead class="table-head">
               <tr>
@@ -297,7 +299,7 @@
           <p data-testid="manual-pick-list-request-error" role="alert" class="m-0 text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
         }
         @if (recordedSummary !== null && !unresolvedSubmission) {
-          <p data-testid="manual-pick-list-recorded" role="status" class="m-0 flex items-center gap-1 font-semibold text-rr-ok-text"><app-icon name="check" [size]="16" />{{ recordedSummary }}</p>
+          <output data-testid="manual-pick-list-recorded" class="m-0 flex items-center gap-1 font-semibold text-rr-ok-text"><app-icon name="check" [size]="16" />{{ recordedSummary }}</output>
         }
 
         @if (unresolvedSubmission) {

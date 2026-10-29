@@ -7,7 +7,8 @@
 
     @if (calculatedUnavailableReason === '') {
       <!-- One segmented toggle for the two views. Record refill holds the only write, so it stays where it is while a save is in flight. -->
-      <div class="inline-flex rounded-lg border border-rr-line bg-rr-surface p-1" role="group" aria-label="Pick List view">
+      <fieldset class="min-w-0 inline-flex rounded-lg border border-rr-line bg-rr-surface p-1">
+        <legend class="sr-only">Pick List view</legend>
         <button
           type="button"
           class="inline-flex min-h-11 items-center gap-2 rounded-md px-4 text-sm font-semibold"
@@ -21,7 +22,7 @@
           [ngClass]="mode === 'manual' ? 'bg-rr-teal text-white' : 'text-rr-navy hover:bg-white'"
           [attr.aria-pressed]="mode === 'manual'"
           (click)="switchMode('manual')"><app-icon name="check" [size]="18" />Record refill</button>
-      </div>
+      </fieldset>
     }
   </header>
 
@@ -47,7 +48,7 @@
   }
 
   @if (manualSaveInFlight) {
-    <p data-testid="pick-list-save-in-flight" role="status" class="m-0 text-sm text-rr-muted">Recording your refill. The view stays here until this save finishes.</p>
+    <output data-testid="pick-list-save-in-flight" class="block m-0 text-sm text-rr-muted">Recording your refill. The view stays here until this save finishes.</output>
   }
 
   <!--
@@ -154,7 +155,7 @@
         <button type="button" class="rr-button-secondary" (click)="refresh()">Retry</button>
       </div>
     } @else if (!loadState.loaded) {
-      <p class="text-md-body value-muted" role="status">Loading pick list&hellip;</p>
+      <output class="block text-md-body value-muted">Loading pick list&hellip;</output>
     } @else if (runProducts().length === 0) {
       <p class="text-md-body value-muted">No products to pick for the selected machines and products.</p>
     } @else {
@@ -172,19 +173,21 @@
           <div class="h-2 rounded-full bg-rr-teal" [style.width.%]="progressPercent()"></div>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2" role="group" aria-label="Show">
+        <fieldset class="min-w-0 flex flex-wrap items-center gap-2">
+          <legend class="sr-only">Show</legend>
           <button type="button" class="rounded-full border px-3 py-1.5 text-sm font-semibold" [ngClass]="statusFilter === 'all' ? 'border-rr-teal bg-rr-teal-tint text-rr-teal' : 'border-rr-line bg-white text-rr-navy'" [attr.aria-pressed]="statusFilter === 'all'" (click)="statusFilter = 'all'">All items ({{ runProducts().length }})</button>
           <button type="button" class="rounded-full border px-3 py-1.5 text-sm font-semibold" [ngClass]="statusFilter === 'remaining' ? 'border-rr-teal bg-rr-teal-tint text-rr-teal' : 'border-rr-line bg-white text-rr-navy'" [attr.aria-pressed]="statusFilter === 'remaining'" (click)="statusFilter = 'remaining'">Only remaining ({{ remainingProductCount() }})</button>
           <button type="button" class="inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-sm font-semibold" [ngClass]="statusFilter === 'shortages' ? 'border-rr-danger-text bg-rr-danger-bg text-rr-danger-text' : 'border-rr-line bg-white text-rr-navy'" [attr.aria-pressed]="statusFilter === 'shortages'" (click)="statusFilter = 'shortages'"><app-icon name="warning" [size]="16" />Only shortages ({{ shortageProducts().length }})</button>
           @if (visibleProducts().length !== runProducts().length) {
             <span class="text-sm text-rr-muted" data-testid="pick-list-visible-count">Showing {{ visibleProducts().length }} of {{ runProducts().length }} products</span>
           }
-        </div>
+        </fieldset>
       </div>
 
       @if (compactLayout) {
         <!-- A phone shows one machine at a time as product cards; the plan is the same plan, so switching machines loses nothing. -->
-        <div class="relative mt-4 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Machine to show">
+        <fieldset class="min-w-0 relative mt-4 flex gap-2 overflow-x-auto pb-1">
+          <legend class="sr-only">Machine to show</legend>
           @for (machineId of columnMachineIds(); track machineId) {
             <button
               type="button"
@@ -196,7 +199,7 @@
               <span class="text-xs">{{ machineProgressLabel(machineId) }}</span>
             </button>
           }
-        </div>
+        </fieldset>
 
         <div class="mt-4 flex flex-col gap-3" data-testid="pick-list-cards">
           @for (product of focusedProducts(); track product.productId) {
@@ -236,7 +239,7 @@
         header rows, many machine columns scroll horizontally, and the Product column stays pinned
         on the left. Machines at the same site sit together under one shared site header.
       -->
-      <div data-testid="pick-list-table-scroll" class="relative mt-4 max-h-[70vh] overflow-auto rounded-lg border border-rr-line" tabindex="0" aria-label="Pick list matrix">
+      <div data-testid="pick-list-table-scroll" class="relative mt-4 max-h-[70vh] overflow-auto rounded-lg border border-rr-line" role="region" aria-label="Pick list matrix">
         <table class="table">
           <thead>
             @if (siteHeadersShown) {

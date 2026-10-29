@@ -205,7 +205,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   readonly planInventoryImpact = PLAN_PICKS_INVENTORY_IMPACT;
   readonly refillInventoryImpact = RECORD_REFILL_INVENTORY_IMPACT;
 
-  @ViewChild(ManualPickListComponent) private manualView?: ManualPickListComponent;
+  @ViewChild(ManualPickListComponent) private readonly manualView?: ManualPickListComponent;
 
   private compactQuery: MediaQueryList | null = null;
   private readonly onCompactChange = (event: MediaQueryListEvent): void => {
@@ -213,13 +213,13 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   };
 
   constructor(
-    private machineService: MachineService,
-    private productService: ProductService,
-    private pickListService: PickListService,
-    private toastService: ToastService,
-    private provider: ProviderAvailabilityService,
-    private route: ActivatedRoute,
-    private siteService: SiteService
+    private readonly machineService: MachineService,
+    private readonly productService: ProductService,
+    private readonly pickListService: PickListService,
+    private readonly toastService: ToastService,
+    private readonly provider: ProviderAvailabilityService,
+    private readonly route: ActivatedRoute,
+    private readonly siteService: SiteService
   ) {}
 
   ngOnInit(): void {
@@ -826,12 +826,12 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
    * is then superseded by a read of the new one.
    */
   private afterMachinesRemoved(machineIds: number[]): void {
-    for (const key of [...this.overrides.keys()]) {
+    for (const key of this.overrides.keys()) {
       if (machineIds.includes(planCellMachineId(key))) {
         this.overrides.delete(key);
       }
     }
-    for (const key of [...this.pickedCells]) {
+    for (const key of this.pickedCells) {
       if (machineIds.includes(planCellMachineId(key))) {
         this.pickedCells.delete(key);
       }

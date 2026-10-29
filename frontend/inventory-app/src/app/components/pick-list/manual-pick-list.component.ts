@@ -548,8 +548,8 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
 
   /** How many entries are malformed on rows the current filters hide. */
   hiddenInvalidEntryCount(): number {
-    const visible = this.visibleProductIds();
-    return this.products.filter((product) => !visible.has(product.id) && this.rowHasError(product.id)).length;
+    const shownIds = this.visibleProductIds();
+    return this.products.filter((product) => !shownIds.has(product.id) && this.rowHasError(product.id)).length;
   }
 
   /** The machine a phone's cards take entries for: always one of the selected columns. */

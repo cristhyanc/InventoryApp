@@ -1412,10 +1412,6 @@ video {
   border-width: 0;
 }
 
-.\!visible {
-  visibility: visible !important;
-}
-
 .visible {
   visibility: visible;
 }
