@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using Inventory.Domain.Exceptions;
 
 namespace Inventory.Domain.PriceCatalogue;
@@ -142,6 +144,25 @@ public static class ProductMatchSuggestionPolicy
             ? trimmed
             : throw new DomainValidationException(ReasonTooLongMessage);
     }
+
+    /// <summary>
+    /// The label the suggestions of one collector run are stored under (issue #941): the run's own id,
+    /// written out.
+    ///
+    /// <para><strong>It is also the idempotency key of a match proposal</strong>, together with the
+    /// waiting key: <c>POST /api/price-collector/matches</c> has no table of its own - the suggestion
+    /// row <em>is</em> the record of what that run decided about that key - so "has this run already
+    /// decided this key?" is answered by looking for a suggestion carrying this label. Which is why the
+    /// label is derived here rather than composed by an adapter: two spellings of one run's label would
+    /// be two answers to that question.</para>
+    ///
+    /// <para>The prefix is what keeps it apart from the labels other writers use for their own
+    /// evidence - the results endpoint of #937 writes its own - and nothing parses either of
+    /// them.</para>
+    /// </summary>
+    public static string CollectorRunFor(long runId) =>
+        NormaliseCollectorRun(
+            "price-collector-run-" + runId.ToString(CultureInfo.InvariantCulture));
 
     /// <summary>The collector run as it is to be stored: trimmed, never empty.</summary>
     /// <exception cref="DomainValidationException">

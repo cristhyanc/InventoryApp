@@ -146,6 +146,92 @@ public class AppDbContext : DbContext
         }
     }
 
+    /// <summary>
+    /// Whether a <see cref="BeginPriceCatalogueMatching"/> lease is currently open, which it is for
+    /// one <c>SaveChanges</c> of one collector request and at no other moment of this context's life
+    /// (issue #941).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope. It is deliberately not read by <see cref="CurrentBusinessId"/> or
+    /// <see cref="TenantFilteringEnabled"/>, exactly as the provisioning lease above is not: a lease
+    /// grants a narrow <em>write</em> and grants no read at all, so while one is open every tenant-owned
+    /// query still matches nothing and the adapter's one reviewed <c>IgnoreQueryFilters</c> statement
+    /// is what reads the mappings - visibly, in one place, over a business-free projection.</para>
+    /// </summary>
+    internal bool PriceCatalogueMatchingLeased { get; private set; }
+
+    /// <summary>
+    /// Opens the matching window of issue #941: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>updates to the match columns of
+    /// <see cref="ProductPriceTracking"/> rows</em> on an otherwise denied scope, and nothing else.
+    ///
+    /// <para><strong>Why a window exists at all.</strong> An automatic match is decided for a waiting
+    /// <em>key</em> - the folded search name and unit label several businesses' products share, which is
+    /// what makes one product one search - and applying it means writing the mappings that carry that
+    /// key, in every business that carries it. The collector is not a member of any of them: its
+    /// request carries a denied <see cref="BusinessScope"/> precisely so it cannot reach a business's
+    /// own data, and that is the right rule. This is the narrow, reviewed exception to its write half
+    /// rather than a relaxation of it: see docs/architecture.md § Collector product matching.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and its only caller is <c>EfPriceCollectorMatchStore</c>, which takes it around one
+    /// <c>SaveChanges</c>; a lease may be taken only while this context's own scope is
+    /// <see cref="BusinessScopeState.Denied"/>, so neither an ordinary member's request nor a support
+    /// session can open one; only one may be open at a time and never beside a provisioning lease; and
+    /// the enforcer still refuses every insert, every delete, every other entity type and every other
+    /// column while it is open - including the ownership key itself, so a mapping cannot be moved
+    /// between businesses through this window any more than through any other.</para>
+    /// </summary>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginPriceCatalogueMatching()
+    {
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "Price catalogue matching is only available to a request that resolved no business of "
+                    + "its own - the price collector reporting its matches. A scope that already names "
+                    + "a business must write through the ordinary tenant path.");
+        }
+
+        if (PriceCatalogueMatchingLeased || SupplierProvisioningBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A price catalogue matching or supplier provisioning lease is already open on this "
+                    + "context.");
+        }
+
+        PriceCatalogueMatchingLeased = true;
+        return new PriceCatalogueMatchingLease(this);
+    }
+
+    /// <summary>
+    /// Closes the matching window of <see cref="BeginPriceCatalogueMatching"/>, on the same terms the
+    /// provisioning lease above closes its own.
+    /// </summary>
+    private sealed class PriceCatalogueMatchingLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public PriceCatalogueMatchingLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.PriceCatalogueMatchingLeased = false;
+            _context = null;
+        }
+    }
+
     public DbSet<Business> Businesses => Set<Business>();
 
     /// <summary>

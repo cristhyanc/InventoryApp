@@ -8,7 +8,7 @@ namespace InventoryApi.Controllers;
 
 /// <summary>
 /// The scheduled price collector's own surface (issue #924, parent #817): the work list a collector
-/// run reads, and nothing else.
+/// run reads, the results it submits (#937), the matches it proposes (#941), and nothing else.
 ///
 /// <para><strong>The caller is an application, not a person.</strong> It authenticates with a
 /// short-lived Microsoft Entra app-only token obtained through GitHub OIDC workload identity
@@ -63,17 +63,20 @@ public sealed class PriceCollectorController : ControllerBase
 {
     private readonly IssuePriceCollectorWorkList _issueWorkList;
     private readonly RecordPriceCollectorResults _recordResults;
+    private readonly RecordCollectorProductMatches _recordMatches;
     private readonly AnswerPriceCollectorSearch _answerSearch;
     private readonly CompletePriceCollectorRun _completeRun;
 
     public PriceCollectorController(
         IssuePriceCollectorWorkList issueWorkList,
         RecordPriceCollectorResults recordResults,
+        RecordCollectorProductMatches recordMatches,
         AnswerPriceCollectorSearch answerSearch,
         CompletePriceCollectorRun completeRun)
     {
         _issueWorkList = issueWorkList;
         _recordResults = recordResults;
+        _recordMatches = recordMatches;
         _answerSearch = answerSearch;
         _completeRun = completeRun;
     }
@@ -136,6 +139,47 @@ public sealed class PriceCollectorController : ControllerBase
         return receipt is null
             ? NotFound()
             : Ok(PriceCollectorResultsResponse.From(receipt));
+    }
+
+    /// <summary>
+    /// Submits one batch of match proposals for a run's waiting keys, and answers what became of
+    /// each: applied automatically, kept as a tentative match for the Super Admin, or refused with a
+    /// reason.
+    ///
+    /// <para>Nothing here is trusted either. The matcher's confidence is one condition among several
+    /// and decides nothing on its own: the backend runs its own checks - the unit label's size against
+    /// the master product's, the brand and the variant against the search name, a fixed descriptor
+    /// list in both directions - against <em>every</em> master product, and applies a match only when
+    /// exactly one passes and it is the one proposed. A pair a Super Admin rejected or undid is never
+    /// applied again, and a suggested new master product is never created. Everything else is stored
+    /// for #928 with the mappings left awaiting a match.</para>
+    /// </summary>
+    /// <response code="200">Every proposal's outcome. Everything but a fresh match carries a reason.</response>
+    /// <response code="400">
+    /// The batch is larger than one request may carry. Nothing was stored.
+    /// </response>
+    /// <response code="401">The token is not the configured collector's app-only token.</response>
+    /// <response code="404">No run has that id.</response>
+    /// <response code="409">The run has finished or has expired. Nothing was stored.</response>
+    [HttpPost("matches")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<PriceCollectorMatchesResponse>> Matches(
+        [FromBody] PriceCollectorMatchesRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // The refusals are DomainValidationException and DomainConflictException, which
+        // DomainExceptionHandler maps centrally to 400 and 409 - see Http/DomainExceptionHandler.cs.
+        var receipt = await _recordMatches.Handle(request.ToBatch(), cancellationToken);
+
+        return receipt is null
+            ? NotFound()
+            : Ok(PriceCollectorMatchesResponse.From(receipt));
     }
 
     /// <summary>

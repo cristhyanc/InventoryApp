@@ -60,11 +60,14 @@ public sealed class CrossBusinessAccessException : Exception
 /// every entity rather than only the tenant-owned ones, because in this state there is no write
 /// this application wants: not a tenant-owned row, not a membership, not an invite, not a business.
 ///
-/// Since issue #849 the denied-scope rule has one reviewed exception, and it is narrower than the
-/// rule rather than a way around it: while <c>AppDbContext.BeginSupplierProvisioning</c> holds a
+/// Since issue #849 the denied-scope rule has reviewed exceptions, and each is narrower than the
+/// rule rather than a way around it. While <c>AppDbContext.BeginSupplierProvisioning</c> holds a
 /// lease, a denied scope may create <em>new <see cref="Supplier"/> rows of that one business</em> -
 /// the copies a newly approved business gets of the platform supplier presets that serve it - and
-/// nothing else. See <see cref="EnforceSupplierProvisioning"/>.
+/// nothing else (see <see cref="EnforceSupplierProvisioning"/>). Since issue #941, while
+/// <c>AppDbContext.BeginPriceCatalogueMatching</c> holds one, it may <em>update the four match
+/// columns</em> of the price-tracking mappings an automatic match applies to - and nothing else (see
+/// <see cref="EnforcePriceCatalogueMatching"/>).
 /// </summary>
 internal static class BusinessOwnershipEnforcer
 {
@@ -103,6 +106,12 @@ internal static class BusinessOwnershipEnforcer
             if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
             {
                 EnforceSupplierProvisioning(context, provisionedBusinessId);
+                return;
+            }
+
+            if (context.PriceCatalogueMatchingLeased)
+            {
+                EnforcePriceCatalogueMatching(context);
                 return;
             }
 
@@ -179,6 +188,87 @@ internal static class BusinessOwnershipEnforcer
         }
 
         EnforceRelationships(context, businessId);
+    }
+
+    /// <summary>
+    /// The columns of a <see cref="ProductPriceTracking"/> row an automatic match may write (issue
+    /// #941): where the mapping has got to, which master product it is, how that was decided, and
+    /// when.
+    ///
+    /// <para>Written out rather than derived, and asserted as a <em>set</em> rather than as a lower
+    /// bound: the business key, the product, the waiting key and the captured search text are all
+    /// outside it, so the matching window cannot move a mapping between businesses, re-point it at
+    /// another product, or change what the collector searches for.</para>
+    /// </summary>
+    private static readonly string[] MatchableTrackingColumns =
+    [
+        nameof(ProductPriceTracking.Status),
+        nameof(ProductPriceTracking.MasterProductId),
+        nameof(ProductPriceTracking.MatchSource),
+        nameof(ProductPriceTracking.UpdatedAtUtc),
+    ];
+
+    /// <summary>
+    /// The matching window of <c>AppDbContext.BeginPriceCatalogueMatching</c> (issue #941): on a
+    /// denied scope, <em>updates to <see cref="MatchableTrackingColumns"/> of
+    /// <see cref="ProductPriceTracking"/> rows</em> are accepted, and every other tenant-owned write
+    /// is refused exactly as it is without a lease.
+    ///
+    /// <para>It is the second exception to "a denied scope writes nothing tenant-owned", and like the
+    /// first it is deliberately smaller than the rule in several directions at once: one entity type,
+    /// one state (an update - never an insert and never a delete, so the collector can neither start
+    /// nor withdraw a business's request to be priced), and four columns, which do not include the
+    /// ownership key. Unlike the provisioning window it names no business, because a match is decided
+    /// for a waiting key and the mappings that carry that key may belong to any number of businesses -
+    /// so what bounds it is what may be written rather than whose row it is, and
+    /// <see cref="EnforceRelationships"/> still runs, so no mapping can be left pointing at another
+    /// business's product.</para>
+    /// </summary>
+    private static void EnforcePriceCatalogueMatching(AppDbContext context)
+    {
+        foreach (var entry in context.ChangeTracker.Entries<IBusinessOwned>().ToList())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Modified when entry.Entity is ProductPriceTracking:
+                    VerifyMatchColumnsOnly(entry);
+                    break;
+
+                case EntityState.Added:
+                case EntityState.Modified:
+                case EntityState.Deleted:
+                    throw new CrossBusinessAccessException(
+                        $"{entry.Metadata.ClrType.Name} cannot be written while matching a tracked "
+                            + "product: the matching path may only update the match columns of a "
+                            + "price-tracking mapping.");
+
+                default:
+                    break;
+            }
+        }
+
+        EnforceRelationships(context, currentBusinessId: null);
+    }
+
+    /// <summary>
+    /// Refuses an update that would change anything but <see cref="MatchableTrackingColumns"/>. The
+    /// message names the columns and never the row's business.
+    /// </summary>
+    private static void VerifyMatchColumnsOnly(EntityEntry<IBusinessOwned> entry)
+    {
+        var unexpected = entry.Properties
+            .Where(property => property.IsModified)
+            .Select(property => property.Metadata.Name)
+            .Except(MatchableTrackingColumns, StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        if (unexpected.Count > 0)
+        {
+            throw new CrossBusinessAccessException(
+                "A price-tracking mapping may only have its match columns written while matching a "
+                    + $"tracked product: {string.Join(", ", unexpected)} cannot be changed this way.");
+        }
     }
 
     /// <summary>
