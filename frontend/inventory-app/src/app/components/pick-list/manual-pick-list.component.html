@@ -1,216 +1,222 @@
-<section class="card">
-  <div class="card-body flex flex-wrap gap-4">
-    <input
-      class="max-w-[220px]"
-      [(ngModel)]="search"
-      placeholder="Search products"
-      aria-label="Search products" />
+<!--
+  Wraps both cards: the parent page gap only spaces its direct children and the host element
+  must stay display-free so the parent's [hidden] binding still hides this view.
+-->
+<div class="flex flex-col gap-6">
+  <section class="card">
+    <div class="card-body flex flex-wrap gap-4">
+      <input
+        class="max-w-[220px]"
+        [(ngModel)]="search"
+        placeholder="Search products"
+        aria-label="Search products" />
 
-    <label class="text-sm self-center" for="manual-pick-list-category">
-      Category
-      <select id="manual-pick-list-category" class="ml-2 max-w-[180px]" [(ngModel)]="categoryId">
-        <option value="">All Categories</option>
-        @for (c of categories(); track c.id) {
-          <option [ngValue]="c.id">{{ c.name }}</option>
-        }
-      </select>
-    </label>
+      <label class="text-sm self-center" for="manual-pick-list-category">
+        Category
+        <select id="manual-pick-list-category" class="ml-2 max-w-[180px]" [(ngModel)]="categoryId">
+          <option value="">All Categories</option>
+          @for (c of categories(); track c.id) {
+            <option [ngValue]="c.id">{{ c.name }}</option>
+          }
+        </select>
+      </label>
 
-    @if (machinesLoadFailed) {
-      <p data-testid="manual-pick-list-machines-failed" role="alert" class="text-md-body text-md-danger-text self-center">
-        {{ machinesLoadFailedMessage }}
-      </p>
-    } @else if (machineSelectorShown) {
-      <!--
-        A disabled <fieldset> is what blocks a selection change while a save is in flight: it
-        disables the dropdown's own trigger and checkboxes natively, so the matrix the outstanding
-        request was built from cannot change underneath it. onSelectedMachineIdsChange refuses as
-        well, so the rule is enforced and not merely rendered.
-      -->
-      <fieldset class="m-0 border-0 p-0" [disabled]="saving">
-        <app-multi-select-dropdown
-          label="Machines"
-          itemLabelSingular="machine"
-          itemLabelPlural="machines"
-          [options]="machineOptions()"
-          [selectedIds]="selectedMachineIds"
-          (selectedIdsChange)="onSelectedMachineIdsChange($event)"
-        ></app-multi-select-dropdown>
-      </fieldset>
-    }
+      @if (machinesLoadFailed) {
+        <p data-testid="manual-pick-list-machines-failed" role="alert" class="text-md-body text-md-danger-text self-center">
+          {{ machinesLoadFailedMessage }}
+        </p>
+      } @else if (machineSelectorShown) {
+        <!--
+          A disabled <fieldset> is what blocks a selection change while a save is in flight: it
+          disables the dropdown's own trigger and checkboxes natively, so the matrix the outstanding
+          request was built from cannot change underneath it. onSelectedMachineIdsChange refuses as
+          well, so the rule is enforced and not merely rendered.
+        -->
+        <fieldset class="m-0 border-0 p-0" [disabled]="saving">
+          <app-multi-select-dropdown
+            label="Machines"
+            itemLabelSingular="machine"
+            itemLabelPlural="machines"
+            [options]="machineOptions()"
+            [selectedIds]="selectedMachineIds"
+            (selectedIdsChange)="onSelectedMachineIdsChange($event)"
+          ></app-multi-select-dropdown>
+        </fieldset>
+      }
 
-    @if (machineResolutionPending) {
-      <p data-testid="manual-pick-list-machine-resolution-pending" role="status" class="text-md-body value-muted self-center">
-        {{ machineResolutionPendingMessage }}
-      </p>
-    }
+      @if (machineResolutionPending) {
+        <p data-testid="manual-pick-list-machine-resolution-pending" role="status" class="text-md-body value-muted self-center">
+          {{ machineResolutionPendingMessage }}
+        </p>
+      }
 
-    @if (machineAttributionFailed) {
-      <p data-testid="manual-pick-list-machine-attribution-failed" role="alert" class="text-md-body text-md-danger-text self-center">
-        {{ machineAttributionFailedMessage }}
-      </p>
-    }
-  </div>
-</section>
-
-<section class="card">
-  <div class="card-header">
-    <h2 class="card-title">Enter quantities taken</h2>
-  </div>
-  <!--
-    Hidden rather than disabled while a support session is active (issue #658), matching the
-    machine-detail page's Restock: a session grants Inventory.Operate, so this write would otherwise
-    still render. save() refuses on its own as well.
-  -->
-  @if (sessionActive) {
-    <div class="card-body">
-      <p data-testid="manual-pick-list-support-session" class="text-md-body value-muted">{{ supportSessionMessage }}</p>
+      @if (machineAttributionFailed) {
+        <p data-testid="manual-pick-list-machine-attribution-failed" role="alert" class="text-md-body text-md-danger-text self-center">
+          {{ machineAttributionFailedMessage }}
+        </p>
+      }
     </div>
-  }
-  @if (catalogueRefreshFailed) {
-    <div class="card-body flex flex-wrap items-center gap-4">
-      <p data-testid="manual-pick-list-refresh-failed" role="alert" class="text-md-body text-md-danger-text">{{ catalogueRefreshFailedMessage }}</p>
-      <button type="button" class="btn btn-secondary" (click)="retryCatalogue.emit()">Refresh</button>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Enter quantities taken</h2>
     </div>
-  }
-  <div class="card-body p-0">
-    <!-- Only a successful read may be described as having no products; see ManualPickListCatalogueState. -->
-    @if (catalogueState === 'loading') {
-      <p data-testid="manual-pick-list-catalogue-loading" class="p-4 text-md-body value-muted">Loading products&hellip;</p>
-    } @else if (catalogueState === 'failed') {
-      <div class="p-4 flex flex-wrap items-center gap-4">
-        <p data-testid="manual-pick-list-catalogue-failed" role="alert" class="text-md-body text-md-danger-text">{{ catalogueLoadFailedMessage }}</p>
-        <button type="button" class="btn btn-secondary" (click)="retryCatalogue.emit()">Retry</button>
+    <!--
+      Hidden rather than disabled while a support session is active (issue #658), matching the
+      machine-detail page's Restock: a session grants Inventory.Operate, so this write would otherwise
+      still render. save() refuses on its own as well.
+    -->
+    @if (sessionActive) {
+      <div class="card-body">
+        <p data-testid="manual-pick-list-support-session" class="text-md-body value-muted">{{ supportSessionMessage }}</p>
       </div>
-    } @else if (visibleProducts().length === 0) {
-      <p class="p-4 text-md-body value-muted">No active products match your filters.</p>
-    } @else {
-      <!--
-        One bounded scroll area for both axes, the same shape the calculated matrix uses: a long
-        product list scrolls vertically under the sticky header row, and a wide machine selection
-        scrolls horizontally inside this container rather than widening the page - which is what
-        keeps a narrow phone from overflowing sideways.
-      -->
-      <div data-testid="manual-pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
-        <table class="table">
-          <thead class="table-head">
-            <tr>
-              <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Product</th>
-              <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Category</th>
-              <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Storage Qty</th>
-              @if (!sessionActive) {
-                @if (matrixMode) {
-                  <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Total Taken</th>
-                  @for (machine of machineColumns; track machine.id) {
-                    <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 min-w-[7.5rem]">
-                      <span class="flex items-center gap-2">
-                        <span class="truncate" [title]="machine.name">{{ machine.name }}</span>
-                        <button
-                          type="button"
-                          class="text-md-gray-500 hover:text-md-danger-text"
-                          [attr.aria-label]="'Remove machine column: ' + machine.name"
-                          [disabled]="saving"
-                          (click)="removeMachineColumn(machine.id)">&times;</button>
-                      </span>
-                    </th>
-                  }
-                } @else {
-                  <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Taken</th>
-                }
-              }
-            </tr>
-          </thead>
-          <tbody>
-            @for (product of visibleProducts(); track product.id) {
-              <tr class="table-row">
-                <td class="table-cell">{{ product.name }}</td>
-                <td class="table-cell">{{ product.category?.name ?? '—' }}</td>
-                <td class="table-cell table-num" data-testid="manual-pick-list-storage-qty">{{ product.quantityInStock }}</td>
+    }
+    @if (catalogueRefreshFailed) {
+      <div class="card-body flex flex-wrap items-center gap-4">
+        <p data-testid="manual-pick-list-refresh-failed" role="alert" class="text-md-body text-md-danger-text">{{ catalogueRefreshFailedMessage }}</p>
+        <button type="button" class="btn btn-secondary" (click)="retryCatalogue.emit()">Refresh</button>
+      </div>
+    }
+    <div class="card-body p-0">
+      <!-- Only a successful read may be described as having no products; see ManualPickListCatalogueState. -->
+      @if (catalogueState === 'loading') {
+        <p data-testid="manual-pick-list-catalogue-loading" class="p-4 text-md-body value-muted">Loading products&hellip;</p>
+      } @else if (catalogueState === 'failed') {
+        <div class="p-4 flex flex-wrap items-center gap-4">
+          <p data-testid="manual-pick-list-catalogue-failed" role="alert" class="text-md-body text-md-danger-text">{{ catalogueLoadFailedMessage }}</p>
+          <button type="button" class="btn btn-secondary" (click)="retryCatalogue.emit()">Retry</button>
+        </div>
+      } @else if (visibleProducts().length === 0) {
+        <p class="p-4 text-md-body value-muted">No active products match your filters.</p>
+      } @else {
+        <!--
+          One bounded scroll area for both axes, the same shape the calculated matrix uses: a long
+          product list scrolls vertically under the sticky header row, and a wide machine selection
+          scrolls horizontally inside this container rather than widening the page - which is what
+          keeps a narrow phone from overflowing sideways.
+        -->
+        <div data-testid="manual-pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
+          <table class="table">
+            <thead class="table-head">
+              <tr>
+                <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Product</th>
+                <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Category</th>
+                <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Storage Qty</th>
                 @if (!sessionActive) {
                   @if (matrixMode) {
-                    <td class="table-cell table-num" data-testid="manual-pick-list-row-total">{{ rowTotal(product.id) }}</td>
+                    <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Total Taken</th>
                     @for (machine of machineColumns; track machine.id) {
+                      <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 min-w-[7.5rem]">
+                        <span class="flex items-center gap-2">
+                          <span class="truncate" [title]="machine.name">{{ machine.name }}</span>
+                          <button
+                            type="button"
+                            class="text-md-gray-500 hover:text-md-danger-text"
+                            [attr.aria-label]="'Remove machine column: ' + machine.name"
+                            [disabled]="saving"
+                            (click)="removeMachineColumn(machine.id)">&times;</button>
+                        </span>
+                      </th>
+                    }
+                  } @else {
+                    <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Taken</th>
+                  }
+                }
+              </tr>
+            </thead>
+            <tbody>
+              @for (product of visibleProducts(); track product.id) {
+                <tr class="table-row">
+                  <td class="table-cell">{{ product.name }}</td>
+                  <td class="table-cell">{{ product.category?.name ?? '—' }}</td>
+                  <td class="table-cell table-num" data-testid="manual-pick-list-storage-qty">{{ product.quantityInStock }}</td>
+                  @if (!sessionActive) {
+                    @if (matrixMode) {
+                      <td class="table-cell table-num" data-testid="manual-pick-list-row-total">{{ rowTotal(product.id) }}</td>
+                      @for (machine of machineColumns; track machine.id) {
+                        <td class="table-cell">
+                          <input
+                            type="text"
+                            inputmode="numeric"
+                            class="max-w-[100px]"
+                            [attr.aria-label]="cellAriaLabel(product, machine)"
+                            [ngModel]="cellValue(product.id, machine.id)"
+                            (ngModelChange)="onCellChange(product.id, machine.id, $event)"
+                            [disabled]="saving" />
+                          @if (cellError(product.id, machine.id); as message) {
+                            <p data-testid="manual-pick-list-cell-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                          }
+                        </td>
+                      }
+                    } @else {
                       <td class="table-cell">
                         <input
                           type="text"
                           inputmode="numeric"
                           class="max-w-[100px]"
-                          [attr.aria-label]="cellAriaLabel(product, machine)"
-                          [ngModel]="cellValue(product.id, machine.id)"
-                          (ngModelChange)="onCellChange(product.id, machine.id, $event)"
+                          [attr.aria-label]="'Taken: ' + product.name"
+                          [ngModel]="takenValue(product.id)"
+                          (ngModelChange)="onTakenChange(product.id, $event)"
                           [disabled]="saving" />
-                        @if (cellError(product.id, machine.id); as message) {
-                          <p data-testid="manual-pick-list-cell-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                        @if (rowError(product.id); as message) {
+                          <p data-testid="manual-pick-list-row-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
                         }
                       </td>
                     }
-                  } @else {
-                    <td class="table-cell">
-                      <input
-                        type="text"
-                        inputmode="numeric"
-                        class="max-w-[100px]"
-                        [attr.aria-label]="'Taken: ' + product.name"
-                        [ngModel]="takenValue(product.id)"
-                        (ngModelChange)="onTakenChange(product.id, $event)"
-                        [disabled]="saving" />
-                      @if (rowError(product.id); as message) {
-                        <p data-testid="manual-pick-list-row-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
-                      }
-                    </td>
                   }
-                }
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-    }
-  </div>
-  @if (!sessionActive) {
-    <!--
-      The storage this pick needs is the whole pick's, not the visible part of it: a filter hides
-      rows and changes nothing about what Save sends, so the hidden part is stated rather than left
-      to be discovered by a refusal.
-    -->
-    <div class="card-body flex flex-wrap items-center gap-4 text-md-body">
-      <span data-testid="manual-pick-list-total-required">
-        Total storage required: <span class="font-semibold text-md-gray-800">{{ totalUnitsRequired() }}</span> units
-      </span>
-      @if (hiddenUnitsRequired() > 0) {
-        <span data-testid="manual-pick-list-hidden-required" class="value-muted">
-          including {{ hiddenUnitsRequired() }} units on {{ hiddenProductsWithEntries() }}
-          {{ hiddenProductsWithEntries() === 1 ? 'product' : 'products' }} hidden by the current filters
-        </span>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
       }
     </div>
-  }
-  <div class="card-body flex flex-wrap items-center gap-4">
-    @if (invalidEntryMessages.length > 0) {
-      <div data-testid="manual-pick-list-invalid-entries" role="alert" class="text-md-body text-md-danger-text">
-        <p>{{ invalidEntriesPrefix }}</p>
-        <ul class="list-disc pl-5">
-          @for (message of invalidEntryMessages; track message) {
-            <li>{{ message }}</li>
-          }
-        </ul>
+    @if (!sessionActive) {
+      <!--
+        The storage this pick needs is the whole pick's, not the visible part of it: a filter hides
+        rows and changes nothing about what Save sends, so the hidden part is stated rather than left
+        to be discovered by a refusal.
+      -->
+      <div class="card-body flex flex-wrap items-center gap-4 text-md-body">
+        <span data-testid="manual-pick-list-total-required">
+          Total storage required: <span class="font-semibold text-md-gray-800">{{ totalUnitsRequired() }}</span> units
+        </span>
+        @if (hiddenUnitsRequired() > 0) {
+          <span data-testid="manual-pick-list-hidden-required" class="value-muted">
+            including {{ hiddenUnitsRequired() }} units on {{ hiddenProductsWithEntries() }}
+            {{ hiddenProductsWithEntries() === 1 ? 'product' : 'products' }} hidden by the current filters
+          </span>
+        }
       </div>
     }
-    @if (requestErrors.length > 0) {
-      <p data-testid="manual-pick-list-request-error" class="text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
-    }
-    @if (unresolvedSubmission) {
-      <p data-testid="manual-pick-list-unresolved" role="alert" class="text-md-body text-md-danger-text">{{ unresolvedMessage }}</p>
+    <div class="card-body flex flex-wrap items-center gap-4">
+      @if (invalidEntryMessages.length > 0) {
+        <div data-testid="manual-pick-list-invalid-entries" role="alert" class="text-md-body text-md-danger-text">
+          <p>{{ invalidEntriesPrefix }}</p>
+          <ul class="list-disc pl-5">
+            @for (message of invalidEntryMessages; track message) {
+              <li>{{ message }}</li>
+            }
+          </ul>
+        </div>
+      }
+      @if (requestErrors.length > 0) {
+        <p data-testid="manual-pick-list-request-error" class="text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
+      }
+      @if (unresolvedSubmission) {
+        <p data-testid="manual-pick-list-unresolved" role="alert" class="text-md-body text-md-danger-text">{{ unresolvedMessage }}</p>
+        @if (!sessionActive) {
+          <button type="button" class="btn btn-primary" [disabled]="!canRetry" (click)="retry()">
+            {{ saving ? 'Retrying…' : 'Retry save' }}
+          </button>
+        }
+      }
       @if (!sessionActive) {
-        <button type="button" class="btn btn-primary" [disabled]="!canRetry" (click)="retry()">
-          {{ saving ? 'Retrying…' : 'Retry save' }}
+        <button type="button" class="btn btn-primary" [disabled]="!canSave" (click)="save()">
+          {{ saving ? 'Saving…' : 'Save' }}
         </button>
       }
-    }
-    @if (!sessionActive) {
-      <button type="button" class="btn btn-primary" [disabled]="!canSave" (click)="save()">
-        {{ saving ? 'Saving…' : 'Save' }}
-      </button>
-    }
-  </div>
-</section>
+    </div>
+  </section>
+</div>
