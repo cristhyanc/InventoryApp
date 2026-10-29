@@ -173,6 +173,13 @@ public static class ApplicationServiceCollectionExtensions
         // because the collector is not an actor and has no business at all.
         services.AddScoped<IssuePriceCollectorWorkList>();
 
+        // And accepting what that run collected (issue #937), on exactly the same terms: three use
+        // cases over one narrow transactional port, reading and writing the shared catalogue under
+        // the collector request's denied business scope and nothing a business owns.
+        services.AddScoped<RecordPriceCollectorResults>();
+        services.AddScoped<AnswerPriceCollectorSearch>();
+        services.AddScoped<CompletePriceCollectorRun>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed

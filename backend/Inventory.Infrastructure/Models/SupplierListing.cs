@@ -90,6 +90,35 @@ public class SupplierListing
     public string? Title { get; set; }
 
     /// <summary>
+    /// The supplier's own wording for <em>which</em> one this is - "Classic", "Zero Sugar" - or
+    /// <see langword="null"/> when it publishes none (issue #937).
+    ///
+    /// <para>Read off the listing and never derived from <see cref="Title"/>, for the reason the
+    /// title says it is evidence rather than a source of fields. It is part of the listing's
+    /// <strong>identity</strong>: a confirmed listing whose variant moves is flagged rather than
+    /// re-priced, because the pack on the shelf is no longer the pack somebody confirmed. See
+    /// <c>PriceCollectorResultPolicy.HasIdentityChanged</c>.</para>
+    /// </summary>
+    public string? Variant { get; set; }
+
+    /// <summary>
+    /// The size of one individual item as the supplier publishes it - the 375 of a 375 ml can - or
+    /// <see langword="null"/> when it does not (issue #937).
+    ///
+    /// <para>It is the listing's own reading and deliberately not the master product's size: the two
+    /// disagreeing is precisely the evidence a reviewer of a wrong match needs, so copying the
+    /// master product's down here would destroy it. Travels with <see cref="SizeUnit"/>, which the
+    /// database checks, because a number with no unit cannot be compared with anything.</para>
+    /// </summary>
+    public decimal? SizeValue { get; set; }
+
+    /// <summary>
+    /// What <see cref="SizeValue"/> is measured in, from the same closed unit list a master
+    /// product's own size uses, or <see langword="null"/> when there is no size.
+    /// </summary>
+    public MasterProductSizeUnit? SizeUnit { get; set; }
+
+    /// <summary>
     /// How many individual items this listing sells together, or <see langword="null"/> when the
     /// supplier does not say.
     ///
@@ -157,6 +186,23 @@ public class SupplierListing
     /// would answer neither "how old is this price?" nor "when did this supplier last move it?".</para>
     /// </summary>
     public DateTime? LastPriceChangeAtUtc { get; set; }
+
+    /// <summary>
+    /// When a <strong>complete</strong> search last failed to find this listing at all, or
+    /// <see langword="null"/> while none ever has (issue #937).
+    ///
+    /// <para><strong>Only a complete search may write it.</strong> A search that was truncated, that
+    /// failed, or that was never run stopped before it had seen everything, so a listing missing
+    /// from its results is a listing nobody looked for -
+    /// <c>PriceCollectorWorkItemPolicy.RecordsListingsNotFound</c> is that rule, and it is the same
+    /// restraint the report availability model shows about a missing provider figure: an absence is
+    /// evidence only when the thing that produced it was complete.</para>
+    ///
+    /// <para>It changes nothing by itself. The listing keeps its latest accepted observation, its
+    /// last successful check and its match status exactly as they were - this column records that a
+    /// search looked and did not see it, which is what #928 and #930 read.</para>
+    /// </summary>
+    public DateTime? LastNotFoundAtUtc { get; set; }
 
     /// <summary>When the listing was first recorded, from the application clock.</summary>
     public DateTime CreatedAtUtc { get; set; }

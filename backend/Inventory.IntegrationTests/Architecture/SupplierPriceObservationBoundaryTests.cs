@@ -101,6 +101,7 @@ public class SupplierPriceObservationBoundaryTests
     /// </summary>
     private static readonly string[] FilesThatMayNameThem =
     [
+        "Inventory.Application/PriceCatalogue/CompletePriceCollectorRun.cs",
         // Issue #930's cheapest-supplier summary: the port and the use case that hand stored facts
         // to the comparison, the adapter that reads the listings and their latest observations, and
         // the HTTP boundary that publishes the answer. Each one is here on purpose - this list is
@@ -109,10 +110,13 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Application/PriceCatalogue/CheapestSupplierSummary.cs",
         "Inventory.Application/PriceCatalogue/ICheapestSupplierSummaryStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCatalogueWorkListStore.cs",
+        "Inventory.Application/PriceCatalogue/IPriceCollectorResultStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunSettings.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunStore.cs",
         "Inventory.Application/PriceCatalogue/IssuePriceCollectorWorkList.cs",
+        "Inventory.Application/PriceCatalogue/PriceCollectorResultContracts.cs",
         "Inventory.Domain/PriceCatalogue/CheapestUnitOfferPolicy.cs",
+        "Inventory.Domain/PriceCatalogue/PriceCollectorResultPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorRunPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorWorkItemPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorWorkListPolicy.cs",
@@ -120,18 +124,23 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Domain/PriceCatalogue/SupplierPriceFreshnessPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierPriceObservationPolicy.cs",
         "Inventory.Infrastructure/Data/AppDbContext.cs",
+        "Inventory.Infrastructure/Models/PriceCollectorResultRow.cs",
         "Inventory.Infrastructure/Models/PriceCollectorRun.cs",
         "Inventory.Infrastructure/Models/PriceCollectorWorkItem.cs",
         "Inventory.Infrastructure/Models/SupplierListing.cs",
+        "Inventory.Infrastructure/Models/SupplierListingPendingObservation.cs",
         "Inventory.Infrastructure/Models/SupplierPreset.cs",
         "Inventory.Infrastructure/Models/SupplierPriceObservation.cs",
         "Inventory.Infrastructure/Persistence/EfCheapestSupplierSummaryStore.cs",
         "InventoryApi/Controllers/CheapestSuppliersController.cs",
         "InventoryApi/DTOs/CheapestSupplierDtos.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCatalogueWorkListStore.cs",
+        "Inventory.Infrastructure/Persistence/EfPriceCollectorResultStore.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCollectorRunStore.cs",
+        "Inventory.Infrastructure/Persistence/PriceCollectorRunClosure.cs",
         "InventoryApi/Adapters/PriceCatalogue/ConfiguredPriceCollectorRunSettings.cs",
         "InventoryApi/Auth/PriceCollector/PriceCollectorOptions.cs",
+        "InventoryApi/DTOs/PriceCollectorResultDtos.cs",
     ];
 
     private static readonly string[] ProductionProjects =

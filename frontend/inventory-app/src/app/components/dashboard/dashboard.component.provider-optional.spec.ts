@@ -17,6 +17,7 @@ import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -216,6 +217,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       { provide: SupportSessionService, useValue: { active$: doubles.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => of(doubles.canViewFinancials ?? true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]

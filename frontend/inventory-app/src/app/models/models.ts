@@ -539,6 +539,11 @@ export interface Machine {
   monthToDateGrossRevenue?: number | null;
   monthToDateDirectProfit: number | null;
   profitabilityStatus?: string | null;
+  /**
+   * The site the machine stands at - the same id `GET api/sites` answers as `siteId` - or
+   * `null`/absent when it is at none (issue #980). The Dashboard lists each site's machines under it.
+   */
+  siteId?: number | null;
 }
 
 /**

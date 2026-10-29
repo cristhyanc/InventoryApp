@@ -16,6 +16,7 @@ import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { ProductService } from '../../services/product.service';
 import { SiteService } from '../../services/site.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -144,6 +145,7 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(options.summary ?? SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       {
         provide: AccessService,
         useValue: { allows: (capability: string) => of(capability === 'Dashboard.ViewFinancials' ? financials : true) }

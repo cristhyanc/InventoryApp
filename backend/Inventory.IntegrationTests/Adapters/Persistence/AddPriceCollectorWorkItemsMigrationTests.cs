@@ -58,10 +58,27 @@ public class AddPriceCollectorWorkItemsMigrationTests
                 await MigrationSchemaProbe.TableNamesAsync(connection));
 
             // The table arrives empty: issuing a work list is its writer, and this migration issues
-            // nothing.
-            Assert.Empty(await after.PriceCollectorWorkItems.AsNoTracking().ToListAsync());
+            // nothing. Counted through the schema rather than through the model, because the model
+            // is today's and this database is at this migration: a later release's columns are not
+            // here yet, and asking for them would fail for the wrong reason (issue #937 added two).
+            Assert.Equal(
+                0,
+                await MigrationSchemaProbe.RowCountAsync(connection, "PriceCollectorWorkItems"));
 
-            var run = await after.PriceCollectorRuns.AsNoTracking().SingleAsync();
+            // Projected for the same reason, to exactly the columns this migration leaves behind.
+            var run = await after.PriceCollectorRuns
+                .AsNoTracking()
+                .Select(row => new
+                {
+                    row.StartedAtUtc,
+                    row.CompletedAtUtc,
+                    row.Status,
+                    row.ListingsCheckedCount,
+                    row.ObservationsRecordedCount,
+                    row.FailureCount,
+                    row.ExpiresAtUtc,
+                })
+                .SingleAsync();
 
             Assert.Equal(Started, run.StartedAtUtc);
             Assert.Equal(Started.AddMinutes(20), run.CompletedAtUtc);

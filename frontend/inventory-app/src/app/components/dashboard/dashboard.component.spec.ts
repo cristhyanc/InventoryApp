@@ -18,6 +18,7 @@ import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -469,6 +470,7 @@ async function renderDashboard(
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
       // its own component with its own tests, and not what this page's own tests are about.
       // Issue #699's own `Dashboard.ViewFinancials` check reads this same stub, so it defaults
