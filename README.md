@@ -1586,8 +1586,9 @@ product you have not switched on.
 - **Products → All Products** has a **Tracked** column showing which of your products are tracked and
   where each one has got to. It is read-only: the switch itself is on each product's own page, and
   there is no way to switch many products on at once.
-- **What the prices look like once a product is matched** is on **Products → Needs Ordering** and
-  the Dashboard's **Reorder priorities**, in the **Cheapest supplier** column — see
+- **What the prices look like once a product is matched** is on **Products → Needs Ordering**,
+  **Products → All Products** and the Dashboard's **Reorder priorities**, in the **Cheapest
+  supplier** column — see
   [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
 - **New Product** has no switch — there is no product yet to track. The form says so, and the switch
   is on that product's **Edit** page once it exists.
@@ -1603,7 +1604,8 @@ it sits after the purchase-cost columns, and a row reads like `JB Metro $0.95/un
 (special)`. These are prices observed on suppliers' own pages as purchasing guidance — they are
 **not** costs you have paid, they never change a purchase, a cost, an inventory value or any report,
 and what you actually paid stays in the **Last purchase** and **Cheapest purchase** columns beside
-them.
+them. **Products → All Products** (issue #940) and the Dashboard's **Reorder priorities** carry the
+same column, cell and popup — everything below applies to all three.
 
 - **Clicking the cell opens a popup listing every one of your suppliers**, cheapest first — for
   example `JB Metro $0.95/unit (24 pack $22.70, special) · Coles $1.27/unit · Woolworths: no match`.
@@ -1640,8 +1642,10 @@ them.
   column reads as **Unavailable** while a Super Admin is looking at your business in read-only
   support view, which is read-only and asks for nothing.
 - **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
-  the Dashboard's Reorder Alerts and All Products cannot ever disagree with Needs Ordering about
-  which supplier is cheapest. Those two pages get the column in their own tasks.
+  the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
+  disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the
+  **Tracked** column, with one request for the page's products — the same batching, failure
+  message and Retry described above, and no sort of its own.
 
 ## A supplier's website
 
