@@ -13481,8 +13481,11 @@ POST api/price-collector/matches   ← { runId, proposals: [{ waitingKey,
 
 **"Obvious" is the backend's answer and never the matcher's.** Claude's own confidence is not calibrated (the owner, same decision), so the level it reports is **one condition among several** and decides nothing on its own. `Inventory.Domain.PriceCatalogue.AutomaticProductMatchPolicy` is the one rule, it stores nothing and reads nothing, and a match is applied only when every one of these holds:
 
+The order below is the order a refusal reports, and it starts earlier than the table: a proposal naming no master product is refused first, as a suggested new one, and one naming a master product this catalogue does not hold is refused next, as `unknown master product` — neither is a condition the table below can state, because neither has a master product description yet to check anything against.
+
 | Condition | What it means |
 | --- | --- |
+| The pair was never refused | no `Rejected` or `Undone` suggestion for that `(waiting key, master product)` pair — checked first, immediately after confirming the proposed master product exists, and before every condition below |
 | Confidence is `high` | `medium` and `low` are tentative matches, whatever else agrees |
 | The unit label **parses** | `"375mL"` → 375 ml, `"1.25L"` → 1250 ml; `"can"`, `"each"`, `"375ml bottle"` parse to nothing |
 | The size **agrees** | after conversion to a canonical unit, so 375 ml and 0.375 l agree and 375 ml, 355 ml and 375 g do not |
@@ -13490,7 +13493,6 @@ POST api/price-collector/matches   ← { runId, proposals: [{ waitingKey,
 | **The variant agrees** | every word of the master product's own name appears in the search name |
 | **No conflicting descriptor** | no descriptor in the fixed list below appears in one of the two descriptions and not the other |
 | **Exactly one suitable candidate** | the backend runs the checks over the **whole** master catalogue, exactly one passes, and it is the one proposed |
-| The pair was never refused | no `Rejected` or `Undone` suggestion for that `(waiting key, master product)` pair |
 
 **The descriptor list is fixed, tested and symmetric**: `zero`, `no sugar`, `sugar free`, `diet`, `max`, `light`/`lite`, `caffeine free`, `decaf`, `vanilla`, `cherry`, `lime`, `original`, `classic`. A descriptor on one side and not the other refuses the match in **either** direction — a search for a plain cola must not be matched to a diet one, and a search for a diet cola must not be matched to the plain one — which is what makes `Coke Zero 375 mL` unable to auto-match `Coke Classic 375 mL` and `Pepsi Max` unable to auto-match `Pepsi`. Each entry holds every spelling that means the same descriptor (`light`/`lite`, `decaf`/`decaffeinated`, `sugar free`/`sugarfree`), so a difference of spelling is not read as a difference of product; a multi-word descriptor matches only as whole words, in order and next to each other. The list is a **list** rather than a rule precisely because nothing may infer that a word changes a product: that is the one judgement this policy is not allowed to make on its own.
 

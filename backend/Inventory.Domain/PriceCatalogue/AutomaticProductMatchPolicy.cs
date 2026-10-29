@@ -119,8 +119,16 @@ public sealed record AutomaticProductMatchDecision(long? MasterProductId, string
 /// every check and that one is the master product the proposal named.</para>
 ///
 /// <para><strong>The conditions, in the order they are asked</strong> (which is the order a refusal
-/// reports):</para>
+/// reports). Two checks run before item 1 below and are not conditions a search name or a master
+/// product's own description can fail: a proposal naming no master product is refused as a suggested
+/// new one (<see cref="SuggestedNewMasterReason"/>), and one naming a master product this catalogue
+/// does not hold is <see cref="UnknownMasterProductReason"/>. Item 1 - the pair's own refusal history -
+/// is checked immediately after those two, and the confidence gate
+/// (<see cref="ProductMatchConfidence.High"/>) runs immediately after item 1, before item 2:</para>
 /// <list type="number">
+/// <item><description>The <c>(waiting key, master product)</c> pair has not been rejected or undone
+/// before - the refusals a Super Admin's decision leaves behind
+/// (<see cref="ProductMatchSuggestionPolicy.BlocksAutomaticMatching"/>).</description></item>
 /// <item><description>The unit label parses to a size and a unit at all - <c>"375mL"</c> is 375 ml and
 /// <c>"1.25L"</c> is 1250 ml.</description></item>
 /// <item><description>That size equals the master product's size once both are in their canonical
@@ -135,9 +143,6 @@ public sealed record AutomaticProductMatchDecision(long? MasterProductId, string
 /// <item><description><strong>Exactly one suitable candidate</strong>, and it is the one proposed. Two
 /// master products that both pass are an ambiguity a person resolves, not one a matcher may
 /// guess at.</description></item>
-/// <item><description>The <c>(waiting key, master product)</c> pair has not been rejected or undone
-/// before - the refusals a Super Admin's decision leaves behind
-/// (<see cref="ProductMatchSuggestionPolicy.BlocksAutomaticMatching"/>).</description></item>
 /// </list>
 ///
 /// <para><strong>Every method here is a pure function of the values it is handed.</strong> It stores
@@ -393,7 +398,7 @@ public static class AutomaticProductMatchPolicy
     {
         size = null;
 
-        var compact = Compact(unitLabel);
+        var compact = PriceCatalogueKey.Fold(unitLabel);
 
         if (compact.Length == 0)
         {
@@ -623,7 +628,7 @@ public static class AutomaticProductMatchPolicy
     private static AutomaticProductMatchDecision Refused(string reason) => new(null, reason);
 
     /// <summary>
-    /// The unit words a label may be written with, folded the way <see cref="Compact"/> folds a label.
+    /// The unit words a label may be written with, folded the way <see cref="PriceCatalogueKey.Fold"/> folds a label.
     /// The declared unit codes and their ordinary spellings, and deliberately nothing clever: a word
     /// that is not here parses to no size, which refuses an automatic match rather than guessing one.
     /// </summary>
@@ -656,26 +661,6 @@ public static class AutomaticProductMatchPolicy
         ["PACK"] = MasterProductSizeUnit.Each,
         ["PK"] = MasterProductSizeUnit.Each,
     };
-
-    /// <summary>
-    /// One label with its whitespace dropped and its letters upper-cased invariantly - the fold
-    /// <c>PriceCatalogueKey</c> applies, for the reason it applies it: the same label must mean the
-    /// same thing on every machine that reads one.
-    /// </summary>
-    private static string Compact(string? value)
-    {
-        var compact = new StringBuilder();
-
-        foreach (var character in value ?? string.Empty)
-        {
-            if (!char.IsWhiteSpace(character))
-            {
-                compact.Append(char.ToUpperInvariant(character));
-            }
-        }
-
-        return compact.ToString();
-    }
 
     /// <summary>
     /// One description as its words: runs of letters and digits, upper-cased invariantly, with every
