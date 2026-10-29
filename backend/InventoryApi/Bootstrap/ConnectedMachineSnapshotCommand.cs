@@ -70,9 +70,10 @@ public static class ConnectedMachineSnapshotCommand
 
         error = string.Empty;
 
-        foreach (var argument in args.Skip(1))
+        var unrecognised = args.Skip(1).FirstOrDefault();
+        if (unrecognised is not null)
         {
-            error = $"Unrecognised argument '{argument}'. This job takes no arguments. "
+            error = $"Unrecognised argument '{unrecognised}'. This job takes no arguments. "
                 + $"Usage: {CommandName}";
             return false;
         }
