@@ -430,7 +430,8 @@ describe('styles.scss', () => {
 
 /**
  * The landing page's `rr` scale, from the owner-approved Restockroo design. `public/landing/`, the
- * `rr-` button classes and, since issue #972, the Dashboard and the shell's navigation use it;
+ * `rr-` button classes and, since issues #972 and #996, the Dashboard, the shell's navigation and the
+ * Pick List use it;
  * these are the text pairs they render.
  */
 describe('landing page tokens (issue #954)', () => {
@@ -474,6 +475,11 @@ describe('landing page tokens (issue #954)', () => {
     ['dashboard values and navigation labels on white', () => rr('navy'), () => WHITE],
     ['navigation labels on the hovered or active-group surface', () => rr('navy'), () => rr('surface')],
     ['the Needs attention heading on its panel', () => rr('navy'), () => rr('warn-bg')],
+    // The Pick List (issue #996): status chips and notices carry their meaning in text on a tint.
+    ['a completed pick or ready entry on its tint', () => rr('ok-text'), () => rr('ok-bg')],
+    ['a storage shortage or unconfirmed save on its tint', () => rr('danger-text'), () => rr('danger-bg')],
+    ['a changed pick quantity’s suggestion on its tint', () => rr('warn-text'), () => rr('warn-bg')],
+    ['the planning-only notice on the teal tint', () => rr('navy'), () => rr('teal-tint')],
     // The pricing cards (issue #971), which sit on rr-surface inside the white Pricing section.
     ['plan names and prices on a plan card', () => rr('navy'), () => rr('surface')],
     ['plan descriptions, features and billing notes on a plan card', () => rr('muted'), () => rr('surface')],

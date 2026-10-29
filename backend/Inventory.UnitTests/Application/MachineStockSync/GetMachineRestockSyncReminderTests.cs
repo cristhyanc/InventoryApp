@@ -1,9 +1,12 @@
 using Inventory.Application.MachineStockSync;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -44,6 +47,45 @@ public class GetMachineRestockSyncReminderTests
         // the one request shape that resolves no Nayax credentials at all.
         Assert.Equal(0, coverage.Reads);
         Assert.Equal(0, connections.ConnectionReads);
+    }
+
+    /// <summary>
+    /// Issue #967: a business whose plan does not include the sales provider is shown no reminder
+    /// either, under its own reason - the Sync Restock it would be reminded to run is itself refused
+    /// by the credential gate. The connection seeded is the healthy one, so the answer cannot be the
+    /// status gate's, and nothing about it is read: the plan is asked first, and nothing here changes
+    /// a stored credential or its status.
+    /// </summary>
+    [Theory]
+    [InlineData(SubscriptionPlan.Free)]
+    [InlineData(SubscriptionPlan.Starter)]
+    public async Task A_plan_without_the_provider_is_shown_no_reminder_and_the_connection_is_not_read(
+        SubscriptionPlan plan)
+    {
+        var connections = new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready, CurrentRevision);
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(Overdue(AvenueHotelId, "Avenue Hotel"));
+
+        var result = await UseCase(connections, coverage, plan: TestCurrentPlan.On(plan))
+            .Handle(CancellationToken.None);
+
+        Assert.Equal(
+            MachineRestockSyncReminderHiddenReasons.PlanRequired,
+            Assert.IsType<HiddenMachineRestockSyncReminderDto>(result).Reason);
+        Assert.Equal(0, connections.ConnectionReads);
+        Assert.Equal(0, coverage.Reads);
+    }
+
+    /// <summary>And Pro is shown exactly the reminder an unenforced deployment shows.</summary>
+    [Fact]
+    public async Task A_pro_business_is_shown_the_reminder()
+    {
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(Overdue(AvenueHotelId, "Avenue Hotel"));
+
+        var result = await UseCase(
+                ReadyConnection(), coverage, plan: TestCurrentPlan.On(SubscriptionPlan.Pro))
+            .Handle(CancellationToken.None);
+
+        Assert.IsType<MachineRestockSyncReminderDto>(result);
     }
 
     [Fact]
@@ -337,11 +379,15 @@ public class GetMachineRestockSyncReminderTests
         FakeNayaxConnectionStore connections,
         FakeMachineRestockSyncCoverageStore coverage,
         IBusinessScope? businessScope = null,
-        IBusinessCalendar? calendar = null) =>
+        IBusinessCalendar? calendar = null,
+        CurrentPlan? plan = null) =>
         new(
             new FakeClock(NowUtc),
             calendar ?? new FakeBusinessCalendar(NowUtc),
             businessScope ?? ResolvedMember(),
+            // The shipped state unless a case says otherwise: plan enforcement is off, so the
+            // reminder behaves exactly as it did before issue #967.
+            plan ?? TestCurrentPlan.Unrestricted(),
             connections,
             coverage);
 

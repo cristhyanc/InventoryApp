@@ -1627,6 +1627,8 @@ A role that nothing checks is a label. Issue #525 is where the capability table 
 
 **Controllers reference capabilities, never roles.** Which roles hold a capability is `RoleCapabilities`'s single answer, and it is the same answer `GET /api/me/access` reports, so the API and the frontend's rendering decisions cannot disagree. An architecture test fails the build if any controller attribute names a `BusinessRole` at all.
 
+**A business's *plan* is a separate requirement and not a sixth authorization class** (issue #967). `[RequirePlan(PlanFeature.X)]` is an MVC authorization filter rather than an `AuthorizeAttribute`, so it is evaluated *after* this middleware has finished: a capability refusal stays the bare `403` described here and a plan is only ever asked about for a caller the role already allowed. The five classes above are unchanged and a plan grants none of them — see [Plan enforcement on reports and Nayax operations](#plan-enforcement-on-reports-and-nayax-operations-issue-967).
+
 **The role comes from the request's memoised membership resolution.** The handler resolves it through `ICurrentBusinessProvider` — the same per-request scoped provider `BusinessScopeMiddleware` uses — so the capability decision and the business the request then acts in come from one membership lookup and cannot disagree, and a role change applies on the member's next request exactly as it already did. Resolving it in the handler rather than reading a `BusinessScope` the middleware published is deliberate: `UseAuthorization()` runs **before** `UseMiddleware<BusinessScopeMiddleware>()`, so a policy that waited for the published scope would be able to pass before any membership had been checked. This is the same reasoning the diagnostics bypass follows in re-evaluating its own policy instead of inferring one from pipeline position. The order is stated in `Program.cs` and pinned by `CapabilityAuthorizationApiTests`; the handler's independence from it is pinned by `BusinessCapabilityAuthorizationHandlerTests`.
 
 **A support session is the second source of a capability, and the handler is read-only for it** (issue #551). Since #551 the handler asks `Inventory.Application.Access.CurrentCapabilities`, which is the one place that chooses between `RoleCapabilities` for a member and `SupportSessionAccessPolicy`'s fixed set for a platform administrator inside a support session; the support state itself comes from `ISupportSessionAccessor`, for the same ordering reason the role does not come from the published scope. In that state the handler additionally requires the request's method to be `GET` or `HEAD`, and that rule is checked first and independently: a write is refused as a write — `403` with `read_only_support_session`, whatever capability it carried — rather than as a missing capability. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
@@ -2852,7 +2854,7 @@ preview is still given the figures.
 
 ### Business subscriptions and plan entitlements (issue #966)
 
-**One business, one plan, and a plan is not a role and not a provider connection.** Issue #966 — a child of #965 — defines the business-owned subscription state, the authoritative Free/Starter/Pro catalogue and the single effective-entitlement rule the enforcement (#967, #977), billing (#969), quota (#968) and frontend (#970, #979) tasks consume. It publishes that answer and **withholds nothing**: with the rollout setting off, which is the shipped state, every business is unrestricted and behaves exactly as it did before plans existed.
+**One business, one plan, and a plan is not a role and not a provider connection.** Issue #966 — a child of #965 — defines the business-owned subscription state, the authoritative Free/Starter/Pro catalogue and the single effective-entitlement rule the enforcement (#967, #977), billing (#969), quota (#968) and frontend (#970, #979) tasks consume. It publishes that answer and **withholds nothing**: with the rollout setting off, which is the shipped state, every business is unrestricted and behaves exactly as it did before plans existed. What *does* withhold a feature once that setting is on is issue #967, which reuses this slice's one rule and adds no record of its own — see [Plan enforcement on reports and Nayax operations](#plan-enforcement-on-reports-and-nayax-operations-issue-967).
 
 **The catalogue is compiled, priced in minor units, and stated once.** `Inventory.Domain.Subscriptions.PlanCatalogue` holds the three rows agreed on #965 — Free A$0 with 1 GB of attachments, Starter A$7 with 20 GB, Pro A$15 with 20 GB, five included connected machines and A$2 per additional one — each as an integer count of minor units with an explicit `AUD` currency beside it, because a price that reaches a payment provider, an invoice and a page must have exactly one representation and a binary floating-point price cannot be compared for equality. It is a compiled table rather than configuration or a row: a price change is a commercial decision with a deployment behind it, and a table a setting could edit is a table that can disagree with what a customer was charged. Whether the advertised prices include GST is an **open launch decision** on #965; the catalogue records the advertised amount and claims nothing about its tax treatment. Being above the included machine allowance is **billed, never blocked** — `AdditionalConnectedMachinePriceMinorUnits` is a price and no code may read it as a limit. `SubscriptionPlan` declares no `0`, for the reason `BusinessStatus` declares none, and `SubscriptionPlans.IsDeclared` is what every reader asks before treating a stored value as a plan.
 
@@ -3011,6 +3013,28 @@ grant, the change, the end, the end-date boundary, the stale revision `409`, the
 business `404`; the audit row committed with the grant and the log entry carrying no reason; and the
 granted business reading its new plan through `GET /api/me/access` while the other business still
 reads Free.
+
+### Plan enforcement on reports and Nayax operations (issue #967)
+
+**One table of plan requirements, two enforcement points, and nothing stored is ever removed.** Issue #967 — a child of #965, after #966 — is what makes a plan withhold anything. It adds no table, no migration and no new read of a business's records beyond the one #966 already defined: it reuses that slice's `GetEffectiveEntitlement` and asks one more question of it. **While the rollout setting is off, which is the shipped state, nothing changes for any business**: `PlanFeaturePolicy.Allows` is `true` for every feature on an unenforced entitlement, so every call site behaves exactly as it did before plans existed and no extra query is made.
+
+**Which plan a feature needs is `Inventory.Domain.Subscriptions.PlanFeaturePolicy`, and nowhere else.** `PlanFeature` is the whole vocabulary — `SalesProviderIntegration`, `BookkeepingAndGstReports`, `ProviderSalesReports`, `SiteCommissions`, `SalesFileImport` — and `RequiredPlan` is the one table: the two reports that need no sales provider are **Starter**, and everything behind the provider, plus the uploaded Nayax sales file, is **Pro** (decided on #965 and its review of 29 October 2026). An endpoint declares a **feature**, never a plan, for the reason a controller declares a capability and never a role: a price or a plan restated at a call site is one that can disagree with the catalogue. No feature is Free, which is asserted: Free's own features are not plan features at all, so a `Free` requirement would be a feature nothing could ever withhold. `Allows` fails closed in the one direction that matters — an entitlement that is enforced and carries no plan, or a plan this deployment does not declare, includes nothing that is not free — and refuses an undeclared `PlanFeature` outright rather than letting the unenforced branch pass it.
+
+**The Application asks through one memoised read.** `Inventory.Application.Subscriptions.CurrentPlan` is the Application-layer companion to `CurrentCapabilities`: it takes no identifier and no plan, only a `PlanFeature`, and it memoises the one entitlement read per request. That memoisation is what keeps a bounded Nayax fan-out from turning one plan question into one database read per machine — the fan-outs resolve credentials once per call, deliberately and still do, and the first asker's read is the one every other asker awaits, concurrent ones included. A failed read is not retried: a database that cannot be reached is an error for every asker, exactly as it is for `GET /api/me/access`, because answering "not included" over a transport failure would lock a paying business out of what it bought.
+
+**The first enforcement point is the credential gate, and it covers every mixed surface at once.** `NayaxRequestCredentialProvider` asks the plan question immediately after the support-session refusal and **before the stored connection is read** — so a downgraded business with perfectly valid saved credentials makes no Nayax request at all and no token is decrypted. It raises the same `NayaxNotConnectedException` every consumer already handles, carrying `RequiredPlan` instead of a connection `Status`, which is what makes the issue's central result fall out of one check rather than out of twenty-four endpoints: the dashboard withholds its fleet card, the machine reads and the Pick List matrix answer their existing `409`, reorder answers in `StorageOnly` mode, the site-commission report comes out unavailable, the inventory-cost transition previews, the catalogue review and Sync Restock degrade as they already do without a connection, and manual pick-list entry, purchasing, inventory and expenses are untouched. **Being here rather than in each consumer is the whole point**: a per-controller check is a check somebody can forget to add to the next controller. The one surface the gate cannot cover is the Sync Restock *reminder*, which makes no Nayax call at all — it reads the stored connection status directly — so `GetMachineRestockSyncReminder` asks the same question itself, before that read, and is withheld with the same reason.
+
+**Each refusal carries the distinct plan reason, and the existing one is unchanged.** Every per-feature availability vocabulary gains a `PlanRequired` member beside `NayaxNotConnected` and `PermissionNotGranted`, spelled identically in all of them — `MachineNeedUnavailableReasons` (the dashboard's withheld section and the reorder listing's response headers), `MachineLatestSalesUnavailableReasons`, `SiteCommissionUnavailableReasons` and `MachineRestockSyncReminderHiddenReasons` — and the HTTP boundary publishes `nayaxUnavailableReason` and `requiredPlan` beside the **unchanged** `409` and the **unchanged** `nayax_not_connected` code. Keeping the status code and the code itself is deliberate: every surface that degrades to its no-usable-provider behaviour does so on that exact answer, so moving a plan refusal to `403` would turn a Pick List that opens manual entry into a Pick List that shows an error. A client that has not learnt about plans therefore degrades exactly as it does today, and one that has can say "needs Pro" instead of "connect Nayax" (issue #979). A plan refusal reports **no** connection status, because no connection was read to have one; a Pro business without a usable connection keeps today's status and reports no required plan.
+
+**The second enforcement point is the endpoint, for what a plan refuses outright.** `InventoryApi.Auth.RequirePlanAttribute` declares the feature an endpoint needs and is an **MVC authorization filter, not an authorization policy**. That is the design rather than a detail: a second `AuthorizeAttribute` would be evaluated together with the capability policy by one middleware in no defined order, and a caller holding neither could be told about the plan instead of simply being refused. An MVC filter runs after the authorization middleware has finished, so **a role refusal stays exactly the bodiless `403` it is today**, a plan is only ever asked about for a caller the role already allowed, and the check happens before model binding and before the action — which is what makes "a refused save leaves the stored credentials unchanged" and "a refused import stores nothing" properties of the pipeline rather than of a use case. A plan never grants a role more access: every endpoint that declares a plan requirement still declares its capability, which an architecture test asserts. The refusal is one shape everywhere, `InventoryApi.Auth.PlanRequirement`: `403` with the stable code `plan_required`, the plan the business would need and the feature, and nothing about the caller, their role, the capability or a price.
+
+**The endpoint requirements, as the issue decides them.** Starter and Pro: `GET /api/reports/bookkeeping` and `/gst`. Pro: `/daily`, `/transactions`, `/reconciliation`, `/machine-profitability`, `/product-profitability`, `/dashboard`, the whole of Site Commissions (the report, the agreements and the payments — a site is known only from the live fleet read, so commission is a provider feature throughout), `POST /api/imports/nayax-sales`, and the three Owner credential actions `POST /api/settings/nayax-connection/test`, `.../save` and `.../retest` — the only Nayax calls in the application that do not go through the ordinary credential provider, which is exactly why they declare the requirement themselves. **`GET /api/settings/nayax-connection/status` deliberately carries none** and stays available on every plan to every role that sees it today: it makes no Nayax call, and it is what tells a downgraded business that its saved credentials and their status are still there. So does the reimbursement XML import, whose figures feed the two reports a Starter business includes.
+
+**A report and its own export cannot need different plans.** `GET /api/reports/{report}/export` is one endpoint serving every report family, so its requirement cannot be a constant: it declares `[RequirePlanPerReport]` and resolves the feature through `Inventory.Domain.Subscriptions.ReportPlanRequirements`, the same table the report actions' declared features are asserted against. A report name this application does not recognise resolves to the **most restricted** feature, because the export's own row builder falls through to product profitability for one — so misspelling a URL is not a way to download a Pro report.
+
+**Every endpoint is accounted for.** `EndpointPlanRequirementTests` (`backend/Inventory.IntegrationTests/Architecture/`) is the plan half of what `EndpointAuthorizationClassificationTests` does for roles: one maintained list of every controller action and one of four kinds — a declared feature, per report, **via the provider gate** (nothing declared, because the sales-provider behaviour is behind the Application's own plan check and degrades rather than refusing), or **none** (every plan includes it). A new endpoint fails the build until somebody decides, and the test also checks each entry against what the endpoint actually declares, in both directions. Like issue #700's financial-disclosure test it is honest about its limit: the gate/none boundary is an allow-list of *decisions* and no reflection rule can prove at build time that an endpoint's Nayax use all goes through the gate. What it does prove is that nobody added an endpoint without that decision being made.
+
+**Nothing is deleted, altered or migrated.** A plan change writes nothing: no sale, cost, link, history row, credential, connection status, agreement, payment or attachment is touched, and a feature becomes readable again the moment the plan includes it. There is no migration in this slice, no new table, no new port and no cross-business read.
 
 ### Per-business Nayax connection (issue #518)
 
@@ -3241,7 +3265,10 @@ the thing every Nayax call authenticates with. Before it, `AddNayaxLynxClient` r
 about 27 non-test files depended on the resulting `INayaxLynxClient`. After it, **the only global
 Nayax setting left is `NayaxLynx:BaseUrl`**, and there is no fallback to a global credential or to
 another business's: a business either has its own usable connection or its Nayax features fail
-closed.
+closed. Since issue #967 the same provider also refuses a business whose **plan** does not include
+the sales provider, before the stored connection is read and with its own distinct reason, which is
+how one check covers every ordinary Nayax call in the application — see
+[Plan enforcement on reports and Nayax operations](#plan-enforcement-on-reports-and-nayax-operations-issue-967).
 
 **The credential is resolved per call, centrally, and no consumer learns that.** `INayaxLynxClient`
 was unchanged by this issue, so none of those ~27 consumers changed either (issues #840 and #842 later
@@ -3722,6 +3749,15 @@ application needs, and until now the only way to discover that was for a feature
 production. So the server runs the reads the application actually makes, reports each one on its own
 line, and holds the tested credentials as a short-lived **encrypted draft** that nothing has
 accepted yet.
+
+Since issue #967 this endpoint — and the save and re-test beside it — additionally requires the
+**Pro** plan, declared at the endpoint rather than in the credential gate, because these are the only
+Nayax calls in the application that do not go through that gate: the test authenticates with the
+pasted pair and the save and re-test run the checks themselves. The requirement is evaluated after the
+Owner capability and before the action, so a refused request makes no Nayax request, writes no draft
+and leaves the stored credentials exactly as they were. Reading the connection *status* carries no
+plan requirement at all. See
+[Plan enforcement on reports and Nayax operations](#plan-enforcement-on-reports-and-nayax-operations-issue-967).
 
 **The checks are the endpoints the application already calls, and they are all reads.**
 `Inventory.Domain.Nayax.NayaxConnectionCheck` is the complete, declared list, and there is one check
@@ -10172,10 +10208,14 @@ errors](#external-integration-errors)) or a genuine cancellation - propagates ou
 failed, so a caller never receives a partial reorder calculation presented as a complete one.
 
 Since issue #726 this use case answers in one of two modes rather than failing when the fleet is
-unavailable to the business at all: the two per-feature availability answers
+unavailable to the business at all: the per-feature availability answers
 (`NayaxNotConnectedException`, `NayaxPermissionNotGrantedException`) produce a complete storage-only
 result with the reason, and every other failure - including the upstream and cancellation cases above
-- still propagates. See
+- still propagates. Since issue #967 a business whose plan does not include the sales provider is the
+same storage-only answer under its own `PlanRequired` reason, which the credential gate raises as a
+`NayaxNotConnectedException` carrying the required plan (see
+[Plan enforcement on reports and Nayax operations](#plan-enforcement-on-reports-and-nayax-operations-issue-967)).
+See
 [Provider-optional reorder and dashboard summary](#provider-optional-reorder-and-dashboard-summary-issue-726).
 
 #### Pick List backend projection (issue #221)
@@ -10555,12 +10595,13 @@ is a thin, entirely client-side consumer of the read-only `GET /api/pick-list` p
 restates none of its arithmetic, including the projection's default ascending-by-MDB-code product
 ordering (issue #496) - until an operator clicks a sortable header, the page renders `pickListProducts`
 in the order the backend returned it rather than re-sorting (see "Client-side Product/MDB Code
-sorting (issue #718)" below). Its row-level MDB Code column shows each product's `mdbCode`, and each
-machine cell additionally shows that machine's own `mdbCode` alongside its Current/Target figures, so
-a product with a different (or repeated) code on another machine stays visible per machine rather
-than being collapsed into the row-level value. Every piece of state the page adds on top of that projection -
+sorting (issue #718)" below). Its row-level MDB Code column shows each product's `mdbCode`; until
+issue #996 each machine cell also repeated that machine's own `mdbCode`, which the Plan picks
+redesign removed (see [Plan picks and Record refill](#plan-picks-and-record-refill-issue-996)
+below). Every piece of state the page adds on top of that projection -
 the applied machine/product filter selections, the matrix data for the applied machines, and which
-positive-pick cells the operator has marked picked (`pickedCells`) - lives only in the component
+positive-pick cells the operator has marked picked (`pickedCells`), and since issue #996 the
+operator's per-cell planned-quantity overrides - lives only in the component
 instance. None of it is written to `localStorage`, a query parameter, or any backend store, so it is
 lost on every page refresh or navigation away, by design: the calculated view is a planning aid, not
 a record of what was actually picked. No selection, filter, or pick/unpick interaction in the
@@ -10617,11 +10658,15 @@ applied (so the initial trigger reads "All products" and the matrix starts unfil
 defaults to no ids staged or applied, so the page still requires an explicit Apply before it fetches
 anything. The Selected Machines chips remain as a read-only summary of `appliedMachineIds`; removing a
 chip updates both the applied and staged machine selections (so the dropdown reflects the removal too)
-and re-fetches or clears the matrix exactly as an Apply with a changed machine selection would. Reset
+and, since issue #996, drops only that machine's planning work without re-reading the snapshot (see
+[Plan picks and Record refill](#plan-picks-and-record-refill-issue-996)). Reset
 clears both the staged and applied Products/Machines selections back to those same defaults, along
-with the matrix data, `pickedCells`, and the snapshot timestamp.
+with the matrix data, `pickedCells`, the overrides, the live filters and the snapshot timestamp,
+after confirming when there is planning work to lose (issue #996).
 
-**Matrix table layout.** The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
+**Matrix table layout.** (Issue #996 adds a site header row above this one, a left-sticky Product
+column and machine columns of at least 15rem; see [Plan picks and Record
+refill](#plan-picks-and-record-refill-issue-996).) The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
 so a long product list scrolls vertically inside the card while many machine columns still scroll
 horizontally in the same area. Every header cell - Product, MDB Code, Storage Qty, Total to Pick and
 each applied machine column (issue #496 added MDB Code; issue #885 added Storage Qty) - is
@@ -10695,11 +10740,13 @@ that never enters manual mode never builds it at all, so the calculated-only pat
 calculated matrix needs none of this: it is a read-only projection with nothing to lose, and its
 already-fetched state survives simply because nothing clears it.
 
-**The page says what it does to inventory per mode.** The subtitle
-(`data-testid="pick-list-inventory-impact"`) is the calculated view's long-standing "Planning only.
-This is a read-only view … nothing selected or picked here is saved" only while the calculated view
-is showing. In manual mode it says instead that nothing is saved until Save is clicked and that Save
-then records one machine refill per entered quantity and reduces that product's storage quantity.
+**The page says what it does to inventory per mode.** The note
+(`data-testid="pick-list-inventory-impact"`) states, while Plan picks (the calculated view) is
+showing, that it is planning only and that adjusted quantities and ticks stay in the browser and
+change no stock (`PLAN_PICKS_INVENTORY_IMPACT`; before issue #996 it called the view read-only). In
+Record refill (manual mode) it says instead that nothing is recorded until Record refill is clicked
+and that recording reduces each product's storage quantity by the quantity taken
+(`RECORD_REFILL_INVENTORY_IMPACT`).
 Describing a view that writes `MachineRefill` movements as read-only is the one thing that line must
 never do, so both wordings are asserted in `pick-list.component.manual-rendering.spec.ts`.
 
@@ -11064,6 +11111,79 @@ then submitted with its `machineId` once the read answers; ordinary no-machine e
 immediately with the read still outstanding; and an uncertain attempt made after the machine resolved
 being retried with the identical key, machine and rows, so a late answer can never become a second
 deduction.
+
+#### Plan picks and Record refill (issue #996)
+
+Issue #996 redesigns both Pick List views and renames them in the UI - **Plan picks** for the
+calculated view (`mode === 'calculated'`) and **Record refill** for manual entry (`mode ===
+'manual'`); the internal mode names, routes, query parameters and every API call are unchanged. It is
+frontend only: no endpoint, DTO, schema or Nayax call was added or altered, and both views still
+compose exactly as described in the two sections above.
+
+**Planning state is transient and keyed per cell.** `PickListComponent` adds `overrides`
+(`Map<string, number>`) and keeps `pickedCells` (`Set<string>`), both keyed by `planCellKey(productId,
+machineId)` (`frontend/inventory-app/src/app/components/pick-list/plan-picks.ts`). The planned
+quantity of a cell is its override when present, otherwise the projection's `quantityToPick`; every
+total, shortage and progress figure (`productPlannedTotal`, `productShortage`, `totalToPickUnits`,
+`actionableCellCount`, `runProgressLabel`) is computed from planned quantities, never written back.
+`parsePickQuantity` is the one input rule: digits only, 0 to `MAXIMUM_PICK_QUANTITY` (int32 max),
+blank refused. Only a cell with a positive suggestion can be edited. 0 is a skip - the cell has no checkbox and counts as no pick. Committing a value
+that differs from the cell's previous planned quantity removes its `pickedCells` mark, because it is
+a different pick. An open editor whose text differs from the quantity it opened with (`editIsDirty`)
+is planning work too, for every discard confirmation and the departure guard below; an untouched
+editor, or one closed with Cancel, is not. Like the rest of the page's state, none of this reaches `localStorage`, a query
+parameter or any request.
+
+**Discarding is explicit and snapshot-scoped.** Overrides and ticks belong to the snapshot they were
+made against, so anything that replaces the snapshot discards them after `window.confirm`: `refresh()`
+(which re-reads the same `appliedMachineIds`, and is also the Retry of a failed read), `resetAll()`,
+and an Apply that adds machines. Removing machines (by chip or by Apply) only filters the snapshot, so
+it confirms only when a removed machine has planning work and drops just that machine's keys
+(`afterMachinesRemoved`). Search, category, the Only remaining / Only shortages status filter,
+sorting and the phone layout's machine focus are derived views in `visibleProducts()` /
+`focusedProducts()` and never touch planning state.
+
+**Stale responses are dropped by generation.** Each snapshot read captures `snapshotGeneration`
+(bumped by every fetch, Reset and empty selection) and the `ListLoadState` token; a response or error
+is applied only while both are still current, so an older read finishing after a newer one, or after
+Reset, can neither replace the newer snapshot nor show a failure over it.
+
+**Site grouping is optional.** The machine dropdown (`MultiSelectOption.group`) and the matrix's
+site header row group machines by site from `SiteService.getList()`, read only when some
+machine carries a `siteId`. The matrix groups by `siteId` (`ColumnGroup`), using the name only as the
+header label, so two sites that share a name are never merged; machines with no known site fall under "Other machines", and a failed
+site read falls back to the ungrouped layout rather than an error.
+
+**Record refill validates the whole submission client-side.** `ManualPickListComponent` computes
+each product's total across every selected machine - including rows hidden by search, category or
+the Entered filter - against its storage quantity (`storageExcess`, `shortageProducts`). Any shortage
+disables a **fresh** submission (`canSave`/`save`) and relabels the button `RESOLVE_SHORTAGE_LABEL`;
+the server's own aggregate check (issue #897) remains the authority, this only stops a request that
+is certain to be refused. An outstanding `unresolvedSubmission` is never blocked by it: Retry save
+resends the identical payload and key whatever the catalogue now says. While `entriesLocked` (a save
+in flight or unresolved) every cell edit, stepper, machine change and Clear is refused. Plan picks
+quantities are handed to Record refill as `@Input() suggestions` keyed by product and local machine
+id (`localMachineId` from the fleet read); entering less than a suggestion is shown as information
+only and nothing is copied automatically.
+
+**Leaving the page is guarded.** The `/pick-list` route has `canDeactivate: [confirmPickListLeave]`
+(`pick-list-leave.guard.ts`), which asks `PickListComponent.confirmLeave()`; a `window:beforeunload`
+listener covers reloads and closed tabs. Both use `leaveWarning()`: a save in flight or unresolved
+outranks entered Record refill quantities or Plan picks overrides and ticks.
+
+**Layout.** Desktop renders both views as tables inside a `relative max-h-[70vh] overflow-auto`
+scroller with a left-sticky product column and top-sticky header rows (Plan picks adds the site row,
+offsetting the column header row with `top-9`); the `relative` keeps the scroller the containing
+block of its absolutely positioned screen-reader labels, without which they widened the page.
+Below 768px (`matchMedia`, desktop in jsdom) both views switch to product cards with a machine focus
+strip, steppers and a summary bar kept above the mobile bottom navigation.
+
+**Tests.** `pick-list.component.plan-picks.spec.ts` (quantity parsing, refresh/retry and stale
+responses, every discard confirmation and what Cancel keeps, overrides, skips, totals, filters, focus,
+site grouping, suggestions, the departure guard, and the rendered editor, summary and phone cards)
+and the issue #996 describes in `manual-pick-list.component.spec.ts` (aggregate storage checks
+including hidden rows, hidden-entry banner, Clear, the recorded summary, locked entries while
+unresolved, and Retry save despite a shortage).
 
 #### Supplier Orders frontend page (issue #387)
 
@@ -12138,8 +12258,9 @@ completely unchanged.
 Nayax fleet read's `CustomerID`, so `GetSiteCommissionReport` previously threw whenever the provider
 was unusable — and because `EfReportingSharedQueries.GetMachineCommissionsAsync` composes it, that
 exception took the bookkeeping, GST, dashboard and machine profitability reports down with it. It now
-catches exactly the two per-feature availability answers issue #726 established for reorder —
-`NayaxNotConnectedException` (no credentials an ordinary operation may use) and
+catches the per-feature availability answers issue #726 established for reorder —
+`NayaxNotConnectedException` (no credentials an ordinary operation may use, or, since issue #967, a
+plan that does not include the sales provider, which it reports as its own `PlanRequired` reason) and
 `NayaxPermissionNotGrantedException` (usable credentials, and Nayax refused this read) — and returns
 `SiteCommissionReport.Unavailable(from, to, reason)`: no rows, and the reason. Everything else still
 propagates: a transport failure, a cancellation, a `401` and the support-session refusal

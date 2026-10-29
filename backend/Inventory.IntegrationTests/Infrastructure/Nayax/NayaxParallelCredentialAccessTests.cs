@@ -15,6 +15,7 @@ using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Sites;
 using InventoryApi.Tests.Application.Access;
+using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 using InventoryApi.Tests.Http;
 using Microsoft.Data.Sqlite;
@@ -504,7 +505,10 @@ public class NayaxParallelCredentialAccessTests
             Commands = commands;
             _store = store;
             _credentials = new NayaxRequestCredentialProvider(
-                store, TestAppDbContext.ScopeFor(businessId), new FakeClock(Now));
+                store,
+                TestAppDbContext.ScopeFor(businessId),
+                TestCurrentPlan.Unrestricted(),
+                new FakeClock(Now));
         }
 
         public AppDbContext Db { get; }

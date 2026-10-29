@@ -8,9 +8,12 @@ namespace InventoryApi.Http;
 // Maps the two per-business Nayax connection failures (issue #520), and only those, to stable
 // ProblemDetails responses the frontend can show:
 //
-//   NayaxNotConnectedException          the current business has no Nayax credentials the status
-//                                       gate will use - nothing stored, or stored and known not to
-//                                       work. An operator has to connect or reconnect Nayax.
+//   NayaxNotConnectedException          the current business has no Nayax credentials an ordinary
+//                                       operation may use: nothing stored, stored and known not to
+//                                       work, or - since issue #967 - a plan that does not include
+//                                       the sales provider at all. An operator has to connect or
+//                                       reconnect Nayax, or upgrade the plan; the response carries
+//                                       which of the two it was.
 //   NayaxPermissionNotGrantedException  Nayax refused one feature for lack of permission while the
 //                                       stored credentials were not yet verified. The connection as
 //                                       a whole may be fine.
@@ -21,6 +24,13 @@ namespace InventoryApi.Http;
 // business membership, and reusing them here would tell a signed-in member they are not allowed to
 // use a feature they are perfectly entitled to. Neither is a 502 either: Nayax answered correctly,
 // and nothing about retrying would help.
+//
+// A plan refusal keeps the 409 too (issue #967), deliberately: every surface that degrades to its
+// no-usable-provider behaviour does so on this exact answer, and moving it to 403 would turn a Pick
+// List that opens manual entry into a Pick List that shows an error. Where a plan refuses an
+// endpoint outright rather than a Nayax call inside one, it is InventoryApi.Auth.PlanRequirement's
+// 403 with the plan_required code, which is a different thing: there, nothing was being read from
+// Nayax and there is no degraded answer to give.
 //
 // The response carries the exception's own message - a fixed, caller-safe sentence declared as a
 // constant on each type - plus the stable `code` a client may branch on, and, for a connection
@@ -86,7 +96,23 @@ public sealed class NayaxConnectionExceptionHandler : IExceptionHandler
         problemDetails.Extensions["code"] = code;
         if (exception is NayaxNotConnectedException notConnected)
         {
-            problemDetails.Extensions["nayaxConnectionStatus"] = notConnected.Status.ToString();
+            // Which of the two refusals this is (issue #967). Published beside the unchanged code
+            // rather than instead of it, so a client that has not learnt about plans yet degrades
+            // exactly as it does today while one that has can say "needs Pro" instead of "connect
+            // Nayax" (issue #979).
+            problemDetails.Extensions["nayaxUnavailableReason"] = notConnected.UnavailableReason;
+            if (notConnected.Status is { } status)
+            {
+                problemDetails.Extensions["nayaxConnectionStatus"] = status.ToString();
+            }
+
+            if (notConnected.RequiredPlan is { } requiredPlan)
+            {
+                // The plan that would include the connection. A plan refusal reads no connection at
+                // all, so there is no status to report beside it - and the business's saved
+                // credentials and their stored status are untouched.
+                problemDetails.Extensions["requiredPlan"] = requiredPlan.ToString();
+            }
         }
 
         await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
@@ -108,7 +134,11 @@ public sealed class NayaxConnectionExceptionHandler : IExceptionHandler
         NayaxNotConnectedException notConnected => (
             NotConnectedTitle,
             NayaxNotConnectedException.ErrorCode,
-            notConnected.Status.ToString()),
+            // The logged detail is the refused status, or - for a plan refusal, which reads no
+            // connection - the reason and the plan that would include it.
+            notConnected.RequiredPlan is { } requiredPlan
+                ? $"{notConnected.UnavailableReason}:{requiredPlan}"
+                : notConnected.Status?.ToString() ?? notConnected.UnavailableReason),
         NayaxPermissionNotGrantedException permission => (
             PermissionNotGrantedTitle,
             NayaxPermissionNotGrantedException.ErrorCode,

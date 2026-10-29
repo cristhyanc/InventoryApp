@@ -35,8 +35,9 @@ public static class ReorderListingMetadataHeaders
 
     /// <summary>
     /// Why the machines' replenishment need is missing from a <c>StorageOnly</c> listing:
-    /// <c>NayaxNotConnected</c> or <c>PermissionNotGranted</c>. Absent in <c>MachineAware</c> mode,
-    /// where there is nothing unavailable to explain.
+    /// <c>NayaxNotConnected</c>, <c>PermissionNotGranted</c> or - since issue #967 -
+    /// <c>PlanRequired</c>, for a business whose plan does not include the sales provider. Absent in
+    /// <c>MachineAware</c> mode, where there is nothing unavailable to explain.
     /// </summary>
     public const string MachineNeedUnavailableReason = "X-Reorder-Machine-Need-Unavailable-Reason";
 
