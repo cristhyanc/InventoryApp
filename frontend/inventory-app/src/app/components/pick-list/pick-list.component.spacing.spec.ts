@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { SiteService } from '../../services/site.service';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
@@ -34,6 +35,7 @@ async function render(machinesResult: Observable<Machine[]> = of([machine(10, 'M
       { provide: MachineService, useValue: { getAll: jest.fn(() => machinesResult) } },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
       { provide: PickListService, useValue: { get: jest.fn(() => of(pickListResult())) } },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
@@ -51,8 +53,8 @@ async function render(machinesResult: Observable<Machine[]> = of([machine(10, 'M
 }
 
 /**
- * The filter card, the optional Selected Machines card, and the results card carry no margin of
- * their own (issue #894): the 1.5rem gap between them comes entirely from `.page`'s own
+ * The filter card (which holds the selected machine chips since issue #996) and the results card
+ * carry no margin of their own (issue #894): the 1.5rem gap between them comes entirely from `.page`'s own
  * `flex flex-col gap-6` (styles.scss), which spaces every one of its direct children by the same
  * amount regardless of which are present. That only holds if these `@if` blocks keep emitting the
  * cards as direct children of `.page` with no wrapping element and no competing margin utility -
@@ -61,13 +63,13 @@ async function render(machinesResult: Observable<Machine[]> = of([machine(10, 'M
 describe('PickListComponent calculated-view card spacing (issue #894)', () => {
   const marginUtility = /\b(m[tbxy]?-\d|space-y-\d)\b/;
 
-  it('keeps the filter, Selected Machines, and results cards as direct, unmargined children of .page', async () => {
+  it('keeps the filter and results cards as direct, unmargined children of .page', async () => {
     const { host } = await render(of([machine(10, 'Machine A'), machine(20, 'Machine B')]));
 
     const page = host.querySelector('.page') as HTMLElement;
     const cards = Array.from(page.children).filter((child) => child.classList.contains('card'));
 
-    expect(cards).toHaveLength(4); // mode toggle, filters, Selected Machines, results
+    expect(cards).toHaveLength(2); // filters (with the selected machine chips), results
     cards.forEach((card) => {
       expect(card.parentElement).toBe(page);
       expect(card.className).not.toMatch(marginUtility);
@@ -75,13 +77,13 @@ describe('PickListComponent calculated-view card spacing (issue #894)', () => {
     expect(page.className).toContain('page');
   });
 
-  it('keeps a single gap between the filter and results cards when Selected Machines is absent', async () => {
+  it('keeps a single gap between the filter and results cards when the machine list failed', async () => {
     const { host } = await render(throwError(() => new HttpErrorResponse({ status: 500 })));
 
     const page = host.querySelector('.page') as HTMLElement;
     const cards = Array.from(page.children).filter((child) => child.classList.contains('card'));
 
-    expect(cards).toHaveLength(3); // mode toggle, filters, results - no Selected Machines card
+    expect(cards).toHaveLength(2); // filters, results
     cards.forEach((card) => {
       expect(card.parentElement).toBe(page);
       expect(card.className).not.toMatch(marginUtility);

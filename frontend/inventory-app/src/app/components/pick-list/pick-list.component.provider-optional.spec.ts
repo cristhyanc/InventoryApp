@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { SiteService } from '../../services/site.service';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
@@ -47,6 +48,7 @@ async function render(options: { status?: SpecConnectionStatus; machines?: Obser
       },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
       { provide: PickListService, useValue: { get: jest.fn(() => of(pickListResult())) } },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
       { provide: AccessService, useValue: { allows: () => of(true) } },

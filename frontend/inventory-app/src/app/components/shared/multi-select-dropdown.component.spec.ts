@@ -197,3 +197,30 @@ describe('MultiSelectDropdownComponent selection', () => {
     expect(selectAllCheckbox().indeterminate).toBe(false);
   });
 });
+
+describe('MultiSelectDropdownComponent option groups (issue #996)', () => {
+  it('lists no group heading for options without a group', async () => {
+    const { host, openPanel } = await render();
+    openPanel();
+
+    expect(host.querySelectorAll('[data-testid="multi-select-group"]')).toHaveLength(0);
+  });
+
+  it('shows one heading per run of options sharing a group, without changing what is selectable', async () => {
+    const { fixture, host, openPanel, optionCheckbox, emitted } = await render();
+    fixture.componentInstance.options = [
+      { id: 1, label: 'Drinks', group: 'Harbour Point' },
+      { id: 2, label: 'Snacks', group: 'Harbour Point' },
+      { id: 3, label: 'Combo', group: 'Pavilion' }
+    ];
+    fixture.detectChanges();
+    openPanel();
+
+    expect(Array.from(host.querySelectorAll('[data-testid="multi-select-group"]')).map((h) => h.textContent?.trim())).toEqual([
+      'Harbour Point',
+      'Pavilion'
+    ]);
+    optionCheckbox('Combo').click();
+    expect(emitted).toEqual([[3]]);
+  });
+});
