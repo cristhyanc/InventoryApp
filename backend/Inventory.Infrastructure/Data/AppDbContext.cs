@@ -386,6 +386,33 @@ public class AppDbContext : DbContext
         Set<SupplierListingPendingObservation>();
 
     /// <summary>
+    /// Each business's paid subscription (issue #966), written only by a verified billing event
+    /// (#969). Ordinary tenant-owned data - one row per business, filtered and stamped centrally -
+    /// and deliberately a different table from <see cref="BusinessPlanGrants"/>, because neither
+    /// record may ever write the other. See <see cref="BusinessBillingSubscription"/>.
+    /// </summary>
+    public DbSet<BusinessBillingSubscription> BusinessBillingSubscriptions =>
+        Set<BusinessBillingSubscription>();
+
+    /// <summary>
+    /// The plans granted to a business by a person rather than a payment (issue #966): the
+    /// grandfathered Pro grant, and the complimentary grants a Super Admin decides (#982). Ordinary
+    /// tenant-owned data, with at most one grandfathered grant per business. See
+    /// <see cref="BusinessPlanGrant"/>.
+    /// </summary>
+    public DbSet<BusinessPlanGrant> BusinessPlanGrants => Set<BusinessPlanGrant>();
+
+    /// <summary>
+    /// The single shared row holding the grandfathering step's fixed cutoff and its completion marker
+    /// (issue #966). The eleventh <em>platform</em> table, on the terms
+    /// <see cref="SupplierPresets"/> states: about no business, so no business key, no index on one
+    /// and no query filter. No row at all means the step has never run, which means nothing is
+    /// enforced; see <see cref="SubscriptionGrandfathering"/>.
+    /// </summary>
+    public DbSet<SubscriptionGrandfathering> SubscriptionGrandfatherings =>
+        Set<SubscriptionGrandfathering>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -443,6 +470,7 @@ public class AppDbContext : DbContext
         ConfigureSupportSessions(modelBuilder);
         ConfigureSupplierPresets(modelBuilder);
         ConfigurePlatformOptionVisibility(modelBuilder);
+        ConfigureSubscriptions(modelBuilder);
         ConfigurePriceCatalogue(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
@@ -1414,6 +1442,90 @@ public class AppDbContext : DbContext
         visibility.Property(x => x.UpdatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the business subscription state of issue #966: two tenant-owned tables about one
+    /// business's plan, and one platform table about the grandfathering step itself.
+    ///
+    /// <para><strong>The classification is the design, again.</strong>
+    /// <see cref="BusinessBillingSubscription"/> and <see cref="BusinessPlanGrant"/> are facts about
+    /// one business, so they are ordinary <see cref="IBusinessOwned"/> rows and
+    /// <see cref="ConfigureBusinessOwnership"/> gives each of them the business key, the index, the
+    /// query filter and the ownership stamp with nothing added here.
+    /// <see cref="SubscriptionGrandfathering"/> is the opposite: one cutoff and one completion marker
+    /// for the whole application, so it carries no business key, no index on one and no query filter,
+    /// exactly as <see cref="ConfigurePlatformOptionVisibility"/> states for the option-visibility
+    /// row.</para>
+    ///
+    /// <para><strong>Two uniqueness rules, and both are the database's.</strong> A business has at
+    /// most one billing subscription, and at most one <em>grandfathered</em> grant - the second
+    /// through a filtered unique index, because a business may legitimately hold several
+    /// complimentary grants. The grandfathering command's "grant it unless one exists" is written as
+    /// one transaction, and this index is what makes that true even if two commands ran at once:
+    /// the loser's insert is refused rather than leaving a business with two grandfathered
+    /// grants.</para>
+    ///
+    /// <para>Every instant here is persisted UTC and marked UTC on the way out, for the reason the
+    /// support session's are: the SQLite provider returns an unspecified kind otherwise, and the
+    /// grant's end instant is reported through <c>GET /api/me/access</c>.</para>
+    /// </summary>
+    private static void ConfigureSubscriptions(ModelBuilder modelBuilder)
+    {
+        var subscription = modelBuilder.Entity<BusinessBillingSubscription>();
+
+        // One subscription per business, led by the business key like every other per-business
+        // uniqueness rule in this schema (AGENTS.md § Tenant ownership and data isolation).
+        subscription.HasIndex(x => x.BusinessId).IsUnique();
+        subscription.Property(x => x.CurrentPeriodStartUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        subscription.Property(x => x.CurrentPeriodEndUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        subscription.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        var grant = modelBuilder.Entity<BusinessPlanGrant>();
+
+        // At most one grandfathered grant per business. Filtered to that one source, because the
+        // complimentary grants of #982 are a list rather than a single row. The filter is SQL, so the
+        // source's numeric value appears as the literal the index is created with; the model test
+        // `The_grandfathered_grant_index_filter_matches_the_declared_source` pins the two together,
+        // so renumbering the enum fails a test rather than silently disabling this index.
+        grant.HasIndex(x => new { x.BusinessId, x.Source })
+            .IsUnique()
+            .HasFilter(@"""Source"" = 10");
+        grant.Property(x => x.Reason).HasMaxLength(500);
+        grant.Property(x => x.StartsAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        grant.Property(x => x.EndsAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        grant.Property(x => x.GrantedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        var grandfathering = modelBuilder.Entity<SubscriptionGrandfathering>();
+
+        // The key is not generated: the step is one answer for the whole application, so two
+        // concurrent first runs collide on the primary key instead of recording two cutoffs, and the
+        // adapter resolves that collision into reading the cutoff the other run fixed.
+        grandfathering.Property(x => x.Id).ValueGeneratedNever();
+        grandfathering.Property(x => x.CutoffUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        grandfathering.Property(x => x.CompletedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
     }
 
     /// <summary>

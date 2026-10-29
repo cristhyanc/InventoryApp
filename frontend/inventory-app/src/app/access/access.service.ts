@@ -21,6 +21,7 @@ import {
 } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { Capability, CapabilitySet, capabilitySet } from './capabilities';
+import { Entitlement } from './entitlement';
 import { OptionVisibility } from './option-visibility';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './signed-in-account';
 
@@ -36,6 +37,13 @@ interface MeAccessResponse {
    * does not report it is read as "not known", which hides nothing - see {@link OptionVisibility}.
    */
   historicalGstClassificationVisible?: boolean;
+
+  /**
+   * What the business has bought (issue #966). Optional on the same terms and for the same reason:
+   * an API that does not report it is read as "not known", which withholds nothing - see
+   * {@link Entitlement}.
+   */
+  entitlement?: Entitlement;
 }
 
 /** What the signed-in member may do, as `GET /api/me/access` reported it. */
@@ -58,6 +66,14 @@ export interface MemberAccess {
    * {@link OptionVisibility}.
    */
   readonly optionVisibility?: OptionVisibility;
+
+  /**
+   * What the business has bought (issue #966), or `undefined` when the API did not report it. It
+   * travels with the capabilities because the shell reads both from one answer, and it is **not**
+   * one of them: nothing in this release hides a feature because of a plan - enforcement is #967's,
+   * #977's and #979's work. See {@link Entitlement}.
+   */
+  readonly entitlement?: Entitlement;
 }
 
 /**
@@ -321,7 +337,10 @@ export class AccessService implements OnDestroy {
                   ? undefined
                   : {
                       historicalGstClassificationVisible: response.historicalGstClassificationVisible
-                    }
+                    },
+              // Read as reported too, and never defaulted here: an absent field means "not known",
+              // and what that means is the one rule on `Entitlement` - nothing is withheld.
+              entitlement: response.entitlement ?? undefined
             }
           })
         ),
