@@ -197,3 +197,69 @@ describe('MultiSelectDropdownComponent selection', () => {
     expect(selectAllCheckbox().indeterminate).toBe(false);
   });
 });
+
+/**
+ * Optional grouping (issue #996): the Pick List's machine filter passes each machine's site, so a
+ * site's machines are offered together and a machine at no known site stays selectable under no
+ * heading. A filter whose options carry no group renders exactly the flat list it always did.
+ */
+describe('MultiSelectDropdownComponent option groups (issue #996)', () => {
+  async function renderGrouped(ungroupedGroupLabel = '') {
+    await TestBed.configureTestingModule({ imports: [MultiSelectDropdownComponent] }).compileComponents();
+
+    const fixture = TestBed.createComponent(MultiSelectDropdownComponent);
+    fixture.componentInstance.label = 'Machines';
+    fixture.componentInstance.itemLabelSingular = 'machine';
+    fixture.componentInstance.itemLabelPlural = 'machines';
+    fixture.componentInstance.ungroupedGroupLabel = ungroupedGroupLabel;
+    fixture.componentInstance.options = [
+      { id: 1, label: 'Machine A', group: 'Airport' },
+      { id: 2, label: 'Machine B' },
+      { id: 3, label: 'Machine C', group: 'Airport' },
+      { id: 4, label: 'Machine D', group: 'Hospital' }
+    ];
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+    host.querySelector<HTMLButtonElement>('button')!.click();
+    fixture.detectChanges();
+
+    return { fixture, host };
+  }
+
+  it('lists each group’s options together, under its heading, with the ungrouped ones last', async () => {
+    const { host } = await renderGrouped('No site recorded');
+
+    const panel = host.querySelector('[role="group"]')!;
+    const rendered = Array.from(panel.querySelectorAll('p, .msd-label')).map((node) => node.textContent?.trim());
+    expect(rendered).toEqual([
+      'Select all',
+      'Airport',
+      'Machine A',
+      'Machine C',
+      'Hospital',
+      'Machine D',
+      'No site recorded',
+      'Machine B'
+    ]);
+  });
+
+  it('leaves the ungrouped options unheaded when no label for them was given', async () => {
+    const { host } = await renderGrouped();
+
+    const headings = Array.from(host.querySelectorAll('[role="group"] p')).map((node) => node.textContent?.trim());
+    expect(headings).toEqual(['Airport', 'Hospital']);
+  });
+
+  it('renders no heading at all for options that carry no group', async () => {
+    const { openPanel, host } = await render([]);
+    openPanel();
+
+    expect(host.querySelectorAll('[role="group"] p')).toHaveLength(0);
+    expect(Array.from(host.querySelectorAll('.msd-label')).map((node) => node.textContent?.trim())).toEqual([
+      'Select all',
+      'Coke',
+      'Chips',
+      'Water'
+    ]);
+  });
+});

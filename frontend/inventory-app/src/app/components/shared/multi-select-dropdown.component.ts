@@ -4,6 +4,20 @@ import { CommonModule } from '@angular/common';
 export interface MultiSelectOption {
   id: number;
   label: string;
+  /**
+   * An optional heading this option belongs under (issue #996): the Pick List's machine filter
+   * passes each machine's site, so a site's machines are offered together. Options with no group
+   * are listed last, under no heading at all, so a machine at no known site stays selectable
+   * without an invented one. A filter whose options carry no group renders exactly as before.
+   */
+  group?: string;
+}
+
+/** One heading of the option panel and the options under it; `label` is `null` for the ungrouped ones. */
+export interface MultiSelectOptionGroup {
+  readonly key: string;
+  readonly label: string | null;
+  readonly options: readonly MultiSelectOption[];
 }
 
 /**
@@ -57,6 +71,13 @@ export class MultiSelectDropdownComponent {
   @Input({ required: true }) itemLabelSingular = '';
   @Input({ required: true }) itemLabelPlural = '';
   @Input() options: MultiSelectOption[] = [];
+
+  /**
+   * What to head the options that carry no {@link MultiSelectOption.group} with, while others do.
+   * Empty - the default - leaves them unheaded, and they are never headed when no option is
+   * grouped at all, because a lone heading over every option says nothing.
+   */
+  @Input() ungroupedGroupLabel = '';
   @Input() selectedIds: number[] = [];
   @Output() readonly selectedIdsChange = new EventEmitter<number[]>();
 
@@ -95,6 +116,42 @@ export class MultiSelectDropdownComponent {
 
   isSelected(id: number): boolean {
     return this.selectedIds.includes(id);
+  }
+
+  /**
+   * The options under their headings, in the order they arrived: one group per distinct `group`
+   * label, then the options that carry none. A set of options with no group at all is one unheaded
+   * group, which renders exactly the flat list this component has always rendered.
+   */
+  get optionGroups(): readonly MultiSelectOptionGroup[] {
+    const groups: MultiSelectOptionGroup[] = [];
+    const byLabel = new Map<string, MultiSelectOption[]>();
+    const ungrouped: MultiSelectOption[] = [];
+    for (const option of this.options) {
+      if (option.group === undefined) {
+        ungrouped.push(option);
+        continue;
+      }
+      const existing = byLabel.get(option.group);
+      if (existing) {
+        existing.push(option);
+      } else {
+        byLabel.set(option.group, [option]);
+      }
+    }
+    for (const [label, options] of byLabel) {
+      groups.push({ key: `group-${label}`, label, options });
+    }
+    if (ungrouped.length > 0) {
+      const label = groups.length > 0 && this.ungroupedGroupLabel !== '' ? this.ungroupedGroupLabel : null;
+      groups.push({ key: 'ungrouped', label, options: ungrouped });
+    }
+    return groups;
+  }
+
+  /** Whether any option named a group, which is the only case headings are drawn for. */
+  get groupHeadingsShown(): boolean {
+    return this.optionGroups.some((group) => group.label !== null);
   }
 
   toggleOpen(): void {
