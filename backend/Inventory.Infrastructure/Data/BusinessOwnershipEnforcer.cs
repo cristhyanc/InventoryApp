@@ -68,6 +68,12 @@ public sealed class CrossBusinessAccessException : Exception
 /// <c>AppDbContext.BeginPriceCatalogueMatching</c> holds one, it may <em>update the four match
 /// columns</em> of the price-tracking mappings an automatic match applies to - and nothing else (see
 /// <see cref="EnforcePriceCatalogueMatching"/>).
+///
+/// Since issue #982 there is a third, on the same terms and reviewed the same way: while
+/// <c>AppDbContext.BeginPlanGrantWrite</c> holds a lease, a denied scope may create or change
+/// <em>one business's <see cref="BusinessPlanGrant"/> row</em> and append the
+/// <see cref="BusinessPlanGrantAudit"/> row beside it - the Super Admin's manual plan grant - and
+/// nothing else. See <see cref="EnforcePlanGrantWrite"/>.
 /// </summary>
 internal static class BusinessOwnershipEnforcer
 {
@@ -100,28 +106,7 @@ internal static class BusinessOwnershipEnforcer
 
         if (scope.BusinessId is not { } businessId)
         {
-            // Denied scope. Reads already return nothing; writes must not be the way around it -
-            // with one reviewed exception, below, which is narrower than this branch rather than a
-            // way out of it.
-            if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
-            {
-                EnforceSupplierProvisioning(context, provisionedBusinessId);
-                return;
-            }
-
-            if (context.PriceCatalogueMatchingLeased)
-            {
-                EnforcePriceCatalogueMatching(context);
-                return;
-            }
-
-            if (context.ChangeTracker.Entries<IBusinessOwned>().Any(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
-            {
-                throw new CrossBusinessAccessException(
-                    "A tenant-owned write was attempted without a resolved current business. "
-                        + "The caller has no business membership, so the write is refused.");
-            }
-
+            EnforceDeniedScope(context);
             return;
         }
 
@@ -147,6 +132,41 @@ internal static class BusinessOwnershipEnforcer
         }
 
         EnforceRelationships(context, businessId);
+    }
+
+    /// <summary>
+    /// The denied-scope branch of <see cref="Enforce"/>: a request that resolved no business writes
+    /// nothing tenant-owned, except through one of the three reviewed leases.
+    /// </summary>
+    private static void EnforceDeniedScope(AppDbContext context)
+    {
+        // Denied scope. Reads already return nothing; writes must not be the way around it -
+        // with three reviewed exceptions, below, each narrower than this branch rather than a
+        // way out of it.
+        if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
+        {
+            EnforceSupplierProvisioning(context, provisionedBusinessId);
+            return;
+        }
+
+        if (context.PriceCatalogueMatchingLeased)
+        {
+            EnforcePriceCatalogueMatching(context);
+            return;
+        }
+
+        if (context.PlanGrantWriteBusinessId is { } grantedBusinessId)
+        {
+            EnforcePlanGrantWrite(context, grantedBusinessId);
+            return;
+        }
+
+        if (context.ChangeTracker.Entries<IBusinessOwned>().Any(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
+        {
+            throw new CrossBusinessAccessException(
+                "A tenant-owned write was attempted without a resolved current business. "
+                    + "The caller has no business membership, so the write is refused.");
+        }
     }
 
     /// <summary>
@@ -269,6 +289,54 @@ internal static class BusinessOwnershipEnforcer
                 "A price-tracking mapping may only have its match columns written while matching a "
                     + $"tracked product: {string.Join(", ", unexpected)} cannot be changed this way.");
         }
+    }
+
+    /// <summary>
+    /// The manual plan grant window of <c>AppDbContext.BeginPlanGrantWrite</c> (issue #982): on a
+    /// denied scope, <em>one business's <see cref="BusinessPlanGrant"/> row and the
+    /// <see cref="BusinessPlanGrantAudit"/> row beside it</em> may be written, and every other
+    /// tenant-owned write is refused exactly as it is without a lease.
+    ///
+    /// <para>It is the third exception to "a denied scope writes nothing tenant-owned", reviewed on
+    /// its own issue, and it is deliberately smaller than that rule in three directions at once: two
+    /// entity types, two states (an insert, and an update of the grant row - never a delete, because
+    /// a grant that was given is never unsaid), and one business, whose id the decision's own write
+    /// transaction read rather than a request supplying it. The audit row may only be inserted: an
+    /// audit trail that could be updated is not one.</para>
+    ///
+    /// <para>Stamping and ownership go through the same <see cref="StampOrVerifyNewRow"/> and
+    /// <see cref="VerifyUnchangedOwnership"/> every ordinary write uses, so a row carrying some
+    /// <em>other</em> business's key is refused here too rather than silently re-owned, and
+    /// <see cref="EnforceRelationships"/> still runs.</para>
+    /// </summary>
+    private static void EnforcePlanGrantWrite(AppDbContext context, int businessId)
+    {
+        foreach (var entry in context.ChangeTracker.Entries<IBusinessOwned>().ToList())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added when entry.Entity is BusinessPlanGrant or BusinessPlanGrantAudit:
+                    StampOrVerifyNewRow(entry, businessId);
+                    break;
+
+                case EntityState.Modified when entry.Entity is BusinessPlanGrant:
+                    VerifyUnchangedOwnership(entry, businessId);
+                    break;
+
+                case EntityState.Added:
+                case EntityState.Modified:
+                case EntityState.Deleted:
+                    throw new CrossBusinessAccessException(
+                        $"{entry.Metadata.ClrType.Name} cannot be written while deciding a business's "
+                            + "plan grant: that path may only create or change that business's own "
+                            + "plan grant and append its audit row.");
+
+                default:
+                    break;
+            }
+        }
+
+        EnforceRelationships(context, businessId);
     }
 
     /// <summary>

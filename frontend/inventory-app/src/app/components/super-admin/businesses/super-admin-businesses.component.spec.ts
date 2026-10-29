@@ -6,8 +6,24 @@ import {
   SuperAdminBusinessDecision,
   SuperAdminBusinessesService
 } from '../../../services/super-admin-businesses.service';
+import { SuperAdminPlanGrant, SuperAdminPlanGrantsService } from '../../../services/super-admin-plan-grants.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+
+/** A business that holds no manual grant, which is what the Plan dialog loads unless a test says otherwise. */
+const noPlanGrant: SuperAdminPlanGrant = {
+  businessId: 9,
+  name: 'Snack Co',
+  hasGrant: false,
+  plan: null,
+  startsAtUtc: null,
+  endsAtUtc: null,
+  endsOnUtc: null,
+  reason: null,
+  revision: 0,
+  grantedAtUtc: null,
+  active: false
+};
 
 function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusiness {
   return {
@@ -30,7 +46,8 @@ function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusine
 async function render(
   service: Partial<SuperAdminBusinessesService>,
   toast?: Partial<ToastService>,
-  supportSession?: Partial<SupportSessionService>
+  supportSession?: Partial<SupportSessionService>,
+  planGrants?: Partial<SuperAdminPlanGrantsService>
 ) {
   await TestBed.configureTestingModule({
     imports: [SuperAdminBusinessesComponent],
@@ -40,7 +57,11 @@ async function render(
         provide: ToastService,
         useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast }
       },
-      { provide: SupportSessionService, useValue: { start: jest.fn(), ...supportSession } }
+      { provide: SupportSessionService, useValue: { start: jest.fn(), ...supportSession } },
+      {
+        provide: SuperAdminPlanGrantsService,
+        useValue: { get: jest.fn(() => of(noPlanGrant)), set: jest.fn(), end: jest.fn(), ...planGrants }
+      }
     ]
   }).compileComponents();
 
@@ -169,7 +190,7 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
 
   it.each<[SuperAdminBusiness['status'], string[]]>([
     ['Pending', ['Approve', 'Reject']],
-    ['Active', ['View as this business', 'Deactivate']],
+    ['Active', ['View as this business', 'Plan', 'Deactivate']],
     ['Deactivated', ['Reactivate', 'Members']]
   ])('for a %s business, offers %s', async (status, expectedButtons) => {
     const list = jest.fn(() => of([business({ status })]));
@@ -364,5 +385,55 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
 
     expect(start).toHaveBeenCalledWith(9, 'Investigating a reported bug');
     expect(host.textContent).not.toContain('View as Snack Co');
+  });
+
+  /**
+   * Issue #982: the Plan action is offered for a trading business, opens the dedicated dialog, and
+   * the dialog reads that business's own grant - this table carries no plan of its own.
+   */
+  it('opens the plan grant dialog for an active business', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const get = jest.fn(() => of(noPlanGrant));
+    const { fixture, host } = await render({ list }, undefined, undefined, { get });
+
+    buttonWithText(host, 'Plan').click();
+    fixture.detectChanges();
+
+    expect(get).toHaveBeenCalledWith(9);
+    expect(host.textContent).toContain('Plan for Snack Co');
+  });
+
+  it('reports a saved grant and closes the dialog when it is dismissed (issue #982)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const set = jest.fn(() => of({ ...noPlanGrant, hasGrant: true, plan: 'Pro', revision: 1, active: true }));
+    const success = jest.fn();
+    const { fixture, host } = await render({ list }, { success }, undefined, { set });
+
+    buttonWithText(host, 'Plan').click();
+    fixture.detectChanges();
+
+    const reason = host.querySelector('#grant-reason') as HTMLTextAreaElement;
+    reason.value = 'Complimentary pilot';
+    reason.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    buttonWithText(host, 'Save grant').click();
+    fixture.detectChanges();
+
+    expect(set).toHaveBeenCalledWith(9, 'Starter', null, 'Complimentary pilot', 0);
+    expect(success).toHaveBeenCalledWith('The plan grant was saved.');
+
+    buttonWithText(host, 'Cancel').click();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Plan for Snack Co');
+  });
+
+  /** A pending application has no plan to grant yet, so the action is not offered on its row. */
+  it('offers no plan action for a business that is not trading (issue #982)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Pending' })]));
+    const { host } = await render({ list });
+
+    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="plan-grant"]')).toBeNull();
   });
 });

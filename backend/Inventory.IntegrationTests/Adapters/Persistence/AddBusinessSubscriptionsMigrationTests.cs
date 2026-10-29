@@ -107,27 +107,23 @@ public class AddBusinessSubscriptionsMigrationTests
         });
         await db.SaveChangesAsync();
 
-        db.BusinessBillingSubscriptions.Add(Subscription(businessId: 1));
-        await db.SaveChangesAsync();
+        // The two subscription rows and the grants below are inserted with SQL rather than through
+        // the EF model, because the model describes the schema *after* every migration - since issue
+        // #982 that includes a `Revision` column this one's schema does not have, and the claim being
+        // made here is about the indexes this migration created.
+        await ExecuteAsync(connection, SubscriptionSql);
+        await Assert.ThrowsAnyAsync<SqliteException>(() => ExecuteAsync(connection, SubscriptionSql));
 
-        db.BusinessBillingSubscriptions.Add(Subscription(businessId: 1));
-        await Assert.ThrowsAnyAsync<DbUpdateException>(() => db.SaveChangesAsync());
-        db.ChangeTracker.Clear();
-
-        db.BusinessPlanGrants.Add(Grant(businessId: 1, ManualPlanGrantSource.Grandfathered));
-        await db.SaveChangesAsync();
-
-        db.BusinessPlanGrants.Add(Grant(businessId: 1, ManualPlanGrantSource.Grandfathered));
-        await Assert.ThrowsAnyAsync<DbUpdateException>(() => db.SaveChangesAsync());
-        db.ChangeTracker.Clear();
+        await ExecuteAsync(connection, GrantSql(ManualPlanGrantSource.Grandfathered));
+        await Assert.ThrowsAnyAsync<SqliteException>(() =>
+            ExecuteAsync(connection, GrantSql(ManualPlanGrantSource.Grandfathered)));
 
         // Two complimentary grants are legitimate: a business may be given one more than once.
-        db.BusinessPlanGrants.AddRange(
-            Grant(businessId: 1, ManualPlanGrantSource.Complimentary),
-            Grant(businessId: 1, ManualPlanGrantSource.Complimentary));
-        await db.SaveChangesAsync();
+        await ExecuteAsync(connection, GrantSql(ManualPlanGrantSource.Complimentary));
+        await ExecuteAsync(connection, GrantSql(ManualPlanGrantSource.Complimentary));
 
-        Assert.Equal(3, await db.BusinessPlanGrants.CountAsync());
+        Assert.Equal(1, await MigrationSchemaProbe.RowCountAsync(connection, "BusinessBillingSubscriptions"));
+        Assert.Equal(3, await MigrationSchemaProbe.RowCountAsync(connection, "BusinessPlanGrants"));
     }
 
     /// <summary>
@@ -163,23 +159,30 @@ public class AddBusinessSubscriptionsMigrationTests
             StringComparison.OrdinalIgnoreCase);
     }
 
-    private static BusinessBillingSubscription Subscription(int businessId) => new()
-    {
-        BusinessId = businessId,
-        Plan = SubscriptionPlan.Pro,
-        Status = BillingSubscriptionStatus.Active,
-        CurrentPeriodStartUtc = Created,
-        CurrentPeriodEndUtc = Created.AddMonths(1),
-        UpdatedAtUtc = Created,
-    };
+    /// <summary>
+    /// One Pro subscription for business 1, written on this migration's own schema. The enum values
+    /// are read from the enums rather than typed, so renumbering one changes the SQL with it.
+    /// </summary>
+    private static string SubscriptionSql =>
+        $"""
+        INSERT INTO BusinessBillingSubscriptions
+            (BusinessId, Plan, Status, CurrentPeriodStartUtc, CurrentPeriodEndUtc, UpdatedAtUtc)
+            VALUES (1, {(int)SubscriptionPlan.Pro}, {(int)BillingSubscriptionStatus.Active},
+                    '2026-02-10 04:00:00', '2026-03-10 04:00:00', '2026-02-10 04:00:00');
+        """;
 
-    private static BusinessPlanGrant Grant(int businessId, ManualPlanGrantSource source) => new()
+    private static string GrantSql(ManualPlanGrantSource source) =>
+        $"""
+        INSERT INTO BusinessPlanGrants
+            (BusinessId, Plan, Source, StartsAtUtc, EndsAtUtc, Reason, GrantedAtUtc)
+            VALUES (1, {(int)SubscriptionPlan.Pro}, {(int)source},
+                    '2026-02-10 04:00:00', NULL, NULL, '2026-02-10 04:00:00');
+        """;
+
+    private static async Task ExecuteAsync(SqliteConnection connection, string sql)
     {
-        BusinessId = businessId,
-        Plan = SubscriptionPlan.Pro,
-        Source = source,
-        StartsAtUtc = Created,
-        EndsAtUtc = null,
-        GrantedAtUtc = Created,
-    };
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
 }

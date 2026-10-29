@@ -306,6 +306,11 @@ namespace Inventory.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("Revision")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0);
+
                     b.Property<int>("Source")
                         .HasColumnType("INTEGER");
 
@@ -321,6 +326,57 @@ namespace Inventory.Infrastructure.Migrations
                         .HasFilter("\"Source\" = 10");
 
                     b.ToTable("BusinessPlanGrants", (string)null);
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessPlanGrantAudit", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ActorDirectoryTenantId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorObjectId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Change")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("EndsAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("FromPlan")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ToPlan")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "OccurredAtUtc");
+
+                    b.ToTable("BusinessPlanGrantAudits");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Category", b =>
