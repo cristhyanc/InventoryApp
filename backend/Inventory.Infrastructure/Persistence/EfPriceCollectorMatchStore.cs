@@ -146,8 +146,11 @@ public sealed class EfPriceCollectorMatchStore : IPriceCollectorMatchStore
             .ConfigureAwait(false))
             .ToHashSet(StringComparer.Ordinal);
 
+        // Tracked, deliberately: a proposal whose pair already has a suggestion still waiting for a
+        // reviewer reuses that row rather than writing a second one, and records this run's decision
+        // on it by stamping the run label - which is the only record there is of what a run decided
+        // about a key. Ordered by the row key, so the oldest suggestion of a pair is the one reused.
         var suggestions = await _db.ProductMatchSuggestions
-            .AsNoTracking()
             .Where(suggestion => citedKeys.Contains(suggestion.WaitingKey))
             .OrderBy(suggestion => suggestion.Id)
             .ToListAsync(cancellationToken)
@@ -368,10 +371,18 @@ public sealed class EfPriceCollectorMatchStore : IPriceCollectorMatchStore
     /// Keeps one proposal the backend could not call obvious as a tentative match for the Super Admin
     /// (#928), or reports why it was not kept at all.
     ///
-    /// <para>Two refusals store nothing (<see cref="AutomaticProductMatchPolicy.StoresTentativeMatch"/>)
-    /// and a proposal whose pair - or whose suggested description - is already recorded stores nothing
-    /// either: the existing row is reported instead, so a reviewer is not handed the same decision once
-    /// per run.</para>
+    /// <para>Two refusals store nothing (<see cref="AutomaticProductMatchPolicy.StoresTentativeMatch"/>).
+    /// A proposal whose pair - or whose suggested description - a reviewer is <em>already</em> looking
+    /// at writes no second row either: that row is reused, so a reviewer is not handed the same
+    /// decision once per run.</para>
+    ///
+    /// <para><strong>A reused row still records this run's decision.</strong> It is stamped with this
+    /// run's label, because the suggestion row is the only record there is of what a run decided about
+    /// a key: without the stamp the next request of the same run would find no decision for the key
+    /// and would decide it again - against a proposal whose confidence, or whose proposed master
+    /// product, may have changed in between. Only the label and the instant are stamped; the evidence
+    /// the reviewer is to act on stays as the row first recorded it. So every decided proposal, kept
+    /// or applied, leaves exactly one suggestion carrying this run's label for its key.</para>
     /// </summary>
     private DecidedProposal Keep(
         MatchContext context,
@@ -384,15 +395,19 @@ public sealed class EfPriceCollectorMatchStore : IPriceCollectorMatchStore
             return Rejected(proposal.WaitingKey, refusal);
         }
 
-        if (context.ExistingSuggestionIdFor(proposal) is { } existing)
+        if (context.ReusableSuggestionFor(proposal) is { } existing)
         {
+            existing.CollectorRun = context.RunLabel;
+            existing.UpdatedAtUtc = asOfUtc;
+            context.RecordDecision(existing);
+
             return new DecidedProposal(
                 proposal.WaitingKey,
                 ProductMatchProposalOutcome.Tentative,
                 AutomaticProductMatchPolicy.AlreadySuggestedReason,
                 proposal.MasterProductId,
                 Suggestion: null,
-                existing);
+                existing.Id);
         }
 
         var suggestion = AddSuggestion(
@@ -615,28 +630,46 @@ public sealed class EfPriceCollectorMatchStore : IPriceCollectorMatchStore
                 .ToHashSet();
 
         /// <summary>
-        /// The suggestion already recording this proposal, or <see langword="null"/> when none does:
-        /// the same <c>(key, master product)</c> pair, or the same suggested description under the same
-        /// key.
+        /// The suggestion this proposal is to be kept as rather than written again, or
+        /// <see langword="null"/> when there is none: a suggestion of the same
+        /// <c>(key, master product)</c> pair, or of the same suggested description under the same key,
+        /// that is <em>still waiting for a reviewer's decision</em>.
+        ///
+        /// <para>A pair whose suggestions have all been decided is not reused, and that is the same
+        /// rule rather than an exception to it: the row reused here is stamped with the run that
+        /// decided the key, and a row saying an <em>earlier</em> run applied the match - or that a
+        /// person accepted it - must not be restamped as this run's tentative decision. A decided row
+        /// is also not the duplicate the reuse exists to prevent: what a reviewer must not be handed
+        /// twice is one proposal still waiting for them.</para>
         /// </summary>
-        public long? ExistingSuggestionIdFor(ValidatedProposal proposal)
+        public ProductMatchSuggestion? ReusableSuggestionFor(ValidatedProposal proposal)
         {
             var descriptionKey = proposal.SuggestedDescriptionKey;
 
             return _suggestions
                 .Where(suggestion =>
-                    string.Equals(suggestion.WaitingKey, proposal.WaitingKey, StringComparison.Ordinal))
-                .Where(suggestion => proposal.MasterProductId is { } proposed
+                    string.Equals(suggestion.WaitingKey, proposal.WaitingKey, StringComparison.Ordinal)
+                    && suggestion.Status == ProductMatchSuggestionStatus.Tentative)
+                .FirstOrDefault(suggestion => proposal.MasterProductId is { } proposed
                     ? suggestion.MasterProductId == proposed
-                    : suggestion.MasterProductId is null && DescribesSame(suggestion, descriptionKey))
-                .Select(suggestion => (long?)suggestion.Id)
-                .FirstOrDefault();
+                    : suggestion.MasterProductId is null && DescribesSame(suggestion, descriptionKey));
         }
 
         /// <summary>Remembers a suggestion this batch wrote, so a later proposal of it sees it too.</summary>
         public void Record(ProductMatchSuggestion suggestion)
         {
             _suggestions.Add(suggestion);
+            RecordDecision(suggestion);
+        }
+
+        /// <summary>
+        /// Remembers the suggestion that records what this run decided about one key, so a later
+        /// request of the same run is answered with that decision instead of deciding the key again.
+        /// The row itself carries this run's label, which is how the same answer survives the request
+        /// that recorded it.
+        /// </summary>
+        public void RecordDecision(ProductMatchSuggestion suggestion)
+        {
             _decidedThisRun[suggestion.WaitingKey] = suggestion;
         }
 

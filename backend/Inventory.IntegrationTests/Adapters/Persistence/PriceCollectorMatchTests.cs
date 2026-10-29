@@ -402,7 +402,10 @@ public class PriceCollectorMatchTests
 
     /// <summary>
     /// A pair that already has a suggestion gets no second row: a reviewer looking at one decision
-    /// must not be handed the same evidence once per run. The existing row is reported instead.
+    /// must not be handed the same evidence once per run. The existing row is reported instead - and
+    /// it is stamped with the run that decided the key, because that row is the only record there is
+    /// of what this run decided (see the retry regressions below). The matcher's own evidence, the
+    /// reason and the confidence the row was first stored with, is left exactly as it was.
     /// </summary>
     [Fact]
     public async Task A_pair_that_already_has_a_suggestion_is_not_suggested_twice()
@@ -428,8 +431,17 @@ public class PriceCollectorMatchTests
         Assert.Equal(AutomaticProductMatchPolicy.AlreadySuggestedReason, tentative.Reason);
 
         var suggestion = Assert.Single(await fixture.AllSuggestionsAsync());
-        Assert.Equal("fixture", suggestion.CollectorRun);
+        Assert.Equal(ProductMatchSuggestionPolicy.CollectorRunFor(runId), suggestion.CollectorRun);
+        Assert.Equal(Now, suggestion.UpdatedAtUtc);
         Assert.Equal(suggestion.Id, tentative.SuggestionId);
+
+        // Reused, not rewritten: the status, the pair and the evidence the row already held are the
+        // reviewer's, and the stamp above is the run's own record of having decided the key.
+        Assert.Equal(ProductMatchSuggestionStatus.Tentative, suggestion.Status);
+        Assert.Equal(cola, suggestion.MasterProductId);
+        Assert.Equal("Seeded by the fixture.", suggestion.Reason);
+        Assert.Equal(0.9m, suggestion.Confidence);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, suggestion.CreatedAtUtc);
     }
 
     #endregion
@@ -659,6 +671,165 @@ public class PriceCollectorMatchTests
         Assert.Equal(AutomaticProductMatchPolicy.AlreadyDecidedInThisRunReason, second.Reason);
         Assert.Equal(first.SuggestionId, second.SuggestionId);
         Assert.Single(await fixture.AllSuggestionsAsync());
+    }
+
+    /// <summary>
+    /// A proposal answered with a suggestion an <em>earlier</em> run left is just as idempotent: the
+    /// reused row records this run's decision, so a second request of the same run and key is
+    /// answered with the outcome that was recorded even though its confidence is now high enough to
+    /// have been applied. Without that record the key would be decided afresh and the match applied,
+    /// which is two different answers to one run and one key.
+    /// </summary>
+    [Fact]
+    public async Task Retrying_a_reused_suggestion_at_a_higher_confidence_keeps_the_recorded_outcome()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.SeedWaitingListingAsync(WaitingKey, "SKU-COLA-30");
+        await fixture.SeedMatchSuggestionAsync(
+            WaitingKey,
+            cola,
+            ProductMatchSuggestionStatus.Tentative);
+
+        var runId = await fixture.SeedRunAsync(RunStarted, Expires);
+        await fixture.SeedWorkItemAsync(runId, masterProductId: null, WaitingKey);
+
+        var first = Assert.Single(
+            (await SubmitAsync(
+                fixture,
+                runId,
+                Proposal(WaitingKey, cola, ProductMatchConfidence.Low)))!.Tentative);
+
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadySuggestedReason, first.Reason);
+
+        // The same run and key again, this time at the confidence that would otherwise have applied
+        // the match - the proposal every other condition of "obvious" agrees with.
+        var receipt = await SubmitAsync(fixture, runId, Proposal(WaitingKey, cola));
+
+        Assert.Empty(receipt!.AutoMatched);
+        var repeat = Assert.Single(receipt.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadyDecidedInThisRunReason, repeat.Reason);
+        Assert.Equal(cola, repeat.MasterProductId);
+        Assert.Equal(first.SuggestionId, repeat.SuggestionId);
+
+        // Still one suggestion, still tentative, and nothing a match would have changed has moved.
+        var suggestion = Assert.Single(await fixture.AllSuggestionsAsync());
+        Assert.Equal(ProductMatchSuggestionStatus.Tentative, suggestion.Status);
+
+        var mapping = Assert.Single(await fixture.AllTrackingsAsync());
+        Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
+        Assert.Null(mapping.MasterProductId);
+        Assert.Null(mapping.MatchSource);
+
+        var listing = Assert.Single(await fixture.AllListingsAsync());
+        Assert.Null(listing.MasterProductId);
+        Assert.Equal(WaitingKey, listing.WaitingKey);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, listing.UpdatedAtUtc);
+    }
+
+    /// <summary>
+    /// And the retry cannot change its mind about <em>which</em> master product the key is either: a
+    /// second request of the same run naming another master product - the one that is in fact the
+    /// single suitable candidate - is answered with the decision that was recorded, not with the
+    /// match it would have applied had the key never been decided.
+    /// </summary>
+    [Fact]
+    public async Task Retrying_a_reused_suggestion_with_another_master_product_keeps_the_recorded_outcome()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var pepsi = await fixture.SeedMasterProductAsync("Pepsi", "Max");
+
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.SeedWaitingListingAsync(WaitingKey, "SKU-COLA-30");
+        await fixture.SeedMatchSuggestionAsync(
+            WaitingKey,
+            pepsi,
+            ProductMatchSuggestionStatus.Tentative);
+
+        var runId = await fixture.SeedRunAsync(RunStarted, Expires);
+        await fixture.SeedWorkItemAsync(runId, masterProductId: null, WaitingKey);
+
+        // Answered with the suggestion the earlier run left for that pair: the proposed master is
+        // not the suitable one, so it is kept rather than applied.
+        var first = Assert.Single((await SubmitAsync(fixture, runId, Proposal(WaitingKey, pepsi)))!.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadySuggestedReason, first.Reason);
+        Assert.Equal(pepsi, first.MasterProductId);
+
+        var receipt = await SubmitAsync(fixture, runId, Proposal(WaitingKey, cola));
+
+        Assert.Empty(receipt!.AutoMatched);
+        var repeat = Assert.Single(receipt.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadyDecidedInThisRunReason, repeat.Reason);
+        Assert.Equal(pepsi, repeat.MasterProductId);
+        Assert.Equal(first.SuggestionId, repeat.SuggestionId);
+
+        var suggestion = Assert.Single(await fixture.AllSuggestionsAsync());
+        Assert.Equal(pepsi, suggestion.MasterProductId);
+        Assert.Equal(ProductMatchSuggestionStatus.Tentative, suggestion.Status);
+
+        var mapping = Assert.Single(await fixture.AllTrackingsAsync());
+        Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
+        Assert.Null(mapping.MasterProductId);
+        Assert.Null(mapping.MatchSource);
+
+        var listing = Assert.Single(await fixture.AllListingsAsync());
+        Assert.Null(listing.MasterProductId);
+        Assert.Equal(WaitingKey, listing.WaitingKey);
+    }
+
+    /// <summary>
+    /// A pair whose only suggestion has already been <em>decided</em> - applied by an earlier run,
+    /// here - is not the one the reuse above is about: this run records its own tentative suggestion
+    /// rather than restamping somebody else's decision as its own, the decided row is left exactly as
+    /// it was, and the key is just as settled for the rest of the run.
+    /// </summary>
+    [Fact]
+    public async Task A_pair_whose_suggestion_was_already_decided_gets_this_runs_own_suggestion()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.SeedMatchSuggestionAsync(
+            WaitingKey,
+            cola,
+            ProductMatchSuggestionStatus.AutoApplied);
+
+        var runId = await fixture.SeedRunAsync(RunStarted, Expires);
+        await fixture.SeedWorkItemAsync(runId, masterProductId: null, WaitingKey);
+
+        var first = Assert.Single(
+            (await SubmitAsync(
+                fixture,
+                runId,
+                Proposal(WaitingKey, cola, ProductMatchConfidence.Medium)))!.Tentative);
+
+        Assert.Equal(AutomaticProductMatchPolicy.ConfidenceBelowHighReason, first.Reason);
+
+        var suggestions = await fixture.AllSuggestionsAsync();
+        Assert.Equal(2, suggestions.Count);
+
+        var applied = Assert.Single(
+            suggestions.Where(s => s.Status == ProductMatchSuggestionStatus.AutoApplied));
+        Assert.Equal("fixture", applied.CollectorRun);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, applied.UpdatedAtUtc);
+
+        var recorded = Assert.Single(
+            suggestions.Where(s => s.Status == ProductMatchSuggestionStatus.Tentative));
+        Assert.Equal(ProductMatchSuggestionPolicy.CollectorRunFor(runId), recorded.CollectorRun);
+        Assert.Equal(recorded.Id, first.SuggestionId);
+
+        // And that row is this run's record of the key, so the retry is answered rather than applied.
+        var repeat = Assert.Single((await SubmitAsync(fixture, runId, Proposal(WaitingKey, cola)))!.Tentative);
+        Assert.Equal(AutomaticProductMatchPolicy.AlreadyDecidedInThisRunReason, repeat.Reason);
+        Assert.Equal(2, (await fixture.AllSuggestionsAsync()).Count);
+
+        var mapping = Assert.Single(await fixture.AllTrackingsAsync());
+        Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
+        Assert.Null(mapping.MasterProductId);
     }
 
     /// <summary>
