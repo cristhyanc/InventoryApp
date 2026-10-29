@@ -202,4 +202,17 @@
       }
     </div>
   </div>
+
+  <!--
+    The keep-open / complete question, composed in as its own feature component (issue #974) rather
+    than grown into this page: it is a distinct workflow with its own modal lifecycle, and this page
+    stays composition. It renders nothing until the server's projection says a balance really would
+    be left undelivered.
+  -->
+  <app-supplier-order-completion-dialog
+    [choice]="completionChoice"
+    (keepOpen)="keepSupplierOrderOpen()"
+    (complete)="completeSupplierOrder()"
+    (cancelled)="cancelCompletionChoice()"
+  ></app-supplier-order-completion-dialog>
 </div>
