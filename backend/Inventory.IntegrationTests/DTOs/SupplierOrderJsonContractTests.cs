@@ -98,6 +98,7 @@ public class SupplierOrderJsonContractTests
             Status = (SupplierOrderStatus)record.Status,
             CreatedAt = record.CreatedAt,
             UpdatedAt = record.UpdatedAt,
+            CompletedWithUndeliveredAt = record.CompletedWithUndeliveredAt,
         };
 
         order.Lines = record.Lines.Select(line => new SupplierOrderLine
@@ -138,6 +139,7 @@ public class SupplierOrderJsonContractTests
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived)]
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Received)]
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Cancelled)]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.ClosedPartiallyDelivered)]
     public void Response_serializes_byte_for_byte_like_the_entity_it_replaced(
         Inventory.Domain.SupplierOrders.SupplierOrderStatus status)
     {
@@ -179,7 +181,7 @@ public class SupplierOrderJsonContractTests
             new[]
             {
                 "id", "supplierId", "supplier", "orderDate", "expectedDate", "reference", "notes",
-                "status", "createdAt", "updatedAt", "lines",
+                "status", "createdAt", "updatedAt", "completedWithUndeliveredAt", "lines",
             },
             document.RootElement.EnumerateObject().Select(property => property.Name));
 
@@ -191,7 +193,7 @@ public class SupplierOrderJsonContractTests
             new[]
             {
                 "id", "supplierOrderId", "productId", "product", "quantityOrdered", "quantityReceived",
-                "unitPrice", "notes", "outstandingQuantity",
+                "unitPrice", "notes", "outstandingQuantity", "undeliveredQuantity",
             },
             document.RootElement.GetProperty("lines")[0].EnumerateObject().Select(property => property.Name));
     }
@@ -241,6 +243,7 @@ public class SupplierOrderJsonContractTests
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived, 1)]
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Received, 2)]
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Cancelled, 3)]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.ClosedPartiallyDelivered, 4)]
     public void Response_serializes_the_status_as_its_persisted_numeric_value(
         Inventory.Domain.SupplierOrders.SupplierOrderStatus status, int expected)
     {
@@ -262,6 +265,7 @@ public class SupplierOrderJsonContractTests
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Received, 24, 24, 0)]
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Received, 24, 30, 0)]
     [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Cancelled, 24, 0, 0)]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.ClosedPartiallyDelivered, 24, 16, 0)]
     public void Response_derives_the_outstanding_quantity_the_entity_computed(
         Inventory.Domain.SupplierOrders.SupplierOrderStatus status,
         decimal quantityOrdered,
@@ -275,6 +279,71 @@ public class SupplierOrderJsonContractTests
         using var document = JsonDocument.Parse(json);
         Assert.Equal(expected, document.RootElement.GetProperty("lines")[0].GetProperty("outstandingQuantity").GetDecimal());
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), json);
+    }
+
+    /// <summary>
+    /// The undelivered quantity issue #974 added is the one authoritative policy's answer, and it is
+    /// a different question from the outstanding quantity beside it: an open order owes its
+    /// remainder, a completed one never will receive it. A client can read both without either
+    /// double-counting or losing the balance.
+    /// </summary>
+    [Theory]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Ordered, 24, 0, 24, 0)]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived, 24, 16, 8, 0)]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Received, 24, 24, 0, 0)]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Cancelled, 24, 6, 0, 0)]
+    [InlineData(Inventory.Domain.SupplierOrders.SupplierOrderStatus.ClosedPartiallyDelivered, 24, 16, 0, 8)]
+    public void Response_reports_what_never_arrived_separately_from_what_still_might(
+        Inventory.Domain.SupplierOrders.SupplierOrderStatus status,
+        decimal quantityOrdered,
+        decimal quantityReceived,
+        decimal expectedOutstanding,
+        decimal expectedUndelivered)
+    {
+        var json = JsonSerializer.Serialize(
+            SupplierOrderResponseMapper.ToResponse(RecordWith(status, quantityOrdered, quantityReceived), Visible),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        var line = document.RootElement.GetProperty("lines")[0];
+        Assert.Equal(expectedOutstanding, line.GetProperty("outstandingQuantity").GetDecimal());
+        Assert.Equal(expectedUndelivered, line.GetProperty("undeliveredQuantity").GetDecimal());
+        // The ordered quantity and the actual receipts stay published, so the balance is inspectable.
+        Assert.Equal(quantityOrdered, line.GetProperty("quantityOrdered").GetDecimal());
+        Assert.Equal(quantityReceived, line.GetProperty("quantityReceived").GetDecimal());
+    }
+
+    /// <summary>
+    /// The completion instant is published so the order list and detail can say when the decision
+    /// was made; the actor who made it is stored with the order and never serialised, because an
+    /// Entra <c>(tid, oid)</c> pair identifies a person.
+    /// </summary>
+    [Fact]
+    public void Response_publishes_the_completion_instant_and_never_the_actor()
+    {
+        var completedAt = new DateTime(2026, 9, 12, 3, 30, 0, DateTimeKind.Utc);
+        var record = RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.ClosedPartiallyDelivered, 24m, 16m)
+            with
+        { CompletedWithUndeliveredAt = completedAt };
+
+        var json = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record, Visible), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(completedAt, document.RootElement.GetProperty("completedWithUndeliveredAt").GetDateTime());
+        Assert.DoesNotContain("completedBy", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("objectId", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("directoryTenantId", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Response_sends_a_null_completion_instant_for_an_order_nobody_completed()
+    {
+        var json = JsonSerializer.Serialize(
+            SupplierOrderResponseMapper.ToResponse(
+                RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived), Visible),
+            WebDefaults);
+
+        Assert.Contains("\"completedWithUndeliveredAt\":null", json, StringComparison.Ordinal);
     }
 
     [Fact]

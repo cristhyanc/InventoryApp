@@ -35,7 +35,7 @@ public class PurchasesControllerTests
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, storage),
-            new UploadPurchase(store, storage, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.Upload(store, storage, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
             new UpdatePurchase(store),
             new DeletePurchase(store, storage),
             new ComputePurchaseTotalValidation(),
@@ -164,6 +164,7 @@ public class PurchasesControllerTests
                 It.IsAny<PurchaseFields>(),
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
                 It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
@@ -220,6 +221,7 @@ public class PurchasesControllerTests
                 It.IsAny<PurchaseFields>(),
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
                 It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Record(totalAmount: 30m));
         var documents = new Mock<IDocumentStorage>();
@@ -238,6 +240,59 @@ public class PurchasesControllerTests
         documents.Verify(
             d => d.SaveAsync(DocumentCategory.PurchaseDocument, It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    /// <summary>
+    /// The two completion form fields the purchase form may carry (issue #974) become one request,
+    /// and only when both are present: an order id with no fingerprint is a decision nothing was
+    /// shown for, so the controller sends none at all rather than one the save would have to guess
+    /// at. Nothing else about the order travels inwards - no quantity, no receipt total, no status.
+    /// </summary>
+    [Theory]
+    [InlineData(9, "fingerprint-from-the-preview", true)]
+    [InlineData(null, "fingerprint-from-the-preview", false)]
+    [InlineData(9, null, false)]
+    [InlineData(9, "   ", false)]
+    [InlineData(null, null, false)]
+    public async Task Upload_forwards_the_completion_choice_only_when_both_fields_are_present(
+        int? supplierOrderId, string? fingerprint, bool expectDecision)
+    {
+        var store = new Mock<IPurchaseStore>();
+        store.Setup(s => s.SupplierExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        store.Setup(s => s.AllProductsExistAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        store.Setup(s => s.FindConflictingCostTransitionBaselineAsync(
+                It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((long, string?, DateTime)?)null);
+        Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? captured = null;
+        store.Setup(s => s.CreateAsync(
+                It.IsAny<PurchaseFields>(),
+                It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((
+                PurchaseFields _,
+                IReadOnlyList<PurchaseItemInput> _,
+                PurchaseFileMetadata _,
+                Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? decision,
+                CancellationToken _) => captured = decision)
+            .ReturnsAsync(Record(totalAmount: 30m));
+
+        await CreateController(store.Object).Upload(
+            CreateFile("scan.jpg"), "Weekly restock", null, 30m, null, null, null, null, null, 4,
+            """[{"productId":3,"quantity":24,"unitCost":1.15}]""",
+            supplierOrderId,
+            fingerprint);
+
+        if (!expectDecision)
+        {
+            Assert.Null(captured);
+            return;
+        }
+
+        Assert.NotNull(captured);
+        Assert.Equal((9, "fingerprint-from-the-preview"), (captured!.SupplierOrderId, captured.DecisionFingerprint));
     }
 
     [Fact]
@@ -343,7 +398,9 @@ public class PurchasesControllerTests
 
     private static Task<ActionResult<PurchaseResponseDto>> UploadThrough(
         PurchasesController controller, IFormFile file, string? items = null) =>
-        controller.Upload(file, "Weekly restock", null, 30m, 5m, null, 2m, null, null, 4, items);
+        controller.Upload(
+            file, "Weekly restock", null, 30m, 5m, null, 2m, null, null, 4, items,
+            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
 
     private static IFormFile CreateFile(string fileName, byte[]? bytes = null)
     {

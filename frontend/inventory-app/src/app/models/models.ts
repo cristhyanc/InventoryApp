@@ -619,13 +619,37 @@ export interface ProductUpdateDto {
   isActive: boolean;
 }
 
+/**
+ * A supplier order's fulfillment state, as the API publishes it. The numbers are the persisted
+ * ones, so a reordered member would be a breaking contract change rather than a refactor.
+ */
+export enum SupplierOrderStatus {
+  Ordered = 0,
+  PartiallyReceived = 1,
+  Received = 2,
+  Cancelled = 3,
+  /**
+   * Explicitly completed with part of the order never delivered (issue #974). Neither a
+   * cancellation - goods really were delivered and are recorded - nor a full receipt.
+   */
+  ClosedPartiallyDelivered = 4
+}
+
 export interface SupplierOrderLine {
   id: number;
   productId: number;
   product?: Product | null;
   quantityOrdered: number;
   quantityReceived: number;
+  /** How much of this line is still expected to arrive; `0` once the order is closed. */
   outstandingQuantity: number;
+  /**
+   * How much of this line was ordered and will never be delivered (issue #974), from the server's
+   * one authoritative policy. `0` on every order that was not explicitly completed with an
+   * undelivered balance, so this and {@link outstandingQuantity} are never both the same figure.
+   * Absent from an older response.
+   */
+  undeliveredQuantity?: number;
   unitPrice?: number | null;
   notes?: string | null;
 }
@@ -639,7 +663,47 @@ export interface SupplierOrder {
   reference?: string | null;
   notes?: string | null;
   status: number;
+  /**
+   * When an operator decided no more of this order would arrive (issue #974); `null` for every
+   * order carrying no such decision. Who decided is deliberately not published.
+   */
+  completedWithUndeliveredAt?: string | null;
   lines: SupplierOrderLine[];
+}
+
+/** One line of the purchase being entered, as the completion preview is asked about it (issue #974). */
+export interface SupplierOrderCompletionPreviewRequest {
+  supplierId?: number | null;
+  purchaseDate?: string | null;
+  lines: Array<{ productId: number; quantity: number }>;
+}
+
+/**
+ * What a supplier order would still be owed once the purchase on the form is applied (issue #974),
+ * with the fingerprint the save compares its own authoritative read against.
+ *
+ * Every quantity here is the server's: the allocation and the remaining balance are its own
+ * authoritative rules. The purchase form formats them and calculates nothing.
+ */
+export interface SupplierOrderCompletionPreview {
+  supplierOrderId: number;
+  status: number;
+  eligibleForCompletion: boolean;
+  hasOutstandingBalance: boolean;
+  decisionFingerprint: string;
+  outstandingLines: SupplierOrderOutstandingLine[];
+}
+
+/** One product the order would still be owed, with the quantity and the unit it was ordered in. */
+export interface SupplierOrderOutstandingLine {
+  supplierOrderLineId: number;
+  productId: number;
+  productName: string;
+  unit?: string | null;
+  quantityOrdered: number;
+  quantityAlreadyReceived: number;
+  quantityOnThisPurchase: number;
+  outstandingQuantity: number;
 }
 
 export interface SupplierOrderCreateDto {

@@ -187,6 +187,8 @@ describe('SupplierOrdersComponent actions', () => {
     expect(component.orderStatus(1)).toBe('Partially received');
     expect(component.orderStatus(2)).toBe('Received');
     expect(component.orderStatus(3)).toBe('Cancelled');
+    // Issue #974: neither a cancellation nor a full receipt, and labelled as neither.
+    expect(component.orderStatus(4)).toBe('Completed — partially delivered');
     expect(component.orderStatus(99)).toBe('Unknown');
   });
 });
@@ -261,11 +263,49 @@ describe('SupplierOrdersComponent rendered structure', () => {
     expect(Array.from(host.querySelectorAll('button')).some((b) => b.textContent?.trim() === 'Cancel')).toBe(true);
   });
 
-  it('hides both actions for a status this page never receives from the active-orders endpoint (defensive)', async () => {
-    const { host } = await render(jest.fn(() => of([order({ status: 2 })])));
+  it.each([[2], [3], [4]])(
+    'hides both actions for closed status %i, which this page never receives from the active-orders endpoint (defensive)',
+    async (status: number) => {
+      const { host } = await render(jest.fn(() => of([order({ status })])));
 
-    expect(Array.from(host.querySelectorAll('button')).some((b) => b.textContent?.includes('Receive / Create Purchase'))).toBe(false);
-    expect(Array.from(host.querySelectorAll('button')).some((b) => b.textContent?.trim() === 'Cancel')).toBe(false);
+      expect(Array.from(host.querySelectorAll('button')).some((b) => b.textContent?.includes('Receive / Create Purchase'))).toBe(false);
+      expect(Array.from(host.querySelectorAll('button')).some((b) => b.textContent?.trim() === 'Cancel')).toBe(false);
+    });
+
+  /**
+   * An order completed with an undelivered balance (issue #974) reads as what it is: it is labelled
+   * as a completion rather than a cancellation or a full receipt, and the quantity that never
+   * arrived is shown beside the receipts, not folded into them.
+   */
+  it('shows a completed order as partially delivered with the quantity that never arrived', async () => {
+    const { host } = await render(
+      jest.fn(() =>
+        of([
+          order({
+            status: 4,
+            completedWithUndeliveredAt: '2026-09-12T03:30:00Z',
+            lines: [
+              {
+                id: 1,
+                productId: 5,
+                product: { id: 5, name: 'Coke' } as SupplierOrder['lines'][number]['product'],
+                quantityOrdered: 24,
+                quantityReceived: 16,
+                outstandingQuantity: 0,
+                undeliveredQuantity: 8,
+                unitPrice: 2
+              }
+            ]
+          })
+        ])
+      )
+    );
+
+    expect(host.textContent).toContain('Completed — partially delivered');
+    const row = host.querySelector('[data-testid="supplier-order-line"]') as HTMLElement;
+    expect(row.textContent).toContain('24');
+    expect(row.textContent).toContain('16');
+    expect(row.textContent).toContain('8');
   });
 
   it('navigates to the purchase workflow when Receive is clicked', async () => {

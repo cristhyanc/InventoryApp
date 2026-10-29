@@ -109,6 +109,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
                 new PurchaseFields("Restock", null, null, null, null, new DateTime(2026, 1, 3), 1),
                 [new PurchaseItemInput(1, 12m, 1m)],
                 FileMetadata(),
+                supplierOrderCompletion: null,
                 CancellationToken.None);
         }
 
@@ -155,6 +156,7 @@ public sealed class EfPurchaseStoreTests : IDisposable
                 new PurchaseFields("Box of 300", null, enteredLineTotal, null, null, DateTime.UtcNow, null),
                 [new PurchaseItemInput(1, quantity, submittedUnitCost)],
                 FileMetadata(),
+                supplierOrderCompletion: null,
                 CancellationToken.None);
         }
 

@@ -353,8 +353,10 @@ public class PublishedResponseSchemaContractTests
 
         Assert.Equal("integer", status.Type);
         Assert.Equal("int32", status.Format);
+        // Issue #974 added 4 (ClosedPartiallyDelivered) to the end. A client reads these numbers, so
+        // an appended member is additive and a reordered or renumbered one would be breaking.
         Assert.Equal(
-            new[] { 0, 1, 2, 3 },
+            new[] { 0, 1, 2, 3, 4 },
             status.Enum.OfType<Microsoft.OpenApi.Any.OpenApiInteger>().Select(value => value.Value).ToArray());
         Assert.Equal(
             "SupplierOrderStatus",
@@ -557,6 +559,7 @@ public class PublishedResponseSchemaContractTests
             "status": { "$ref": "#/components/schemas/SupplierOrderStatus" },
             "createdAt": { "type": "string", "format": "date-time" },
             "updatedAt": { "type": "string", "format": "date-time" },
+            "completedWithUndeliveredAt": { "type": "string", "format": "date-time", "nullable": true },
             "lines": {
               "type": "array",
               "items": { "$ref": "#/components/schemas/SupplierOrderLine" },
@@ -578,7 +581,8 @@ public class PublishedResponseSchemaContractTests
             "quantityReceived": { "type": "number", "format": "double" },
             "unitPrice": { "type": "number", "format": "double", "nullable": true },
             "notes": { "type": "string", "nullable": true },
-            "outstandingQuantity": { "type": "number", "format": "double", "readOnly": true }
+            "outstandingQuantity": { "type": "number", "format": "double", "readOnly": true },
+            "undeliveredQuantity": { "type": "number", "format": "double", "readOnly": true }
           },
           "additionalProperties": false
         }

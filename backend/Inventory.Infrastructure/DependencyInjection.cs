@@ -279,6 +279,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxSaleTimestampRepairStore, EfNayaxSaleTimestampRepairStore>();
         services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
         services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
+        services.AddScoped<ISupplierOrderCompletionStore, EfSupplierOrderCompletionStore>();
         services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
         services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
         services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();

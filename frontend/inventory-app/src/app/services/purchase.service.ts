@@ -22,6 +22,17 @@ export interface PurchaseUploadPayload {
   purchaseDate?: string | null;
   supplierId?: number | null;
   items?: PurchaseItemPayload[];
+  /**
+   * The supplier order the operator chose to complete with whatever stays undelivered (issue
+   * #974), and the fingerprint the server's own preview issued for it. Both are sent only
+   * together: an id with no fingerprint is a decision nothing was shown for, and the save refuses
+   * it. Omitting both is "keep the order open", which is the save that has always happened.
+   *
+   * Nothing else about the order is ever sent - no quantity, no receipt total, no status: the save
+   * reads all of those from the order's own rows.
+   */
+  completeSupplierOrderId?: number | null;
+  completeSupplierOrderFingerprint?: string | null;
 }
 
 export interface PurchaseItemPayload {
@@ -108,6 +119,12 @@ export class PurchaseService {
     formData.append('file', payload.file);
     this.appendPurchaseFormFields(formData, payload);
     formData.append('items', JSON.stringify(payload.items ?? []));
+    // Only on a create, and only as a pair (issue #974). An edit never carries a completion choice:
+    // closing an order happens with the purchase that records its final delivery, once.
+    if (payload.completeSupplierOrderId != null && payload.completeSupplierOrderFingerprint) {
+      formData.append('completeSupplierOrderId', String(payload.completeSupplierOrderId));
+      formData.append('completeSupplierOrderFingerprint', payload.completeSupplierOrderFingerprint);
+    }
 
     return this.http.post<PurchaseResponse>(this.baseUrl, formData).pipe(
       map(response => {

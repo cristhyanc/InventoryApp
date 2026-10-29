@@ -156,6 +156,10 @@ public class SupportSessionRequestApiTests
     // the central refusal is what stops it, not an eligibility check it might have passed.
     [InlineData("Inventory.Operate", "DELETE", "/api/local-machines/999999")]
     [InlineData("Purchasing.Operate", "POST", "/api/supplierorders")]
+    // The supplier-order completion preview of issue #974, which declares no rule of its own and
+    // changes nothing: it is a POST because the purchase being projected is a body, so the method
+    // rule refuses it exactly as it refuses the cheapest-supplier summary.
+    [InlineData("Purchasing.Operate", "POST", "/api/supplierorders/999999/completion-preview")]
     // The supplier "Not used" switch of issue #934, which declares no rule of its own: the method
     // rule refuses it under the capability the session does grant, so a supporter cannot take a
     // business's supplier out of its pickers while looking at it.

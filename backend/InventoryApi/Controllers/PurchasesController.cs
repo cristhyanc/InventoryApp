@@ -1,5 +1,6 @@
 using Inventory.Application.Access;
 using Inventory.Application.Purchases;
+using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using InventoryApi.Adapters.Mapping;
@@ -100,6 +101,7 @@ public class PurchasesController : ControllerBase
 
     // multipart/form-data: file + title + notes + totalAmount + deliveryCost + deliveryGstClassification
     // + packageCost + packageGstClassification + purchaseDate + supplierId + items
+    // + completeSupplierOrderId + completeSupplierOrderFingerprint
     [HttpPost]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10485760)]
@@ -114,7 +116,9 @@ public class PurchasesController : ControllerBase
         [FromForm] GstClassification? packageGstClassification,
         [FromForm] DateTime? purchaseDate,
         [FromForm] int? supplierId,
-        [FromForm] string? items)
+        [FromForm] string? items,
+        [FromForm] int? completeSupplierOrderId,
+        [FromForm] string? completeSupplierOrderFingerprint)
     {
         // The uploaded file stays an HTTP concern: the controller is the only place that sees
         // IFormFile and adapts it to the Application layer's PurchaseFileInput port.
@@ -131,6 +135,7 @@ public class PurchasesController : ControllerBase
                     title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
                     deliveryGstClassification, packageGstClassification),
                 (ParseItems(items) ?? []).Select(ToItemInput).ToList(),
+                ToCompletionRequest(completeSupplierOrderId, completeSupplierOrderFingerprint),
                 CancellationToken.None);
         }
         catch (InvalidOperationException ex)
@@ -239,4 +244,16 @@ public class PurchasesController : ControllerBase
 
     private static PurchaseItemInput ToItemInput(PurchaseItemDto dto) =>
         new(dto.ProductId, dto.Quantity, dto.UnitCost, dto.GstClassification, dto.Id);
+
+    /// <summary>
+    /// The operator's "complete this order" choice, when the form carried one (issue #974). Both
+    /// fields are required together: an order id with no fingerprint is a decision nothing was shown
+    /// for, so it is left out rather than sent on as a completion the save would have to guess at -
+    /// and the save then refuses it, because an empty fingerprint matches nothing it recomputes.
+    /// Nothing else about the order travels inwards.
+    /// </summary>
+    private static SupplierOrderCompletionRequest? ToCompletionRequest(int? supplierOrderId, string? fingerprint) =>
+        supplierOrderId is { } id && !string.IsNullOrWhiteSpace(fingerprint)
+            ? new SupplierOrderCompletionRequest(id, fingerprint)
+            : null;
 }
