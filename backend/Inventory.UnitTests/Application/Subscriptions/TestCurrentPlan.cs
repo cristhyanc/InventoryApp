@@ -1,5 +1,7 @@
 using Inventory.Application.Subscriptions;
 using Inventory.Domain.Subscriptions;
+using InventoryApi.Tests.Application.ConnectedMachines;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 
 namespace InventoryApi.Tests.Application.Subscriptions;
@@ -63,5 +65,9 @@ public static class TestCurrentPlan
             grandfathering,
             new FakeManualPlanGrantStore(grants),
             new FakeBillingSubscriptionStore(),
+            // The connected machines of issue #978 travel with the plan; a plan feature question
+            // never reads them, so the business here has no Nayax connection and no recorded count.
+            new FakeNayaxConnectionStore(),
+            new FakeConnectedMachineSnapshotStore(),
             new FakeClock(Now)));
 }
