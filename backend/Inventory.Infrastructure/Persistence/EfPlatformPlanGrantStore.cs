@@ -26,8 +26,8 @@ namespace Inventory.Infrastructure.Persistence;
 /// therefore does two things explicitly, and nothing more. Its two statements over
 /// <c>BusinessPlanGrants</c> use <c>IgnoreQueryFilters</c>, each pinned to the single business id the
 /// decision named <em>and</em> to <see cref="ManualPlanGrantSource.Complimentary"/>, projecting the
-/// grant's plan, period, reason, revision and instant - this is the third reviewed
-/// <c>IgnoreQueryFilters</c> path in a request (AGENTS.md § There are exactly three reviewed
+/// grant's plan, period, reason, revision and instant - this is the fourth reviewed
+/// <c>IgnoreQueryFilters</c> path in a request (AGENTS.md § There are exactly four reviewed
 /// IgnoreQueryFilters paths), and the alternatives were the ones issue #544 already rejected: an
 /// unscoped context in a request path would hand one adapter every tenant-owned table at once, and
 /// resolving each business into the request scope would make a platform decision impersonate a
