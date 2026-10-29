@@ -2,6 +2,7 @@ using Inventory.Application.Documents;
 using Inventory.Application.Expenses;
 using Inventory.Application.Machines;
 using Inventory.Domain.Expenses;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Machines;
 using Xunit;
 
@@ -22,7 +23,7 @@ public class UpdateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var created = await new CreateOperatingExpense(store, documents, new FakeLocalMachineStore())
+        var created = await new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced())
             .Handle(Fields("Original"), AttachmentInput("old.pdf"), CancellationToken.None);
         return (store, documents, created.Record!.Id, created.Record.AttachmentStoredFileName!);
     }
@@ -32,7 +33,7 @@ public class UpdateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(999, Fields(), null, CancellationToken.None);
 
@@ -45,7 +46,7 @@ public class UpdateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(999, Fields(), AttachmentInput("new.exe"), CancellationToken.None);
 
@@ -61,7 +62,7 @@ public class UpdateOperatingExpenseTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(1, Fields(description: ""), null, CancellationToken.None);
 
@@ -74,7 +75,7 @@ public class UpdateOperatingExpenseTests
     public async Task Update_without_attachment_leaves_the_existing_attachment_untouched()
     {
         var (store, documents, id, storedFileName) = await SeedWithAttachmentAsync();
-        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(id, Fields("Updated"), null, CancellationToken.None);
 
@@ -88,7 +89,7 @@ public class UpdateOperatingExpenseTests
     public async Task Replacing_the_attachment_deletes_the_previous_document_only_after_saving()
     {
         var (store, documents, id, oldStoredFileName) = await SeedWithAttachmentAsync();
-        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(id, Fields("Updated"), AttachmentInput("new.png"), CancellationToken.None);
 
@@ -104,7 +105,7 @@ public class UpdateOperatingExpenseTests
     public async Task Failed_replacement_preserves_the_existing_attachment()
     {
         var (store, documents, id, oldStoredFileName) = await SeedWithAttachmentAsync();
-        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(id, Fields("Updated"), AttachmentInput("new.exe"), CancellationToken.None);
 
@@ -120,7 +121,7 @@ public class UpdateOperatingExpenseTests
     {
         var (store, documents, id, oldStoredFileName) = await SeedWithAttachmentAsync();
         store.ThrowOnUpdate = true;
-        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore());
+        var useCase = new UpdateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced());
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => useCase.Handle(id, Fields("Updated"), AttachmentInput("new.png"), CancellationToken.None));
@@ -140,10 +141,10 @@ public class UpdateOperatingExpenseTests
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
         var machines = new FakeLocalMachineStore([new LocalMachineRecord(41, "Lobby", IsActive: true)]);
-        var created = await new CreateOperatingExpense(store, documents, machines)
+        var created = await new CreateOperatingExpense(store, documents, machines, FakeAttachmentQuota.NotEnforced())
             .Handle(Fields("Original"), null, CancellationToken.None);
 
-        var result = await new UpdateOperatingExpense(store, documents, machines)
+        var result = await new UpdateOperatingExpense(store, documents, machines, FakeAttachmentQuota.NotEnforced())
             .Handle(created.Record!.Id, Fields("Updated", machineId: 41), null, CancellationToken.None);
 
         Assert.True(result.IsValid);
@@ -159,7 +160,7 @@ public class UpdateOperatingExpenseTests
     {
         var (store, documents, id, oldStoredFileName) = await SeedWithAttachmentAsync();
         var machines = new FakeLocalMachineStore([new LocalMachineRecord(41, "Lobby", IsActive: true)]);
-        var useCase = new UpdateOperatingExpense(store, documents, machines);
+        var useCase = new UpdateOperatingExpense(store, documents, machines, FakeAttachmentQuota.NotEnforced());
 
         var result = await useCase.Handle(
             id, Fields("Updated", machineId: 42), AttachmentInput("new.pdf"), CancellationToken.None);

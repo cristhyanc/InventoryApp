@@ -1,4 +1,5 @@
 using Inventory.Application.Access;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
@@ -174,6 +175,12 @@ public static class ApplicationServiceCollectionExtensions
         // that ends or a subscription that is cancelled applies on the next request rather than when
         // something expires a cache.
         services.AddScoped<GetEffectiveEntitlement>();
+
+        // The attachment storage quota of issue #968, which reads the entitlement above for its
+        // allowance. Scoped for the same reason: both the guard every upload path reserves through
+        // and the figures the access read reports belong to one request's resolved business.
+        services.AddScoped<AttachmentQuotaGuard>();
+        services.AddScoped<GetAttachmentStorageStatus>();
 
         // The one place every enforcement point asks whether the request's business includes a
         // feature (issue #967). Scoped and memoising that one entitlement read, so a bounded Nayax

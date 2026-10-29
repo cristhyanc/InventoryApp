@@ -158,6 +158,29 @@ own setting: the running API reads the same `DocumentStorage:Provider`, so switc
 persistently would move live document reads to the container before anything had been copied or
 verified.
 
+### Reconciling attachment storage against the records (issue #968)
+
+A document's bytes live outside the database, so storage and records can disagree in three ways
+that nothing inside the application can see. `reconcile-attachment-storage` is the operator's read
+of that, per business, against whichever storage the deployment is configured with:
+
+```bash
+dotnet run --project backend/InventoryApi -- reconcile-attachment-storage --dry-run
+dotnet run --project backend/InventoryApi -- reconcile-attachment-storage --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll reconcile-attachment-storage --dry-run` /
+`--apply` instead. Exactly one of the two flags must be given; a dry run writes nothing.
+
+It reports, for each business, the records whose file is **missing**, the records whose attachment
+size was **never recorded**, and the stored files **no record refers to**. An `--apply` writes one
+thing and one thing only: a size filled in from the stored file itself. **It never deletes
+anything** — an orphan file is reported for a human to decide about, because deleting a business's
+receipt cannot be undone — and it never guesses: a size that cannot be read from storage stays
+unknown and is reported as a missing file. It exits `0` when nothing needs attention and `1` when
+something does, so an apply can be gated on a clean dry run. Running it again is safe and changes
+nothing new.
+
 The dry run writes nothing and reports what an apply would do. An apply copies each document to
 `tenants/{businessId}/purchases|expenses/{storedFileName}`, where the business is read from the
 record that owns the document, and verifies the copy by size and SHA-256 before counting it as
@@ -488,15 +511,18 @@ connected-machine charge only starts once paid plans and the Nayax connection ar
 treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
 asserted here until it is decided.
 
-**Plan limits are described as future behaviour, because none of them is enforced yet.** Attachment
-quota enforcement (issue #968) and recording a purchase without attaching a document (issue #976)
-have not shipped: today attachment storage is unrestricted and a purchase still requires its file.
-So the section's lead paragraph says the storage allowances and the connected-machine charge start
-when the paid plans launch and that nothing is limited today, the Free card repeats it for its 1 GB
-allowance, and the storage FAQ describes the 80% warning and the 100% upload pause only as what will
-happen from launch. The page must never present a limit, a paused upload, a per-machine charge or a
-document-free purchase as today's behaviour; `landing-page.component.spec.ts` holds that as a copy
-regression.
+**Plan limits are still described as future behaviour, because none of them applies to a visitor
+today.** The attachment quota is implemented (issue #968) but applies only once a deployment
+switches plan enforcement on, which the shipped state does not; the extra connected-machine charge
+needs billing (issue #969) that is not live. So the section's lead paragraph says the storage
+allowances and the connected-machine charge start when the paid plans launch and that nothing is
+limited today, the Free card repeats it for its 1 GB allowance, and the storage FAQ describes the
+80% warning and the 100% upload pause only as what will happen from launch — which is exactly what
+[Attachment storage](#attachment-storage) does once enforcement is on. The page must never present a
+limit, a paused upload or a per-machine charge as today's behaviour;
+`landing-page.component.spec.ts` holds that as a copy regression. (Recording a purchase without
+attaching a document has since shipped, issue #976, and the page claims nothing about it either
+way.)
 
 ## The dashboard and the menu
 
@@ -645,7 +671,7 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 
 Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
 
-**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below). Supplier price data (#977) and the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything and no extra query is made.
+**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Supplier price data (#977) and the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
 
 ### The plans
 
@@ -663,7 +689,7 @@ Prices are AUD per business per month, as agreed on issue #965. Whether the adve
 
 A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**.
 
-Storage limits cover purchase and expense attachments combined — not transaction records — and attachments are **never deleted automatically** on a downgrade.
+Storage limits cover purchase and expense attachments combined — not transaction records — 1 GB means 1,000,000,000 bytes, and attachments are **never deleted automatically** on a downgrade. See [Attachment storage](#attachment-storage) for exactly what happens as a business fills it up.
 
 ### What is local and what needs a connected plan
 
@@ -721,6 +747,21 @@ From those, one rule decides what the business may use:
 - Grants and paid periods are **UTC instants**: a period applies from its start instant inclusive and stops at its end instant exclusive.
 
 `GET /api/me/access` publishes the answer beside the capability set — `entitlement.enforced`, the plan, where it came from (`ManualGrant`, `BillingSubscription`, `NoActiveRecord`, or the two unrestricted states) and when that record ends. It is computed per request with no server cache, there is no separate endpoint and no request names a business. Inside a [support session](#super-admin-support-sessions) it reports the **viewed** business's own plan, and a [role preview](#previewing-the-app-as-a-role-issues-720-and-721) narrows role capabilities only and never changes the plan.
+
+Beside it, `entitlement.attachmentStorage` carries the business's attachment storage: how much it is using, its plan's allowance, and whether that is `Normal`, `Warning` (80% and over) or `Full`. It is `null` while nothing is enforced, because then there is no allowance and nothing is counted.
+
+### Attachment storage
+
+Each plan includes an amount of purchase and expense attachment storage, and that allowance is enforced once plans are being enforced (issue #968). It is about **documents only**: nothing here ever stops a purchase, an expense or any other record being saved.
+
+- **What counts.** The sizes of the attachments the business's purchases and expenses actually refer to, plus any upload it has in progress. A file left in storage that no record refers to is **not** charged to the business, and neither is an attachment whose size was never recorded — both are reported by [`reconcile-attachment-storage`](#reconciling-attachment-storage-against-the-records-issue-968) instead.
+- **Deleting frees it immediately.** Deleting a purchase, an expense or an attachment releases its bytes as soon as that change is saved, whether or not the stored file is removed successfully.
+- **At 80% the business is warned**, and the warning state travels with the plan in the access read above, so the app can say so before anything is refused.
+- **At 100% only new uploads pause.** Viewing, downloading and deleting attachments keep working, and so does recording purchases and expenses — a purchase can be saved [without a receipt](#a-purchase-without-a-receipt) and the document added later. An upload that does not fit is refused with a sentence that says the record can still be saved without it, and nothing is written to storage.
+- **Replacing a file when storage is full works, as long as it does not grow.** Replacing an expense's attachment is charged only the **difference**: a smaller or same-size file succeeds even at or over the allowance, and a larger one needs room for the difference alone. The old file's bytes stop counting the moment the record points at the new file.
+- **If two people replace the same attachment at once, exactly one wins.** The other is refused with "This attachment was replaced by someone else while the upload was in progress. Reload the record and try again." — its file is removed, nothing about the record changed, and retrying from the reloaded record is safe.
+- **An abandoned or crashed upload stops holding storage on its own**, within 30 minutes, without anybody having to clean anything up.
+- **After a downgrade a business can be above its new allowance, and nothing is deleted.** Every existing attachment stays viewable, downloadable and deletable; only new uploads that would add bytes are refused, until enough has been freed or the plan is upgraded again.
 
 ### Grandfathering, in one sentence
 

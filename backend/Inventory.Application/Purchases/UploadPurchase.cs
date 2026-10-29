@@ -1,3 +1,4 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Documents;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Tenancy;
@@ -25,6 +26,15 @@ namespace Inventory.Application.Purchases;
 /// document cannot do is fall back to the uploaded file's name for its title, so a blank title is
 /// refused instead of stored empty.</para>
 ///
+/// <para><strong>Since issue #968 the document's storage is reserved before it is written.</strong>
+/// The reservation is taken after every other validation and before the bytes reach storage, so an
+/// upload that does not fit the business's plan allowance is refused without writing anything, and
+/// two concurrent uploads cannot both pass a check only one of them fits through. It is consumed
+/// inside <see cref="IPurchaseStore.CreateAsync"/>'s own transaction, so the reserved bytes become
+/// the document's recorded size with the purchase; a failure releases it along with the bytes.
+/// Only the <em>document</em> is ever refused for storage - the purchase itself can always be
+/// recorded without one - and while no plan is enforced nothing is reserved at all.</para>
+///
 /// <para>Since issue #974 the request may also carry the operator's decision to complete a linked
 /// supplier order with whatever stays undelivered. This use case adds only the attribution a client
 /// may not supply - who decided, and when - and hands the decision to the same
@@ -38,14 +48,20 @@ public sealed class UploadPurchase
     private readonly IDocumentStorage _documents;
     private readonly IAuthenticatedActorAccessor _actors;
     private readonly IClock _clock;
+    private readonly AttachmentQuotaGuard _quota;
 
     public UploadPurchase(
-        IPurchaseStore store, IDocumentStorage documents, IAuthenticatedActorAccessor actors, IClock clock)
+        IPurchaseStore store,
+        IDocumentStorage documents,
+        IAuthenticatedActorAccessor actors,
+        IClock clock,
+        AttachmentQuotaGuard quota)
     {
         _store = store;
         _documents = documents;
         _actors = actors;
         _clock = clock;
+        _quota = quota;
     }
 
     public async Task<PurchaseRecord?> Handle(
@@ -98,6 +114,15 @@ public sealed class UploadPurchase
                 PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(
                     conflictingBaseline.CutoffAt, conflictingBaseline.ProductId, conflictingBaseline.ProductName));
 
+        // The document's storage is reserved before a single byte is written (issue #968), and the
+        // refusal is about the document alone: a purchase with no document is always recordable, so
+        // the caller is told to save it without one rather than losing what it typed.
+        var quota = file is null
+            ? AttachmentQuotaDecision.NotEnforced
+            : await _quota.ReserveAsync(DocumentCategory.PurchaseDocument, null, file.Length, cancellationToken);
+        if (quota.Refused)
+            throw new AttachmentStorageQuotaExceededException();
+
         var (storedFileName, fileMetadata) = await SaveDocumentAsync(file, cancellationToken);
 
         var resolvedFields = fields with
@@ -109,7 +134,7 @@ public sealed class UploadPurchase
         };
 
         return await CreateOrCleanUpAsync(
-            resolvedFields, items, fileMetadata, decision, storedFileName, cancellationToken);
+            resolvedFields, items, fileMetadata, decision, storedFileName, quota, cancellationToken);
     }
 
     private static bool IsDocumentInvalid(PurchaseFileInput? file) =>
@@ -140,18 +165,25 @@ public sealed class UploadPurchase
         PurchaseFileMetadata? fileMetadata,
         SupplierOrderCompletionDecision? decision,
         string? storedFileName,
+        AttachmentQuotaDecision quota,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await _store.CreateAsync(resolvedFields, items, fileMetadata, decision, cancellationToken);
+            return await _store.CreateAsync(
+                resolvedFields, items, fileMetadata, decision, quota.Reservation, cancellationToken);
         }
         catch
         {
             // Only bytes this request wrote are removed; with no document there are none, and the
-            // purchase that failed to save is simply not there.
+            // purchase that failed to save is simply not there. The reservation goes with them -
+            // including when the write refused the upload because the reservation had expired and
+            // the quota no longer fits - so nothing holds storage for a purchase that was not
+            // saved. A failed removal is left for the reconciliation command rather than hiding
+            // the failure that produced it.
             if (storedFileName is not null)
                 await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
+            await _quota.ReleaseAsync(quota, cancellationToken);
             throw;
         }
     }
