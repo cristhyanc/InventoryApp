@@ -16,6 +16,7 @@ import { LocalMachineService } from '../../services/local-machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { IconComponent } from '../shared/icon.component';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { generateIdempotencyKey } from './idempotency-key';
 import {
@@ -47,15 +48,15 @@ export function multiMachineRefillRecordedMessage(allocationCount: number, machi
   return `Refill recorded: ${allocationCount} ${entries} across ${machineCount} ${machines}.`;
 }
 
-export const REFILL_CONFLICT_MESSAGE = 'This refill could not be recorded. Review your entries and click Save to try again.';
+export const REFILL_CONFLICT_MESSAGE = 'This refill could not be recorded. Review your entries and click Record refill to try again.';
 
 export const REFILL_UNCERTAIN_MESSAGE =
-  "Couldn't confirm whether this refill was recorded. Review your entries and click Save to retry.";
+  "Couldn't confirm whether this refill was recorded. Use Retry save to resend exactly the same refill; your entries stay locked until it is confirmed.";
 
 export const REFILL_FORBIDDEN_MESSAGE = 'This refill was refused, so nothing was recorded.';
 
 export const SUPPORT_SESSION_READ_ONLY_MESSAGE =
-  'A support session is active, so quantities taken cannot be recorded here. End the session to record a pick.';
+  'A support session is active, so quantities taken cannot be recorded here. End the session to record a refill.';
 
 export const CATALOGUE_LOAD_FAILED_MESSAGE = 'The product list could not be loaded, so quantities taken cannot be entered.';
 
@@ -66,10 +67,10 @@ export const MACHINES_LOAD_FAILED_MESSAGE =
   'The machine list could not be loaded, so this refill cannot be attributed to a machine.';
 
 export const MACHINE_ATTRIBUTION_FAILED_MESSAGE =
-  'The machine this entry was opened for could not be selected automatically - it may have been deactivated or removed. Choose it below if it is still listed, or save without a machine.';
+  'The machine this entry was opened for could not be selected automatically - it may have been deactivated or removed. Choose it below if it is still listed, or record without a machine.';
 
 export const MACHINE_RESOLUTION_PENDING_MESSAGE =
-  'Confirming the machine this entry was opened for. Quantities can be typed now and saved once it is confirmed.';
+  'Confirming the machine this entry was opened for. Quantities can be typed now and recorded once it is confirmed.';
 
 /**
  * What the operator is asked before the "No machine" column's quantities are dropped on the way into
@@ -78,11 +79,11 @@ export const MACHINE_RESOLUTION_PENDING_MESSAGE =
  * invent a pick several times the size of the one that was typed.
  */
 export const DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION =
-  'Selecting machines replaces the single Taken column with one column per machine. The quantities already typed cannot be attributed to a machine, so they will be discarded. Continue?';
+  'Selecting machines replaces the single Quantity taken column with one column per machine. The quantities already typed cannot be attributed to a machine, so they will be discarded. Continue?';
 
 /** What the operator is asked before every machine column's quantities are dropped on the way back to "No machine". */
 export const DISCARD_MACHINE_COLUMNS_CONFIRMATION =
-  'Clearing the machine selection replaces the machine columns with a single Taken column. The quantities typed per machine will be discarded. Continue?';
+  'Clearing the machine selection replaces the machine columns with a single Quantity taken column. The quantities typed per machine will be discarded. Continue?';
 
 /** What the operator is asked before one or more machine columns that hold quantities are removed. */
 export function discardMachineColumnConfirmation(...machineNames: string[]): string {
@@ -90,8 +91,26 @@ export function discardMachineColumnConfirmation(...machineNames: string[]): str
   return `Remove the ${machineNames.join(', ')} ${columns}? The quantities already typed there will be discarded.`;
 }
 
-/** The sentence introducing every entry that has to be fixed before Save is offered again. */
-export const INVALID_ENTRIES_PREFIX = 'Fix these entries before saving:';
+/** The sentence introducing every entry that has to be fixed before Record refill is offered again. */
+export const INVALID_ENTRIES_PREFIX = 'Fix these entries before recording:';
+
+/** What the operator is asked before Clear drops every entered quantity. */
+export const CLEAR_ENTRIES_CONFIRMATION = 'Clear every entered quantity, including any hidden by the current filters?';
+
+/** The primary action's label while entered totals exceed known storage: recording is blocked until they are resolved. */
+export const RESOLVE_SHORTAGE_LABEL = 'Resolve shortage to record';
+
+/** What a confirmed recording reports on screen: the totals the server confirmed, never before. */
+export function refillRecordedSummary(units: number, machineCount: number): string {
+  const unitWord = units === 1 ? 'unit' : 'units';
+  if (machineCount === 0) {
+    return `Refill recorded: ${units} ${unitWord} taken from storage.`;
+  }
+  return `Refill recorded: ${units} ${unitWord} across ${machineCount} ${machineCount === 1 ? 'machine' : 'machines'}.`;
+}
+
+/** Which rows the entry table shows, beside the search and category filters. */
+export type RefillEntryFilter = 'all' | 'entered' | 'shortages';
 
 /**
  * Where the page's read of the active catalogue stands. Only `'loaded'` means {@link
@@ -226,6 +245,19 @@ interface ManualPickSubmission {
  * `403` that does reach here is a definite refusal - nothing was recorded - and is reported as one,
  * never as the uncertain outcome that asks for a retry.
  *
+ * **Issue #996 redesigned it as Record refill** without changing what it sends. Each row shows the
+ * storage available, the entries, the row's total and its status; the whole submission's totals
+ * sit under the table. **Storage excess is checked across every selected machine at once** -
+ * entries a filter hides included, because they all come off one shelf - and while any product's
+ * total exceeds the storage it is known to hold, a fresh recording is blocked ("Resolve shortage to
+ * record"). The server stays authoritative for stock that changed meanwhile, and an unconfirmed
+ * retry is never blocked by it. Being below a known suggestion ({@link suggestions}) is information
+ * only; no suggestion is shown, or invented, where none is known. Clear asks first, a confirmed
+ * recording reports its totals ({@link recordedSummary}) only once the server has answered, and
+ * **while an outcome is uncertain every entry is locked** ({@link entriesLocked}): the one action
+ * offered is Retry save. On a phone ({@link compact}) the rows become cards with one focused machine
+ * and touch steppers; the draft behind them is the same.
+ *
  * **The catalogue's own state is the page's.** {@link catalogueState} says whether `products` is a
  * real answer yet, so a slow or failed read is never shown as an empty catalogue, and
  * {@link catalogueRefreshFailed} says the refresh after a save failed, so stale storage quantities
@@ -234,7 +266,7 @@ interface ManualPickSubmission {
 @Component({
   selector: 'app-manual-pick-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, MultiSelectDropdownComponent],
+  imports: [CommonModule, FormsModule, MultiSelectDropdownComponent, IconComponent],
   templateUrl: './manual-pick-list.component.html'
 })
 export class ManualPickListComponent implements OnInit, OnDestroy {
@@ -253,6 +285,16 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
    */
   @Input() preselectedMachineId: number | null = null;
 
+  /**
+   * Known suggested quantities, keyed by {@link refillCellKey} of a product and a **local** machine
+   * (issue #996). Only ever information beside an entry - never a value typed into one - and absent
+   * for any pair nobody suggested, in which case nothing is shown rather than an invented number.
+   */
+  @Input() suggestions: ReadonlyMap<string, number> = new Map();
+
+  /** Whether the page is in its phone layout: product cards and one focused machine instead of the matrix. */
+  @Input() compact = false;
+
   /** Emitted when the operator asks to read the catalogue again after a failed load or refresh. */
   @Output() readonly retryCatalogue = new EventEmitter<void>();
 
@@ -264,7 +306,14 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
 
   search = '';
   categoryId: number | '' = '';
+  entryFilter: RefillEntryFilter = 'all';
   saving = false;
+
+  /** The machine a phone's cards take entries for; `null` falls back to the first selected machine. */
+  focusedMachineId: number | null = null;
+
+  /** The confirmed totals of the last recorded refill, shown until the next edit; `null` before any confirmation. */
+  recordedSummary: string | null = null;
 
   /**
    * Whether a support session is active (issue #658). While it is, the inventory-writing controls
@@ -416,8 +465,169 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
       if (this.categoryId !== '' && product.category?.id !== this.categoryId) {
         return false;
       }
+      if (this.entryFilter === 'entered' && !this.hasEntry(product.id)) {
+        return false;
+      }
+      if (this.entryFilter === 'shortages' && this.storageExcess(product) === 0) {
+        return false;
+      }
       return term === '' || product.name.toLowerCase().includes(term);
     });
+  }
+
+  /** Whether a product has anything typed against it in the current mode, valid or not. */
+  hasEntry(productId: number): boolean {
+    if (!this.matrixMode) {
+      return holdsQuantity(this.takenById.get(productId));
+    }
+    return this.machineColumns.some((machine) => holdsQuantity(this.cellValue(productId, machine.id)));
+  }
+
+  /** How many products have an entry, whatever the filters hide. */
+  enteredProductCount(): number {
+    return this.products.filter((product) => this.hasEntry(product.id)).length;
+  }
+
+  /**
+   * The units this product's entries ask for beyond the storage it is known to hold, summed across
+   * **every** selected machine - including entries a filter hides - because they all come off the
+   * one shelf. `0` when storage covers them.
+   */
+  storageExcess(product: Product): number {
+    return Math.max(0, this.rowTotal(product.id) - product.quantityInStock);
+  }
+
+  /** The products whose entered total exceeds known storage; while any does, a fresh recording is blocked. */
+  shortageProducts(): Product[] {
+    return this.products.filter((product) => this.storageExcess(product) > 0);
+  }
+
+  /** Whether a product's entries are ready to record: something entered, nothing malformed, storage covers it. */
+  isReadyToRecord(product: Product): boolean {
+    return this.rowTotal(product.id) > 0 && this.storageExcess(product) === 0 && !this.rowHasError(product.id);
+  }
+
+  /** How many products are ready to record. */
+  readyProductCount(): number {
+    return this.products.filter((product) => this.isReadyToRecord(product)).length;
+  }
+
+  /** The known suggestion for one product at one local machine, or `null` when nobody suggested one. */
+  suggestionFor(productId: number, machineId: number): number | null {
+    return this.suggestions.get(refillCellKey(productId, machineId)) ?? null;
+  }
+
+  /**
+   * Whether an entry is below a known suggestion: information only, never a reason to block. An
+   * empty entry and one with no known suggestion are never "below" anything.
+   */
+  isBelowSuggestion(productId: number, machineId: number): boolean {
+    const suggestion = this.suggestionFor(productId, machineId);
+    const parsed = parseTakenEntry(this.cellValue(productId, machineId));
+    return suggestion !== null && !('error' in parsed) && parsed.quantity > 0 && parsed.quantity < suggestion;
+  }
+
+  /** Whether any of a product's entries is below its known suggestion. */
+  rowBelowSuggestion(productId: number): boolean {
+    return this.matrixMode && this.machineColumns.some((machine) => this.isBelowSuggestion(productId, machine.id));
+  }
+
+  /** Clears the search, category and entry filters, revealing every product. */
+  showAllProducts(): void {
+    this.search = '';
+    this.categoryId = '';
+    this.entryFilter = 'all';
+  }
+
+  /** Clears the search and category filters and shows only the products with an entry, hidden ones included. */
+  showEnteredProducts(): void {
+    this.search = '';
+    this.categoryId = '';
+    this.entryFilter = 'entered';
+  }
+
+  /** How many entries are malformed on rows the current filters hide. */
+  hiddenInvalidEntryCount(): number {
+    const shownIds = this.visibleProductIds();
+    return this.products.filter((product) => !shownIds.has(product.id) && this.rowHasError(product.id)).length;
+  }
+
+  /** The machine a phone's cards take entries for: always one of the selected columns. */
+  focusedMachine(): LocalMachine | null {
+    const columns = this.machineColumns;
+    return columns.find((machine) => machine.id === this.focusedMachineId) ?? columns[0] ?? null;
+  }
+
+  focusMachine(machineId: number): void {
+    this.focusedMachineId = machineId;
+  }
+
+  /** Entered units for one machine, across every product. */
+  machineUnits(machineId: number): number {
+    return this.products.reduce((total, product) => {
+      const parsed = parseTakenEntry(this.cellValue(product.id, machineId));
+      return 'error' in parsed ? total : total + parsed.quantity;
+    }, 0);
+  }
+
+  /** How many products have an entry at one machine. */
+  machineEntryCount(machineId: number): number {
+    return this.products.filter((product) => holdsQuantity(this.cellValue(product.id, machineId))).length;
+  }
+
+  /** Whether any quantity is entered at all, in either mode; what the page's departure guard asks about. */
+  hasEnteredQuantities(): boolean {
+    return this.unattributedEntriesPresent() || [...this.cellValues.values()].some(holdsQuantity);
+  }
+
+  /** Whether entries may change right now: not while a save is in flight, and not while an unconfirmed one is outstanding. */
+  get entriesLocked(): boolean {
+    return this.saving || this.unresolvedSubmission;
+  }
+
+  /**
+   * Adds `delta` to an entry from the touch controls, never below zero. A malformed entry is left
+   * for the operator to fix rather than guessed at.
+   */
+  stepCell(productId: number, machineId: number | null, delta: number): void {
+    const raw = machineId === null ? this.takenValue(productId) : this.cellValue(productId, machineId);
+    const parsed = parseTakenEntry(raw);
+    if ('error' in parsed) {
+      return;
+    }
+    const next = String(Math.max(0, parsed.quantity + delta));
+    if (machineId === null) {
+      this.onTakenChange(productId, next);
+    } else {
+      this.onCellChange(productId, machineId, next);
+    }
+  }
+
+  /**
+   * Drops every entered quantity in the current mode, after asking. Refused while a save is in
+   * flight or an unconfirmed one is outstanding, because the entries are then the request itself.
+   */
+  clearEntries(): void {
+    if (this.entriesLocked || !this.hasEnteredQuantities()) {
+      return;
+    }
+    if (!window.confirm(CLEAR_ENTRIES_CONFIRMATION)) {
+      return;
+    }
+    this.takenById.clear();
+    this.cellValues.clear();
+    this.rowErrors.clear();
+    this.cellErrors.clear();
+    this.requestErrors = [];
+    this.recordedSummary = null;
+  }
+
+  /** The primary action's label: what it will do, or why it cannot yet. */
+  get primaryActionLabel(): string {
+    if (this.saving) {
+      return 'Recording…';
+    }
+    return this.shortageProducts().length > 0 ? RESOLVE_SHORTAGE_LABEL : 'Record refill';
   }
 
   takenValue(productId: number): string {
@@ -425,11 +635,12 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   }
 
   onTakenChange(productId: number, value: string): void {
-    if (this.saving) {
+    if (this.entriesLocked) {
       return;
     }
     this.takenById.set(productId, value);
     this.rowErrors.delete(productId);
+    this.recordedSummary = null;
   }
 
   /** The one message for this row of the "No machine" column: a malformed entry first, else the server's own last refusal. */
@@ -447,11 +658,12 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   }
 
   onCellChange(productId: number, machineId: number, value: string): void {
-    if (this.saving) {
+    if (this.entriesLocked) {
       return;
     }
     this.cellValues.set(refillCellKey(productId, machineId), value);
     this.cellErrors.delete(refillCellKey(productId, machineId));
+    this.recordedSummary = null;
   }
 
   /** The one message for this cell: a malformed entry first, else the server's own last per-allocation refusal. */
@@ -466,7 +678,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
 
   /** The accessible name of one cell, which has to name both things it is about. */
   cellAriaLabel(product: Product, machine: LocalMachine): string {
-    return `Taken: ${product.name} at ${machine.name}`;
+    return `Quantity taken: ${product.name} at ${machine.name}`;
   }
 
   /** Every malformed entry, naming the product and - in the matrix - the machine it was typed against. */
@@ -523,7 +735,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** How many products with a typed quantity the current filter hides. */
   hiddenProductsWithEntries(): number {
     const visibleIds = this.visibleProductIds();
-    return this.products.filter((product) => !visibleIds.has(product.id) && this.rowTotal(product.id) > 0).length;
+    return this.products.filter((product) => !visibleIds.has(product.id) && this.hasEntry(product.id)).length;
   }
 
   /**
@@ -532,7 +744,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
    * request being answered is the request that was built.
    */
   onSelectedMachineIdsChange(machineIds: number[]): void {
-    if (this.saving) {
+    if (this.entriesLocked) {
       return;
     }
 
@@ -578,6 +790,13 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     if (this.unresolvedSubmission) {
       return this.lastSubmission !== null;
     }
+    // A fresh recording is blocked while entered totals exceed known storage. The server stays
+    // authoritative - it weighs the batch against storage again inside its own transaction - but a
+    // refill the screen already knows cannot fit is not offered. An unconfirmed retry above is
+    // never blocked by this, because it must resend exactly what it sent.
+    if (this.shortageProducts().length > 0) {
+      return false;
+    }
     const payload = this.buildPayload();
     return payload !== null && !isEmptyPayload(payload);
   }
@@ -606,7 +825,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     }
 
     const payload = this.buildPayload();
-    if (payload === null || isEmptyPayload(payload)) {
+    if (payload === null || isEmptyPayload(payload) || this.shortageProducts().length > 0) {
       return;
     }
 
@@ -655,6 +874,14 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
       }
     }
     this.discardUnattributedEntries();
+  }
+
+  /** Whether any of a product's entries in the current mode is malformed. */
+  private rowHasError(productId: number): boolean {
+    if (!this.matrixMode) {
+      return this.rowError(productId) !== null;
+    }
+    return this.machineColumns.some((machine) => this.cellError(productId, machine.id) !== null);
   }
 
   /** Whether the "No machine" column holds anything the operator would mind losing. */
@@ -746,6 +973,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
         this.lastSubmission = null;
         this.discardRecordedEntries(submission.payload);
         this.saveInFlightChange.emit(false);
+        this.recordedSummary = recordedSummary(submission.payload);
         this.toastService.success(recordedMessage(submission.payload));
         this.refillRecorded.emit();
       },
@@ -849,6 +1077,14 @@ function payloadsEqual(a: ManualPickPayload, b: ManualPickPayload): boolean {
     return pickListRefillRowsEqual(a.rows, b.rows);
   }
   return false;
+}
+
+function recordedSummary(payload: ManualPickPayload): string {
+  if (payload.kind !== 'batch') {
+    return refillRecordedSummary(payload.rows.reduce((total, row) => total + row.quantityTaken, 0), 0);
+  }
+  const machineCount = new Set(payload.allocations.map((allocation) => allocation.machineId)).size;
+  return refillRecordedSummary(payload.allocations.reduce((total, allocation) => total + allocation.quantityTaken, 0), machineCount);
 }
 
 function recordedMessage(payload: ManualPickPayload): string {

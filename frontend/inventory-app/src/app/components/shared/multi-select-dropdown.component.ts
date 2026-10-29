@@ -4,6 +4,12 @@ import { CommonModule } from '@angular/common';
 export interface MultiSelectOption {
   id: number;
   label: string;
+  /**
+   * An optional heading the option is listed under (issue #996: the Pick List groups machines by
+   * site). Consecutive options with the same group share one heading; options without one are
+   * listed without a heading, so a caller that never sets it sees the flat list it always had.
+   */
+  group?: string;
 }
 
 /**
@@ -66,6 +72,12 @@ export class MultiSelectDropdownComponent {
   @ViewChild('trigger') private trigger?: ElementRef<HTMLButtonElement>;
 
   constructor(private elementRef: ElementRef<HTMLElement>) {}
+
+  /** Whether `options[index]` starts a new group heading. */
+  startsGroup(index: number): boolean {
+    const group = this.options[index]?.group;
+    return group !== undefined && (index === 0 || this.options[index - 1].group !== group);
+  }
 
   get allSelected(): boolean {
     return this.options.length > 0 && this.selectedIds.length === this.options.length;
