@@ -239,7 +239,7 @@
         header rows, many machine columns scroll horizontally, and the Product column stays pinned
         on the left. Machines at the same site sit together under one shared site header.
       -->
-      <div data-testid="pick-list-table-scroll" class="relative mt-4 max-h-[70vh] overflow-auto rounded-lg border border-rr-line" role="region" aria-label="Pick list matrix">
+      <section data-testid="pick-list-table-scroll" class="relative mt-4 max-h-[70vh] overflow-auto rounded-lg border border-rr-line" aria-label="Pick list matrix">
         <table class="table">
           <thead>
             @if (siteHeadersShown) {
@@ -298,7 +298,7 @@
         @if (visibleProducts().length === 0) {
           <p class="p-4 text-md-body value-muted">No products match the current filters.</p>
         }
-      </div>
+      </section>
       @if (appliedMachineIds.length > 2) {
         <p class="m-0 mt-2 flex items-center gap-1 text-xs text-rr-muted"><app-icon name="arrow_forward" [size]="14" />Scroll sideways to see every machine.</p>
       }
