@@ -43,4 +43,68 @@ export interface Entitlement {
    * when it has no recorded end - which is what a grandfathered grant has until an owner sets one.
    */
   readonly endsAtUtc: string | null;
+
+  /**
+   * What the business's connected machines cost it (issue #978), or `null` while nothing is
+   * enforced - which is the shipped state, where nothing about the business's machines is read at
+   * all. `undefined` means the answer is not known, by the same fail-open rule as the rest of this
+   * type.
+   */
+  readonly connectedMachines?: ConnectedMachines | null;
+}
+
+/**
+ * The business's connected machines, as `GET /api/me/access` reported them beside the plan
+ * (issue #978).
+ *
+ * A connected machine is a machine on the business's Nayax account, linked in this application or
+ * not; a manual machine is never one. The count is **recorded evidence** rather than a live read -
+ * the last complete fleet read of the business's current Nayax account - so it is reported with how
+ * well known it is, and the page that shows any of this is #970's work; nothing in this release
+ * displays it.
+ *
+ * **Being over the allowance is billed, never blocked.** No screen may read
+ * {@link machinesOverAllowance} as a limit: linking a machine, importing sales, the reports and the
+ * pick list are unaffected by it, and nothing removes a link or any history.
+ */
+export interface ConnectedMachines {
+  /** How many connected machines the effective plan includes - five on Pro. */
+  readonly includedByPlan: number;
+
+  /** How many extra connected machines the business has bought. */
+  readonly purchasedAdditional: number;
+
+  /** {@link includedByPlan} plus {@link purchasedAdditional}: what the count is compared against. */
+  readonly allowance: number;
+
+  /**
+   * The machines the current Nayax account was last counted at, or `null` when there is no count.
+   * Null, never zero: a count nobody could take is not an empty fleet, so a client must not render
+   * it as `0`.
+   */
+  readonly count: number | null;
+
+  /** The UTC day that count was taken for, as the API reported it, or `null` when there is none. */
+  readonly asOfDateUtc: string | null;
+
+  /**
+   * How many UTC days old the count is: `0` while it is current, its real age while it is stale,
+   * and `null` when there is no count.
+   */
+  readonly ageInDays: number | null;
+
+  /** How well known the count is: `Current`, `Stale` or `Unavailable`. */
+  readonly state: string;
+
+  /**
+   * Why there is no count - `NotConnected`, `ConnectionNeedsAttention`, `NeverCounted` or
+   * `AccountNotYetCounted` - and `None` when there is one.
+   */
+  readonly unavailableReason: string;
+
+  /**
+   * How many counted machines are above the allowance, never negative, and `null` when there is no
+   * count - because "none over" and "not known" are different answers.
+   */
+  readonly machinesOverAllowance: number | null;
 }
