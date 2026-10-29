@@ -101,6 +101,7 @@ describe('LandingHeaderComponent (issue #954)', () => {
       ['Features', '#features'],
       ['How it works', '#how-it-works'],
       ['Nayax integration', '#nayax'],
+      ['Pricing', '#pricing'],
       ['FAQs', '#faqs']
     ]);
 

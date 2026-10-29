@@ -7191,6 +7191,29 @@ intentional copy change are recorded in [docs/design/restockroo-landing-page.md]
 The application is client-rendered, so the title and description are set in the browser; nothing
 here adds server rendering or promises search-engine indexing.
 
+**Pricing section (issue #971).** A fifth entry, `{ id: 'pricing', label: 'Pricing' }`, was added to
+`LANDING_SECTIONS` before `'faqs'`, so the header, its mobile menu and the footer navigation pick it
+up with no component change; the routed page places the `#pricing` section itself between
+`#how-it-works` and `#faqs`, as the issue required. The section renders `LANDING_PLANS` — Free,
+Starter and Pro, each a plain object (name, price, billing note, description, feature strings, an
+optional badge and an optional note) — with no new injected service and no request, preserving the
+page's "makes no request" guarantee; the catalogue is the plan proposal [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
+agreed (1 GB/20 GB/20 GB attachment allowances, Starter's supplier comparisons and Bookkeeping/GST
+reports, Pro's Nayax connection and connected reports, 5 included connected machines and A$2/month
+per extra one), reproduced here only as static marketing copy — it is not read from, and does not
+have to stay byte-for-byte in step with, a backend plan catalogue, because issue #965's catalogue
+endpoint does not exist yet. Free carries an "Available now" badge; Starter and Pro carry "Coming
+soon" and every plan's action is the same `getStarted()`/**Open app** the rest of the page uses, so
+there is no second, parallel purchase flow and nothing to keep anonymous. Pro's card carries its own
+`note` making the plan-entitlement/usable-connection distinction explicit, matching issue #965's
+rule that the two are never promised together. The GST tax treatment of the advertised prices is
+one of #965's open launch decisions and is deliberately not stated here until it is decided — see
+[docs/design/restockroo-landing-page.md](design/restockroo-landing-page.md) for how the rest of the
+page's copy is kept inside what the application actually does, which is the same rule applied to the
+"Optional sales connection", "Optional integration" and the renamed "Inventory value at cost" facts
+this issue reconciled with the plan catalogue (each now says what is free today versus what Pro will
+gate once paid plans are live, instead of implying Nayax or reporting are unconditionally free).
+
 ### Runtime configuration and API contracts
 
 `ConfigService` resolves the API base URL through an application initializer, before feature services issue requests, and is the single source of truth for it. On `localhost`/`127.0.0.1` it resolves to `/api`, which `proxy.conf.json` forwards to `http://localhost:5000/`; on any other origin it uses `apiBaseUrl` from `/assets/config.json`, falling back to `/api` if that load fails or yields nothing usable (`api-base-url.ts` holds that framework-free resolution rule). No one therefore edits the tracked `assets/config.json` to move between local development and deployment. Do not hard-code API hosts in components or feature services.

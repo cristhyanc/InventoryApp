@@ -20,6 +20,7 @@ export const LANDING_SECTIONS: readonly LandingSection[] = [
   { id: 'features', label: 'Features' },
   { id: 'how-it-works', label: 'How it works' },
   { id: 'nayax', label: 'Nayax integration' },
+  { id: 'pricing', label: 'Pricing' },
   { id: 'faqs', label: 'FAQs' }
 ];
 
@@ -52,8 +53,8 @@ export const LANDING_FEATURES: readonly LandingFeature[] = [
   },
   {
     icon: 'analytics',
-    title: 'Inventory and cost reporting',
-    description: 'Review your inventory value at cost, with average unit costs kept up to date as purchases are recorded.'
+    title: 'Inventory value at cost',
+    description: 'See your inventory valued at cost on the dashboard, with average unit costs kept up to date as purchases are recorded.'
   },
   {
     icon: 'local_shipping',
@@ -88,11 +89,11 @@ export const INTEGRATION_FACTS: readonly LandingFact[] = [
   },
   {
     title: 'Optional sales connection',
-    description: 'Connect supported Nayax credentials whenever you want to add sales data.'
+    description: 'Nayax will be a Pro plan feature once paid plans are live. It is open to every business today, while Starter and Pro are coming soon.'
   },
   {
     title: 'Optional integration',
-    description: 'Use core inventory without connecting Nayax.'
+    description: 'Nayax will be a Pro feature once paid plans launch, and connecting it stays optional: core inventory keeps working without it.'
   }
 ];
 
@@ -128,6 +129,74 @@ export const LANDING_STEPS: readonly LandingStep[] = [
   }
 ];
 
+/** One pricing plan card (issue #971). Prices are AUD per business; `billingNote` states the period. */
+export interface LandingPlan {
+  readonly id: string;
+  readonly name: string;
+  readonly price: string;
+  readonly billingNote: string;
+  readonly description: string;
+  readonly features: readonly string[];
+  /** Shown as a badge on the card. Absent only for Free, which needs no "coming soon" caveat. */
+  readonly badge?: string;
+  /** An extra callout under the feature list, used by Pro to separate plan entitlement from a usable Nayax connection. */
+  readonly note?: string;
+}
+
+export const LANDING_PLANS: readonly LandingPlan[] = [
+  {
+    id: 'free',
+    name: 'Free',
+    price: 'A$0',
+    billingNote: 'per business',
+    description: 'Run inventory by hand, at no cost.',
+    features: [
+      'Dashboard overview',
+      'Machines, products and categories',
+      'Stock on hand, take inventory and stock history',
+      'Purchases, supplier orders and suppliers',
+      'Expenses',
+      'Manual Pick List entry',
+      '1 GB of purchase and expense attachments'
+    ],
+    badge: 'Available now'
+  },
+  {
+    id: 'starter',
+    name: 'Starter',
+    price: 'A$7',
+    billingNote: 'per business, per month',
+    description: 'Free, plus daily supplier comparisons and local reports.',
+    features: [
+      'Everything in Free',
+      '20 GB of purchase and expense attachments',
+      'Daily cheapest-supplier comparisons',
+      'Bookkeeping and GST reports, with CSV/XLSX export'
+    ],
+    badge: 'Coming soon'
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    price: 'A$15',
+    billingNote: 'per business, per month',
+    description: 'Starter, plus your Nayax connection and the reports it powers.',
+    features: [
+      'Everything in Starter',
+      '20 GB of purchase and expense attachments',
+      'Connect your Nayax account for vending sales data',
+      'Sites, Site Commissions, Daily, Transactions, Reconciliation, Machines and Products reports',
+      'Machine latest sales and dashboard sales refresh',
+      'Sync Restock and the automated Pick List matrix',
+      'Nayax sales file import',
+      '5 connected machines included, then A$2/month per additional connected machine'
+    ],
+    badge: 'Coming soon',
+    note:
+      'Plan entitlement and a usable Nayax connection are separate: Pro includes the Nayax connection, but connected features still need your own working Nayax credentials.'
+  }
+];
+
 export interface LandingFaq {
   readonly question: string;
   readonly answer: string;
@@ -150,6 +219,23 @@ export const LANDING_FAQS: readonly LandingFaq[] = [
   {
     question: 'Can I use Restockroo on my phone?',
     answer: 'Yes. Restockroo runs in your web browser, and its layout adapts to mobile screens. There is no app to install.'
+  },
+  {
+    question: 'When can I subscribe to Starter or Pro?',
+    answer:
+      'Starter and Pro are coming soon. Free is available today at no cost, and you will be able to upgrade once paid plans launch.'
+  },
+  {
+    question: 'What happens if I reach my storage limit?',
+    answer:
+      "You'll see a warning at 80% of your plan's attachment storage. At 100%, new uploads pause until you free up space or upgrade; " +
+      'you can still view, download and delete existing attachments, and you can still record a purchase or expense without attaching a document.'
+  },
+  {
+    question: 'Will connecting Nayax cost extra?',
+    answer:
+      'Nayax will be part of the Pro plan once paid plans launch, including 5 connected machines. Extra connected machines beyond ' +
+      'that are A$2/month each.'
   }
 ];
 
