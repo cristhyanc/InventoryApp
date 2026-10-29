@@ -1812,8 +1812,8 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `Inventory.Operate` | `GET api/categories`, `GET api/categories/{id}`, `POST api/categories`, `PUT`/`DELETE api/categories/{id}` (the three category writes of issue #736), `POST api/products/{productId}/inventory-count/apply`, `GET`/`PUT api/products/{id}/gst-rule`, `PUT`/`DELETE api/products/{id}` | none — status codes, a category's name and description, and the refusal sentences | Already safe |
 | `Inventory.Operate` | `POST api/machines/{id}/sync-restock` and its `apply`/`resolve-duplicate`/`resolve-manual` actions, `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts` | none — machine-stock quantities, discrepancies and per-event outcomes | Already safe |
 | `Purchasing.Operate` | `GET api/purchases`, `GET api/purchases/{id}`, `POST api/purchases`, `PUT api/purchases/{id}` | each line's nested product `inventoryValue` | **Redacted here**. The purchase's own `totalAmount`, `deliveryCost`, `packageCost`, line `unitCost`, `lineTotal` and the input-GST block stay visible by the decision |
-| `Purchasing.Operate` | `GET api/supplierorders`, `GET api/supplierorders/{id}`, `POST api/supplierorders` | each line's nested product `inventoryValue` | **Redacted here**. `quantityOrdered`, `quantityReceived`, `unitPrice` and `outstandingQuantity` stay visible |
-| `Purchasing.Operate` | `GET api/purchases/{id}/file`, `DELETE api/purchases/{id}`, `POST api/supplierorders/{id}/cancel`, the whole of `api/suppliers` including `GET .../gst-defaults` | none — a stored document stream, status codes, supplier contact detail and GST classifications | Already safe |
+| `Purchasing.Operate` | `GET api/supplierorders`, `GET api/supplierorders/{id}`, `POST api/supplierorders` | each line's nested product `inventoryValue` | **Redacted here**. `quantityOrdered`, `quantityReceived`, `unitPrice`, `outstandingQuantity` and (issue #974) `undeliveredQuantity`/`completedWithUndeliveredAt` stay visible |
+| `Purchasing.Operate` | `GET api/purchases/{id}/file`, `DELETE api/purchases/{id}`, `POST api/supplierorders/{id}/cancel`, `POST api/supplierorders/{id}/completion-preview` (issue #974), the whole of `api/suppliers` including `GET .../gst-defaults` | none — a stored document stream, status codes, supplier contact detail, GST classifications, and the completion preview's ordered/received/outstanding quantities and its opaque decision fingerprint | Already safe |
 | *(none — reachable by any signed-in caller)* | `GET api/me/access`, `GET api/me/account-state`, `POST api/invites/redeem`, `POST api/onboarding/business-applications` | none | Already safe |
 
 Nothing was deferred: the audit found no leak that needed a frontend change or a contract decision, so no follow-up issue was filed under #328 for one. The two figures it closes were already nullable on every one of these responses and already optional in the frontend's `models.ts` (`StockAdjustment.inventoryValueAfter`, `StockHistoryEntry.inventoryValueAfter`, `Product.inventoryValue`), and no component renders a movement's inventory value at all, so there was no `$0.00`/`NaN` rendering to fix first the way #699 had to precede #697.
@@ -9564,6 +9564,9 @@ client-side filter/paging.
 2. Purchase-linked restock movements add physical and costing inventory at purchase cost.
 3. Delivery/package amounts remain identifiable for whole-business reporting.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
+5. The purchase that records an order's final delivery may also close whatever stays undelivered, in the
+   same transaction and without recording anything for the goods that never arrived (see
+   [Completing a partially delivered supplier order](#completing-a-partially-delivered-supplier-order-issue-974)).
 
 A purchase line is recorded as a quantity and a unit cost, and that contract is unchanged. How the
 operator *arrives* at that unit cost is theirs to decide per line on the Add and Edit purchase forms,
@@ -9598,6 +9601,101 @@ the whole write rolls back. An unchanged edit changes no movement quantity, so i
 any product with a baseline or a costing position the rebuild sets the replayed quantity anyway, so
 the outcome there is unchanged.
 
+#### Completing a partially delivered supplier order (issue #974)
+
+A supplier order has five fulfillment states, and the fifth is a person's decision rather than a function of
+its quantities. `Inventory.Domain.SupplierOrders.SupplierOrderStatus.ClosedPartiallyDelivered` (persisted
+`4`) means **an operator recorded the final delivery and decided nothing more will arrive**. It is
+deliberately neither `Cancelled` - goods really were delivered and are recorded - nor `Received` - part of
+the order never came - and no existing order is ever reclassified into it: `AddSupplierOrderPartialCompletion`
+is three additive nullable columns on `SupplierOrders` (`CompletedWithUndeliveredAt`,
+`CompletedByDirectoryTenantId`, `CompletedByObjectId`) and nothing else. The status column needs no schema
+change at all, for the reason `Businesses.Status` carries no `CHECK` constraint. The actor is the validated
+Entra `(tid, oid)` pair, following `InventoryCostRepairs.CreatedByDirectoryTenantId`/`CreatedByObjectId`: no
+email address and no display name, and it is never published - `SupplierOrderResponse` carries the instant
+and nothing about who.
+
+**The decision is made before the purchase is saved, and applied inside the purchase's own transaction.**
+`POST /api/supplierorders/{id}/completion-preview` projects the lines currently on the purchase form against
+the order's stored receipts and reports what would be left outstanding, together with a
+`decisionFingerprint`. It writes nothing and grants nothing. `POST /api/purchases` then takes two extra
+multipart fields, `completeSupplierOrderId` and `completeSupplierOrderFingerprint`, and
+`EfPurchaseStore.CreateAsync` re-reads the order, re-checks its ownership, its eligibility and its current
+receipt totals, recomputes that fingerprint and writes the status - **all inside the one transaction** that
+already holds the purchase, its receipt allocations, its restock movements and its cost rebuild. A refusal
+therefore persists none of them. There is no second client request that could close an order after a purchase
+was created.
+
+| Concern | Where it is decided |
+| --- | --- |
+| Eligibility, the projected balance, and the two protected statuses | `Inventory.Domain.SupplierOrders.SupplierOrderCompletionPolicy` |
+| The quantities this purchase applies to each line | `SupplierOrderFulfillmentAllocationPolicy` - the purchase write's own algorithm, over the purchase write's own candidate query |
+| What a line is still owed, and what never arrived | `SupplierOrderLineOutstandingPolicy.Outstanding`/`.Undelivered` |
+| Whether the decision is still the one that was shown | `SupplierOrderCompletionFingerprint` |
+| The candidate outstanding lines both the preview and the save work from | `Inventory.Infrastructure.Persistence.EfSupplierOrderFulfillmentQueries` |
+
+**One calculation feeds the preview and the save.** The candidate-line query was `EfPurchaseStore`'s private
+query until this issue; it is now the shared `EfSupplierOrderFulfillmentQueries.CandidateLinesByProductAsync`
+that `EfSupplierOrderCompletionStore` reads too, so the balance the operator was shown and the balance the
+save leaves cannot be two answers. The only change to the query itself is that it also excludes a completed
+order, which is closed and must receive nothing more. The Angular purchase form formats the projection and
+calculates nothing: it subtracts no receipt from any order.
+
+**Concurrency.** When - and only when - a completion decision rides along, `CreateAsync` opens
+`SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`) instead of the deferred transaction a purchase save has
+always used, so SQLite's write lock is held *before* the authoritative read the decision is checked against
+rather than at the first write after it. The ordinary purchase save is unchanged. A competing receipt, a
+cancellation, a completion or an edited order landing between the preview and the save changes the
+fingerprint and is refused with `SupplierOrderCompletionPolicy.StaleDecisionMessage`; an order that is no
+longer open is refused with `NotEligibleMessage`; and a purchase that turns out to receive the order in full
+is refused with `NoOutstandingBalanceMessage` rather than recording a completion over a complete delivery.
+Each refusal is an `InvalidOperationException`, which `PurchasesController` already maps to `400` with the
+message, and the whole transaction rolls back.
+
+**What it never touches.** No quantity, stock movement, cost, AVCO position, inventory value, GST component
+or purchase amount is created for goods that did not arrive - the only thing the completion writes is the
+order's own status and its attribution. The ordered quantities, the real receipts and the purchase links stay
+exactly as they were, with the closed balance published as each line's `undeliveredQuantity`, which is `0`
+on every order but a completed one so that "still expected" and "never came" can never be read as each
+other.
+
+**Outstanding-order and active-order treatment.** A completed order's remainder is **not** supply on its
+way, so `EfOutstandingSupplierOrderQuantityStore` excludes it beside `Cancelled` and `Received` - counting a
+closed balance as on-order would suppress a reorder alert for goods nobody is sending (see
+[Provider-optional reorder and dashboard summary](#provider-optional-reorder-and-dashboard-summary-issue-726),
+whose formula is unchanged: this removes an input, it does not add a rule). `EfSupplierOrderStore.ListActiveAsync`
+excludes it for the same reason, so it leaves the Supplier Orders page, and `CancelAsync` refuses it: an order
+that is already closed is not cancellable, and a completion is never relabelled as a cancellation.
+`SupplierOrderStatusPolicy.Resolve(currentStatus, lines)` is the overload every write path now uses, so the
+receipt rollup leaves both of the statuses a person decides - `Cancelled` and `ClosedPartiallyDelivered` -
+exactly as they are.
+
+**Interaction with purchase corrections.** Editing or deleting a purchase that holds a receipt allocation on
+a completed order is **refused whole**, with a message naming the order
+(`SupplierOrderCompletionPolicy.LinkedToCompletedOrderMessage`). Reopening a completed order is out of scope,
+and the two alternatives are each worse than refusing: detaching the allocations would leave the order
+recording deliveries no purchase holds, and re-allocating onto it would make a closed order accept a receipt.
+The check runs before the correction's transaction opens, so a refusal writes nothing. A purchase linked to
+an order that is still open, or to no order at all, is completely unaffected and still editable.
+
+**Authorization.** Both endpoints are on controllers that already declare `Purchasing.Operate`
+(authorization class 1); nothing was added to `EndpointAuthorizationClassificationTests`. The preview is a
+`POST` that changes nothing, so a read-only support session and a role preview both refuse it by their own
+method rules rather than by anything written for it - the same way the cheapest-supplier summary is refused.
+A client may *request* a completion; it cannot submit a receipt total, a quantity or a status, and the order
+is reached through the ordinary tenant query filters, so another business's order id is simply not found.
+
+**The frontend** asks the question in a dedicated feature component,
+`SupplierOrderCompletionDialogComponent` (`components/purchases/supplier-order-completion-dialog/`), composed
+into `PurchaseUploadComponent` through one input and three outputs rather than grown into the routed page -
+see [Page composition boundary](#page-composition-boundary-issue-191). It is a native modal `<dialog>` opened
+with `showModal()`, like the cheapest-supplier popup and the More sheet, so the purchase form behind it is
+inert; **Keep order open** is the focused default, Escape and the backdrop both answer *cancel* rather than
+picking a default, and cancelling returns to the form with everything entered still there and nothing saved.
+A failed save clears the settled choice, so the next attempt re-previews rather than resubmitting a
+fingerprint the server already refused, and the "order completed" toast fires only after the server stored
+it.
+
 #### Reorder-alert machine-product fan-out (issue #47)
 
 The low-stock endpoints (`GET /api/products/alerts/low-stock`, and
@@ -9615,8 +9713,10 @@ product ID is the local one, resolved from each selection's `NayaxProductID` thr
 table since issue #733 (see
 [Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)).
 `Inventory.Application.Reorder.IOutstandingSupplierOrderQuantityStore` is the narrow port for the
-outstanding (not cancelled, not fully received) supplier-order quantity per product the use case also
-returns; `Inventory.Infrastructure.Persistence.EfOutstandingSupplierOrderQuantityStore` is its EF
+outstanding supplier-order quantity per product the use case also returns - outstanding meaning "still on
+its way", so an order that is cancelled, fully received or explicitly completed with an undelivered balance
+(issue #974) contributes nothing;
+`Inventory.Infrastructure.Persistence.EfOutstandingSupplierOrderQuantityStore` is its EF
 adapter, Infrastructure-owned since Persistence 8/8 of #153 like every other `Ef*` adapter.
 The caller applies both returned dictionaries onto its already-filtered product list unchanged
 (`MachineReplenishmentNeed`, `OnOrderQuantity`, and the `NeedToOrder`/`IsReorderAlert` values they
@@ -10544,14 +10644,20 @@ Supplier orders moved from a Products-area child view to a dedicated Purchases w
 `/purchases/orders`). It is a thin consumer of the existing `SupplierOrderService` and the
 existing `GET /api/supplierorders` contract: it introduces no new service, DTO, endpoint, or
 supplier-order business rule. `GET /api/supplierorders` already returns only active orders
-(`Ordered`/`PartiallyReceived`; `Received` and `Cancelled` are excluded in `EfSupplierOrderStore`),
+(`Ordered`/`PartiallyReceived`; `Received`, `Cancelled` and - since issue #974 -
+`ClosedPartiallyDelivered` are excluded in `EfSupplierOrderStore`),
 so the page states on screen that it shows open orders only, and its supplier/reference search and
 Ordered/Partially-received status filter are purely client-side presentation filters over that
-already-active set, not new query parameters on the endpoint. Listing received or cancelled orders
-remains out of scope; it needs a new API contract. The page's Receive/Create Purchase and Cancel
+already-active set, not new query parameters on the endpoint. Listing received, cancelled or completed
+orders remains out of scope; it needs a new API contract. The page's Receive/Create Purchase and Cancel
 actions are unchanged from the previous Products-area view: Receive navigates to
-`/purchases/new?supplierOrderId=<id>` (the existing `PurchaseUploadComponent` prefill workflow,
-unchanged) and Cancel calls `SupplierOrderService.cancel`.
+`/purchases/new?supplierOrderId=<id>` (the existing `PurchaseUploadComponent` prefill workflow, which
+since issue #974 asks about the order's outstanding balance before saving) and Cancel calls
+`SupplierOrderService.cancel`. Both actions are offered only while the order is one of the two **open**
+statuses rather than "not one of the closed ones", so a closed status added later is excluded by default
+instead of being offered a write; `ClosedPartiallyDelivered` renders as **Completed — partially delivered**
+and, where an order records one, the line table shows an **Undelivered** column beside Outstanding, which
+the server supplies as each line's `undeliveredQuantity`.
 
 **Compatibility treatment of the old Products "On Order" entry point.** The Products-area
 `ProductOnOrderComponent` (previously routed at `/products/on-order`) was removed rather than kept

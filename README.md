@@ -6,7 +6,10 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 - Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A supplier that came from the platform's supplier list keeps that list's name and website, cannot be deleted, and can be marked **Not used** to keep it out of the pickers; a business receives the ones that serve the state it trades in, picks up more when it changes state, and can add any other that serves it in one click from **Available to add** (see [Suppliers from the platform list](#suppliers-from-the-platform-list)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
-- Purchases, their supporting documents, supplier orders, and stock movements.
+- Purchases, their supporting documents, supplier orders, and stock movements. Recording the final delivery
+  against a supplier order that arrived short offers, before anything is saved, a choice between keeping the
+  order open and completing it with the remainder undelivered (see [Receiving a supplier order: keep it open,
+  or complete it](#receiving-a-supplier-order-keep-it-open-or-complete-it)).
 - Sites, vending machines, product assignments, and machine refills.
 - A **home dashboard reminder when machine restock sync is behind** (see [Machine restock sync reminder](#machine-restock-sync-reminder)): Sync Restock is something an operator asks for, so the dashboard says which Nayax-linked machines have not had a successful restock sync in the last three business days, or still have restock events waiting to be reviewed.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -1235,6 +1238,56 @@ amounts.
 
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.
+
+## Receiving a supplier order: keep it open, or complete it
+
+**Receive / Create Purchase** on the Supplier Orders page opens Add Purchase with the order's outstanding
+lines prefilled, exactly as before. Suppliers do not always send everything they were ordered, though, and an
+order you record a short final delivery against used to stay **Partially received** until you cancelled it
+separately — which said the wrong thing, because the goods that *did* arrive were delivered and recorded.
+
+So when you press **Add Purchase** on a purchase that came from a supplier order, and the order would still
+be short of something afterwards, the application asks what should happen to the remainder before it saves
+anything:
+
+- **Keep order open** — the safe default, and the behaviour saving the purchase has always had. The order
+  stays **Partially received**, and the quantities that have not arrived stay on order: they still count
+  towards the restock target, so the products do not ask to be ordered again.
+- **Complete order** — nothing more is expected. The purchase is saved and the order is closed in the same
+  step, with the status **Completed — partially delivered**.
+- **Back to purchase** — closes the question and saves nothing. Everything you entered — the document, the
+  title, every line, the charges and the classifications — is still on the form.
+
+The dialog lists the affected products with what was ordered, what had already been received, what this
+purchase delivers and what would be left outstanding, each in the unit the product is ordered in. Those
+figures come from the server, which projects your entered lines against the order's own stored receipts using
+the same allocation it will use when it saves — the page does not work them out itself.
+
+**What completing an order does, and what it deliberately does not.**
+
+- It records **only what actually arrived**. The quantities that never came create no stock, no cost, no
+  weighted-average change, no GST and no purchase amount of any kind. Nothing on the order is rewritten to
+  make it add up, and a line this purchase left out entirely is closed at the zero that really arrived.
+- The order keeps its **ordered quantities, its real receipts and its purchase links** as history, with the
+  undelivered balance readable beside them, and records who completed it and when. It is **not** relabelled
+  **Cancelled** (goods really were delivered) and **not** relabelled **Received** (part of it never came).
+- The closed balance stops being **on order**. It no longer counts towards a restock target, so the products
+  on it start asking to be ordered again — which is the point: nobody is sending them.
+- A completed order accepts **no further receipts**, is no longer listed among the open orders, and cannot be
+  cancelled. Reopening one is not supported.
+- Because the order was closed on that purchase's receipts, **that purchase can no longer be edited or
+  deleted**. Both are refused with a message naming the order, rather than silently reopening it or leaving
+  it recording a delivery no purchase holds.
+
+**A fully received order is unchanged.** If your purchase receives everything still outstanding, nothing is
+asked and the order becomes **Received** as it always did. A purchase that is not linked to an order is
+unchanged too.
+
+**If the order changed while you were deciding** — somebody else recorded another receipt, or cancelled or
+completed it — the save is refused, **nothing at all is stored** (not the purchase, not its stock, not the
+order's status), and the page asks you to reload the order and review the outstanding quantities with your
+entered purchase still on screen. The same applies if the save fails for any other reason: nothing ever
+reports an order as completed unless the server stored it.
 
 ## Products and categories
 
