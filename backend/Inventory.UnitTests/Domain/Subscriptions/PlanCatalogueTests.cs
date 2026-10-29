@@ -125,4 +125,36 @@ public class PlanCatalogueTests
     public void An_undeclared_plan_cannot_be_compared() =>
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             SubscriptionPlans.Higher((SubscriptionPlan)0, SubscriptionPlan.Free));
+
+    /// <summary>
+    /// A plan arrives from a caller as its published <em>name</em> (issue #982), case-insensitively
+    /// and with surrounding whitespace ignored.
+    /// </summary>
+    [Theory]
+    [InlineData("Free", SubscriptionPlan.Free)]
+    [InlineData("starter", SubscriptionPlan.Starter)]
+    [InlineData("  PRO  ", SubscriptionPlan.Pro)]
+    public void A_declared_plan_name_parses(string name, SubscriptionPlan expected)
+    {
+        Assert.True(SubscriptionPlans.TryParse(name, out var plan));
+        Assert.Equal(expected, plan);
+    }
+
+    /// <summary>
+    /// And a number does not, which is the whole point of parsing a name: <c>Enum.TryParse</c> alone
+    /// would turn <c>"30"</c> into Pro and <c>"99"</c> into a plan nobody declared.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("Platinum")]
+    [InlineData("0")]
+    [InlineData("30")]
+    [InlineData("99")]
+    public void Anything_that_is_not_a_declared_plan_name_is_refused(string? name)
+    {
+        Assert.False(SubscriptionPlans.TryParse(name, out var plan));
+        Assert.False(SubscriptionPlans.IsDeclared(plan));
+    }
 }

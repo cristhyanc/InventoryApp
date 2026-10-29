@@ -5,6 +5,7 @@ using Inventory.Domain.MachineStock;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Stock;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
@@ -177,9 +178,9 @@ public class AppDbContext : DbContext
     /// take one, and its only caller is <c>EfPriceCollectorMatchStore</c>, which takes it around one
     /// <c>SaveChanges</c>; a lease may be taken only while this context's own scope is
     /// <see cref="BusinessScopeState.Denied"/>, so neither an ordinary member's request nor a support
-    /// session can open one; only one may be open at a time and never beside a provisioning lease; and
-    /// the enforcer still refuses every insert, every delete, every other entity type and every other
-    /// column while it is open - including the ownership key itself, so a mapping cannot be moved
+    /// session can open one; only one may be open at a time and never beside a provisioning or plan
+    /// grant lease; and the enforcer still refuses every insert, every delete, every other entity
+    /// type and every other column while it is open - including the ownership key itself, so a mapping cannot be moved
     /// between businesses through this window any more than through any other.</para>
     /// </summary>
     /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
@@ -196,11 +197,13 @@ public class AppDbContext : DbContext
                     + "a business must write through the ordinary tenant path.");
         }
 
-        if (PriceCatalogueMatchingLeased || SupplierProvisioningBusinessId is not null)
+        if (PriceCatalogueMatchingLeased
+            || SupplierProvisioningBusinessId is not null
+            || PlanGrantWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A price catalogue matching or supplier provisioning lease is already open on this "
-                    + "context.");
+                "A price catalogue matching, supplier provisioning or plan grant write lease is "
+                    + "already open on this context.");
         }
 
         PriceCatalogueMatchingLeased = true;
@@ -228,6 +231,100 @@ public class AppDbContext : DbContext
             }
 
             _context.PriceCatalogueMatchingLeased = false;
+            _context = null;
+        }
+    }
+
+    /// <summary>
+    /// The business a <see cref="BeginPlanGrantWrite"/> lease is currently open for, and <c>null</c> -
+    /// which is every other moment of this context's life - when none is (issue #982).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope. Like the provisioning lease above it is deliberately not read by
+    /// <see cref="CurrentBusinessId"/> or <see cref="TenantFilteringEnabled"/>: a lease grants a
+    /// write and never a read, so while one is open every tenant-owned query still matches nothing
+    /// and the one adapter that reads these two tables under a denied scope does so through an
+    /// explicit, business-pinned <c>IgnoreQueryFilters</c> statement that a reviewer can see.</para>
+    /// </summary>
+    internal int? PlanGrantWriteBusinessId { get; private set; }
+
+    /// <summary>
+    /// Opens the manual plan grant window: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>that one business's
+    /// <see cref="BusinessPlanGrant"/> row and the <see cref="BusinessPlanGrantAudit"/> row beside
+    /// it, and nothing else</em> on an otherwise denied scope (issue #982, the owner-approved
+    /// amendment of 29 October 2026).
+    ///
+    /// <para><strong>Why a window exists at all.</strong> A manual grant is the Super Admin's
+    /// decision about a business they are not a member of, so the request carries a denied
+    /// <see cref="BusinessScope"/> and the enforcer refuses every tenant-owned write - which is what
+    /// makes the platform-admin surface unable to touch a business's own data. A plan grant is
+    /// nevertheless a tenant-owned row of issue #966, and the platform owner has to be able to
+    /// grandfather, trial and comp a business without billing it. This is the narrow, reviewed
+    /// exception rather than a relaxation of the rule: see docs/architecture.md § Super Admin sets a
+    /// business's plan.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and the only caller is <c>EfPlatformPlanGrantStore</c>, which takes it around one
+    /// <c>SaveChanges</c>; two entity types and no other, inserts and - for the grant row alone -
+    /// updates, never a delete; the business id is the key of the row the decision's own write
+    /// transaction read, never a value a request supplied; a lease may be taken only while this
+    /// context's own scope is <see cref="BusinessScopeState.Denied"/>, so neither an ordinary
+    /// member's request nor a support session can open one; and only one may be open at a time,
+    /// never beside a matching or provisioning lease.</para>
+    /// </summary>
+    /// <param name="businessId">The business whose grant and audit rows may be written.</param>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginPlanGrantWrite(int businessId)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(businessId, 0);
+
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "A manual plan grant is only written by a request that resolved no business of its "
+                    + "own - the platform administrator deciding it. A scope that already names a "
+                    + "business must not write another business's grant at all.");
+        }
+
+        if (PlanGrantWriteBusinessId is not null
+            || PriceCatalogueMatchingLeased
+            || SupplierProvisioningBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A plan grant write, price catalogue matching or supplier provisioning lease is "
+                    + "already open on this context.");
+        }
+
+        PlanGrantWriteBusinessId = businessId;
+        return new PlanGrantWriteLease(this);
+    }
+
+    /// <summary>
+    /// Closes the window of <see cref="BeginPlanGrantWrite"/>. A sealed class with one field, for the
+    /// reason <see cref="SupplierProvisioningLease"/> is one: a struct would be copied by the
+    /// <c>using</c> statement.
+    /// </summary>
+    private sealed class PlanGrantWriteLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public PlanGrantWriteLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.PlanGrantWriteBusinessId = null;
             _context = null;
         }
     }
@@ -487,6 +584,14 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessPlanGrant"/>.
     /// </summary>
     public DbSet<BusinessPlanGrant> BusinessPlanGrants => Set<BusinessPlanGrant>();
+
+    /// <summary>
+    /// Every decision a Super Admin has made about a business's manual grant (issue #982): who
+    /// granted, changed or ended what, and why. Ordinary tenant-owned data, append-only, and written
+    /// in the same <c>SaveChanges</c> as the grant it is about - so the grant and the record of who
+    /// gave it commit together or not at all. See <see cref="BusinessPlanGrantAudit"/>.
+    /// </summary>
+    public DbSet<BusinessPlanGrantAudit> BusinessPlanGrantAudits => Set<BusinessPlanGrantAudit>();
 
     /// <summary>
     /// The single shared row holding the grandfathering step's fixed cutoff and its completion marker
@@ -1646,6 +1751,33 @@ public class AppDbContext : DbContext
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
         grant.Property(x => x.GrantedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        // The Super Admin surface's optimistic concurrency counter (issue #982). It defaults to 0,
+        // which is what every row written before that surface existed - and the grandfathered grant,
+        // which it never writes - holds, and it is an ordinary column rather than a provider row
+        // version because the value is compared by the use case, reported to the client and logged.
+        grant.Property(x => x.Revision).HasDefaultValue(0);
+
+        // The decisions that produced those grants (issue #982): one append-only row per committed
+        // create, change or end, written in the same SaveChanges as the grant it is about. Tenant-
+        // owned with nothing added, exactly as the grant is; the reason column matches the grant's
+        // length, and the actor's Entra pair is sized like every other stored (tid, oid).
+        var grantAudit = modelBuilder.Entity<BusinessPlanGrantAudit>();
+
+        // The one index this table needs: a business's decisions in the order they happened, which is
+        // how the trail is read. The business key alone is already indexed centrally.
+        grantAudit.HasIndex(x => new { x.BusinessId, x.OccurredAtUtc });
+        grantAudit.Property(x => x.Reason).HasMaxLength(ManualPlanGrantPolicy.MaxReasonLength);
+        grantAudit.Property(x => x.ActorDirectoryTenantId).HasMaxLength(100);
+        grantAudit.Property(x => x.ActorObjectId).HasMaxLength(100);
+        grantAudit.Property(x => x.EndsAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        grantAudit.Property(x => x.OccurredAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
 

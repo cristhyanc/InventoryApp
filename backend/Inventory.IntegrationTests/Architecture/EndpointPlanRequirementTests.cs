@@ -324,6 +324,9 @@ public class EndpointPlanRequirementTests
         new("SuperAdminBusinessesController.Reject", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reject
         new("SuperAdminBusinessesController.ReleaseMember", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/members/{membershipId:int}/release
         new("SuperAdminOptionVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/option-visibility
+        new("SuperAdminPlanGrantsController.End", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/plan-grant/end
+        new("SuperAdminPlanGrantsController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/plan-grant
+        new("SuperAdminPlanGrantsController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/plan-grant
         new("SuperAdminSupplierPresetsController.Create", PlanRequirementKind.None), // POST api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.List", PlanRequirementKind.None), // GET api/super-admin/supplier-presets
         new("SuperAdminSupplierPresetsController.Update", PlanRequirementKind.None), // PUT api/super-admin/supplier-presets/{id:int}

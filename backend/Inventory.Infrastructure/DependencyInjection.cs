@@ -25,6 +25,7 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
@@ -222,6 +223,16 @@ public static class InfrastructureServiceCollectionExtensions
         // load records on the request's own context and the daily job on the one it opened for that
         // business.
         services.AddScoped<IConnectedMachineSnapshotStore, EfConnectedMachineSnapshotStore>();
+
+        // The Super Admin's manual plan grant (issue #982). A separate adapter rather than a method
+        // on either store above, because it answers a different kind of question: the business is the
+        // subject of a platform decision rather than the caller's own resolved scope, so this is the
+        // one path that reads and writes a business's grant under a denied scope - through one
+        // business-pinned IgnoreQueryFilters read and the narrow write lease of
+        // AppDbContext.BeginPlanGrantWrite. Scoped like every adapter here, so it runs on the
+        // request's own context and inside the decision's transaction on it, which is also the only
+        // way that lease can be taken at all.
+        services.AddScoped<IPlatformPlanGrantStore, EfPlatformPlanGrantStore>();
 
         // The attachment storage accounting of issue #968: the business's own usage, and the
         // reservation an upload takes before it writes a byte. Scoped like every adapter here, so

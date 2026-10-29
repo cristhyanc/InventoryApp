@@ -23,6 +23,7 @@ using InventoryApi.Adapters.Subscriptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.SupportSessions;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
@@ -328,6 +329,11 @@ builder.Services.AddScoped<ISupplierPresetAudit, LoggingSupplierPresetAudit>();
 // no field for a business, a member or anything of theirs, because this setting is about none of
 // them.
 builder.Services.AddScoped<IOptionVisibilityAudit, LoggingOptionVisibilityAudit>();
+// The manual plan grant trail (issue #982): one event per committed create, change or end. A
+// separate port again, on the same terms - a different event with different fields - and its entry
+// type has no field for the administrator's reason text or for any name, so the reason stays in the
+// database row the decision wrote in its own transaction and never reaches a log.
+builder.Services.AddScoped<IPlatformPlanGrantAudit, LoggingPlatformPlanGrantAudit>();
 // What else happens when a business is deactivated (issue #545's hook point): since issue #550, every
 // active support session for that business ends. It is the single registration #545 declared this
 // hook for, replaced here rather than by editing that transition - the hook runs inside the

@@ -24,6 +24,7 @@ using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -183,6 +184,13 @@ public static class ApplicationServiceCollectionExtensions
         // AppDbContext and under the business that scope resolved - a snapshot can never belong to a
         // business a caller named.
         services.AddScoped<IConnectedMachineSnapshotRecorder, RecordConnectedMachineSnapshot>();
+
+        // And the Super Admin's manual grant on one business (issue #982). Scoped like the
+        // platform-admin surfaces above and for the same reasons: the business read, the revision
+        // comparison and the grant and audit write all run on the request's own AppDbContext, inside
+        // one BEGIN IMMEDIATE transaction on that same context, and the business it decides about is
+        // named by the route - the subject of the decision rather than a tenancy scope.
+        services.AddScoped<ManageBusinessPlanGrant>();
 
         // The attachment storage quota of issue #968, which reads the entitlement above for its
         // allowance. Scoped for the same reason: both the guard every upload path reserves through
