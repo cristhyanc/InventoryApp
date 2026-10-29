@@ -64,6 +64,20 @@ integration heading "Core inventory works on its own. Connect Nayax when you nee
 step titles, the four FAQ questions, the "Example dashboard · Sample data" label and every sample
 figure the issue lists.
 
+## Pricing copy (issue #971)
+
+The pricing section the homepage gained in issue #971 follows the same rule, with one addition that
+matters more than a narrowed phrase: **a plan limit nothing enforces yet is written as what happens
+once the paid plans launch, never as today's behaviour.** Attachment quota enforcement (issue #968)
+and recording a purchase without attaching a document (issue #976) have not shipped - attachment
+storage is unrestricted, and `PurchasesController.Upload` still refuses a request with no file - so
+the section's lead paragraph, the Free card's own note and the "What happens if I reach my storage
+limit?" FAQ all say the allowances, the 80% warning and the 100% upload pause start at launch and
+that nothing is limited today, and no copy on the page promises a purchase or expense recorded with
+no document attached. Starter and Pro stay badged "Coming soon" for the same reason. Restoring a
+present-tense version of any of those sentences means the behaviour has to exist first; a copy
+regression in `landing-page.component.spec.ts` fails if it does not.
+
 ## Follow-up
 
 - **Privacy, terms and contact.** The footer has no Privacy Policy, Terms of Service or Contact link

@@ -22,8 +22,13 @@ public sealed class EfOutstandingSupplierOrderQuantityStore : IOutstandingSuppli
 
     public async Task<IReadOnlyDictionary<long, decimal>> GetOutstandingQuantitiesByProductAsync(CancellationToken cancellationToken) =>
         await _db.SupplierOrderLines
+            // The closed states contribute no on-order supply. ClosedPartiallyDelivered joined
+            // Cancelled and Received here in issue #974: an order the operator completed with part
+            // of it undelivered is not stock on its way, so counting its balance as supply would
+            // suppress a reorder alert for goods nobody is sending.
             .Where(line => line.SupplierOrder.Status != SupplierOrderStatus.Cancelled &&
-                           line.SupplierOrder.Status != SupplierOrderStatus.Received)
+                           line.SupplierOrder.Status != SupplierOrderStatus.Received &&
+                           line.SupplierOrder.Status != SupplierOrderStatus.ClosedPartiallyDelivered)
             .GroupBy(line => line.ProductId)
             .Select(group => new { ProductId = group.Key, Quantity = group.Sum(line => line.QuantityOrdered - line.QuantityReceived) })
             .ToDictionaryAsync(item => item.ProductId, item => item.Quantity, cancellationToken);

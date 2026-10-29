@@ -22,6 +22,7 @@ function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusine
     state: 'QLD',
     activeMemberCount: 1,
     nayaxConfigured: false,
+    nayaxConnectionStatus: 'NotConfigured',
     ...overrides
   };
 }
@@ -87,6 +88,56 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     );
 
     expect(states).toEqual(['QLD', '—']);
+  });
+
+  /**
+   * Issue #983: a coloured dot next to each business name says how usable its Nayax connection was
+   * at its last test - green for `Ready`, orange for either state that is stored but not working,
+   * and red for one with nothing stored.
+   */
+  it.each<[SuperAdminBusiness['nayaxConnectionStatus'], string]>([
+    ['Ready', 'bg-rr-ok-text'],
+    ['PendingPermissions', 'bg-rr-warn-text'],
+    ['NeedsAttention', 'bg-rr-warn-text'],
+    ['NotConfigured', 'bg-rr-danger-text']
+  ])('shows a %s business with a %s dot', async (nayaxConnectionStatus, expectedClass) => {
+    const { host } = await render({ list: () => of([business({ nayaxConnectionStatus })]) });
+
+    const dot = rowFor(host, 'Snack Co').querySelector('[data-testid="nayax-connection-dot"]');
+
+    expect(dot).not.toBeNull();
+    expect(dot!.classList).toContain(expectedClass);
+  });
+
+  /**
+   * Issue #983: colour is never the only signal, and the two orange states stay distinct - each of
+   * the four has its own tooltip and its own screen-reader label.
+   */
+  it.each<[SuperAdminBusiness['nayaxConnectionStatus'], string]>([
+    ['Ready', 'Nayax verified at last test'],
+    ['PendingPermissions', 'Nayax token saved, not tested yet'],
+    ['NeedsAttention', 'Nayax last test failed'],
+    ['NotConfigured', 'Nayax not set up']
+  ])('describes a %s connection as "%s" in text as well as colour', async (nayaxConnectionStatus, expectedLabel) => {
+    const { host } = await render({ list: () => of([business({ nayaxConnectionStatus })]) });
+
+    const row = rowFor(host, 'Snack Co');
+
+    expect(row.querySelector('[data-testid="nayax-connection-dot"]')!.getAttribute('title')).toBe(expectedLabel);
+    expect(row.querySelector('[data-testid="nayax-connection-label"]')!.textContent?.trim()).toBe(expectedLabel);
+  });
+
+  /**
+   * Issue #983: the dot carries no text of its own, so the label beside it is the one thing a
+   * screen reader announces - the status is never read out twice.
+   */
+  it('hides the dot itself from assistive technology and keeps the label visually hidden', async () => {
+    const { host } = await render({ list: () => of([business({ nayaxConnectionStatus: 'Ready' })]) });
+
+    const row = rowFor(host, 'Snack Co');
+
+    expect(row.querySelector('[data-testid="nayax-connection-dot"]')!.getAttribute('aria-hidden')).toBe('true');
+    expect(row.querySelector('[data-testid="nayax-connection-label"]')!.classList).toContain('sr-only');
   });
 
   it('shows an error state when the list fails to load', async () => {

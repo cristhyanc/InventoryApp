@@ -474,9 +474,26 @@ describe('landing page tokens (issue #954)', () => {
     ['dashboard values and navigation labels on white', () => rr('navy'), () => WHITE],
     ['navigation labels on the hovered or active-group surface', () => rr('navy'), () => rr('surface')],
     ['the Needs attention heading on its panel', () => rr('navy'), () => rr('warn-bg')],
+    // The pricing cards (issue #971), which sit on rr-surface inside the white Pricing section.
+    ['plan names and prices on a plan card', () => rr('navy'), () => rr('surface')],
+    ['plan descriptions, features and billing notes on a plan card', () => rr('muted'), () => rr('surface')],
+    ['the feature tick on a plan card', () => rr('teal'), () => rr('surface')],
+    ["a plan badge and Free's and Pro's notes, on their white chip", () => rr('muted'), () => WHITE],
+    ['a plan card action label', () => rr('navy'), () => WHITE],
+    ['a hovered plan card action label', () => rr('navy'), () => rr('canvas')],
   ];
 
   it.each(pairs)('%s reach WCAG AA 4.5:1', (_label, foreground, background) => {
     expect(contrastRatio(foreground(), background())).toBeGreaterThanOrEqual(4.5);
+  });
+
+  /*
+   * A focus indicator is non-text contrast (WCAG 1.4.11), minimum 3:1. The global
+   * `:focus-visible` outline is md-info at a 2px offset, so on the pricing cards (issue #971) -
+   * the first landing surface holding a focusable control - it is drawn over rr-surface rather
+   * than over white, and is measured against it here.
+   */
+  it('keeps the focus-visible outline at 3:1 over a plan card surface', () => {
+    expect(contrastRatio(color('md-info'), rr('surface'))).toBeGreaterThanOrEqual(3);
   });
 });

@@ -111,6 +111,38 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("BusinessBackfillAudits");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessBillingSubscription", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CurrentPeriodEndUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CurrentPeriodStartUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Plan")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId")
+                        .IsUnique();
+
+                    b.ToTable("BusinessBillingSubscriptions");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>
                 {
                     b.Property<int>("Id")
@@ -208,6 +240,45 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("BusinessNayaxConnections");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessPlanGrant", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("EndsAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("GrantedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Plan")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("StartsAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "Source")
+                        .IsUnique()
+                        .HasFilter("\"Source\" = 10");
+
+                    b.ToTable("BusinessPlanGrants");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Category", b =>
@@ -2138,7 +2209,6 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("ContentType")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
@@ -2154,10 +2224,9 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("FileName")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<long>("FileSizeBytes")
+                    b.Property<long?>("FileSizeBytes")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Notes")
@@ -2176,7 +2245,6 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("StoredFileName")
-                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("SupplierId")
@@ -2195,7 +2263,10 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SupplierId");
 
-                    b.ToTable("Receipts", (string)null);
+                    b.ToTable("Receipts", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Receipts_DocumentMetadataAllOrNothing", "(\"StoredFileName\" IS NULL AND \"ContentType\" IS NULL AND \"FileName\" IS NULL AND \"FileSizeBytes\" IS NULL) OR (\"StoredFileName\" IS NOT NULL AND \"ContentType\" IS NOT NULL AND \"FileName\" IS NOT NULL AND \"FileSizeBytes\" IS NOT NULL)");
+                        });
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PurchaseItem", b =>
@@ -2350,6 +2421,25 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "MachineId");
 
                     b.ToTable("StockAdjustments");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SubscriptionGrandfathering", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CutoffUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("GrantedBusinessCount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("SubscriptionGrandfatherings");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Supplier", b =>
@@ -2633,6 +2723,15 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("CompletedByDirectoryTenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CompletedByObjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedWithUndeliveredAt")
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");

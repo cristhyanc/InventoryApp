@@ -1,0 +1,68 @@
+@if (choice) {
+  <!--
+    A native modal `<dialog>`, not a `role="dialog"` div inside a backdrop div, for the reason the
+    cheapest-supplier popup is one (issue #930) and the More sheet became one (issue #972):
+    `showModal()` moves this into the top layer, makes the purchase form behind it inert and paints
+    the backdrop as this element's own `::backdrop`, so the form cannot be clicked, tabbed into or
+    reached by assistive technology while the question is open. Neither `role` nor `aria-modal` is
+    written here because the platform maps a modal `<dialog>` to exactly those, and repeating them
+    is how the two drift apart. Escape arrives as the dialog's own `cancel` event, which this
+    component answers as the cancel choice: dismissing a question is not answering it.
+  -->
+  <dialog
+    #dialogPanel
+    tabindex="-1"
+    [attr.aria-labelledby]="titleId"
+    class="m-auto flex max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-xl flex-col overflow-hidden rounded-md-dialog border-0 bg-white p-0 text-left text-md-gray-800 shadow-md-lg outline-none backdrop:bg-md-gray-800/50"
+    data-testid="supplier-order-completion-dialog"
+  >
+    <div class="border-b border-md-gray-200 px-6 py-4">
+      <h2 [id]="titleId" class="card-title">Some ordered items are still outstanding</h2>
+      <p class="text-md-body value-muted">
+        Supplier order #{{ choice.supplierOrderId }} will still be short of the items below once this purchase is
+        saved. Keep the order open if more is still coming, or complete it if nothing more will arrive.
+      </p>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <table class="table">
+        <caption class="sr-only">Items that would be left outstanding on supplier order #{{ choice.supplierOrderId }}</caption>
+        <thead class="table-head">
+          <tr>
+            <th scope="col" class="table-cell">Product</th>
+            <th scope="col" class="table-cell table-num">Ordered</th>
+            <th scope="col" class="table-cell table-num">Already received</th>
+            <th scope="col" class="table-cell table-num">On this purchase</th>
+            <th scope="col" class="table-cell table-num">Still outstanding</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (line of choice.outstandingLines; track line.supplierOrderLineId) {
+            <tr class="table-row" data-testid="completion-outstanding-row">
+              <td class="table-cell">{{ line.productName }}</td>
+              <td class="table-cell table-num">{{ quantity(line.quantityOrdered, line.unit) }}</td>
+              <td class="table-cell table-num">{{ quantity(line.quantityAlreadyReceived, line.unit) }}</td>
+              <td class="table-cell table-num">{{ quantity(line.quantityOnThisPurchase, line.unit) }}</td>
+              <td class="table-cell table-num font-semibold">{{ quantity(line.outstandingQuantity, line.unit) }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+
+      <p class="mt-4 text-md-body value-muted">
+        Completing the order records only what actually arrived. The quantities that never came are kept as history,
+        stay out of what is still on order, and change no stock, cost or GST figure.
+      </p>
+    </div>
+
+    <!--
+      Keep order open first and focused: it is the safe answer, and it is the behaviour saving this
+      purchase has always had. Completing is the deliberate one.
+    -->
+    <div class="flex flex-wrap justify-end gap-2 border-t border-md-gray-200 px-6 py-4">
+      <button type="button" class="btn btn-link" (click)="cancelChoice()">Back to purchase</button>
+      <button #keepOpenButton type="button" class="btn btn-primary" (click)="keepOrderOpen()">Keep order open</button>
+      <button type="button" class="btn btn-secondary" (click)="completeOrder()">Complete order</button>
+    </div>
+  </dialog>
+}

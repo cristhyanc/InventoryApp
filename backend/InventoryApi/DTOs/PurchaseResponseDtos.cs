@@ -45,10 +45,15 @@ public sealed record PurchaseResponse
 
     // Stored-document metadata for the uploaded scan/photo of the supporting document. It names a
     // file in protected storage, never a physical server path.
-    public required string FileName { get; init; }
-    public required string StoredFileName { get; init; }
-    public required string ContentType { get; init; }
-    public required long FileSizeBytes { get; init; }
+    //
+    // All four are nullable since issue #976: a purchase may have no document at all, and then all
+    // four are emitted as null together - never as "" and 0, which a client would have to guess at,
+    // and never partially. The keys stay on the wire in both states, so a client reads "no
+    // document" from a null rather than from an absent member.
+    public string? FileName { get; init; }
+    public string? StoredFileName { get; init; }
+    public string? ContentType { get; init; }
+    public long? FileSizeBytes { get; init; }
 
     public required DateTime CreatedAt { get; init; }
 }

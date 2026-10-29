@@ -48,15 +48,15 @@
   -->
   @if (isSalesSyncSkippedInSupportView) {
     <div class="alert alert-warning">
-      <p class="alert-title">{{ nayaxUnavailableMessage }}. Sites and Machines below show the last synchronized figures, which may be stale.</p>
+      <p class="alert-title">{{ nayaxUnavailableMessage }}. Site and machine performance below shows the last synchronized figures, which may be stale.</p>
     </div>
   } @else if (isSalesSyncFailed) {
     <div class="alert alert-warning">
-      <p class="alert-title">Latest Nayax sales could not be synchronized. Sites and Machines below show the last successfully synchronized figures, which may be stale.</p>
+      <p class="alert-title">Latest Nayax sales could not be synchronized. Site and machine performance below shows the last successfully synchronized figures, which may be stale.</p>
     </div>
   } @else if (isSalesSyncRecentlyRefreshed) {
     <!-- The business's run limit (issue #681): a refresh moments ago, not a failure. -->
-    <p class="text-md-body mb-3">Nayax sales were refreshed for this business in the last couple of minutes, so Sites and Machines below show those figures.</p>
+    <p class="text-md-body mb-3">Nayax sales were refreshed for this business in the last couple of minutes, so Site and machine performance below shows those figures.</p>
   }
 
   @if (isSummaryFailed) {
@@ -270,301 +270,26 @@
   </section>
 
   <!--
-    The two live-fleet sections (issue #727). Both are read from Nayax, so a business with no usable
-    provider is shown neither - not an empty one, which would say the business has no sites or
-    machines, and not an unavailable one, because the page is about what it does have.
+    The live-fleet performance card (issue #727 and issue #987). Every figure in it is read from
+    Nayax, so a business with no usable provider is shown no card at all - not an empty one, which
+    would say the business has no sites or machines, and not an unavailable one, because the page is
+    about what it does have.
 
-    Issue #972 asks for machines grouped under their sites, but a machine read here carries no site
-    at all, so they stay two lists rather than a grouping this page would have to invent (the owner's
-    decision of 28 October 2026; the site on each machine is a separate follow-up).
+    Issue #987 replaced the former separate Site performance and Machine performance cards with one
+    expandable card, the arrangement the owner selected on 29 October 2026. It is a dedicated feature
+    component: this page keeps owning the two reads, their states and the capability answer, and
+    hands them over as inputs (the page-composition rule).
   -->
   @if (isLiveFleetShown) {
-  <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="site-performance-title">
-    <div class="card-header flex-wrap gap-2">
-      <div>
-        <h2 id="site-performance-title" class="card-title text-lg font-semibold text-rr-navy">Site performance</h2>
-        <p class="m-0 text-sm text-rr-muted">Sites, their stock levels and sales</p>
-      </div>
-    </div>
-    <div class="card-body p-0">
-      @if (isLoadingSites) {
-        <div class="space-y-3 p-4">
-          <div class="h-4 w-32 animate-pulse rounded bg-md-gray-200"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-        </div>
-      } @else if (sitesError) {
-        <!-- A request nobody answered is never "No sites available yet" (issue #727). -->
-        <p class="p-4 text-md-body value-negative">{{ sitesError }}</p>
-      } @else if (sites.length === 0) {
-        <p class="p-4 text-md-body value-muted">No sites available yet.</p>
-      } @else {
-        <div class="hidden overflow-x-auto md:block">
-          <table class="table">
-            <thead class="table-head">
-              <tr>
-                <th scope="col" class="table-cell">Site</th>
-                <th scope="col" class="table-cell">Stock</th>
-                <th scope="col" class="table-cell">Low / Empty</th>
-                @if (canViewFinancials) {
-                  <th scope="col" class="table-cell table-num">Today</th>
-                  <th scope="col" class="table-cell table-num">This Week</th>
-                  <th scope="col" class="table-cell table-num">vs same time last week</th>
-                }
-                <th scope="col" class="table-cell table-num">Products</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (site of sites; track site.siteId) {
-                <tr class="table-row">
-                  <td class="table-cell">
-                    <span class="font-semibold text-rr-navy">{{ site.siteName }}</span>
-                    <span class="block text-xs text-rr-caption">{{ machineCountLabel(site.machineCount) }}</span>
-                  </td>
-                  <td class="table-cell">
-                    <span class="flex items-center gap-2">
-                      <span class="h-2 w-20 overflow-hidden rounded-full bg-rr-surface" aria-hidden="true">
-                        <span class="block h-full rounded-full" [ngClass]="siteStockBarClass(site)" [style.width.%]="stockBarWidth(site)"></span>
-                      </span>
-                      <span class="badge" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}%</span>
-                    </span>
-                  </td>
-                  <td class="table-cell">
-                    <a [routerLink]="['/sites', site.siteId, 'products']" class="hover:underline">
-                      {{ site.lowProductCount }} low · {{ site.emptyProductCount }} empty
-                    </a>
-                  </td>
-                  @if (canViewFinancials) {
-                    <td class="table-cell table-num">{{ site.todayRevenue == null ? 'Unavailable' : ('$' + site.todayRevenue.toFixed(2)) }}</td>
-                    <td class="table-cell table-num">{{ site.currentWeekRevenue == null ? 'Unavailable' : ('$' + site.currentWeekRevenue.toFixed(2)) }}</td>
-                    <td class="table-cell table-num" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
-                      {{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
-                    </td>
-                  }
-                  <td class="table-cell table-num">
-                    <a [routerLink]="['/sites', site.siteId, 'products']" class="btn btn-sm btn-secondary">Products</a>
-                  </td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Narrow screens: one card per site with the same figures, never a squeezed table. -->
-        <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="site-cards">
-          @for (site of sites; track site.siteId) {
-            <li class="rounded-lg border border-rr-line bg-white p-3">
-              <div class="flex items-start justify-between gap-2">
-                <div class="min-w-0">
-                  <p class="m-0 break-words font-semibold text-rr-navy">{{ site.siteName }}</p>
-                  <p class="m-0 text-xs text-rr-caption">{{ machineCountLabel(site.machineCount) }}</p>
-                </div>
-                <span class="badge shrink-0" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}% stock</span>
-              </div>
-              <dl class="m-0 mt-3 grid grid-cols-2 gap-2 rounded-lg bg-rr-surface p-2 text-sm">
-                @if (canViewFinancials) {
-                  <div>
-                    <dt class="text-xs text-rr-muted">Sales this week</dt>
-                    <dd class="m-0 font-semibold">{{ site.currentWeekRevenue == null ? 'Unavailable' : ('$' + site.currentWeekRevenue.toFixed(2)) }}</dd>
-                    <dd class="m-0 text-xs" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">{{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }} vs same time last week</dd>
-                  </div>
-                }
-                <div>
-                  <dt class="text-xs text-rr-muted">Selections</dt>
-                  <dd class="m-0 font-semibold">{{ site.lowProductCount }} low · {{ site.emptyProductCount }} empty</dd>
-                </div>
-                @if (canViewFinancials) {
-                  <div>
-                    <dt class="text-xs text-rr-muted">Today</dt>
-                    <dd class="m-0">{{ site.todayRevenue == null ? 'Unavailable' : ('$' + site.todayRevenue.toFixed(2)) }}</dd>
-                  </div>
-                }
-              </dl>
-              <a [routerLink]="['/sites', site.siteId, 'products']" class="mt-2 inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-rr-teal">
-                View site products <app-icon name="arrow_forward" [size]="16" />
-              </a>
-            </li>
-          }
-        </ul>
-      }
-    </div>
-  </section>
-
-  <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="machine-performance-title">
-    <div class="card-header flex-wrap gap-2">
-      <div>
-        <h2 id="machine-performance-title" class="card-title text-lg font-semibold text-rr-navy">Machine performance</h2>
-        <p class="m-0 text-sm text-rr-muted">Machines under their sites, with their sales and direct profit</p>
-      </div>
-    </div>
-    <div class="card-body p-0">
-      @if (isLoadingMachines) {
-        <div class="space-y-3 p-4">
-          <div class="h-4 w-36 animate-pulse rounded bg-md-gray-200"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-        </div>
-      } @else if (machinesError) {
-        <p class="p-4 text-md-body value-negative">{{ machinesError }}</p>
-      } @else if (machines.length === 0) {
-        <p class="p-4 text-md-body value-muted">No machines available yet.</p>
-      } @else {
-        <div class="hidden overflow-x-auto md:block">
-          <table class="table">
-            <thead class="table-head">
-              <tr>
-                <th scope="col" class="table-cell">Machine</th>
-                @if (canViewFinancials) {
-                  <th scope="col" class="table-cell table-num">Today</th>
-                  <th scope="col" class="table-cell table-num">This Week</th>
-                  <th scope="col" class="table-cell table-num">Last Week</th>
-                  <th scope="col" class="table-cell table-num">vs same time last week</th>
-                  <th scope="col" class="table-cell table-num">Month to Date</th>
-                }
-              </tr>
-            </thead>
-            <!--
-              One row group per site (issue #980), in the Sites section's order, headed by the site;
-              machines at no listed site follow under "Other machines". Every machine appears once.
-            -->
-            @for (group of machineGroups; track group.key) {
-              <tbody [attr.data-testid]="'machine-group-' + group.key">
-                @if (group.label !== null) {
-                  <tr class="bg-rr-surface">
-                    <th scope="rowgroup" [attr.colspan]="canViewFinancials ? 6 : 1" class="table-cell text-left text-xs font-semibold uppercase tracking-wider text-rr-muted">
-                      {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
-                    </th>
-                  </tr>
-                }
-                @for (machine of group.machines; track machine.machineID) {
-                  <tr class="table-row table-row-link" (click)="followMachineRowLink($event)" (keydown.enter)="followMachineRowLink($event)">
-                    <td class="table-cell">
-                      <a
-                        class="table-row-anchor"
-                        [routerLink]="machine.localMachineId != null ? ['/machines', machine.localMachineId] : null"
-                        [attr.aria-label]="'View details for ' + (machine.machineName || 'Unnamed machine')">{{ machine.machineName || 'Unnamed machine' }}</a>
-                    </td>
-                    @if (canViewFinancials) {
-                      <td class="table-cell table-num">
-                        <div>{{ periodSalesText(machine, 'today') }}</div>
-                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'today') }}</div>
-                      </td>
-                      <td class="table-cell table-num">
-                        <div>{{ periodSalesText(machine, 'week') }}</div>
-                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'week') }}</div>
-                      </td>
-                      <td class="table-cell table-num">
-                        <div>{{ periodSalesText(machine, 'lastWeek') }}</div>
-                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'lastWeek') }}</div>
-                      </td>
-                      <td class="table-cell table-num" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
-                        {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }}
-                      </td>
-                      <td class="table-cell table-num">
-                        <div>{{ periodSalesText(machine, 'monthToDate') }}</div>
-                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'monthToDate') }}</div>
-                      </td>
-                    }
-                  </tr>
-                }
-              </tbody>
-            }
-            @if (canViewFinancials) {
-              <tfoot class="bg-rr-surface font-semibold">
-                <tr>
-                  <td class="table-cell">Totals ({{ machineCountLabel(machines.length) }})</td>
-                  <td class="table-cell table-num">
-                    <div>{{ totalSalesText('today') }}</div>
-                    <div class="text-xs value-muted">{{ totalProfitText('today') }}</div>
-                  </td>
-                  <td class="table-cell table-num">
-                    <div>{{ totalSalesText('week') }}</div>
-                    <div class="text-xs value-muted">{{ totalProfitText('week') }}</div>
-                  </td>
-                  <td class="table-cell table-num">
-                    <div>{{ totalSalesText('lastWeek') }}</div>
-                    <div class="text-xs value-muted">{{ totalProfitText('lastWeek') }}</div>
-                  </td>
-                  <td class="table-cell table-num" [ngClass]="trendClass(totalCurrentWeekSales, totalPreviousComparableWeekSales)">
-                    {{ trendLabel(totalCurrentWeekSales, totalPreviousComparableWeekSales) }}
-                  </td>
-                  <td class="table-cell table-num">
-                    <div>{{ totalSalesText('monthToDate') }}</div>
-                    <div class="text-xs value-muted">{{ totalProfitText('monthToDate') }}</div>
-                  </td>
-                </tr>
-              </tfoot>
-            }
-          </table>
-        </div>
-
-        <!--
-          Narrow screens: one card per machine for the period chosen here, then the fleet total for
-          the same period. Every period the table shows is one press away.
-        -->
-        <div class="md:hidden" data-testid="machine-cards">
-          @if (canViewFinancials) {
-            <fieldset class="m-0 flex min-w-0 gap-1 overflow-x-auto border-0 p-3 pb-0" data-testid="machine-period">
-              <legend class="sr-only">Sales period</legend>
-              @for (period of machinePeriods; track period.id) {
-                <button
-                  type="button"
-                  class="min-h-11 shrink-0 rounded-lg px-3 text-sm font-semibold"
-                  [class.bg-rr-teal]="machinePeriod === period.id"
-                  [class.text-white]="machinePeriod === period.id"
-                  [class.bg-rr-surface]="machinePeriod !== period.id"
-                  [class.text-rr-navy]="machinePeriod !== period.id"
-                  [attr.aria-pressed]="machinePeriod === period.id"
-                  (click)="machinePeriod = period.id"
-                >{{ period.label }}</button>
-              }
-            </fieldset>
-          }
-          @for (group of machineGroups; track group.key) {
-            <div [attr.data-testid]="'machine-card-group-' + group.key">
-              @if (group.label !== null) {
-                <h3 class="m-0 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-rr-muted">
-                  {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
-                </h3>
-              }
-              <ul class="m-0 flex list-none flex-col gap-3 p-3">
-                @for (machine of group.machines; track machine.machineID) {
-                  <li class="rounded-lg border border-rr-line bg-white p-3">
-                    @if (machine.localMachineId != null) {
-                      <a [routerLink]="['/machines', machine.localMachineId]" class="break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</a>
-                    } @else {
-                      <p class="m-0 break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</p>
-                    }
-                    @if (canViewFinancials) {
-                      <p class="m-0 mt-2 text-sm font-semibold">{{ periodSalesText(machine, machinePeriod) }}</p>
-                      <p class="m-0 text-xs text-rr-muted">{{ periodProfitText(machine, machinePeriod) }}</p>
-                      @if (machinePeriod === 'week') {
-                        <p class="m-0 text-xs" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
-                          {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }} vs same time last week
-                        </p>
-                      }
-                    }
-                  </li>
-                }
-              </ul>
-            </div>
-          }
-          @if (canViewFinancials) {
-            <div class="mx-3 mb-3 rounded-lg bg-rr-surface p-3 text-sm" data-testid="machine-totals-card">
-              <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-muted">Fleet total · {{ machinePeriodLabel }}</p>
-              <p class="m-0 mt-1 font-semibold">{{ totalSalesText(machinePeriod) }}</p>
-              <p class="m-0 text-xs text-rr-muted">{{ totalProfitText(machinePeriod) }}</p>
-              @if (machinePeriod === 'week') {
-                <p class="m-0 text-xs" [ngClass]="trendClass(totalCurrentWeekSales, totalPreviousComparableWeekSales)">
-                  {{ trendLabel(totalCurrentWeekSales, totalPreviousComparableWeekSales) }} vs same time last week
-                </p>
-              }
-            </div>
-          }
-        </div>
-      }
-    </div>
-  </section>
+    <app-site-machine-performance
+      [sites]="sites"
+      [machines]="machines"
+      [isLoadingSites]="isLoadingSites"
+      [isLoadingMachines]="isLoadingMachines"
+      [sitesError]="sitesError"
+      [machinesError]="machinesError"
+      [canViewFinancials]="canViewFinancials"
+    ></app-site-machine-performance>
   }
 
   <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="reorder-priorities-title">

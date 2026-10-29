@@ -1,5 +1,6 @@
 using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.SupplierOrders;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Tests.Application.Access;
@@ -26,12 +27,14 @@ public class SupplierOrdersControllerTests
     private static SupplierOrderCreateDto CreateDto() =>
         new(1, DateTime.UtcNow, null, null, null, [new SupplierOrderLineCreateDto(1, 5)]);
 
-    private static SupplierOrdersController CreateController(ISupplierOrderStore store) =>
+    private static SupplierOrdersController CreateController(
+        ISupplierOrderStore store, ISupplierOrderCompletionStore? completionStore = null) =>
         new(
             new ListActiveSupplierOrders(store),
             new GetSupplierOrder(store),
             new CreateSupplierOrder(store),
             new CancelSupplierOrder(store),
+            new PreviewSupplierOrderCompletion(completionStore ?? new Mock<ISupplierOrderCompletionStore>().Object),
             // An Owner, so the lines carry their product's inventory value; the role-dependent
             // shape itself is StockAndPurchasingFinancialRedactionApiTests, through the real
             // pipeline (issue #700).
@@ -146,6 +149,61 @@ public class SupplierOrdersControllerTests
         {
             Assert.IsType<NotFoundResult>(result);
         }
+    }
+
+    /// <summary>
+    /// The completion-preview action is thin: it hands the route id, the form's supplier and date
+    /// and the entered lines to the use case and maps the answer (issue #974). It calculates
+    /// nothing - every quantity in the response is the one the use case reported.
+    /// </summary>
+    [Fact]
+    public async Task CompletionPreview_maps_the_use_cases_projection()
+    {
+        var completionStore = new Mock<ISupplierOrderCompletionStore>();
+        var purchaseDate = new DateTime(2026, 9, 12, 2, 0, 0, DateTimeKind.Utc);
+        completionStore
+            .Setup(s => s.FindFactsAsync(
+                9, 4, purchaseDate, It.Is<IReadOnlyCollection<long>>(ids => ids.SequenceEqual(new long[] { 3 })),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SupplierOrderCompletionFacts(
+                9,
+                BusinessId: 1,
+                SupplierId: 4,
+                Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived,
+                [new SupplierOrderCompletionLineFacts(11, 3, "Coke", "can", 24m, 6m)],
+                new Dictionary<long, IReadOnlyList<CandidateOrderLine>>
+                {
+                    [3] = [new CandidateOrderLine(11, 9, 18m)],
+                }));
+
+        var result = await CreateController(StoreWithKnownSupplierAndProducts().Object, completionStore.Object)
+            .CompletionPreview(9, new SupplierOrderCompletionPreviewDto(4, purchaseDate, [new(3, 10m)]));
+
+        var preview = Assert.IsType<SupplierOrderCompletionPreviewResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(
+            (9, Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived, true, true),
+            (preview.SupplierOrderId, preview.Status, preview.EligibleForCompletion, preview.HasOutstandingBalance));
+        Assert.NotEmpty(preview.DecisionFingerprint);
+        var line = Assert.Single(preview.OutstandingLines);
+        Assert.Equal((11, 3L, "Coke", "can"), (line.SupplierOrderLineId, line.ProductId, line.ProductName, line.Unit));
+        Assert.Equal((24m, 6m, 10m, 8m),
+            (line.QuantityOrdered, line.QuantityAlreadyReceived, line.QuantityOnThisPurchase, line.OutstandingQuantity));
+    }
+
+    [Fact]
+    public async Task CompletionPreview_is_not_found_for_an_order_the_caller_cannot_reach()
+    {
+        var completionStore = new Mock<ISupplierOrderCompletionStore>();
+        completionStore
+            .Setup(s => s.FindFactsAsync(
+                It.IsAny<int>(), It.IsAny<int?>(), It.IsAny<DateTime>(),
+                It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((SupplierOrderCompletionFacts?)null);
+
+        var result = await CreateController(StoreWithKnownSupplierAndProducts().Object, completionStore.Object)
+            .CompletionPreview(9, new SupplierOrderCompletionPreviewDto(4, null, []));
+
+        Assert.IsType<NotFoundResult>(result.Result);
     }
 
     private static SupplierOrderRecord Record() => new(

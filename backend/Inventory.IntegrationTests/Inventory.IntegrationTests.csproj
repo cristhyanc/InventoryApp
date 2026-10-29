@@ -92,6 +92,8 @@
     <Compile Include="..\Inventory.UnitTests\Application\Stock\FakeStockAdjustmentStore.cs" Link="Application\Stock\FakeStockAdjustmentStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Suppliers\FakeAvailableSupplierPresetStore.cs" Link="Application\Suppliers\FakeAvailableSupplierPresetStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Suppliers\FakeSupplierStore.cs" Link="Application\Suppliers\FakeSupplierStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Subscriptions\FakeSubscriptionStores.cs" Link="Application\Subscriptions\FakeSubscriptionStores.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Subscriptions\TestCurrentPlan.cs" Link="Application\Subscriptions\TestCurrentPlan.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\SupportSessions\FakeSupportSessionAccessor.cs" Link="Application\SupportSessions\FakeSupportSessionAccessor.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Tenancy\FakeActorProfileAccessor.cs" Link="Application\Tenancy\FakeActorProfileAccessor.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Tenancy\FakeAuthenticatedActorAccessor.cs" Link="Application\Tenancy\FakeAuthenticatedActorAccessor.cs" />

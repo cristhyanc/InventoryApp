@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
+using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
 using Inventory.Domain.SupplierOrders;
@@ -7,7 +8,9 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 // Inventory.Domain.SupplierOrders declares its own SupplierOrderStatus, so the persisted enum the
-// EF query compares against is named explicitly rather than relying on which using wins.
+// EF query compares against is named explicitly rather than relying on which using wins, and the
+// Domain enum the policies speak is named through its own alias.
+using DomainStatus = Inventory.Domain.SupplierOrders.SupplierOrderStatus;
 using PersistenceModels = Inventory.Infrastructure.Models;
 
 namespace Inventory.Infrastructure.Persistence;
@@ -61,12 +64,15 @@ public sealed class EfPurchaseStore : IPurchaseStore
         return purchase is null ? null : ToRecord(purchase);
     }
 
+    /// <summary>
+    /// A purchase that does not exist and a purchase with no document are the same <c>null</c>
+    /// (issue #976), which is what makes <c>GET api/purchases/{id}/file</c> answer <c>404</c> for
+    /// both. The four values are read together because the database guarantees they move together.
+    /// </summary>
     public async Task<PurchaseFileMetadata?> FindFileMetadataAsync(int id, CancellationToken cancellationToken)
     {
         var purchase = await _db.Receipts.FindAsync([id], cancellationToken);
-        return purchase is null
-            ? null
-            : new PurchaseFileMetadata(purchase.StoredFileName, purchase.ContentType, purchase.FileName, purchase.FileSizeBytes);
+        return ToFileMetadata(purchase);
     }
 
     public Task<bool> SupplierExistsAsync(int supplierId, CancellationToken cancellationToken) =>
@@ -102,7 +108,11 @@ public sealed class EfPurchaseStore : IPurchaseStore
     }
 
     public async Task<PurchaseRecord> CreateAsync(
-        PurchaseFields fields, IReadOnlyList<PurchaseItemInput> items, PurchaseFileMetadata file, CancellationToken cancellationToken)
+        PurchaseFields fields,
+        IReadOnlyList<PurchaseItemInput> items,
+        PurchaseFileMetadata? file,
+        SupplierOrderCompletionDecision? supplierOrderCompletion,
+        CancellationToken cancellationToken)
     {
         var purchase = new Purchase
         {
@@ -113,10 +123,12 @@ public sealed class EfPurchaseStore : IPurchaseStore
             PackageCost = fields.PackageCost,
             PurchaseDate = fields.PurchaseDate ?? DateTime.UtcNow,
             SupplierId = fields.SupplierId,
-            FileName = file.FileName,
-            StoredFileName = file.StoredFileName,
-            ContentType = file.ContentType,
-            FileSizeBytes = file.FileSizeBytes,
+            // All four together, or all four null (issue #976): there is no half-documented
+            // purchase, and the table's own check constraint refuses one.
+            FileName = file?.FileName,
+            StoredFileName = file?.StoredFileName,
+            ContentType = file?.ContentType,
+            FileSizeBytes = file?.FileSizeBytes,
         };
         ApplyChargeClassifications(purchase, fields, GstClassificationState.Unclassified, GstClassificationState.Unclassified);
         purchase.Items = items.Select(x =>
@@ -131,7 +143,22 @@ public sealed class EfPurchaseStore : IPurchaseStore
             return item;
         }).ToList();
 
-        await using var transaction = await BeginTransactionAsync();
+        // BEGIN IMMEDIATE when a completion decision rides along (issue #974), the deferred
+        // transaction this write has always used otherwise. The decision's authoritative read, its
+        // fingerprint comparison and the status write have to be one operation against a competing
+        // receipt, and a deferred transaction takes SQLite's write lock only at the first write -
+        // which is after that read. An ordinary purchase save is unchanged.
+        await using var writeLock = supplierOrderCompletion is null
+            ? null
+            : await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+        await using var transaction = supplierOrderCompletion is null ? await BeginTransactionAsync() : null;
+
+        // Read, and refused, before anything at all is written: a stale decision must leave the
+        // purchase unsaved rather than roll a committed-looking one back.
+        var completionTarget = supplierOrderCompletion is null
+            ? null
+            : await ReadCompletionTargetAsync(supplierOrderCompletion, cancellationToken);
+
         _db.Receipts.Add(purchase);
         await _db.SaveChangesAsync(cancellationToken);
         await AllocateSupplierOrderFulfillmentAsync(purchase, cancellationToken);
@@ -146,14 +173,163 @@ public sealed class EfPurchaseStore : IPurchaseStore
         await _db.SaveChangesAsync(cancellationToken);
         await RebuildAffectedAsync(purchase.Items.Select(item => (item.ProductId, purchase.PurchaseDate)), cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
+
+        // After the allocation and its status rollup, so the balance that is closed is the one this
+        // purchase actually leaves, and still inside the same transaction.
+        if (completionTarget is not null)
+            await CompleteSupplierOrderAsync(completionTarget, supplierOrderCompletion!, cancellationToken);
+
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        if (writeLock is not null) await writeLock.CommitAsync(cancellationToken);
 
         return ToRecord(purchase);
+    }
+
+    /// <summary>
+    /// Records a document on a purchase that has none, and only while it has none (issue #976).
+    ///
+    /// <para><strong>Why the write lock.</strong> "Attach only if empty" is a check-then-write rule,
+    /// and its authoritative read, its comparison and its write have to be one operation - the same
+    /// reasoning as issue #974's completion decision and issue #896's machine delete, and the same
+    /// <see cref="SqliteWriteLockTransaction"/>. A deferred transaction takes SQLite's write lock at
+    /// the first write, which is <em>after</em> the read the decision rests on, so two concurrent
+    /// attaches would both read a purchase with no document and the second would overwrite the
+    /// first's stored name - orphaning bytes that nothing can ever reach again. With
+    /// <c>BEGIN IMMEDIATE</c> the second caller waits, then reads the first one's committed document
+    /// and is refused.</para>
+    ///
+    /// <para>The purchase is reached through the ordinary tenant query filters, so one belonging to
+    /// another business is simply not found, and the write goes through <c>SaveChanges</c> - never a
+    /// bulk update - so the central ownership stamp, the read-only support-session refusal and the
+    /// business-immutability enforcement all stay in force.</para>
+    /// </summary>
+    public async Task<PurchaseDocumentAttachment> AttachDocumentAsync(
+        int id, PurchaseFileMetadata document, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
+        var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
+            .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
+        if (purchase is null)
+            return new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.PurchaseNotFound, null);
+
+        // The stored name is the authoritative "has a document": the check constraint guarantees the
+        // other three move with it, so one column decides.
+        if (purchase.StoredFileName is not null)
+            return new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.AlreadyHasDocument, null);
+
+        purchase.FileName = document.FileName;
+        purchase.StoredFileName = document.StoredFileName;
+        purchase.ContentType = document.ContentType;
+        purchase.FileSizeBytes = document.FileSizeBytes;
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        return new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.Attached, ToRecord(purchase));
+    }
+
+    /// <summary>
+    /// Re-reads the order the completion decision names, inside the write transaction, and refuses
+    /// the save unless it is still the order the decision was shown over (issue #974).
+    ///
+    /// <para>Every check is made from the stored rows: the order is reached through the ordinary
+    /// tenant query filters, so one belonging to another business is simply not found; its
+    /// eligibility is read from its own status; and the fingerprint is recomputed from its own
+    /// lines' ordered and received quantities. The request contributes the id and a value to compare
+    /// against - never a receipt total and never a status.</para>
+    /// </summary>
+    private async Task<SupplierOrder> ReadCompletionTargetAsync(
+        SupplierOrderCompletionDecision decision, CancellationToken cancellationToken)
+    {
+        var order = await _db.SupplierOrders
+            .Include(candidate => candidate.Lines)
+            .FirstOrDefaultAsync(candidate => candidate.Id == decision.SupplierOrderId, cancellationToken)
+            ?? throw new InvalidOperationException(SupplierOrderCompletionPolicy.UnknownOrderMessage);
+
+        var status = (DomainStatus)order.Status;
+        if (!SupplierOrderCompletionPolicy.IsEligibleForCompletion(status))
+            throw new InvalidOperationException(SupplierOrderCompletionPolicy.NotEligibleMessage);
+
+        var fingerprint = SupplierOrderCompletionFingerprint.Compute(
+            order.BusinessId, order.Id, status, ToFulfillments(order));
+        if (!string.Equals(fingerprint, decision.DecisionFingerprint, StringComparison.Ordinal))
+            throw new InvalidOperationException(SupplierOrderCompletionPolicy.StaleDecisionMessage);
+
+        return order;
+    }
+
+    /// <summary>
+    /// Closes the order's remaining undelivered balance, with the actor and instant the Application
+    /// resolved. It writes nothing but the order's own status and that attribution: no quantity, no
+    /// receipt, no stock movement and no cost, because none of those goods arrived.
+    /// </summary>
+    private async Task CompleteSupplierOrderAsync(
+        SupplierOrder order, SupplierOrderCompletionDecision decision, CancellationToken cancellationToken)
+    {
+        var status = (DomainStatus)order.Status;
+
+        // The rollup above may have moved the order on - a purchase that happened to complete it in
+        // full leaves it Received - and a balance that no longer exists must not be "closed".
+        if (!SupplierOrderCompletionPolicy.IsEligibleForCompletion(status))
+            throw new InvalidOperationException(SupplierOrderCompletionPolicy.NoOutstandingBalanceMessage);
+
+        var projected = SupplierOrderCompletionPolicy.Project(
+            status, ToFulfillments(order), new Dictionary<int, decimal>());
+        if (!SupplierOrderCompletionPolicy.HasOutstandingBalance(projected))
+            throw new InvalidOperationException(SupplierOrderCompletionPolicy.NoOutstandingBalanceMessage);
+
+        order.Status = (PersistenceModels.SupplierOrderStatus)SupplierOrderCompletionPolicy.CompletedStatus;
+        order.CompletedWithUndeliveredAt = decision.DecidedAtUtc;
+        order.CompletedByDirectoryTenantId = decision.DecidedByDirectoryTenantId;
+        order.CompletedByObjectId = decision.DecidedByObjectId;
+        order.UpdatedAt = decision.DecidedAtUtc;
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static IReadOnlyList<SupplierOrderLineFulfillment> ToFulfillments(SupplierOrder order) =>
+        order.Lines
+            .Select(line => new SupplierOrderLineFulfillment(line.Id, line.QuantityOrdered, line.QuantityReceived))
+            .ToList();
+
+    /// <summary>
+    /// Refuses a correction that would rewrite or remove the receipts a completed supplier order was
+    /// closed on (issue #974). Reopening such an order is out of scope, and the two alternatives are
+    /// both worse: detaching its allocations would leave it recording deliveries no purchase holds,
+    /// and re-allocating onto it would make a closed order accept a receipt. So the whole correction
+    /// is refused, and the explicit decision stands.
+    /// </summary>
+    private async Task EnsureNoCompletedSupplierOrderAsync(
+        IEnumerable<int> purchaseItemIds, CancellationToken cancellationToken)
+    {
+        var ids = purchaseItemIds.ToList();
+        if (ids.Count == 0) return;
+
+        var completedOrderIds = await _db.SupplierOrderReceiptAllocations
+            .Where(allocation => ids.Contains(allocation.ReceiptItemId) &&
+                allocation.SupplierOrderLine.SupplierOrder.Status ==
+                    PersistenceModels.SupplierOrderStatus.ClosedPartiallyDelivered)
+            .Select(allocation => allocation.SupplierOrderLine.SupplierOrderId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        if (completedOrderIds.Count > 0)
+            throw new InvalidOperationException(
+                SupplierOrderCompletionPolicy.LinkedToCompletedOrderMessage(completedOrderIds));
     }
 
     public async Task<PurchaseRecord?> UpdateAsync(
         int id, PurchaseFields fields, IReadOnlyList<PurchaseItemInput>? items, CancellationToken cancellationToken)
     {
+        // The write lock first, before anything is read (issue #974). The completed-order guard below
+        // is a check-then-write rule, and the write it protects is this whole correction: the guard
+        // used to answer before the transaction opened at all, so a purchase save carrying a
+        // completion decision could close the linked order in between - and the correction would then
+        // rewrite the very receipts that order was closed on, while the rollup, which deliberately
+        // preserves ClosedPartiallyDelivered, left it reading completed. This is the same lock the
+        // completion path takes, which is what serialises the two against each other.
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
         var purchase = await _db.Receipts.Include(r => r.Supplier).Include(r => r.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
         if (purchase is null) return null;
@@ -165,10 +341,16 @@ public sealed class EfPurchaseStore : IPurchaseStore
         var originalSupplierId = purchase.SupplierId;
         var originalItems = purchase.Items.ToList();
 
-        // Decided before anything is written, and before the transaction even opens: a submission
-        // whose lines cannot be identified safely must leave every persisted row untouched.
+        // Decided before anything is written: a submission whose lines cannot be identified safely
+        // must leave every persisted row untouched, which is now the transaction above rolling back
+        // rather than there being no transaction yet.
         var lineMatch = items is null ? default : MatchSubmittedLines(originalItems, items);
         if (lineMatch.Error is { } identityError) throw new InvalidOperationException(identityError);
+
+        // A purchase a completed supplier order was closed on cannot be corrected at all (issue
+        // #974). Read with the write lock held, so no completion can commit between this answer and
+        // the correction it permits; the refusal still writes nothing.
+        await EnsureNoCompletedSupplierOrderAsync(originalItems.Select(item => item.Id), cancellationToken);
 
         var storedDeliveryGst = new GstClassificationState(
             purchase.DeliveryGstClassification, purchase.DeliveryGstClassificationSource);
@@ -187,7 +369,6 @@ public sealed class EfPurchaseStore : IPurchaseStore
         var affected = new Dictionary<long, DateTime>();
         var physicalChanges = new Dictionary<long, int>();
 
-        await using var transaction = await BeginTransactionAsync();
         if (requiresFulfillmentReconciliation)
             await RemoveSupplierOrderFulfillmentAsync(originalItems.Select(item => item.Id), cancellationToken);
 
@@ -308,16 +489,23 @@ public sealed class EfPurchaseStore : IPurchaseStore
             await AllocateSupplierOrderFulfillmentAsync(purchase, cancellationToken);
         await RebuildAffectedAsync(affected.Select(item => (item.Key, item.Value)), cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return ToRecord(purchase);
     }
 
     public async Task<string?> DeleteAsync(int id, CancellationToken cancellationToken)
     {
+        // The write lock first, for the reason UpdateAsync takes it there (issue #974): the
+        // completed-order guard below and the removal it permits have to be one operation against a
+        // purchase save that is completing the very order this purchase delivered. A delete is the
+        // worse half - it would leave a completed order recording a delivery no purchase holds.
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
         var purchase = await _db.Receipts.Include(r => r.Items).FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
         if (purchase is null) return null;
 
         var storedFileName = purchase.StoredFileName;
+        await EnsureNoCompletedSupplierOrderAsync(purchase.Items.Select(item => item.Id), cancellationToken);
         var movements = await _db.StockAdjustments
             .Where(movement => movement.ReceiptItemId.HasValue &&
                 purchase.Items.Select(item => item.Id).Contains(movement.ReceiptItemId.Value))
@@ -328,7 +516,6 @@ public sealed class EfPurchaseStore : IPurchaseStore
         foreach (var movement in movements)
             AddPhysicalChange(physicalChanges, movement.ProductId, -movement.QuantityChange);
 
-        await using var transaction = await BeginTransactionAsync();
         await RemoveSupplierOrderFulfillmentAsync(purchase.Items.Select(item => item.Id), cancellationToken);
         _db.StockAdjustments.RemoveRange(movements);
         await StagePhysicalStockAsync(physicalChanges, cancellationToken);
@@ -336,7 +523,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         await _db.SaveChangesAsync(cancellationToken);
         await RebuildAffectedAsync(affected, cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return storedFileName;
     }
 
@@ -344,27 +531,14 @@ public sealed class EfPurchaseStore : IPurchaseStore
     {
         if (!purchase.SupplierId.HasValue) return;
 
-        var purchaseDayEnd = purchase.PurchaseDate.Date.AddDays(1);
-        var candidateLinesByProduct = new Dictionary<long, IReadOnlyList<CandidateOrderLine>>();
-        foreach (var productId in purchase.Items.Select(item => item.ProductId).Distinct())
-        {
-            var lines = await _db.SupplierOrderLines
-                .Include(line => line.SupplierOrder)
-                .Where(line => line.ProductId == productId &&
-                    line.SupplierOrder.SupplierId == purchase.SupplierId &&
-                    line.SupplierOrder.OrderDate < purchaseDayEnd &&
-                    line.SupplierOrder.Status != PersistenceModels.SupplierOrderStatus.Cancelled &&
-                    line.SupplierOrder.Status != PersistenceModels.SupplierOrderStatus.Received &&
-                    line.QuantityReceived < line.QuantityOrdered)
-                .OrderBy(line => line.SupplierOrder.OrderDate)
-                .ThenBy(line => line.SupplierOrder.Id)
-                .ThenBy(line => line.Id)
-                .ToListAsync(cancellationToken);
-
-            candidateLinesByProduct[productId] = lines
-                .Select(line => new CandidateOrderLine(line.Id, line.SupplierOrderId, line.QuantityOrdered - line.QuantityReceived))
-                .ToList();
-        }
+        // The same query the completion preview projects over (issue #974), so the balance the
+        // operator was shown and the balance this write leaves are one calculation.
+        var candidateLinesByProduct = await EfSupplierOrderFulfillmentQueries.CandidateLinesByProductAsync(
+            _db,
+            purchase.SupplierId,
+            purchase.PurchaseDate,
+            purchase.Items.Select(item => item.ProductId),
+            cancellationToken);
 
         var purchaseItemsToAllocate = purchase.Items
             .Select(item => new PurchaseItemToAllocate(item.Id, item.ProductId, item.Quantity))
@@ -418,9 +592,13 @@ public sealed class EfPurchaseStore : IPurchaseStore
         {
             foreach (var line in order.Lines)
                 line.QuantityReceived = line.ReceiptAllocations.Sum(allocation => allocation.QuantityApplied);
-            if (order.Status != PersistenceModels.SupplierOrderStatus.Cancelled)
-                order.Status = (PersistenceModels.SupplierOrderStatus)SupplierOrderStatusPolicy.Resolve(
-                    order.Lines.Select(line => (line.QuantityOrdered, line.QuantityReceived)));
+
+            // The rollup is applied through the status-preserving overload (issue #974), which
+            // leaves both of the statuses a person decides - Cancelled, and the explicit
+            // completed-with-undelivered state - exactly as they are.
+            order.Status = (PersistenceModels.SupplierOrderStatus)SupplierOrderStatusPolicy.Resolve(
+                (DomainStatus)order.Status,
+                order.Lines.Select(line => (line.QuantityOrdered, line.QuantityReceived)));
             order.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -618,6 +796,16 @@ public sealed class EfPurchaseStore : IPurchaseStore
         purchase.ContentType,
         purchase.FileSizeBytes,
         purchase.CreatedAt);
+
+    /// <summary>
+    /// The purchase's document metadata, or <c>null</c> when there is no purchase or it has no
+    /// document (issue #976). The stored name decides; the check constraint is what lets it.
+    /// </summary>
+    private static PurchaseFileMetadata? ToFileMetadata(Purchase? purchase) =>
+        purchase is { StoredFileName: not null, ContentType: not null, FileName: not null, FileSizeBytes: not null }
+            ? new PurchaseFileMetadata(
+                purchase.StoredFileName, purchase.ContentType, purchase.FileName, purchase.FileSizeBytes.Value)
+            : null;
 
     private static PurchaseSupplierRecord ToSupplierRecord(Supplier supplier) => new(
         supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address,

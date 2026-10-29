@@ -156,6 +156,10 @@ public class SupportSessionRequestApiTests
     // the central refusal is what stops it, not an eligibility check it might have passed.
     [InlineData("Inventory.Operate", "DELETE", "/api/local-machines/999999")]
     [InlineData("Purchasing.Operate", "POST", "/api/supplierorders")]
+    // The supplier-order completion preview of issue #974, which declares no rule of its own and
+    // changes nothing: it is a POST because the purchase being projected is a body, so the method
+    // rule refuses it exactly as it refuses the cheapest-supplier summary.
+    [InlineData("Purchasing.Operate", "POST", "/api/supplierorders/999999/completion-preview")]
     // The supplier "Not used" switch of issue #934, which declares no rule of its own: the method
     // rule refuses it under the capability the session does grant, so a supporter cannot take a
     // business's supplier out of its pickers while looking at it.
@@ -182,6 +186,31 @@ public class SupportSessionRequestApiTests
         Assert.True(
             response.StatusCode == HttpStatusCode.Forbidden,
             $"{method} {route} ({capability}) answered {(int)response.StatusCode} in a support session.");
+        Assert.Equal(SupportSessionErrorCodes.ReadOnly, await CodeAsync(response));
+    }
+
+    /// <summary>
+    /// The same criterion for the two purchase writes that take a <c>multipart/form-data</c> body
+    /// (issue #976's "add a document" and the purchase create it exists beside). They are tested
+    /// separately rather than as rows above because the body's content type is part of reaching the
+    /// endpoint at all: a JSON body is answered <c>415</c> during action selection, before any
+    /// authorization runs, which would prove nothing about the session.
+    ///
+    /// <para>Neither declares a rule of its own: the central <c>GET</c>/<c>HEAD</c> method rule is
+    /// what refuses them, under the capability the session <em>does</em> grant. The purchase named
+    /// is not one of either business's, so a refusal that reached the endpoint would be a
+    /// <c>404</c>.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("/api/purchases")]
+    [InlineData("/api/purchases/999999/file")]
+    public async Task A_multipart_purchase_write_is_refused_as_read_only(string route)
+    {
+        var client = await _factory.InSupportSessionAsync();
+
+        var response = await client.PostAsync(route, MultipartDocument());
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(SupportSessionErrorCodes.ReadOnly, await CodeAsync(response));
     }
 
@@ -797,6 +826,20 @@ public class SupportSessionRequestApiTests
     /// is about the access decision, which is taken before an action binds a body, so nothing here
     /// may be a request the endpoint would act on.
     /// </summary>
+    /// <summary>
+    /// A minimal <c>multipart/form-data</c> body carrying one document part, which is what the
+    /// purchase create and the "add a document" write of issue #976 accept.
+    /// </summary>
+    private static MultipartFormDataContent MultipartDocument()
+    {
+        var content = new MultipartFormDataContent();
+        var file = new ByteArrayContent([1, 2, 3]);
+        file.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        content.Add(file, "file", "scan.jpg");
+        content.Add(new StringContent("Weekly restock"), "title");
+        return content;
+    }
+
     private static HttpRequestMessage Request(string method, string route)
     {
         var request = new HttpRequestMessage(new HttpMethod(method), route);

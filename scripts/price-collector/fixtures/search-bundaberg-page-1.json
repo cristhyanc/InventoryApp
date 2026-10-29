@@ -1,0 +1,60 @@
+{
+  "data": {
+    "products": {
+      "total_count": 3,
+      "page_info": {
+        "current_page": 1,
+        "page_size": 2,
+        "total_pages": 2
+      },
+      "items": [
+        {
+          "sku": "BGB25",
+          "name": "Bundaberg Ginger Beer 375ml Bottle",
+          "url_key": "bundaberg-ginger-beer-375ml-bottle",
+          "url_suffix": ".html",
+          "stock_status": "IN_STOCK",
+          "price_range": {
+            "minimum_price": {
+              "final_price": { "value": 31.2, "currency": "AUD" },
+              "regular_price": { "value": 33.6, "currency": "AUD" }
+            }
+          },
+          "custom_attributesV2": {
+            "items": [
+              { "code": "pickamntsoldas", "value": "24" },
+              { "code": "gst", "value": "10" },
+              { "code": "innerbarcode", "value": "9311493000012" },
+              { "code": "outerbarcode", "value": "19311493000019" },
+              { "code": "special_from_date", "value": "2025-06-02 00:00:00" },
+              { "code": "special_to_date", "value": "2025-06-30 00:00:00" }
+            ],
+            "errors": []
+          }
+        },
+        {
+          "sku": "CCC3",
+          "name": "Bundaberg Creaming Soda 375ml Bottle",
+          "url_key": "bundaberg-creaming-soda-375ml-bottle",
+          "url_suffix": ".html",
+          "stock_status": "OUT_OF_STOCK",
+          "price_range": {
+            "minimum_price": {
+              "final_price": { "value": 32.4, "currency": "AUD" },
+              "regular_price": { "value": 32.4, "currency": "AUD" }
+            }
+          },
+          "custom_attributesV2": {
+            "items": [
+              { "code": "pickamntsoldas", "value": "24" },
+              { "code": "gst", "value": "10" },
+              { "code": "innerbarcode", "value": "9311493000029" },
+              { "code": "outerbarcode", "value": "19311493000026" }
+            ],
+            "errors": []
+          }
+        }
+      ]
+    }
+  }
+}

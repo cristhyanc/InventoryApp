@@ -1,7 +1,11 @@
 using Inventory.Application.Documents;
 using Inventory.Application.Purchases;
+using Inventory.Application.SupplierOrders;
+using Inventory.Application.Tenancy;
 using Inventory.Domain.Purchases;
+using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Expenses;
+using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -18,6 +22,19 @@ public class UploadPurchaseTests
 
     private static readonly FakeClock Clock = new(NowUtc);
 
+    /// <summary>The identified operator these tests record as, and whose attribution a completion decision carries.</summary>
+    private static readonly ActorIdentity Operator = Actor("44444444-4444-4444-4444-444444444444");
+
+    private static UploadPurchase UseCase(
+        IPurchaseStore store, IDocumentStorage documents, IAuthenticatedActorAccessor? actors = null) =>
+        new(store, documents, actors ?? FakeAuthenticatedActorAccessor.Identified(Operator), Clock);
+
+    private static ActorIdentity Actor(string objectId)
+    {
+        ActorIdentity.TryCreate("22222222-2222-2222-2222-222222222222", objectId, out var actor);
+        return actor!;
+    }
+
     private static PurchaseFields Fields(int? supplierId = null, DateTime? purchaseDate = null) =>
         new("Weekly restock", null, null, null, null, purchaseDate, supplierId);
 
@@ -29,7 +46,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var result = await useCase.Handle(FileInput(length: 0), Fields(), [], CancellationToken.None);
 
@@ -42,7 +59,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var result = await useCase.Handle(FileInput(length: 10 * 1024 * 1024 + 1), Fields(), [], CancellationToken.None);
 
@@ -55,7 +72,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var result = await useCase.Handle(FileInput("receipt.exe"), Fields(), [], CancellationToken.None);
 
@@ -68,7 +85,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore { SupplierExists = false };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var result = await useCase.Handle(
             FileInput(), Fields(supplierId: 99), [new PurchaseItemInput(1, -1, 1)], CancellationToken.None);
@@ -82,7 +99,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(1, 0, 1)], CancellationToken.None));
@@ -96,7 +113,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore { AllProductsExist = false };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(404, 1, 1)], CancellationToken.None));
@@ -111,7 +128,7 @@ public class UploadPurchaseTests
         var cutoff = new DateTime(2026, 1, 1);
         var store = new FakePurchaseStore { ConflictingBaseline = (1, "Coke", cutoff) };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(purchaseDate: cutoff), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
@@ -129,7 +146,7 @@ public class UploadPurchaseTests
     {
         var cutoff = new DateTime(2026, 1, 1);
         var store = new FakePurchaseStore { ConflictingBaseline = (1, null, cutoff) };
-        var useCase = new UploadPurchase(store, new FakeDocumentStorage(), Clock);
+        var useCase = UseCase(store, new FakeDocumentStorage());
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(purchaseDate: cutoff), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
@@ -144,13 +161,14 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var record = await useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(1, 2m, 1.5m)], CancellationToken.None);
 
         Assert.NotNull(record);
         Assert.Single(documents.SavedFileNames);
-        Assert.True(documents.Contains(DocumentCategory.PurchaseDocument, record!.StoredFileName));
+        Assert.True(documents.Contains(
+            DocumentCategory.PurchaseDocument, Assert.IsType<string>(record!.StoredFileName)));
         Assert.Equal(store.LastCreated, record);
     }
 
@@ -165,7 +183,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var record = await useCase.Handle(
             FileInput(), Fields(purchaseDate: null), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None);
@@ -180,7 +198,7 @@ public class UploadPurchaseTests
         var suppliedDate = new DateTime(2026, 2, 1);
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var record = await useCase.Handle(
             FileInput(), Fields(purchaseDate: suppliedDate), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None);
@@ -189,12 +207,107 @@ public class UploadPurchaseTests
         Assert.Equal(suppliedDate, store.LastConflictCheckedPurchaseDate);
     }
 
+    /// <summary>
+    /// Issue #976: no document at all is the ordinary case, not a refusal. Nothing is stored in
+    /// document storage, all four metadata values are recorded as absent together, and the purchase
+    /// itself is saved exactly as it is with a document.
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_with_no_document_is_saved_and_stores_no_file()
+    {
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = UseCase(store, documents);
+
+        var record = await useCase.Handle(
+            file: null, Fields(), [new PurchaseItemInput(1, 2m, 1.5m)], CancellationToken.None);
+
+        Assert.NotNull(record);
+        Assert.Empty(documents.SavedFileNames);
+        Assert.Empty(documents.DeletedFileNames);
+        Assert.Equal(
+            (null, null, null, (long?)null),
+            (record!.FileName, record.StoredFileName, record.ContentType, record.FileSizeBytes));
+        Assert.Equal("Weekly restock", record.Title);
+        Assert.Equal(store.LastCreated, record);
+    }
+
+    /// <summary>
+    /// The one thing a purchase with no document cannot do is take its title from the uploaded file's
+    /// name, because there is no uploaded file. It is refused by name rather than stored with an
+    /// empty title, and nothing is written - not even the empty-document case below, because the
+    /// refusal comes before any store call at all.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_blank_title_with_no_document_is_refused(string? title)
+    {
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = UseCase(store, documents);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => useCase.Handle(
+            file: null,
+            new PurchaseFields(title, null, null, null, null, null, null),
+            [new PurchaseItemInput(1, 1, 1)],
+            CancellationToken.None));
+
+        Assert.Equal(PurchaseDocumentPolicy.TitleRequiredWithoutDocumentMessage, exception.Message);
+        Assert.Null(store.LastCreated);
+        Assert.Empty(documents.SavedFileNames);
+    }
+
+    /// <summary>
+    /// Every other validation is reached and answered exactly as it is with a document, so recording
+    /// no receipt is not a way past the supplier, item or cost-transition rules.
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_with_no_document_is_still_subject_to_the_other_validation()
+    {
+        var unknownSupplier = new FakePurchaseStore { SupplierExists = false };
+        Assert.Null(await UseCase(unknownSupplier, new FakeDocumentStorage()).Handle(
+            file: null, Fields(supplierId: 99), [], CancellationToken.None));
+
+        var malformedItems = new FakePurchaseStore();
+        var malformed = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => UseCase(malformedItems, new FakeDocumentStorage()).Handle(
+                file: null, Fields(), [new PurchaseItemInput(1, 0, 1)], CancellationToken.None));
+        Assert.Equal(PurchaseItemFormatPolicy.InvalidItemsMessage, malformed.Message);
+
+        var cutoff = new DateTime(2026, 1, 1);
+        var beforeCutoff = new FakePurchaseStore { ConflictingBaseline = (1, "Coke", cutoff) };
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => UseCase(beforeCutoff, new FakeDocumentStorage()).Handle(
+                file: null, Fields(purchaseDate: cutoff), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
+        Assert.Equal(
+            PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(cutoff, 1, "Coke"), refused.Message);
+    }
+
+    /// <summary>
+    /// A failed save with no document has no bytes to clean up, so the cleanup must not run at all -
+    /// a delete of a null stored name would be a call nothing asked for.
+    /// </summary>
+    [Fact]
+    public async Task When_persistence_fails_with_no_document_nothing_is_deleted()
+    {
+        var store = new FakePurchaseStore { ThrowOnCreate = true };
+        var documents = new FakeDocumentStorage();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => UseCase(store, documents).Handle(
+            file: null, Fields(), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
+
+        Assert.Empty(documents.SavedFileNames);
+        Assert.Empty(documents.DeletedFileNames);
+    }
+
     [Fact]
     public async Task A_blank_title_falls_back_to_the_uploaded_file_name()
     {
         var store = new FakePurchaseStore();
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         var record = await useCase.Handle(
             FileInput("scan.jpg"), new PurchaseFields("   ", null, null, null, null, null, null), [], CancellationToken.None);
@@ -207,7 +320,7 @@ public class UploadPurchaseTests
     {
         var store = new FakePurchaseStore { ThrowOnCreate = true };
         var documents = new FakeDocumentStorage();
-        var useCase = new UploadPurchase(store, documents, Clock);
+        var useCase = UseCase(store, documents);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => useCase.Handle(FileInput(), Fields(), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
@@ -216,5 +329,76 @@ public class UploadPurchaseTests
         var savedFileName = documents.SavedFileNames[0];
         Assert.Contains(savedFileName, documents.DeletedFileNames);
         Assert.False(documents.Contains(DocumentCategory.PurchaseDocument, savedFileName));
+    }
+
+    /// <summary>
+    /// A purchase with no completion choice hands the store none (issue #974), so the ordinary save
+    /// path is untouched and nothing can close an order that nobody asked about.
+    /// </summary>
+    [Fact]
+    public async Task A_purchase_with_no_completion_choice_hands_the_store_none()
+    {
+        var store = new FakePurchaseStore();
+        var useCase = UseCase(store, new FakeDocumentStorage());
+
+        await useCase.Handle(FileInput(), Fields(supplierId: 4), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None);
+
+        Assert.Null(store.LastCompletionDecision);
+    }
+
+    /// <summary>
+    /// The request carries the order id and the fingerprint; the actor and the instant are the
+    /// server's. That split is what keeps a client from asserting who decided or when.
+    /// </summary>
+    [Fact]
+    public async Task A_completion_choice_is_attributed_to_the_caller_and_the_clock()
+    {
+        var store = new FakePurchaseStore();
+        var useCase = UseCase(store, new FakeDocumentStorage());
+
+        await useCase.Handle(
+            FileInput(),
+            Fields(supplierId: 4),
+            [new PurchaseItemInput(1, 1, 1)],
+            new SupplierOrderCompletionRequest(9, "fingerprint-from-the-preview"),
+            CancellationToken.None);
+
+        var decision = store.LastCompletionDecision;
+        Assert.NotNull(decision);
+        Assert.Equal((9, "fingerprint-from-the-preview"), (decision!.SupplierOrderId, decision.DecisionFingerprint));
+        Assert.Equal(
+            (Operator.DirectoryTenantId, Operator.ObjectId, NowUtc),
+            (decision.DecidedByDirectoryTenantId, decision.DecidedByObjectId, decision.DecidedAtUtc));
+    }
+
+    /// <summary>
+    /// A completion that cannot name who made it is not auditable, so it is refused before the
+    /// document is stored and before the write transaction opens - the same rule
+    /// <c>ApplyInventoryCostRepair</c> applies to a costing repair.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unidentifiable_caller_cannot_complete_an_order_and_stores_nothing(bool notAuthenticated)
+    {
+        var store = new FakePurchaseStore();
+        var documents = new FakeDocumentStorage();
+        var useCase = UseCase(
+            store,
+            documents,
+            notAuthenticated
+                ? FakeAuthenticatedActorAccessor.NotAuthenticated()
+                : FakeAuthenticatedActorAccessor.Unidentifiable());
+
+        await Assert.ThrowsAsync<BusinessAccessDeniedException>(() => useCase.Handle(
+            FileInput(),
+            Fields(supplierId: 4),
+            [new PurchaseItemInput(1, 1, 1)],
+            new SupplierOrderCompletionRequest(9, "fingerprint-from-the-preview"),
+            CancellationToken.None));
+
+        Assert.Empty(documents.SavedFileNames);
+        Assert.Null(store.LastCreated);
+        Assert.Null(store.LastCompletionDecision);
     }
 }

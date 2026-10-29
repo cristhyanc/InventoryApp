@@ -216,7 +216,7 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
     {
         var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
         return new PurchaseDocumentUseCases(
-            new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
+            TestPurchaseUseCases.Upload(store, documents, new FakeClock(DateTime.UtcNow)),
             new GetPurchaseFile(store, documents),
             new DeletePurchase(store, documents));
     }
@@ -272,6 +272,9 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
         Assert.NotNull(purchase);
         Assert.Equal(businessId, purchase.BusinessId);
+        // Non-null because this purchase was uploaded with a document; nullable on the record since
+        // issue #976, where a purchase may have none.
+        Assert.NotNull(purchase.StoredFileName);
         return (purchase.Id, purchase.StoredFileName);
     }
 

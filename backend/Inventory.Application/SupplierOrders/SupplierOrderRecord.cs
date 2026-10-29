@@ -2,7 +2,15 @@ using Inventory.Domain.SupplierOrders;
 
 namespace Inventory.Application.SupplierOrders;
 
-/// <summary>One supplier order as the Application layer sees it, with its supplier detail and lines.</summary>
+/// <summary>
+/// One supplier order as the Application layer sees it, with its supplier detail and lines.
+///
+/// <para><c>CompletedWithUndeliveredAt</c> is the instant an operator decided no more of the order
+/// would arrive (issue #974), and is <c>null</c> for every order that carries no such decision. The
+/// actor who made it is stored with the order but is deliberately not carried here: an Entra
+/// <c>(tid, oid)</c> pair identifies a person and belongs in the audit record, not in a purchasing
+/// read.</para>
+/// </summary>
 public sealed record SupplierOrderRecord(
     int Id,
     int BusinessId,
@@ -15,7 +23,8 @@ public sealed record SupplierOrderRecord(
     SupplierOrderStatus Status,
     DateTime CreatedAt,
     DateTime UpdatedAt,
-    IReadOnlyList<SupplierOrderLineRecord> Lines);
+    IReadOnlyList<SupplierOrderLineRecord> Lines,
+    DateTime? CompletedWithUndeliveredAt = null);
 
 /// <summary>The supplier detail carried on a supplier order, as the Application layer sees it.</summary>
 public sealed record SupplierOrderSupplierRecord(

@@ -41,6 +41,7 @@ using Inventory.Application.SalesSync;
 using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupportSessions;
@@ -200,6 +201,18 @@ public static class InfrastructureServiceCollectionExtensions
         // request's own denied-scope context and a member's read on their own resolved one; neither
         // scope selects anything, because there is no owner to compare.
         services.AddScoped<IOptionVisibilityStore, EfOptionVisibilityStore>();
+        // The business subscription state of issue #966: three deliberately tiny adapters over three
+        // tables, kept apart because the records they hold must never write each other. The billing
+        // subscription and the manual grants are ordinary tenant-owned reads and writes through the
+        // central filters and the ownership stamp - the business comes from the caller's resolved
+        // scope, never from a parameter - and the grandfathering record is the third table in this
+        // schema that names no business, for the same reason the option visibility is: the cutoff and
+        // the completion marker are one answer for the whole application. All three are scoped like
+        // every adapter here, so the per-request entitlement read runs on the request's own context
+        // and the human-run grandfathering command on the one it opened per business.
+        services.AddScoped<IBillingSubscriptionStore, EfBillingSubscriptionStore>();
+        services.AddScoped<IManualPlanGrantStore, EfManualPlanGrantStore>();
+        services.AddScoped<ISubscriptionGrandfatheringStore, EfSubscriptionGrandfatheringStore>();
         // The one provisioning write of issue #849: the copies of those presets a business receives
         // when its application is approved. A separate one-method adapter rather than a method on
         // the directory store above, because this is the only platform-admin path that writes a
@@ -286,6 +299,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxSaleTimestampRepairStore, EfNayaxSaleTimestampRepairStore>();
         services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
         services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
+        services.AddScoped<ISupplierOrderCompletionStore, EfSupplierOrderCompletionStore>();
         services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
         services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
         services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();

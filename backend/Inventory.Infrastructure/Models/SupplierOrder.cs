@@ -10,7 +10,14 @@ public enum SupplierOrderStatus
     Ordered,
     PartiallyReceived,
     Received,
-    Cancelled
+    Cancelled,
+
+    /// <summary>
+    /// Explicitly completed with part of the order never delivered (issue #974). Mirrors
+    /// <see cref="Inventory.Domain.SupplierOrders.SupplierOrderStatus.ClosedPartiallyDelivered"/>;
+    /// the persisted integer is <c>4</c> and no existing row is ever reclassified into it.
+    /// </summary>
+    ClosedPartiallyDelivered
 }
 
 public class SupplierOrder : IBusinessOwned
@@ -32,6 +39,29 @@ public class SupplierOrder : IBusinessOwned
     public SupplierOrderStatus Status { get; set; } = SupplierOrderStatus.Ordered;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// The UTC instant an operator decided no more of this order would arrive (issue #974), set
+    /// exactly when <see cref="Status"/> becomes
+    /// <see cref="SupplierOrderStatus.ClosedPartiallyDelivered"/> and never cleared. <c>null</c> for
+    /// every other order, including every order recorded before that decision existed: nothing is
+    /// backfilled.
+    /// </summary>
+    public DateTime? CompletedWithUndeliveredAt { get; set; }
+
+    /// <summary>
+    /// The Entra directory tenant id (<c>tid</c>) of the operator who completed the order, following
+    /// <see cref="InventoryCostRepair.CreatedByDirectoryTenantId"/>: the validated <c>(tid, oid)</c>
+    /// pair is this application's identity for an actor, and no email address or display name is
+    /// stored. Never serialised out.
+    /// </summary>
+    [JsonIgnore]
+    public string? CompletedByDirectoryTenantId { get; set; }
+
+    /// <summary>The Entra object id (<c>oid</c>) of the operator who completed the order. Never serialised out.</summary>
+    [JsonIgnore]
+    public string? CompletedByObjectId { get; set; }
+
     public virtual ICollection<SupplierOrderLine> Lines { get; set; } = new List<SupplierOrderLine>();
 }
 
@@ -66,6 +96,15 @@ public class SupplierOrderLine : IBusinessOwned
     /// </summary>
     [NotMapped]
     public decimal OutstandingQuantity => SupplierOrderLineOutstandingPolicy.Outstanding(
+        (Inventory.Domain.SupplierOrders.SupplierOrderStatus)SupplierOrder.Status, QuantityOrdered, QuantityReceived);
+
+    /// <summary>
+    /// How much of this line will never be delivered (issue #974), from the same authoritative
+    /// policy the API-owned <c>SupplierOrderLineResponse</c> uses, exactly as
+    /// <see cref="OutstandingQuantity"/> does.
+    /// </summary>
+    [NotMapped]
+    public decimal UndeliveredQuantity => SupplierOrderLineOutstandingPolicy.Undelivered(
         (Inventory.Domain.SupplierOrders.SupplierOrderStatus)SupplierOrder.Status, QuantityOrdered, QuantityReceived);
 }
 

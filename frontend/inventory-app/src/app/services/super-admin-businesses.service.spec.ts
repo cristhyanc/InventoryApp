@@ -19,7 +19,8 @@ const business: SuperAdminBusiness = {
   abn: '12345678901',
   state: 'NSW',
   activeMemberCount: 1,
-  nayaxConfigured: false
+  nayaxConfigured: false,
+  nayaxConnectionStatus: 'NotConfigured'
 };
 
 const member: SuperAdminBusinessMember = {

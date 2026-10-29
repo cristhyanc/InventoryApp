@@ -33,6 +33,14 @@ import {
   purchaseCostSortValue,
   purchaseCostSupplierDisplay
 } from './product-purchase-costs/product-purchase-costs.component';
+import {
+  CHEAPEST_SUPPLIERS_NOT_READ_YET,
+  CheapestSuppliers,
+  CheapestSuppliersComponent,
+  cheapestSupplierFor
+} from '../shared/cheapest-supplier/cheapest-suppliers.component';
+import { CheapestSupplierCellComponent } from '../shared/cheapest-supplier/cheapest-supplier-cell.component';
+import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
 
 // No 'supplier' column since issue #787 (A1 of #786): a product carries no supplier to sort by.
 // No `price` column since issue #792 (A2 of #786): a product carries no selling price, so there is
@@ -53,7 +61,15 @@ type ProductStatusFilter = 'active' | 'all';
 @Component({
   selector: 'app-product-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, ConfirmationDialogComponent, ProductPurchaseCostsComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    RouterLink,
+    ConfirmationDialogComponent,
+    ProductPurchaseCostsComponent,
+    CheapestSuppliersComponent,
+    CheapestSupplierCellComponent
+  ],
   templateUrl: './product-list.component.html'
 })
 export class ProductListComponent implements OnInit, OnDestroy {
@@ -127,6 +143,15 @@ export class ProductListComponent implements OnInit, OnDestroy {
    * belong to that component (issue #191's page composition boundary).
    */
   purchaseCosts: ProductPurchaseCosts = PURCHASE_COSTS_NOT_READ_YET;
+
+  /**
+   * Where `<app-cheapest-suppliers>`'s one read for {@link productIds} stands, and the answers it
+   * found (issue #940, reusing #930's shared component). This page only lays that answer out in the
+   * Cheapest supplier column through {@link cheapestSupplier}; the request, its batching, its
+   * failure message and its Retry control belong to that component (issue #191's page composition
+   * boundary).
+   */
+  cheapestSuppliers: CheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
 
   /**
    * The status of each tracked product, by product id (issue #938), for the Tracked column. Empty
@@ -260,6 +285,15 @@ export class ProductListComponent implements OnInit, OnDestroy {
   /** Records what `<app-product-purchase-costs>` has published, for the cost cells and their sort. */
   onPurchaseCostsChange(costs: ProductPurchaseCosts): void {
     this.purchaseCosts = costs;
+  }
+
+  /**
+   * This product's cheapest-supplier answer, or `undefined` while the read has not established one
+   * (issue #940). The cell tells the states apart from the read's own state, never from this being
+   * absent.
+   */
+  cheapestSupplier(product: Product): CheapestSupplierProduct | undefined {
+    return cheapestSupplierFor(this.cheapestSuppliers, product.id);
   }
 
   onSearchChange(value: string): void {

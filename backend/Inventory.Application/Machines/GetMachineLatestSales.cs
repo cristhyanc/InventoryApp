@@ -51,14 +51,7 @@ public sealed class GetMachineLatestSales
         }
         catch (NayaxNotConnectedException exception)
         {
-            // NotConfigured is the state of a business with nothing stored, so it is the state of a
-            // business with no sales provider (issue #759). Any other refused status - today
-            // NeedsAttention, including the one a 401 has just written - is a provider that is
-            // configured and currently unusable, which is a different sentence for the operator.
-            return MachineLatestSales.Unavailable(
-                exception.Status == NayaxConnectionStatus.NotConfigured
-                    ? MachineLatestSalesUnavailableReason.NoSalesProvider
-                    : MachineLatestSalesUnavailableReason.NayaxNotConnected);
+            return MachineLatestSales.Unavailable(ClassifyUnavailableReason(exception));
         }
         catch (NayaxPermissionNotGrantedException)
         {
@@ -77,6 +70,29 @@ public sealed class GetMachineLatestSales
                 .ThenByDescending(sale => sale.SaleAtUtc)
                 .ThenByDescending(sale => sale.TransactionId),
         ]);
+    }
+
+    /// <summary>
+    /// The plan is asked about first, because a plan refusal reads no connection at all and so
+    /// carries no status to classify (issue #967): a business that has not bought the provider is
+    /// not a business with none configured.
+    ///
+    /// <para>Otherwise, NotConfigured is the state of a business with nothing stored, so it is the
+    /// state of a business with no sales provider (issue #759). Any other refused status - today
+    /// NeedsAttention, including the one a 401 has just written - is a provider that is configured
+    /// and currently unusable, which is a different sentence for the operator.</para>
+    /// </summary>
+    private static MachineLatestSalesUnavailableReason ClassifyUnavailableReason(
+        NayaxNotConnectedException exception)
+    {
+        if (exception.RequiredPlan is not null)
+        {
+            return MachineLatestSalesUnavailableReason.PlanRequired;
+        }
+
+        return exception.Status == NayaxConnectionStatus.NotConfigured
+            ? MachineLatestSalesUnavailableReason.NoSalesProvider
+            : MachineLatestSalesUnavailableReason.NayaxNotConnected;
     }
 
     /// <summary>

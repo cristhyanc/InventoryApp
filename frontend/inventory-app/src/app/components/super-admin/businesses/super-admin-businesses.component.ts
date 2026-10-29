@@ -5,6 +5,7 @@ import { Subject, takeUntil } from 'rxjs';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { ToastService } from '../../../services/toast.service';
 import { SuperAdminBusiness, SuperAdminBusinessesService } from '../../../services/super-admin-businesses.service';
+import type { NayaxConnectionStatusName } from '../../../services/nayax-connection.service';
 import { BusinessMembersDialogComponent } from './business-members-dialog.component';
 import { BusinessRejectDialogComponent } from './business-reject-dialog.component';
 import { ViewAsBusinessDialogComponent } from './view-as-business-dialog.component';
@@ -12,6 +13,32 @@ import { ViewAsBusinessDialogComponent } from './view-as-business-dialog.compone
 /** The filterable statuses, matching `Inventory.Domain.Tenancy.BusinessStatus`'s published names. */
 export const SUPER_ADMIN_BUSINESS_STATUS_FILTERS = ['All', 'Pending', 'Active', 'Rejected', 'Deactivated'] as const;
 export type SuperAdminBusinessStatusFilter = (typeof SUPER_ADMIN_BUSINESS_STATUS_FILTERS)[number];
+
+/**
+ * How each stored Nayax connection status is shown beside a business's name (issue #983): a dot
+ * colour, and the sentence that is its tooltip and its screen-reader label.
+ *
+ * Green is the one verified state. Both states that mean "credentials are stored and are not known
+ * to work" are orange, because neither is a working connection and neither is nothing at all - and
+ * each keeps its **own sentence**, so the colour they share never makes "saved, never tested" and
+ * "the last test failed" look like the same thing. Red is the business that has not started.
+ *
+ * The sentence is always rendered, never only hovered: colour alone is not a signal somebody who
+ * cannot distinguish these three hues, or who is reading with a screen reader, can use.
+ */
+const NAYAX_STATUS_PRESENTATION: Record<NayaxConnectionStatusName, { dotClass: string; label: string }> = {
+  Ready: { dotClass: 'bg-rr-ok-text', label: 'Nayax verified at last test' },
+  PendingPermissions: { dotClass: 'bg-rr-warn-text', label: 'Nayax token saved, not tested yet' },
+  NeedsAttention: { dotClass: 'bg-rr-warn-text', label: 'Nayax last test failed' },
+  NotConfigured: { dotClass: 'bg-rr-danger-text', label: 'Nayax not set up' }
+};
+
+/**
+ * What a status name this code does not declare is shown as. The API publishes the stored value as
+ * it is, so an undeclared one is reported as unknown rather than presented as one of the four - the
+ * same restraint the members list shows about a role nobody granted.
+ */
+const UNKNOWN_NAYAX_STATUS = { dotClass: 'bg-rr-line-strong', label: 'Nayax status unknown' } as const;
 
 type PendingBusinessAction =
   | { readonly kind: 'approve'; readonly business: SuperAdminBusiness }
@@ -31,6 +58,10 @@ type PendingBusinessAction =
  * for a single-call confirmation - while Reject (its own reason text and submission state) and
  * Members (its own load, release confirmation and error) are dedicated feature components
  * composed through `[businessId]`/`[businessName]` and their outputs.
+ *
+ * The Nayax dot beside each business name (issue #983) is presentation only in the same sense: the
+ * status it colours is the one the API already stored from that business's own last permission test,
+ * this page neither tests nor re-tests anything, and loading the list makes no Nayax call.
  *
  * "View as this business" (issue #553, a slice of #513) is the one dedicated feature component
  * composed the same way Reject and Members are: its own reason text, submission state and error,
@@ -101,6 +132,16 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
           this.loadError = true;
         }
       });
+  }
+
+  /** The dot colour for one business's stored Nayax connection status (issue #983). */
+  nayaxDotClass(business: SuperAdminBusiness): string {
+    return this.nayaxPresentation(business).dotClass;
+  }
+
+  /** That status in words - the dot's tooltip and the label a screen reader reads (issue #983). */
+  nayaxStatusLabel(business: SuperAdminBusiness): string {
+    return this.nayaxPresentation(business).label;
   }
 
   requestApprove(business: SuperAdminBusiness): void {
@@ -217,6 +258,10 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
       default:
         return '';
     }
+  }
+
+  private nayaxPresentation(business: SuperAdminBusiness): { dotClass: string; label: string } {
+    return NAYAX_STATUS_PRESENTATION[business.nayaxConnectionStatus] ?? UNKNOWN_NAYAX_STATUS;
   }
 
   private onActionSucceeded(message: string): void {

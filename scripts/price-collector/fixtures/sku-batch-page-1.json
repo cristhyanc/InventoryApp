@@ -1,0 +1,36 @@
+{
+  "data": {
+    "products": {
+      "total_count": 2,
+      "page_info": {
+        "current_page": 1,
+        "page_size": 1,
+        "total_pages": 2
+      },
+      "items": [
+        {
+          "sku": "BGB25",
+          "name": "Bundaberg Ginger Beer 375ml Bottle",
+          "url_key": "bundaberg-ginger-beer-375ml-bottle",
+          "url_suffix": ".html",
+          "stock_status": "IN_STOCK",
+          "price_range": {
+            "minimum_price": {
+              "final_price": { "value": 31.2, "currency": "AUD" },
+              "regular_price": { "value": 33.6, "currency": "AUD" }
+            }
+          },
+          "custom_attributesV2": {
+            "items": [
+              { "code": "pickamntsoldas", "value": "24" },
+              { "code": "gst", "value": "10" },
+              { "code": "innerbarcode", "value": "9311493000012" },
+              { "code": "outerbarcode", "value": "19311493000019" }
+            ],
+            "errors": []
+          }
+        }
+      ]
+    }
+  }
+}

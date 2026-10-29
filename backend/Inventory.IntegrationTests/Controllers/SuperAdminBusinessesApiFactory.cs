@@ -66,6 +66,12 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     public static readonly DateTime AppliedAt = new(2026, 9, 1, 6, 0, 0, DateTimeKind.Utc);
     public static readonly DateTime RejectedAt = new(2026, 9, 20, 7, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>
+    /// The instant a seeded Nayax connection was last tested at (issue #983). It exists so a test can
+    /// assert the directory does <em>not</em> report when a test ran.
+    /// </summary>
+    public static readonly DateTime LastTestedAt = new(2026, 10, 25, 2, 15, 0, DateTimeKind.Utc);
+
     private readonly SqliteConnection _connection = new("Data Source=:memory:");
     private readonly RecordingLoggerProvider _logs = new();
 
@@ -572,16 +578,38 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public async Task SeedTenantDataAsync(string productName, string tokenCiphertextMarker)
     {
+        await using (var db = Database())
+        {
+            db.Products.Add(new Product { BusinessId = TradingBusinessId, Name = productName });
+            await db.SaveChangesAsync();
+        }
+
+        await SeedNayaxConnectionAsync(TradingBusinessId, NayaxConnectionStatus.Ready, tokenCiphertextMarker);
+    }
+
+    /// <summary>
+    /// Stores one Nayax connection for one business in exactly one of its stored statuses, so a test
+    /// can prove what the directory reports for each of the four (issue #983). The credential columns
+    /// are filled because a stored row always has them; what the test is about is the status beside
+    /// them, and that none of them is ever served.
+    /// </summary>
+    public async Task SeedNayaxConnectionAsync(
+        int businessId,
+        NayaxConnectionStatus status,
+        string tokenCiphertextMarker = "ciphertext-marker-that-must-never-be-served")
+    {
         await using var db = Database();
-        db.Products.Add(new Product { BusinessId = TradingBusinessId, Name = productName });
         db.BusinessNayaxConnections.Add(new BusinessNayaxConnection
         {
-            BusinessId = TradingBusinessId,
+            BusinessId = businessId,
             OperatorId = "2002736764",
             AccessTokenCiphertext = tokenCiphertextMarker,
             EncryptionKeyId = "2026-10",
-            Status = NayaxConnectionStatus.Ready,
+            Status = status,
             CredentialRevision = 1,
+            // The instant a test must never find in a response: when the connection was last tested
+            // is deliberately not part of the directory.
+            LastTestedAtUtc = LastTestedAt,
             UpdatedAtUtc = CreatedAt,
         });
         await db.SaveChangesAsync();

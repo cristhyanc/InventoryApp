@@ -64,7 +64,12 @@ public sealed class MeController : ControllerBase
                     session.ExpiresAtUtc,
                     session.ReadOnly)
                 : null,
-            access.HistoricalGstClassificationVisible));
+            access.HistoricalGstClassificationVisible,
+            new MeEntitlementResponse(
+                access.Entitlement.Enforced,
+                access.Entitlement.Plan?.ToString(),
+                access.Entitlement.Source.ToString(),
+                access.Entitlement.EndsAtUtc)));
     }
 
     /// <summary>

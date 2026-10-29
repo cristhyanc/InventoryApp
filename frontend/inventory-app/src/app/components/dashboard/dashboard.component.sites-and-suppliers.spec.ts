@@ -26,13 +26,15 @@ import {
   CHEAPEST_SUPPLIERS_FAILED_MESSAGE,
   CHEAPEST_SUPPLIERS_SUPPORT_SESSION_MESSAGE
 } from '../shared/cheapest-supplier/cheapest-suppliers.component';
-import { DashboardComponent, OTHER_MACHINES_LABEL, groupMachinesBySite } from './dashboard.component';
+import { DashboardComponent } from './dashboard.component';
 
 /**
- * The two Dashboard follow-ups to issue #972: machines listed under their sites (issue #980), and
- * the observed Cheapest supplier column in Reorder priorities (issue #981), which reuses issue
- * #930's shared read and cell unchanged. The read itself, its batching and the cell's popup have
- * their own specs; this file is about the dashboard.
+ * The two Dashboard follow-ups to issue #972: machines listed under their sites (issue #980, now
+ * inside issue #987's combined Site and machine performance card), and the observed Cheapest
+ * supplier column in Reorder priorities (issue #981), which reuses issue #930's shared read and cell
+ * unchanged. The read itself, its batching and the cell's popup have their own specs, and the
+ * combined card's own behaviour is `site-machine-performance/site-machine-performance.component.spec.ts`'s;
+ * this file is about the dashboard page composing them.
  */
 
 const SUMMARY: DashboardSummary = {
@@ -218,91 +220,76 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
   return { fixture, host: fixture.nativeElement as HTMLElement };
 }
 
-function machineSection(host: HTMLElement): HTMLElement {
-  return host.querySelector('section[aria-labelledby="machine-performance-title"]') as HTMLElement;
+function performanceSection(host: HTMLElement): HTMLElement {
+  return host.querySelector('section[aria-labelledby="site-machine-performance-title"]') as HTMLElement;
 }
 
 function reorderSection(host: HTMLElement): HTMLElement {
   return host.querySelector('section[aria-labelledby="reorder-priorities-title"]') as HTMLElement;
 }
 
-/** The desktop table's groups, as [heading, machine names] in rendered order. */
+/**
+ * The combined card's desktop groups, as [expander label, machine names] in rendered order. The
+ * expander's leading chevron is presentation (`aria-hidden`), so it is dropped from the label.
+ */
 function tableGroups(host: HTMLElement): [string | null, string[]][] {
-  return Array.from(machineSection(host).querySelectorAll<HTMLElement>('tbody[data-testid^="machine-group-"]')).map((body) => [
-    body.querySelector('th[scope="rowgroup"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? null,
+  return Array.from(performanceSection(host).querySelectorAll<HTMLElement>('tbody[id^="site-machines-"]')).map((body) => [
+    host
+      .querySelector(`[aria-controls="${body.id}"]`)
+      ?.textContent?.replace(/\s+/g, ' ')
+      .replace(/^[▴▾]\s*/, '')
+      .trim() ?? null,
     Array.from(body.querySelectorAll('a.table-row-anchor')).map((anchor) => anchor.textContent?.trim() ?? '')
   ]);
 }
 
-describe('groupMachinesBySite (issue #980)', () => {
-  it('lists each site with its own machines, in the site order, then the rest under Other machines', () => {
-    const groups = groupMachinesBySite(FLEET, [HARBOUR, PAVILLION]);
-
-    expect(groups.map((group) => [group.label, group.machines.map((m) => m.machineID)])).toEqual([
-      ['Harbour Point Plaza', [2]],
-      ['Pavillion Shopping Centre', [1, 4]],
-      [OTHER_MACHINES_LABEL, [3, 5]]
-    ]);
-  });
-
-  it('places every machine exactly once', () => {
-    const placed = groupMachinesBySite(FLEET, [HARBOUR, PAVILLION]).flatMap((group) => group.machines);
-
-    expect(placed).toHaveLength(FLEET.length);
-    expect(new Set(placed).size).toBe(FLEET.length);
-  });
-
-  it('gives a site with no listed machine no group', () => {
-    const groups = groupMachinesBySite([machine(2, 'Avenue Hotel VM', 1)], [HARBOUR, PAVILLION]);
-
-    expect(groups.map((group) => group.label)).toEqual(['Harbour Point Plaza']);
-  });
-
-  it('leaves the list unheaded when no machine is at a listed site', () => {
-    const groups = groupMachinesBySite(FLEET, []);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].label).toBeNull();
-    expect(groups[0].machines).toHaveLength(FLEET.length);
-  });
-});
-
-describe('Dashboard machines under their sites (issue #980)', () => {
+describe('Dashboard machines under their sites (issues #980 and #987)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('heads each site row group with the site and its machine count', async () => {
+  it('composes one card whose site rows hold that site own machines', async () => {
     const { host } = await render();
 
+    expect(performanceSection(host).querySelector('.card-title')?.textContent?.trim()).toBe(
+      'Site and machine performance'
+    );
     expect(tableGroups(host)).toEqual([
-      ['Harbour Point Plaza · 1 machine', ['Avenue Hotel VM']],
-      ['Pavillion Shopping Centre · 2 machines', ['Pavillion Left', 'Pavillion Right']],
+      ['Harbour Point Plaza', ['Avenue Hotel VM']],
+      ['Pavillion Shopping Centre', ['Pavillion Left', 'Pavillion Right']],
       ['Other machines · 2 machines', ['Warehouse test unit', 'Moved machine']]
     ]);
   });
 
   it('groups the narrow-screen cards the same way', async () => {
     const { host } = await render();
-    const headings = Array.from(machineSection(host).querySelectorAll('[data-testid^="machine-card-group-"] h3')).map((h) =>
-      h.textContent?.replace(/\s+/g, ' ').trim()
-    );
+    const groups = Array.from(
+      performanceSection(host).querySelectorAll<HTMLElement>('[data-testid^="performance-card-group-"]')
+    ).map((group) => [
+      group
+        .querySelector('[data-testid^="performance-card-expander-"]')
+        ?.textContent?.replace(/\s+/g, ' ')
+        .replace(/^[▴▾]\s*/, '')
+        .trim(),
+      Array.from(group.querySelectorAll('[data-testid^="performance-machine-card-"]')).length
+    ]);
 
-    expect(headings).toEqual([
-      'Harbour Point Plaza · 1 machine',
-      'Pavillion Shopping Centre · 2 machines',
-      'Other machines · 2 machines'
+    expect(groups).toEqual([
+      ['Harbour Point Plaza', 1],
+      ['Pavillion Shopping Centre', 2],
+      ['Other machines · 2 machines', 2]
     ]);
   });
 
   it('keeps the fleet totals over every machine', async () => {
     const { host } = await render();
 
-    expect(machineSection(host).querySelector('tfoot')?.textContent).toContain('Totals (5 machines)');
-    expect(machineSection(host).querySelector('tfoot')?.textContent).toContain('$100.00 sales');
+    expect(performanceSection(host).querySelector('tfoot')?.textContent).toContain('Totals (5 machines)');
+    expect(performanceSection(host).querySelector('tfoot')?.textContent).toContain('$100.00 sales');
   });
 
-  it('shows the machines unheaded when the site list could not be read', async () => {
+  it('shows the machines unheaded, in the same card, when the site list could not be read', async () => {
     const { host } = await render({ sites: throwError(() => new Error('down')) });
 
+    expect(performanceSection(host).querySelector('[data-testid="sites-unavailable"]')).not.toBeNull();
     expect(tableGroups(host)).toEqual([
       [null, ['Pavillion Left', 'Avenue Hotel VM', 'Warehouse test unit', 'Pavillion Right', 'Moved machine']]
     ]);

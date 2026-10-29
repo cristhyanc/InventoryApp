@@ -45,13 +45,23 @@
               <tr class="table-row align-top">
                 <td class="table-cell">
                   <div class="flex min-w-56 items-start gap-3">
-                    <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
-                      @if (isImage(r) && thumbnailUrl(r)) {
-                        <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-md-control object-cover" />
-                      } @else {
-                        <div class="flex h-14 w-14 items-center justify-center rounded-md-control bg-md-gray-100 text-xl">📄</div>
-                      }
-                    </button>
+                    <!-- Only a purchase that has a document has one to open (issue #976); one with
+                         none shows a plain placeholder rather than a control that would 404. -->
+                    @if (hasDocument(r)) {
+                      <button type="button" class="shrink-0" (click)="openDocument(r)" [attr.aria-label]="'Open document for ' + r.title">
+                        @if (isImage(r) && thumbnailUrl(r)) {
+                          <img [src]="thumbnailUrl(r)" [alt]="r.title" class="h-14 w-14 rounded-md-control object-cover" />
+                        } @else {
+                          <div class="flex h-14 w-14 items-center justify-center rounded-md-control bg-md-gray-100 text-xl">📄</div>
+                        }
+                      </button>
+                    } @else {
+                      <div
+                        data-testid="purchase-no-document-placeholder"
+                        aria-hidden="true"
+                        class="flex h-14 w-14 shrink-0 items-center justify-center rounded-md-control bg-md-gray-100 text-xl value-muted"
+                      >&ndash;</div>
+                    }
                     <div class="min-w-0">
                       <strong class="block font-semibold text-md-gray-800">{{ r.title }}</strong>
                       @if (r.notes) {
@@ -110,7 +120,21 @@
                     </div>
                   }
                 </td>
-                <td class="table-cell text-xs value-muted">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</td>
+                <td class="table-cell text-xs value-muted">
+                  @if (hasDocument(r)) {
+                    <span data-testid="purchase-document-name">{{ r.fileName }} · {{ formatSize(r.fileSizeBytes) }}</span>
+                  } @else {
+                    <!-- "No document" is a real state, not a missing value (issue #976), and a
+                         purchase that has none is offered one. The control is hidden in a support
+                         session for the same reason Delete is: adding a document is a write. -->
+                    <div class="flex flex-col items-start gap-2">
+                      <span data-testid="purchase-no-document">No document</span>
+                      @if (!sessionActive) {
+                        <app-purchase-document-attach [purchase]="r" (attached)="load()" />
+                      }
+                    </div>
+                  }
+                </td>
                 <td data-testid="purchases-actions-cell" class="table-cell sticky right-0 z-10 border-l border-md-gray-200 bg-white">
                   <div class="flex justify-end gap-2">
                     <a
