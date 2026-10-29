@@ -134,6 +134,66 @@ describe('AccessService capability cache (issue #528)', () => {
     expect(state.access.optionVisibility).toBeUndefined();
   });
 
+  /**
+   * The business's plan entitlement (issue #966) travels with the capabilities for the same reason,
+   * and is read exactly as reported: the shipped state is `enforced: false` with no plan at all, and
+   * it is never read as `Free`, which would be a lock on a business nothing is enforcing anything
+   * for.
+   */
+  it('reports the entitlement the API published, without touching the capabilities', async () => {
+    const entitlement = {
+      enforced: true,
+      plan: 'Pro',
+      source: 'ManualGrant',
+      endsAtUtc: null
+    };
+    const { service } = configure({
+      responses: [() => of({ ...OWNER_RESPONSE, entitlement })]
+    });
+
+    const state = await firstValueFrom(service.access$);
+
+    expect(state.status).toBe('granted');
+    if (state.status !== 'granted') {
+      return;
+    }
+    expect(state.access.entitlement).toEqual(entitlement);
+    // And it is not a capability: the reported set is the role's, untouched.
+    expect([...state.access.capabilities]).toEqual([...CAPABILITIES]);
+  });
+
+  it('reports the shipped state, where nothing is enforced and no plan is claimed', async () => {
+    const entitlement = {
+      enforced: false,
+      plan: null,
+      source: 'EnforcementDisabled',
+      endsAtUtc: null
+    };
+    const { service } = configure({
+      responses: [() => of({ ...OWNER_RESPONSE, entitlement })]
+    });
+
+    const state = await firstValueFrom(service.access$);
+
+    expect(state.status).toBe('granted');
+    if (state.status !== 'granted') {
+      return;
+    }
+    expect(state.access.entitlement).toEqual(entitlement);
+  });
+
+  it('leaves the entitlement unknown when the API did not report it', async () => {
+    const { service } = configure({ responses: [() => of(OWNER_RESPONSE)] });
+
+    const state = await firstValueFrom(service.access$);
+
+    expect(state.status).toBe('granted');
+    if (state.status !== 'granted') {
+      return;
+    }
+    expect(state.access.entitlement).toBeUndefined();
+  });
+
   it('answers each capability from the reported set, granting nothing the role does not hold', async () => {
     const { service } = configure({ responses: [() => of(OPERATOR_RESPONSE)] });
 

@@ -1,13 +1,17 @@
 using Inventory.Application.Access;
 using Inventory.Application.Businesses;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.PlatformOptions;
+using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.SupportSessions;
+using InventoryApi.Tests.Application.Time;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Access;
@@ -30,17 +34,42 @@ public class GetCurrentAccessTests
         ICurrentBusinessProvider currentBusiness,
         IBusinessProfileStore? store = null,
         ISupportSessionAccessor? supportSession = null,
-        IOptionVisibilityStore? options = null)
+        IOptionVisibilityStore? options = null,
+        IRolePreviewAccessor? rolePreview = null,
+        GetEffectiveEntitlement? entitlement = null)
     {
         var session = supportSession ?? new FakeSupportSessionAccessor();
 
         return new(
             currentBusiness,
-            new CurrentCapabilities(session, currentBusiness, new FakeRolePreviewAccessor()),
+            new CurrentCapabilities(session, currentBusiness, rolePreview ?? new FakeRolePreviewAccessor()),
             session,
             new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()),
-            new GetOptionVisibility(options ?? new FakeOptionVisibilityStore()));
+            new GetOptionVisibility(options ?? new FakeOptionVisibilityStore()),
+            entitlement ?? Unrestricted());
+
     }
+
+    /// <summary>
+    /// The entitlement every deployment reports today (issue #966): the rollout setting is off, so
+    /// nothing is enforced and no plan is reported. It is the default here for the same reason it is
+    /// the default in production - it is the shipped state.
+    /// </summary>
+    private static GetEffectiveEntitlement Unrestricted() =>
+        Entitlement(FakeSubscriptionEnforcementFlag.Disabled, new FakeSubscriptionGrandfatheringStore());
+
+    private static GetEffectiveEntitlement Entitlement(
+        ISubscriptionEnforcementFlag flag,
+        ISubscriptionGrandfatheringStore grandfathering,
+        IManualPlanGrantStore? grants = null) =>
+        new(
+            flag,
+            grandfathering,
+            grants ?? new FakeManualPlanGrantStore(),
+            new FakeBillingSubscriptionStore(),
+            new FakeClock(EntitlementNow));
+
+    private static readonly DateTime EntitlementNow = new(2026, 11, 10, 6, 0, 0, DateTimeKind.Utc);
 
     [Theory]
     [InlineData(BusinessRole.Operator)]
@@ -160,6 +189,74 @@ public class GetCurrentAccessTests
             .Handle(CancellationToken.None);
 
         Assert.True(access.HistoricalGstClassificationVisible);
+    }
+
+    /// <summary>
+    /// The business's plan travels with the answer too (issue #966), and - like the option
+    /// visibility above - it changes no capability: the same Owner is reported with exactly the Owner
+    /// set whether nothing is enforced or the business is on Pro. A plan says what the business
+    /// bought; a role says what this member may do with it.
+    /// </summary>
+    [Fact]
+    public async Task Reports_the_entitlement_without_changing_any_capability()
+    {
+        var access = await Create(
+                new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Owner),
+                entitlement: Entitlement(
+                    FakeSubscriptionEnforcementFlag.Enabled,
+                    FakeSubscriptionGrandfatheringStore.Completed(),
+                    new FakeManualPlanGrantStore(new ManualPlanGrantState(
+                        SubscriptionPlan.Pro,
+                        ManualPlanGrantSource.Grandfathered,
+                        new EntitlementPeriod(new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc), null)))))
+            .Handle(CancellationToken.None);
+
+        Assert.True(access.Entitlement.Enforced);
+        Assert.Equal(SubscriptionPlan.Pro, access.Entitlement.Plan);
+        Assert.Equal(EntitlementSource.ManualGrant, access.Entitlement.Source);
+        Assert.Equal(RoleCapabilities.For(BusinessRole.Owner), access.Capabilities);
+    }
+
+    /// <summary>
+    /// The shipped state, reported to every member: nothing is enforced, and no plan is claimed for
+    /// a business nothing is restricting.
+    /// </summary>
+    [Fact]
+    public async Task Reports_that_nothing_is_enforced_while_the_rollout_setting_is_off()
+    {
+        var access = await Create(new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Operator))
+            .Handle(CancellationToken.None);
+
+        Assert.False(access.Entitlement.Enforced);
+        Assert.Null(access.Entitlement.Plan);
+        Assert.Equal(EntitlementSource.EnforcementDisabled, access.Entitlement.Source);
+    }
+
+    /// <summary>
+    /// A role preview narrows capabilities and <strong>never</strong> changes the plan (decided 29
+    /// October 2026): the same business reports the same entitlement whether the administrator is
+    /// previewing a role or not, while the capability set is the previewed role's.
+    /// </summary>
+    [Fact]
+    public async Task A_role_preview_narrows_capabilities_and_leaves_the_plan_alone()
+    {
+        var grant = new FakeManualPlanGrantStore(new ManualPlanGrantState(
+            SubscriptionPlan.Pro,
+            ManualPlanGrantSource.Grandfathered,
+            new EntitlementPeriod(new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc), null)));
+
+        var access = await Create(
+                new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Owner),
+                rolePreview: FakeRolePreviewAccessor.Previewing(BusinessRole.Operator),
+                entitlement: Entitlement(
+                    FakeSubscriptionEnforcementFlag.Enabled,
+                    FakeSubscriptionGrandfatheringStore.Completed(),
+                    grant))
+            .Handle(CancellationToken.None);
+
+        Assert.Equal(RoleCapabilities.For(BusinessRole.Operator), access.Capabilities);
+        Assert.Equal(SubscriptionPlan.Pro, access.Entitlement.Plan);
+        Assert.Equal(EntitlementSource.ManualGrant, access.Entitlement.Source);
     }
 
     /// <summary>

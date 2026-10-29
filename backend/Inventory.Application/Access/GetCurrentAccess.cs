@@ -1,5 +1,6 @@
 using Inventory.Application.Businesses;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
@@ -31,6 +32,15 @@ namespace Inventory.Application.Access;
 /// "what may I do" and "what is on offer" have to arrive together or a menu can be built from one
 /// without the other. It is not a capability: the capability set above is identical in both states,
 /// and the classification endpoints authorize themselves by <c>Data.Repair</c> regardless.
+///
+/// Since issue #966 it also reports what the business has <em>bought</em>, from
+/// <see cref="GetEffectiveEntitlement"/>: the effective plan, or that nothing is enforced at all,
+/// which is the shipped state. That is part of this one answer for the same reason the option
+/// visibility is - the shell builds its menu from this response - and it is read last, after the
+/// resolutions above, so a caller with no access to describe is denied before anything is read about
+/// a business's plan. Inside a support session the business resolved is the one being viewed, so the
+/// plan reported is that business's own; a role preview narrows capabilities and cannot reach the
+/// plan at all.
 /// </summary>
 public sealed class GetCurrentAccess
 {
@@ -39,19 +49,22 @@ public sealed class GetCurrentAccess
     private readonly ISupportSessionAccessor _supportSession;
     private readonly GetCurrentBusiness _getCurrentBusiness;
     private readonly GetOptionVisibility _optionVisibility;
+    private readonly GetEffectiveEntitlement _entitlement;
 
     public GetCurrentAccess(
         ICurrentBusinessProvider currentBusiness,
         CurrentCapabilities capabilities,
         ISupportSessionAccessor supportSession,
         GetCurrentBusiness getCurrentBusiness,
-        GetOptionVisibility optionVisibility)
+        GetOptionVisibility optionVisibility,
+        GetEffectiveEntitlement entitlement)
     {
         _currentBusiness = currentBusiness;
         _capabilities = capabilities;
         _supportSession = supportSession;
         _getCurrentBusiness = getCurrentBusiness;
         _optionVisibility = optionVisibility;
+        _entitlement = entitlement;
     }
 
     /// <exception cref="BusinessAccessDeniedException">
@@ -70,6 +83,10 @@ public sealed class GetCurrentAccess
         // (issue #873). Read after the resolutions above, so a caller with no access to describe is
         // denied before anything is read about what they would have been offered.
         var options = await _optionVisibility.Handle(cancellationToken).ConfigureAwait(false);
+        // And what the business has bought (issue #966), read on the request's own resolved scope -
+        // which inside a support session is the business being viewed, so the plan reported is that
+        // business's own. Read after the resolutions above for the same reason the options are.
+        var entitlement = await _entitlement.Handle(cancellationToken).ConfigureAwait(false);
 
         // The role is read only for a member. A support session resolves none - the administrator
         // holds no membership in the business at all - and asking for one would deny the request
@@ -86,6 +103,7 @@ public sealed class GetCurrentAccess
             support is { IsActive: true, ExpiresAtUtc: { } expiresAtUtc }
                 ? new CurrentSupportSession(business.Name, expiresAtUtc, ReadOnly: true)
                 : null,
-            options.HistoricalGstClassificationVisible);
+            options.HistoricalGstClassificationVisible,
+            entitlement);
     }
 }

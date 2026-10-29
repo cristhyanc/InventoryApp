@@ -40,13 +40,66 @@ namespace InventoryApi.DTOs;
 /// members whose capabilities already allowed it, and the classification endpoints keep authorizing
 /// every request by <c>Data.Repair</c> either way.
 /// </param>
+/// <param name="Entitlement">
+/// What the business has <em>bought</em> (issue #966): the effective plan, or - in the shipped state -
+/// that nothing is enforced at all. Always present, never omitted, so a client never has to tell
+/// "the API does not report this" from "nothing is enforced"; see
+/// <see cref="MeEntitlementResponse"/>. It is deliberately not a capability and implies none.
+/// </param>
 public sealed record MeAccessResponse(
     string? Role,
     IReadOnlyList<string> Capabilities,
     string BusinessName,
     string TimeZoneId,
     MeSupportSessionResponse? SupportSession,
-    bool HistoricalGstClassificationVisible);
+    bool HistoricalGstClassificationVisible,
+    MeEntitlementResponse Entitlement);
+
+/// <summary>
+/// The business's plan entitlement, as <c>GET /api/me/access</c> reports it (issue #966).
+///
+/// <para>There is deliberately no separate read endpoint and no caller-supplied business id: this
+/// is computed per request, with no server cache, for the business the request already resolved -
+/// which inside a support session is the business being viewed, so a supporter sees that business's
+/// own plan. A role preview never changes it.</para>
+///
+/// <para>It carries no price, no storage figure and no machine allowance. Those are the plan
+/// catalogue's (<c>Inventory.Domain.Subscriptions.PlanCatalogue</c>), and the page that shows them
+/// is issue #970's work; repeating them in every access read would be a second place a price could
+/// be wrong.</para>
+/// </summary>
+/// <param name="Enforced">
+/// Whether plan entitlement applies at all. <see langword="false"/> is the shipped state and today's
+/// behaviour - every business unrestricted - and a client that reads it offers everything, exactly as
+/// it does now. It is <see langword="false"/> both while the rollout setting is off and while the
+/// grandfathering step has not completed, which is one answer on purpose: in both states nothing is
+/// withheld from anybody.
+/// </param>
+/// <param name="Plan">
+/// The effective plan's published name - <c>Free</c>, <c>Starter</c> or <c>Pro</c> - while
+/// <paramref name="Enforced"/> is <see langword="true"/>, and an explicit <c>null</c> while it is
+/// not. Null rather than <c>Pro</c>, because "unrestricted" is not a plan anybody is on; null rather
+/// than <c>Free</c>, because reporting Free would lock a business nothing is enforcing anything for.
+/// A name rather than a number, for the reason the role and the capabilities are names.
+/// </param>
+/// <param name="Source">
+/// Where that plan came from, as the published name of
+/// <c>Inventory.Domain.Subscriptions.EntitlementSource</c>: <c>EnforcementDisabled</c>,
+/// <c>GrandfatheringNotCompleted</c>, <c>ManualGrant</c>, <c>BillingSubscription</c> or
+/// <c>NoActiveRecord</c>. It is reported so a client (and a support request) can tell a
+/// complimentary or grandfathered plan from a paid one, and an unrestricted deployment from a
+/// business that has nothing active.
+/// </param>
+/// <param name="EndsAtUtc">
+/// When the record that decided the plan stops entitling it, <strong>exclusive</strong>, or
+/// <c>null</c> when it has no recorded end - which is what a grandfathered grant has until an owner
+/// sets one. It is that one record's end, never a combination of both records' dates.
+/// </param>
+public sealed record MeEntitlementResponse(
+    bool Enforced,
+    string? Plan,
+    string Source,
+    DateTime? EndsAtUtc);
 
 /// <summary>
 /// The support session a request is inside, as <c>GET /api/me/access</c> reports it (issue #551).

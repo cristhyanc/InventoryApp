@@ -1,3 +1,4 @@
+using Inventory.Domain.Subscriptions;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
@@ -132,6 +133,20 @@ public class BusinessOwnershipCoverageTests
     /// listing it is a reading of. Neither has a <c>BusinessId</c> to carry. See
     /// docs/architecture.md § Collector results.</para>
     ///
+    /// <para><see cref="SubscriptionGrandfathering"/> is the eleventh, and the reviewed ownership
+    /// decision on issue #966, whose own "Migration, data and deployment impact" declares an additive
+    /// table for the grandfathering record. The structural reason is the one
+    /// <see cref="PlatformOptionVisibility"/> states: the step runs <em>once, over every business</em>,
+    /// so its cutoff instant and its completion marker are one answer for the whole application and
+    /// there is no business whose key the row could carry or whose filter could match it. What the
+    /// step writes <em>per business</em> is an ordinary tenant-owned <see cref="BusinessPlanGrant"/>
+    /// row, stamped and filtered centrally with nothing added - and that row, with
+    /// <see cref="BusinessBillingSubscription"/> beside it, is asserted to be owned in
+    /// <see cref="The_named_entity_is_business_owned"/> below. It is also the one platform table no
+    /// request writes at all: its writer is the human-run <c>grandfather-business-plans</c> command,
+    /// and the per-request read of the completion marker is bounded to that one marker. See
+    /// docs/architecture.md § Business subscriptions and plan entitlements.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
     /// by the ownership mechanism, because there is no ownership here to enforce. <strong>Reading has
@@ -159,6 +174,7 @@ public class BusinessOwnershipCoverageTests
         typeof(PriceCollectorWorkItem),
         typeof(PriceCollectorResultRow),
         typeof(SupplierListingPendingObservation),
+        typeof(SubscriptionGrandfathering),
     ];
 
     /// <summary>
@@ -183,15 +199,15 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are ten, each
+    /// about no business is a tenancy decision, not an implementation detail. There are eleven, each
     /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
     /// (#873), the shared price catalogue's master products, supplier listings and match suggestions
-    /// (#923), the collector runs and observed prices of #925, the collector work items of #924, and
-    /// the submitted result rows and held readings of #937 - and an eleventh one arriving is the
-    /// change this assertion exists to make visible.
+    /// (#923), the collector runs and observed prices of #925, the collector work items of #924, the
+    /// submitted result rows and held readings of #937, and the subscription grandfathering record of
+    /// #966 - and a twelfth one arriving is the change this assertion exists to make visible.
     /// </summary>
     [Fact]
-    public void Exactly_ten_entities_are_declared_platform_tables() =>
+    public void Exactly_eleven_entities_are_declared_platform_tables() =>
         Assert.Equal(
             [
                 "MasterProduct",
@@ -200,6 +216,7 @@ public class BusinessOwnershipCoverageTests
                 "PriceCollectorRun",
                 "PriceCollectorWorkItem",
                 "ProductMatchSuggestion",
+                "SubscriptionGrandfathering",
                 "SupplierListing",
                 "SupplierListingPendingObservation",
                 "SupplierPreset",
@@ -444,6 +461,49 @@ public class BusinessOwnershipCoverageTests
         Assert.Equal(@"""SupplierPresetId"" IS NOT NULL", unique.GetFilter());
     }
 
+    /// <summary>
+    /// A business holds at most one <em>grandfathered</em> grant (issue #966), as a filtered unique
+    /// index led by the business key: led by it because two businesses legitimately hold one each,
+    /// and filtered because the complimentary grants of #982 are a list rather than a single row.
+    ///
+    /// <para>The filter is SQL, so it carries the source's numeric value as a literal. This test is
+    /// what pins that literal to the declared enum: renumbering
+    /// <see cref="ManualPlanGrantSource.Grandfathered"/> would otherwise leave an index filtered on a
+    /// value nothing writes, which would silently stop refusing a second grandfathered grant.</para>
+    /// </summary>
+    [Fact]
+    public void A_business_may_hold_only_one_grandfathered_plan_grant()
+    {
+        var grant = BuildModel().FindEntityType(typeof(BusinessPlanGrant))!;
+
+        var unique = Assert.Single(grant.GetIndexes().Where(index => index.IsUnique));
+
+        Assert.Equal(
+            [nameof(IBusinessOwned.BusinessId), nameof(BusinessPlanGrant.Source)],
+            unique.Properties.Select(property => property.Name).ToArray());
+        Assert.Equal(
+            FormattableString.Invariant($@"""Source"" = {(int)ManualPlanGrantSource.Grandfathered}"),
+            unique.GetFilter());
+    }
+
+    /// <summary>
+    /// And a business holds at most one billing subscription, as a unique index on the business key
+    /// itself - so "the business's subscription" has one answer rather than being whichever row a
+    /// read happened to return first.
+    /// </summary>
+    [Fact]
+    public void A_business_may_hold_only_one_billing_subscription()
+    {
+        var subscription = BuildModel().FindEntityType(typeof(BusinessBillingSubscription))!;
+
+        var unique = Assert.Single(subscription.GetIndexes().Where(index => index.IsUnique));
+
+        Assert.Equal(
+            [nameof(IBusinessOwned.BusinessId)],
+            unique.Properties.Select(property => property.Name).ToArray());
+        Assert.Null(unique.GetFilter());
+    }
+
     private static IModel BuildModel()
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
@@ -605,6 +665,11 @@ public class BusinessOwnershipCoverageTests
     // it are about products and are declared in PlatformEntities above, and this one is a business
     // saying it wants one of its own products priced - which is exactly what tenant ownership is for.
     [InlineData(typeof(ProductPriceTracking))]
+    // The two tenant-owned halves of the business subscription state (issue #966): the plan a
+    // business paid for and the plans a person granted it are facts about that one business, while
+    // the grandfathering record beside them is about none and is declared in PlatformEntities above.
+    [InlineData(typeof(BusinessBillingSubscription))]
+    [InlineData(typeof(BusinessPlanGrant))]
     public void The_named_entity_is_business_owned(Type entityType)
     {
         Assert.True(

@@ -242,12 +242,17 @@ describe('Dashboard Needs attention (issue #972)', () => {
   });
 });
 
-describe('Dashboard narrow-screen site and machine cards (issue #972)', () => {
+/**
+ * The narrow layout of the combined Site and machine performance card (issue #987, replacing the
+ * two separate card lists of issue #972): the same hierarchy as expandable site cards holding
+ * machine cards, with the shared period control and the same values and actions as the table.
+ */
+describe('Dashboard narrow-screen performance cards (issues #972 and #987)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   it('gives each site a card with the same figures and comparison as its table row', async () => {
     const { host } = await render();
-    const card = host.querySelector('[data-testid="site-cards"] li');
+    const card = host.querySelector('[data-testid="performance-card-group-site-7"]');
 
     expect(card?.textContent).toContain('Harbour Point Plaza');
     expect(card?.textContent).toContain('80% stock');
@@ -256,11 +261,11 @@ describe('Dashboard narrow-screen site and machine cards (issue #972)', () => {
     expect(card?.textContent).toContain('↑ 63.2% vs same time last week');
   });
 
-  it('switches the machine cards and the fleet total between every period the table shows', async () => {
+  it('switches the machine cards and the fleet total between every period the card offers', async () => {
     const { fixture, host } = await render();
-    const cards = () => host.querySelector('[data-testid="machine-cards"]') as HTMLElement;
+    const cards = () => host.querySelector('[data-testid="performance-cards"]') as HTMLElement;
     const periodButton = (label: string) =>
-      Array.from(cards().querySelectorAll<HTMLButtonElement>('[data-testid="machine-period"] button')).find(
+      Array.from(host.querySelectorAll<HTMLButtonElement>('[data-testid="performance-period"] button')).find(
         (button) => button.textContent?.trim() === label
       ) as HTMLButtonElement;
 
@@ -284,19 +289,18 @@ describe('Dashboard narrow-screen site and machine cards (issue #972)', () => {
 
   it('shows an Operator no period control, sales, profit or total', async () => {
     const { host } = await render({ canViewFinancials: false });
-    const cards = host.querySelector('[data-testid="machine-cards"]') as HTMLElement;
+    const cards = host.querySelector('[data-testid="performance-cards"]') as HTMLElement;
 
-    expect(cards.querySelector('[data-testid="machine-period"]')).toBeNull();
+    expect(host.querySelector('[data-testid="performance-period"]')).toBeNull();
     expect(cards.textContent).not.toContain('$');
     expect(host.querySelector('[data-testid="machine-totals-card"]')).toBeNull();
-    expect(host.querySelector('[data-testid="site-cards"]')?.textContent).not.toContain('$');
   });
 
   it('never presents an unknown machine figure as zero, in a card or in the total', async () => {
     const { host } = await render({
       machines: [MACHINE, { ...MACHINE, machineID: 2, localMachineId: 502, currentWeekGrossRevenue: null, currentWeekDirectProfit: null }]
     });
-    const cards = host.querySelector('[data-testid="machine-cards"]') as HTMLElement;
+    const cards = host.querySelector('[data-testid="performance-cards"]') as HTMLElement;
 
     expect(cards.textContent).toContain('Unavailable');
     expect(host.querySelector('[data-testid="machine-totals-card"]')?.textContent).toContain('Unavailable');
