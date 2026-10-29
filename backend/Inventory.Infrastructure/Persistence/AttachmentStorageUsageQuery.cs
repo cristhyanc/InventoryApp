@@ -37,12 +37,12 @@ internal static class AttachmentStorageUsageQuery
         // the reconciliation command, never estimated.
         var purchaseBytes = await db.Receipts
             .Where(purchase => purchase.StoredFileName != null)
-            .SumAsync(purchase => (long?)purchase.FileSizeBytes, cancellationToken)
+            .SumAsync(purchase => purchase.FileSizeBytes, cancellationToken)
             .ConfigureAwait(false) ?? 0L;
 
         var expenseBytes = await db.OperatingExpenses
             .Where(expense => expense.AttachmentStoredFileName != null)
-            .SumAsync(expense => (long?)expense.AttachmentFileSizeBytes, cancellationToken)
+            .SumAsync(expense => expense.AttachmentFileSizeBytes, cancellationToken)
             .ConfigureAwait(false) ?? 0L;
 
         var reservedBytes = await db.AttachmentStorageReservations
