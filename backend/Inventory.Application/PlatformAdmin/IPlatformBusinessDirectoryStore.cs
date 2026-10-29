@@ -1,3 +1,4 @@
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.PlatformAdmin;
@@ -6,7 +7,8 @@ namespace Inventory.Application.PlatformAdmin;
 /// One business as the Super Admin's directory reports it (issue #544): what it is called, where it
 /// is in its lifecycle, the dates of its application and its decision, the contact detail its
 /// application recorded, the state or territory it trades in (issue #933), how many people can
-/// currently reach it, and whether it has stored Nayax credentials.
+/// currently reach it, and whether it has stored Nayax credentials and how usable they were when
+/// they were last tested (issue #983).
 ///
 /// <para><strong>What it deliberately does not carry.</strong> No sale, stock, cost, purchase,
 /// product, machine, site or report value - nothing tenant-owned at all - and no member's name,
@@ -55,9 +57,19 @@ namespace Inventory.Application.PlatformAdmin;
 /// </param>
 /// <param name="NayaxConfigured">
 /// Whether the business has stored Nayax credentials at all - the existence of its single
-/// <c>BusinessNayaxConnection</c> row, which is what <c>NotConfigured</c> is the absence of. It is
-/// a yes/no and nothing more: no operator id, no connection status, and under no circumstances any
-/// part of the token.
+/// <c>BusinessNayaxConnection</c> row, which is what
+/// <see cref="NayaxConnectionStatus.NotConfigured"/> is the absence of. It is a yes/no and nothing
+/// more: no operator id, no key id, and under no circumstances any part of the token.
+/// </param>
+/// <param name="NayaxConnectionStatus">
+/// The connection status stored on that row, or <see cref="NayaxConnectionStatus.NotConfigured"/>
+/// for a business that has no row at all (issue #983). It is the <em>stored</em> result of that
+/// business's own last permission test - reading the directory tests nothing and makes no Nayax
+/// call - and it is the second and last thing this record says about a connection. The operator id,
+/// the credential revision, the instant of that test, whether the machine checks were left
+/// unverified, any Nayax error text and every part of the token are all deliberately absent: the
+/// platform owner needs to see which businesses are connected, not to read their credentials or
+/// diagnose them.
 /// </param>
 public sealed record PlatformBusinessSummary(
     int BusinessId,
@@ -70,7 +82,8 @@ public sealed record PlatformBusinessSummary(
     string? Abn,
     string? State,
     int ActiveMemberCount,
-    bool NayaxConfigured);
+    bool NayaxConfigured,
+    NayaxConnectionStatus NayaxConnectionStatus);
 
 /// <summary>
 /// The applicant of one pending business (issue #544): the membership the approval confirms and the
@@ -136,7 +149,9 @@ public sealed record PlatformBusinessDecision(
 /// write-capable platform-admin path, and the first request path of any kind that reads across every
 /// business through <c>AppDbContext</c>. What keeps that from being a general cross-business context
 /// is that the whole surface is here, in one reviewable interface: a fixed set of business columns,
-/// the count of active memberships, the existence of a Nayax connection row, the memberships of one
+/// the count of active memberships, the existence of a Nayax connection row and the status stored on
+/// it (issue #983, the owner-approved widening of this port by exactly that stored status), the
+/// memberships of one
 /// named business, and writes that change nothing but a business's lifecycle status, its decision
 /// instant and rejection reason, and one of its memberships' activation. There is no method that
 /// takes a table name, a predicate, a column list or a statement, and no method that reaches a

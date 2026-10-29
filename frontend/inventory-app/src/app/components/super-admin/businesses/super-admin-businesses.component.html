@@ -43,7 +43,19 @@
           <tbody>
             @for (business of filteredBusinesses; track business.businessId) {
               <tr class="table-row">
-                <td class="table-cell">{{ business.name }}</td>
+                <td class="table-cell">
+                  <span class="inline-flex items-center gap-2">
+                    <span
+                      class="h-2 w-2 shrink-0 rounded-full"
+                      [ngClass]="nayaxDotClass(business)"
+                      [title]="nayaxStatusLabel(business)"
+                      data-testid="nayax-connection-dot"
+                      aria-hidden="true"
+                    ></span>
+                    <span class="sr-only" data-testid="nayax-connection-label">{{ nayaxStatusLabel(business) }}</span>
+                    {{ business.name }}
+                  </span>
+                </td>
                 <td class="table-cell">
                   <span
                     class="badge"
