@@ -1,6 +1,7 @@
 using Inventory.Application.Access;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -19,12 +20,21 @@ namespace InventoryApi.Controllers;
 /// alike - to a Manager and an Owner. The report is not split onto <c>Reports.View</c>: it is the
 /// same surface the agreements are maintained from, and a role that may read what a site is owed but
 /// not why would be told a number it cannot check.
+///
+/// <para>Every action also requires <see cref="PlanFeature.SiteCommissions"/> (issue #967), declared
+/// on the controller for the same reason the capability is: a site is known only from the live fleet
+/// read's <c>CustomerID</c>, so commission is a sales-provider feature throughout, and the
+/// agreements and payments are maintained from the surface the report is read on. The plan is
+/// evaluated after the capability, so a role refusal is unchanged; nothing stored is deleted or
+/// altered when a business's plan stops including this - the agreements and payments stay exactly as
+/// they are and become readable again with the plan.</para>
 /// </summary>
 [ApiController]
 [Route("api/site-commissions")]
 [Authorize]
 [RequiredScope("access_as_user")]
 [RequireCapability(Capability.SiteCommissionsManage)]
+[RequirePlan(PlanFeature.SiteCommissions)]
 public sealed class SiteCommissionsController : ControllerBase
 {
     private readonly IGetSiteCommissionReport _getReport;

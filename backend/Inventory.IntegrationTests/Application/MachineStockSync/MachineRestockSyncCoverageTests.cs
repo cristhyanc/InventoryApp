@@ -11,6 +11,7 @@ using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -865,7 +866,8 @@ public class MachineRestockSyncCoverageTests
         var scope = new BusinessScope();
         scope.Resolve(BusinessId.From(businessId));
 
-        return new NayaxRequestCredentialProvider(connections, scope, new FakeClock(SyncStartedAt));
+        return new NayaxRequestCredentialProvider(
+            connections, scope, TestCurrentPlan.Unrestricted(), new FakeClock(SyncStartedAt));
     }
 
     private static async Task<(DateTime? StartedAtUtc, int? CredentialRevision)> CoverageOfAsync(

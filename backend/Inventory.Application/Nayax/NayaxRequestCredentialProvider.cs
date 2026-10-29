@@ -1,7 +1,9 @@
+using Inventory.Application.Subscriptions;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 
 namespace Inventory.Application.Nayax;
 
@@ -47,20 +49,42 @@ namespace Inventory.Application.Nayax;
 /// decrypted, so it holds for every ordinary Nayax call - read and write alike - and no request
 /// leaves the API. Being here rather than in each of the ~27 consumers is the whole point: a
 /// per-controller check is a check somebody can forget to add to the next controller.</para>
+///
+/// <para><strong>A business whose plan does not include the sales provider resolves no credentials
+/// either (issue #967).</strong> The check is made here, for exactly the reason the support-session
+/// one is: this is the one place every ordinary Nayax call passes through, so every mixed surface -
+/// the dashboard's fleet sections, the machine reads, reorder, the Pick List matrix, the
+/// inventory-cost transition previews, the catalogue review and Sync Restock - gets the
+/// no-usable-provider behaviour it already has for an unusable connection, without a check being
+/// added to any of them. It is made <em>before</em> the stored connection is read, so a downgraded
+/// business with perfectly valid saved credentials makes no Nayax request at all and its credentials,
+/// their status and its stored sales, costs and history are all left exactly as they are. The
+/// refusal carries the distinct plan reason (<see cref="NayaxNotConnectedException.PlanRequired"/>),
+/// so a surface can say "needs Pro" instead of "connect Nayax". While plan enforcement is off -
+/// the shipped state - nothing about the business's plan is read and nothing changes.</para>
+///
+/// <para>The credential actions an Owner uses to <em>set up</em> the connection - test, save and
+/// re-test - deliberately do not come through here (they call Nayax with pasted credentials, or run
+/// the connection check themselves), so they declare the plan requirement at their own endpoints.
+/// Reading the connection status does not come through here either, and stays available on every
+/// plan.</para>
 /// </summary>
 public sealed class NayaxRequestCredentialProvider : INayaxRequestCredentialProvider
 {
     private readonly INayaxConnectionStore _store;
     private readonly IBusinessScope _businessScope;
+    private readonly CurrentPlan _plan;
     private readonly IClock _clock;
 
     public NayaxRequestCredentialProvider(
         INayaxConnectionStore store,
         IBusinessScope businessScope,
+        CurrentPlan plan,
         IClock clock)
     {
         _store = store;
         _businessScope = businessScope;
+        _plan = plan;
         _clock = clock;
     }
 
@@ -72,6 +96,17 @@ public sealed class NayaxRequestCredentialProvider : INayaxRequestCredentialProv
             // First, and before anything is read: a support session never authenticates to Nayax as
             // the business it is looking at.
             throw new SupportSessionNayaxUnavailableException();
+        }
+
+        // Then the plan, and still before anything about the connection is read: a business that has
+        // not bought the sales provider spends no Nayax request and has no token decrypted, however
+        // usable the credentials it saved while it was on a plan that included them.
+        if (!await _plan
+                .AllowsAsync(PlanFeature.SalesProviderIntegration, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            throw NayaxNotConnectedException.PlanRequired(
+                PlanFeaturePolicy.RequiredPlan(PlanFeature.SalesProviderIntegration));
         }
 
         // The gate travels into the read, so the status it decides on and the token that is

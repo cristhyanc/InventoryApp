@@ -44,6 +44,14 @@ public static class MachineRestockSyncReminderHiddenReasons
     public const string NayaxNotConnected = "NayaxNotConnected";
 
     /// <summary>
+    /// The business's effective plan does not include the sales provider (issue #967), so there is
+    /// no provider restock sync for it to be reminded about. Deliberately distinct from
+    /// <see cref="NayaxNotConnected"/>: the credentials may be valid and still saved, and nothing
+    /// here changes them.
+    /// </summary>
+    public const string PlanRequired = "PlanRequired";
+
+    /// <summary>
     /// The business's sales provider names none of its machines, so there is no provider restock
     /// sync for any of them to be overdue for. A machine an operator created themselves is never
     /// counted here.
@@ -96,6 +104,10 @@ public sealed record HiddenMachineRestockSyncReminderDto(string Reason) : IMachi
     /// <summary>The reminder for a business with no usable Nayax connection.</summary>
     public static HiddenMachineRestockSyncReminderDto NayaxNotConnected { get; } =
         new(MachineRestockSyncReminderHiddenReasons.NayaxNotConnected);
+
+    /// <summary>The reminder for a business whose plan does not include the sales provider.</summary>
+    public static HiddenMachineRestockSyncReminderDto PlanRequired { get; } =
+        new(MachineRestockSyncReminderHiddenReasons.PlanRequired);
 
     /// <summary>The reminder for a business whose provider names none of its machines.</summary>
     public static HiddenMachineRestockSyncReminderDto NoProviderMachines { get; } =

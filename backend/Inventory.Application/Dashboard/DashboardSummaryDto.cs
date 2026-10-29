@@ -118,7 +118,8 @@ public sealed record DashboardOrderingSummaryDto(
 /// sentence to display. Issue #552 published exactly one, <see cref="SupportView"/>; issue #726
 /// adds the two availability answers of a business whose Nayax fleet reads cannot be made -
 /// <see cref="NayaxNotConnected"/> and <see cref="PermissionNotGranted"/> - in the same shape and
-/// deliberately not in a second one.</para>
+/// deliberately not in a second one, and issue #967 adds <see cref="PlanRequired"/> beside them for a
+/// business whose plan does not include the provider at all.</para>
 /// </summary>
 public sealed record UnavailableDashboardSectionDto(string Reason) : IDashboardRefillSectionDto
 {
@@ -152,6 +153,16 @@ public sealed record UnavailableDashboardSectionDto(string Reason) : IDashboardR
     public const string PermissionNotGrantedReason = MachineNeedUnavailableReasons.PermissionNotGranted;
 
     /// <summary>
+    /// The reason code for a business whose plan does not include the sales provider (issue #967).
+    /// The fleet read is not made at all, so the section is withheld exactly as it is for an unusable
+    /// connection - and distinctly, because the business may have perfectly valid credentials saved
+    /// and the thing that would restore the card is the plan.
+    ///
+    /// <para>Taken from <see cref="MachineNeedUnavailableReasons"/>, as the two above are.</para>
+    /// </summary>
+    public const string PlanRequiredReason = MachineNeedUnavailableReasons.PlanRequired;
+
+    /// <summary>
     /// Always <see langword="false"/>. The property is published so a client branches on a stated
     /// flag rather than on the absence of the figures it expected.
     /// </summary>
@@ -166,6 +177,9 @@ public sealed record UnavailableDashboardSectionDto(string Reason) : IDashboardR
     /// <summary>The section for a feature this business's Nayax account has not granted.</summary>
     public static UnavailableDashboardSectionDto PermissionNotGranted { get; } = new(PermissionNotGrantedReason);
 
+    /// <summary>The section for a business whose plan does not include the sales provider.</summary>
+    public static UnavailableDashboardSectionDto PlanRequired { get; } = new(PlanRequiredReason);
+
     /// <summary>
     /// The section for the reason a reorder calculation reported (issue #726). One mapping from the
     /// Application's reason to the published code, so the dashboard cannot publish a code the
@@ -179,6 +193,7 @@ public sealed record UnavailableDashboardSectionDto(string Reason) : IDashboardR
     {
         MachineNeedUnavailableReason.NayaxNotConnected => NayaxNotConnected,
         MachineNeedUnavailableReason.PermissionNotGranted => PermissionNotGranted,
+        MachineNeedUnavailableReason.PlanRequired => PlanRequired,
         _ => throw new ArgumentOutOfRangeException(
             nameof(reason), reason, "Unknown machine-need unavailability reason."),
     };

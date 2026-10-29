@@ -2,6 +2,7 @@ using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.SupportSessions;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using Moq;
 using Xunit;
 
@@ -218,6 +219,22 @@ public class GetMachineLatestSalesTests
 
         Assert.False(result.IsAvailable);
         Assert.Equal(MachineLatestSalesUnavailableReason.NayaxNotConnected, result.UnavailableReason);
+        Assert.Empty(result.Sales);
+    }
+
+    /// <summary>
+    /// Issue #967: a plan that does not include the sales provider is a third answer again, and
+    /// deliberately not the "no sales provider" one - a plan refusal reads no connection at all, so
+    /// classifying it by a status it never saw would report a business with valid saved credentials
+    /// as a business that has never connected anything.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_without_the_provider_is_unavailable_with_its_own_reason()
+    {
+        var result = await HandleRefusal(NayaxNotConnectedException.PlanRequired(SubscriptionPlan.Pro));
+
+        Assert.False(result.IsAvailable);
+        Assert.Equal(MachineLatestSalesUnavailableReason.PlanRequired, result.UnavailableReason);
         Assert.Empty(result.Sales);
     }
 
