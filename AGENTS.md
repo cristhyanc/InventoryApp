@@ -52,6 +52,7 @@ scripts/deployment-migration-preflight.mjs Deploy Production migration preflight
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
 scripts/run-agent-evals.mjs           InventoryApp Agent Evals runner (with .test.mjs)
 scripts/run-agent-model-evals.mjs     On-demand model-decision evals over a bounded critical set (with .test.mjs)
+scripts/price-collector/jbmetro-lookup.mjs  JB Metro GraphQL search and SKU lookup for the scheduled price collector (with .test.mjs and recorded fixtures/)
 evals/agent/                          Agent Evals corpus, schema and baseline report (see evals/agent/README.md)
 ```
 
