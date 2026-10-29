@@ -72,8 +72,18 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
 
         foreach (var open in stillOpen)
         {
-            open.Status = PriceCollectorRunStatus.Expired;
-            open.CompletedAtUtc = run.IssuedAtUtc;
+            // The same closure a completion performs (issue #937), with the status fixed to
+            // Expired: every search nobody answered becomes NotSearched, the per-outcome counts are
+            // written, and what the run did manage is recorded. Expiring and completing differ only
+            // in what the status says about who reported.
+            await PriceCollectorRunClosure
+                .CloseAsync(
+                    _db,
+                    open,
+                    run.IssuedAtUtc,
+                    PriceCollectorRunStatus.Expired,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var issued = new Models.PriceCollectorRun

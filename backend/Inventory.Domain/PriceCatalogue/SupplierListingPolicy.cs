@@ -25,7 +25,7 @@ public enum BarcodeScope
 /// How confident the catalogue is that one supplier listing really is the master product it hangs
 /// from (issue #923, parent #817).
 ///
-/// <para>Three states, because the collector of <see cref="SupplierListingMatchStatus.Proposed"/>
+/// <para>Four states, because the collector of <see cref="SupplierListingMatchStatus.Proposed"/>
 /// listings is a search and not an oracle: a Super Admin confirms one (#928), and a listing whose
 /// evidence disagrees with itself is flagged rather than quietly priced. Numbered from 1.</para>
 /// </summary>
@@ -43,6 +43,20 @@ public enum SupplierListingMatchStatus
     /// names something else.
     /// </summary>
     NeedsReview = 3,
+
+    /// <summary>
+    /// Refused by a person: this listing is not this product (#928).
+    ///
+    /// <para>It is kept rather than deleted, for the reason a rejected match suggestion is
+    /// (<see cref="ProductMatchSuggestionStatus.Rejected"/>): a search finds the same shelf again
+    /// every run, and a listing that was deleted would be rediscovered and proposed a second time.
+    /// A refusal has to outlive the row it refused. A rediscovery therefore leaves it rejected -
+    /// <see cref="PriceCollectorResultPolicy.DecideForKnownListing"/> is that rule - unless the
+    /// listing's own identity changed, which makes it a new proposal rather than the thing somebody
+    /// refused. Issue #937 is the first writer of this value, and only in that one direction: moving
+    /// a listing <em>into</em> it is #928's.</para>
+    /// </summary>
+    Rejected = 4,
 }
 
 /// <summary>
@@ -72,6 +86,13 @@ public static class SupplierListingPolicy
 
     /// <summary>The longest accepted listing title - the supplier's own wording for the product.</summary>
     public const int MaxTitleLength = 400;
+
+    /// <summary>
+    /// The longest accepted variant - the supplier's own wording for <em>which</em> one this is
+    /// ("Classic", "Zero Sugar"), read off the listing rather than inferred from the title (issue
+    /// #937). Bounded like a master product's name, because that is what it describes.
+    /// </summary>
+    public const int MaxVariantLength = MasterProductPolicy.MaxNameLength;
 
     /// <summary>
     /// The longest accepted listing URL. The same bound a supplier's website carries, for the same
@@ -136,6 +157,17 @@ public static class SupplierListingPolicy
         "A supplier listing belongs to a master product or to a waiting key, not to both and not to "
             + "neither.";
 
+    /// <summary>What a caller who submitted a variant that is too long is told.</summary>
+    public const string VariantTooLongMessage = "A listing variant must be 200 characters or fewer.";
+
+    /// <summary>
+    /// What a caller who submitted an individual size without its unit, or a unit without a size, is
+    /// told. The two travel together for the reason a barcode and its scope do: "375" of something
+    /// nobody declared cannot be compared with anything, and a unit on its own describes nothing.
+    /// </summary>
+    public const string SizeAndUnitTogetherMessage =
+        "A listing's individual size and its unit are recorded together, or neither is.";
+
     /// <summary>Whether <paramref name="scope"/> is one of the declared scopes.</summary>
     public static bool IsDeclaredBarcodeScope(BarcodeScope? scope) =>
         scope is null || Enum.IsDefined(scope.Value);
@@ -189,6 +221,75 @@ public static class SupplierListingPolicy
             ? trimmed
             : throw new DomainValidationException(SupplierProductIdTooLongMessage);
     }
+
+    /// <summary>What a caller who submitted a title that is too long is told.</summary>
+    public const string TitleTooLongMessage = "A listing title must be 400 characters or fewer.";
+
+    /// <summary>
+    /// The supplier's own wording as it is to be stored (issue #937): trimmed, with blank stored as
+    /// <see langword="null"/>. It is evidence a reviewer reads and never a value anything derives a
+    /// size, a pack count or a brand from, so nothing else is done to it.
+    /// </summary>
+    /// <exception cref="DomainValidationException">
+    /// The title is longer than <see cref="MaxTitleLength"/> once trimmed.
+    /// </exception>
+    public static string? NormaliseTitle(string? title)
+    {
+        var trimmed = (title ?? string.Empty).Trim();
+
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        return trimmed.Length <= MaxTitleLength
+            ? trimmed
+            : throw new DomainValidationException(TitleTooLongMessage);
+    }
+
+    /// <summary>
+    /// The variant as it is to be stored (issue #937): trimmed, with blank stored as
+    /// <see langword="null"/> so "the supplier did not say which one" has one spelling.
+    /// </summary>
+    /// <exception cref="DomainValidationException">
+    /// The variant is longer than <see cref="MaxVariantLength"/> once trimmed.
+    /// </exception>
+    public static string? NormaliseVariant(string? variant)
+    {
+        var trimmed = (variant ?? string.Empty).Trim();
+
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        return trimmed.Length <= MaxVariantLength
+            ? trimmed
+            : throw new DomainValidationException(VariantTooLongMessage);
+    }
+
+    /// <summary>
+    /// The individual size and its unit as they are to be stored (issue #937): a positive size at
+    /// the catalogue's own scale with its declared unit, or two <see langword="null"/>s when the
+    /// supplier published neither.
+    ///
+    /// <para>The size is held to <see cref="MasterProductPolicy.NormaliseSize"/>'s rules, which are
+    /// the only size rules in this catalogue: one listing's size is compared against a master
+    /// product's, so a second scale beside it would be a second answer to "is this the same size?".
+    /// </para>
+    /// </summary>
+    /// <exception cref="DomainValidationException">
+    /// Only one of the two was given, the unit is not a declared one, or the size is not a size this
+    /// catalogue stores. Nothing is stored.
+    /// </exception>
+    public static (decimal? SizeValue, MasterProductSizeUnit? SizeUnit) NormaliseIndividualSize(
+        decimal? sizeValue,
+        MasterProductSizeUnit? sizeUnit) => (sizeValue, sizeUnit) switch
+        {
+            (null, null) => (null, null),
+            ({ } size, { } unit) => (MasterProductPolicy.NormaliseSize(size, unit), unit),
+            _ => throw new DomainValidationException(SizeAndUnitTogetherMessage),
+        };
 
     /// <summary>
     /// The units per pack as they are to be stored: a positive whole number, or

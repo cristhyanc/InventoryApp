@@ -88,4 +88,27 @@ public class PriceCollectorWorkItem
     /// and a work item's own instant is what says when this search actually finished.
     /// </summary>
     public DateTime? OutcomeAtUtc { get; set; }
+
+    /// <summary>
+    /// Why the search failed, for an outcome of <see cref="PriceCollectorWorkItemOutcome.Failed"/>
+    /// and for no other (issue #937). <see langword="null"/> everywhere else, which the database
+    /// does not check only because doing so would hard-code the outcome enum's numbers into
+    /// migration history - <c>PriceCollectorWorkItemPolicy.RequireReportableAnswer</c> is the rule.
+    ///
+    /// <para>A closed vocabulary rather than a sentence, because the reason is what decides whose
+    /// problem a failing search is: a collector defect, a provider's quota, or a slow site.</para>
+    /// </summary>
+    public PriceCollectorSearchFailureReason? FailureReason { get; set; }
+
+    /// <summary>
+    /// How many distinct supplier product ids the collector declared it had submitted for this
+    /// search, or <see langword="null"/> while the search is unanswered (issue #937).
+    ///
+    /// <para>It is the collector's own total, stored as submitted, and the backend accepts the
+    /// outcome only while it equals the rows it has actually received for this work item in this run
+    /// - so a batch lost in transit leaves the search unanswered rather than silently finished. It
+    /// is kept afterwards because a second, identical outcome call has to be recognisable as
+    /// identical, and the total is part of what the collector said.</para>
+    /// </summary>
+    public int? SubmittedRowCount { get; set; }
 }
