@@ -236,6 +236,49 @@ so re-running one writes nothing and can never move a sale off a product it alre
 [docs/architecture.md § The sale's own product](docs/architecture.md#the-sales-own-product-issue-758)
 for the model, the migration steps and what the failure gate guarantees.
 
+#### Grandfathering existing businesses onto Pro
+
+[Business plans](#business-plans-free-starter-and-pro) are enforced only once a human has run this
+command and it has recorded its completion marker (issue #966). It gives every business that was
+already trading a **Pro grant with no end date**, so switching enforcement on cannot downgrade a
+business that is using the application today:
+
+```bash
+dotnet run --project backend/InventoryApi -- grandfather-business-plans --dry-run
+dotnet run --project backend/InventoryApi -- grandfather-business-plans --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll grandfather-business-plans --dry-run` /
+`--apply` instead. `--apply` must be typed explicitly; neither flag is a dry run, both together are
+refused, and there is **no flag for a cutoff, a plan or a business** — a command line that could
+name a business would be a way to grant Pro to one that was not entitled to it.
+
+- **The cutoff is recorded once and never moves.** The first apply fixes it from the clock before
+  any grant is written; every later run reads it back and grants by it. A dry run records nothing
+  and reports the instant an apply would fix.
+- **Eligible:** a business created before the cutoff whose status at the cutoff was Active or
+  Deactivated — trading, or offboarded after having traded. **Not eligible:** a pending or rejected
+  application, anything created at or after the cutoff, and an application that was *decided* at or
+  after the cutoff, which is how a pending application approved later still starts on Free even when
+  the command is run again afterwards.
+- **Safe to rerun.** Each business's grant is one transaction that inserts only if that business
+  holds no grandfathered grant, with a unique index underneath it, and the completion marker is
+  written last. An interrupted run therefore leaves some businesses granted, the cutoff fixed and
+  **nothing enforced** — rerunning finishes the rest by the same cutoff. A run after completion
+  changes nothing and says so. A grant's end date, if an owner sets one later, survives a rerun
+  untouched.
+- The dry run lists every business with the rule's decision about it and writes nothing at all; the
+  apply lists what it granted, what already held a grant, and whether the completion marker was
+  written. Neither prints a business name, a member or a credential.
+
+It is independent of `Subscriptions__EnforcementEnabled` — this is the step run *before* enforcement
+is switched on — and it writes nothing but those grants and its own record: no business's status, no
+billing subscription and nothing else a business owns.
+
+**Do not run this against production from this description.** See
+[docs/architecture.md § Business subscriptions and plan entitlements](docs/architecture.md#business-subscriptions-and-plan-entitlements-issue-966)
+for the state model, the entitlement rule and the rollout order.
+
 ### 2. How the frontend finds the API
 
 Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.
@@ -530,6 +573,61 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 - **Accepting joins the business immediately.** The application re-checks the signed-in person's access and lands on the dashboard with the role the invite granted — there is nothing further to do and no sign-out to force.
 - See [docs/architecture.md § Invite acceptance page](docs/architecture.md#invite-acceptance-page-issue-535) for the design, the token's one accepted residual, and what each account state is shown.
 
+## Business plans (Free, Starter and Pro)
+
+Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
+
+**Nothing is enforced yet.** Issue #966 defines the plan state, the catalogue and the one entitlement rule, and publishes the answer; withholding a feature because of a plan is separate, later work (issues #967, #977 and #979). With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**.
+
+### The plans
+
+Prices are AUD per business per month, as agreed on issue #965. Whether the advertised price includes GST is an open launch decision; the catalogue records the advertised amount and claims nothing about its tax treatment.
+
+| | **Free** | **Starter** | **Pro** |
+| --- | --- | --- | --- |
+| Price per month | A$0 | A$7 | A$15 |
+| Local features (below) | Yes | Yes | Yes |
+| Purchase/expense attachments | 1 GB | 20 GB | 20 GB |
+| Daily cheapest-supplier comparisons | — | Yes | Yes |
+| Bookkeeping and GST reports, with exports | — | Yes | Yes |
+| Nayax connection and everything that needs it (below) | — | — | Yes |
+| Connected machines included | — | — | 5, then A$2/month each |
+
+A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**.
+
+Storage limits cover purchase and expense attachments combined — not transaction records — and attachments are **never deleted automatically** on a downgrade.
+
+### What is local and what needs a connected plan
+
+The split is the same one the application already makes for a business with no usable provider, and [The menu without a usable provider](#the-menu-without-a-usable-provider) is the list of what Nayax is behind. Said in plan terms:
+
+- **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, and **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)).
+- **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
+- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list).
+
+A paid plan and a usable Nayax connection are separate conditions: a Pro business whose credentials are missing or have stopped working sees exactly today's connection-required pages, and a connected Free or Starter business sees the same "no usable provider" behaviour it would without credentials.
+
+### How a business's plan is decided
+
+Two records per business, and **neither ever changes the other**:
+
+- a **billing subscription**, written only by verified billing events (issue #969), and
+- **manual grants**, written only by a Super Admin (issue #982) or by the grandfathering step below.
+
+From those, one rule decides what the business may use:
+
+- **The rollout setting off → unrestricted.** Today's behaviour, whatever either record says.
+- **On, but the grandfathering step has not completed → still unrestricted**, and the API logs a startup error naming the missing command. Enforcement cannot start before the businesses that were already trading hold their grant.
+- Otherwise the effective plan is **the higher of** the active manual grant and the active paid plan.
+- **Expired, cancelled, missing or unreadable records → Free** for paid features. Free's own local features are never locked.
+- Grants and paid periods are **UTC instants**: a period applies from its start instant inclusive and stops at its end instant exclusive.
+
+`GET /api/me/access` publishes the answer beside the capability set — `entitlement.enforced`, the plan, where it came from (`ManualGrant`, `BillingSubscription`, `NoActiveRecord`, or the two unrestricted states) and when that record ends. It is computed per request with no server cache, there is no separate endpoint and no request names a business. Inside a [support session](#super-admin-support-sessions) it reports the **viewed** business's own plan, and a [role preview](#previewing-the-app-as-a-role-issues-720-and-721) narrows role capabilities only and never changes the plan.
+
+### Grandfathering, in one sentence
+
+When plan enforcement is being switched on, a human runs [`grandfather-business-plans`](#grandfathering-existing-businesses-onto-pro) once: every business that was already trading (or had traded and been offboarded) before the recorded cutoff is given a **Pro grant with no end date**, every other business starts on **Free**, and the command records the completion marker enforcement waits for. A pending application approved after the cutoff starts on Free, and the command is safe to run again — it changes nothing once it has completed.
+
 ## Privacy: the personal data this application stores
 
 The application stores almost no personal data. It holds a vending business's own trading records — products, purchases, sales, expenses and reports — and the only people it records are the business's own members.
@@ -565,6 +663,7 @@ PriceCollector__TenantId
 PriceCollector__ClientId
 PriceCollector__RunExpiryHours
 SelfServiceOnboarding__Enabled
+Subscriptions__EnforcementEnabled
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
 
@@ -583,6 +682,8 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 `PriceCollector__TenantId` and `PriceCollector__ClientId` name the one scheduled price collector whose app-only token the API trusts (issue #924) — see [The scheduled price collector](#the-scheduled-price-collector-issue-924) below. Neither is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. Both empty is the shipped, fail-closed state: the collector bearer scheme accepts nothing, the collector policy denies everybody, and `GET /api/price-collector/work` answers `401` to every request while every other endpoint is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. `PriceCollector__RunExpiryHours` is how long an issued run stays open unless the collector reports back; blank, unparseable or outside 1–168 means the owner's default of **6 hours**, logged when it falls back, and it is never read as "no expiry". All three are read once at startup, so filling them in takes effect on the next restart.
 
 `SelfServiceOnboarding__Enabled` switches [self-service business onboarding](#starting-a-business-self-service-onboarding) on (issue #541). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off `POST /api/onboarding/business-applications` answers `404` and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can create a business in a deployment that has not deliberately opened the door. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on in production is a human decision with a verified release gate in front of it — [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541).
+
+`Subscriptions__EnforcementEnabled` switches [business plan enforcement](#business-plans-free-starter-and-pro) on (issue #966). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off every business is unrestricted and behaves exactly as it did before plans existed, and `GET /api/me/access` reports `entitlement.enforced: false` with no plan at all. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on is a human decision with two gates in front of it: the [`grandfather-business-plans`](#grandfathering-existing-businesses-onto-pro) command must have completed first — otherwise the API logs a startup error and keeps treating every business as unrestricted — and the paid plans themselves are switched on only when the whole rollout is released together (issue #965's launch gate).
 
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
 
