@@ -81,14 +81,21 @@ public class ProductMatchSuggestion
     public string Reason { get; set; } = string.Empty;
 
     /// <summary>
-    /// The collector run that produced the suggestion. Opaque text that nothing parses, so the
-    /// collector of #924 may name its runs however it names them.
+    /// The collector run that produced the row. Opaque text that nothing parses, so the collector of
+    /// #924 may name its runs however it names them.
+    ///
+    /// <para><strong>It is written once and never rewritten.</strong> For the automatic matching of
+    /// #941 it is also the idempotency key of a proposal, together with
+    /// <see cref="WaitingKey"/> - so relabelling an existing row would erase the record of what the
+    /// run that wrote it decided. A run that repeats a proposal somebody is already looking at
+    /// records its own <see cref="ProductMatchSuggestionStatus.Repeated"/> row instead.</para>
     /// </summary>
     public string CollectorRun { get; set; } = string.Empty;
 
     /// <summary>
-    /// What has happened to the suggestion: tentative, auto-applied, accepted, rejected or undone.
-    /// The last two are the ones that are kept forever.
+    /// What has happened to the suggestion: tentative, auto-applied, accepted, rejected, undone, or
+    /// one run's record of having repeated a proposal a reviewer is already looking at. Rejected and
+    /// undone are the ones that are kept forever.
     /// </summary>
     public ProductMatchSuggestionStatus Status { get; set; } = ProductMatchSuggestionStatus.Tentative;
 

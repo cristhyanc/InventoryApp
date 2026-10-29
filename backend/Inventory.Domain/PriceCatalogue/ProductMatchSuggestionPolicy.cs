@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using Inventory.Domain.Exceptions;
 
 namespace Inventory.Domain.PriceCatalogue;
@@ -11,6 +13,14 @@ namespace Inventory.Domain.PriceCatalogue;
 /// forever so the matcher never proposes or applies that pair again: a matcher that forgot a
 /// rejection would re-apply it on its next run, and the person who rejected it would have to reject
 /// it again every run. Nothing in this catalogue deletes a suggestion.</para>
+///
+/// <para><strong>One of the six states is a record rather than a suggestion.</strong>
+/// <see cref="Repeated"/> is what a collector run writes when it proposes a match a reviewer is
+/// already looking at: the run's own record of having decided that waiting key, which is what makes
+/// a repeat request answerable without relabelling - and so erasing - the record of whichever run
+/// decided the key before. <see cref="ProductMatchSuggestionPolicy.AwaitsReview"/> is the one
+/// predicate for "is a reviewer still to decide this?", and it is true of <see cref="Tentative"/>
+/// alone.</para>
 ///
 /// <para>Numbered from 1, so a stored <c>0</c> is never read as <see cref="Tentative"/> by accident.</para>
 /// </summary>
@@ -36,6 +46,22 @@ public enum ProductMatchSuggestionStatus
     /// match a person took back is a match that was wrong, whatever its confidence said.
     /// </summary>
     Undone = 5,
+
+    /// <summary>
+    /// A proposal one run made while an identical one was already <see cref="Tentative"/> (issue
+    /// #941): the record of what <em>that</em> run decided about the waiting key, and never a second
+    /// proposal for anybody to decide.
+    ///
+    /// <para><strong>It is the record, not the suggestion.</strong> A run's decision about a key has
+    /// to be stored under that run's own label, because that is the only thing
+    /// <c>POST api/price-collector/matches</c> can answer a repeat request from - and it cannot be
+    /// stored by relabelling the waiting proposal, which would erase whichever run decided the key
+    /// before. So the waiting row is left exactly as the reviewer has it and the repeating run
+    /// records its own, with this status to say that it is a record and that nothing is waiting on
+    /// it: <see cref="ProductMatchSuggestionPolicy.AwaitsReview"/> is false for it, it is never
+    /// reused as somebody's pending proposal, and it blocks no pair.</para>
+    /// </summary>
+    Repeated = 6,
 }
 
 /// <summary>
@@ -125,6 +151,19 @@ public static class ProductMatchSuggestionPolicy
     public static bool BlocksAutomaticMatching(ProductMatchSuggestionStatus status) =>
         status is ProductMatchSuggestionStatus.Rejected or ProductMatchSuggestionStatus.Undone;
 
+    /// <summary>
+    /// Whether a suggestion in <paramref name="status"/> is one a reviewer still has to decide
+    /// (#928) - which is the only kind a later proposal of the same pair is answered with instead of
+    /// writing a second row, because what a reviewer must not be handed twice is one proposal still
+    /// waiting for them.
+    ///
+    /// <para>A decided row - applied, accepted, rejected or undone - is not that, and neither is the
+    /// <see cref="ProductMatchSuggestionStatus.Repeated"/> record one run leaves of having repeated
+    /// somebody else's pending proposal: a record is nobody's decision to make.</para>
+    /// </summary>
+    public static bool AwaitsReview(ProductMatchSuggestionStatus status) =>
+        status is ProductMatchSuggestionStatus.Tentative;
+
     /// <summary>The reason as it is to be stored: trimmed, never empty.</summary>
     /// <exception cref="DomainValidationException">
     /// The reason is blank, or longer than <see cref="MaxReasonLength"/> once trimmed.
@@ -142,6 +181,25 @@ public static class ProductMatchSuggestionPolicy
             ? trimmed
             : throw new DomainValidationException(ReasonTooLongMessage);
     }
+
+    /// <summary>
+    /// The label the suggestions of one collector run are stored under (issue #941): the run's own id,
+    /// written out.
+    ///
+    /// <para><strong>It is also the idempotency key of a match proposal</strong>, together with the
+    /// waiting key: <c>POST /api/price-collector/matches</c> has no table of its own - the suggestion
+    /// row <em>is</em> the record of what that run decided about that key - so "has this run already
+    /// decided this key?" is answered by looking for a suggestion carrying this label. Which is why the
+    /// label is derived here rather than composed by an adapter: two spellings of one run's label would
+    /// be two answers to that question.</para>
+    ///
+    /// <para>The prefix is what keeps it apart from the labels other writers use for their own
+    /// evidence - the results endpoint of #937 writes its own - and nothing parses either of
+    /// them.</para>
+    /// </summary>
+    public static string CollectorRunFor(long runId) =>
+        NormaliseCollectorRun(
+            "price-collector-run-" + runId.ToString(CultureInfo.InvariantCulture));
 
     /// <summary>The collector run as it is to be stored: trimmed, never empty.</summary>
     /// <exception cref="DomainValidationException">

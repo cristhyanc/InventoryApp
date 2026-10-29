@@ -238,6 +238,7 @@ public class EndpointPlanRequirementTests
         new("PickListController.RecordRefill", PlanRequirementKind.None), // POST api/pick-list/refills
 
         // The price collector is an application with no membership and a denied scope.
+        new("PriceCollectorController.Matches", PlanRequirementKind.None), // POST api/price-collector/matches
         new("PriceCollectorController.CompleteRun", PlanRequirementKind.None), // POST api/price-collector/runs/{runId:long}/complete
         new("PriceCollectorController.Results", PlanRequirementKind.None), // POST api/price-collector/results
         new("PriceCollectorController.SearchOutcome", PlanRequirementKind.None), // POST api/price-collector/work-items/{workItemId:long}/outcome

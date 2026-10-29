@@ -79,7 +79,7 @@ public static class PriceCatalogueKey
                 key.Append(Separator);
             }
 
-            var normalised = Normalise(parts[index]);
+            var normalised = Fold(parts[index]);
 
             key.Append(normalised.Length.ToString(CultureInfo.InvariantCulture));
             key.Append(LengthSeparator);
@@ -110,9 +110,18 @@ public static class PriceCatalogueKey
     private static int LengthPrefixLength(int maxPartLength) =>
         maxPartLength.ToString(CultureInfo.InvariantCulture).Length + 1;
 
-    private static string Normalise(string? part)
+    /// <summary>
+    /// The one fold this whole catalogue compares descriptions by: upper-cased invariantly, with its
+    /// whitespace dropped and everything else - punctuation included - left alone.
+    ///
+    /// <para>Public so a caller that is not building a key, but still has to answer "would these fold
+    /// to the same text?" - <see cref="AutomaticProductMatchPolicy.TryParseSize"/> reads a unit label
+    /// this way before it looks for a number in it - asks this rule rather than reimplementing it.
+    /// </para>
+    /// </summary>
+    public static string Fold(string? part)
     {
-        var normalised = new StringBuilder();
+        var folded = new StringBuilder();
 
         foreach (var character in part ?? string.Empty)
         {
@@ -121,9 +130,9 @@ public static class PriceCatalogueKey
                 continue;
             }
 
-            normalised.Append(char.ToUpperInvariant(character));
+            folded.Append(char.ToUpperInvariant(character));
         }
 
-        return normalised.ToString();
+        return folded.ToString();
     }
 }
