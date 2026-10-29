@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
@@ -46,6 +48,33 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     public async Task Every_endpoint_refuses_a_caller_who_is_not_the_configured_administrator(string objectId)
     {
         var client = _factory.Authenticated(objectId);
+
+        foreach (var response in await AllEndpointsAsync(client))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        await AssertNothingWasDecidedAsync();
+    }
+
+    /// <summary>
+    /// The same answer for an Operator, the weakest business role there is (issue #983). The theory
+    /// above covers an Owner and a Manager; an Operator of a trading business is refused every
+    /// endpoint of this surface too, so nothing the directory reports - the Nayax connection status
+    /// included - becomes readable to a business role.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_of_a_business_reaches_no_endpoint_of_this_surface()
+    {
+        const string OperatorObjectId = "66666666-6666-6666-6666-666666666666";
+        await _factory.SeedMembershipAsync(
+            _factory.TradingBusinessId,
+            OperatorObjectId,
+            BusinessRole.Operator,
+            isActive: true);
+        await _factory.SeedNayaxConnectionAsync(_factory.TradingBusinessId, NayaxConnectionStatus.Ready);
+
+        var client = _factory.Authenticated(OperatorObjectId);
 
         foreach (var response in await AllEndpointsAsync(client))
         {
@@ -108,7 +137,7 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     #region The directory
 
     /// <summary>
-    /// The list: every business, pending applications first, with the ten declared fields and the
+    /// The list: every business, pending applications first, with the twelve declared fields and the
     /// application detail read off the rows.
     /// </summary>
     [Fact]
@@ -156,9 +185,13 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
 
     /// <summary>
     /// The acceptance criterion "no tenant data in responses", asserted structurally and by value:
-    /// the response objects carry exactly the eleven declared properties, and a seeded product name and
-    /// Nayax token ciphertext appear nowhere in the body - while the connection's existence is
-    /// still reported as the yes/no it is meant to be.
+    /// the response objects carry exactly the twelve declared properties, and a seeded product name and
+    /// Nayax token ciphertext appear nowhere in the body - while the connection's existence and its
+    /// stored status are still reported as the yes/no and the status name they are meant to be.
+    ///
+    /// <para>The credential half is what the property list is really for (issue #983): the operator
+    /// id, the encryption key id, the credential revision and the instant the connection was last
+    /// tested are all on the row the status was read from, and none of them may travel with it.</para>
     /// </summary>
     [Fact]
     public async Task The_directory_reports_no_tenant_data_and_no_credential()
@@ -174,6 +207,9 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         Assert.DoesNotContain(ProductName, raw, StringComparison.Ordinal);
         Assert.DoesNotContain(Ciphertext, raw, StringComparison.Ordinal);
         Assert.DoesNotContain("2002736764", raw, StringComparison.Ordinal);
+        // "2026-10" is both the seeded encryption key id and the month the connection was last tested
+        // in, and neither the key nor that instant is part of this contract.
+        Assert.DoesNotContain("2026-10", raw, StringComparison.Ordinal);
 
         foreach (var business in body.RootElement.EnumerateArray())
         {
@@ -188,6 +224,7 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
                     "decidedAtUtc",
                     "name",
                     "nayaxConfigured",
+                    "nayaxConnectionStatus",
                     "state",
                     "status",
                 ],
@@ -199,6 +236,76 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
                 .Single(business => business.GetProperty("businessId").GetInt32() == _factory.TradingBusinessId)
                 .GetProperty("nayaxConfigured")
                 .GetBoolean());
+    }
+
+    /// <summary>
+    /// The stored connection status of each business, reported as the published name (issue #983).
+    /// All four values, because the whole point of the field is that the two "saved but not working"
+    /// states stay apart from each other and from "nothing stored": a business with no connection row
+    /// reads <c>NotConfigured</c>, which is exactly what the absence of that row means.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionStatus.PendingPermissions)]
+    [InlineData(NayaxConnectionStatus.Ready)]
+    [InlineData(NayaxConnectionStatus.NeedsAttention)]
+    public async Task The_directory_reports_each_businesss_stored_nayax_connection_status(
+        NayaxConnectionStatus stored)
+    {
+        await _factory.SeedNayaxConnectionAsync(_factory.TradingBusinessId, stored);
+
+        var body = await ReadJsonAsync(await _factory.AsAdministrator().GetAsync(ListUrl));
+        var businesses = body.RootElement.EnumerateArray().ToList();
+
+        var trading = businesses.Single(business =>
+            business.GetProperty("businessId").GetInt32() == _factory.TradingBusinessId);
+        Assert.Equal(stored.ToString(), trading.GetProperty("nayaxConnectionStatus").GetString());
+        Assert.True(trading.GetProperty("nayaxConfigured").GetBoolean());
+
+        // Every other business has no connection row at all, which is what NotConfigured is.
+        Assert.All(
+            businesses.Where(business =>
+                business.GetProperty("businessId").GetInt32() != _factory.TradingBusinessId),
+            business =>
+            {
+                Assert.Equal(
+                    nameof(NayaxConnectionStatus.NotConfigured),
+                    business.GetProperty("nayaxConnectionStatus").GetString());
+                Assert.False(business.GetProperty("nayaxConfigured").GetBoolean());
+            });
+    }
+
+    /// <summary>
+    /// The status is the stored result of the business's last test, and reading the directory makes no
+    /// Nayax call (issue #983) - the host these tests run on has no Nayax client configured to reach,
+    /// and the list is answered from the rows alone, for a business whose last test failed as readily
+    /// as for one whose passed.
+    /// </summary>
+    [Fact]
+    public async Task The_directory_reports_the_stored_status_without_testing_the_connection()
+    {
+        await _factory.SeedNayaxConnectionAsync(
+            _factory.TradingBusinessId,
+            NayaxConnectionStatus.NeedsAttention);
+
+        var body = await ReadJsonAsync(await _factory.AsAdministrator().GetAsync(ListUrl));
+
+        Assert.Equal(
+            nameof(NayaxConnectionStatus.NeedsAttention),
+            body.RootElement.EnumerateArray()
+                .Single(business => business.GetProperty("businessId").GetInt32() == _factory.TradingBusinessId)
+                .GetProperty("nayaxConnectionStatus")
+                .GetString());
+
+        // The stored row is exactly as it was seeded: no status was rewritten, no revision bumped and
+        // no last-tested instant recorded by reading the list.
+        await using var db = _factory.Database();
+        var connection = await db.BusinessNayaxConnections
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.BusinessId == _factory.TradingBusinessId);
+        Assert.Equal(NayaxConnectionStatus.NeedsAttention, connection.Status);
+        Assert.Equal(1, connection.CredentialRevision);
+        Assert.Equal(SuperAdminBusinessesApiFactory.LastTestedAt, connection.LastTestedAtUtc);
     }
 
     [Fact]
