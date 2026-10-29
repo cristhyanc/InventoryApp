@@ -324,6 +324,81 @@ public class MeAccessEntitlementApiTests : IClassFixture<MeAccessEntitlementApiT
             (await ReadBodyAsync(client)).GetProperty("entitlement").GetProperty("plan").GetString());
     }
 
+    /// <summary>
+    /// The attachment storage figures of issue #968, over HTTP: this business's own usage, its
+    /// plan's allowance read from the catalogue, and the warning state those two produce. The other
+    /// business's attachments are invisible here, which is the same isolation the plan itself has.
+    /// </summary>
+    [Fact]
+    public async Task The_attachment_storage_reported_is_this_businesss_own_usage_and_its_plans_allowance()
+    {
+        await _factory.CompleteGrandfatheringAsync(Cutoff);
+        await _factory.SeedExpenseAttachmentAsync(_factory.TradingBusinessId, 400);
+        await _factory.SeedExpenseAttachmentAsync(_factory.OtherBusinessId, 900_000_000);
+
+        var storage = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("attachmentStorage");
+
+        Assert.Equal(400, storage.GetProperty("usedBytes").GetInt64());
+        Assert.Equal(
+            PlanCatalogue.For(SubscriptionPlan.Free).AttachmentStorageLimitBytes,
+            storage.GetProperty("limitBytes").GetInt64());
+        Assert.Equal("Normal", storage.GetProperty("warningLevel").GetString());
+
+        var other = (await ReadAsync(ApiFactory.OtherBusinessOwnerObjectId))
+            .GetProperty("attachmentStorage");
+        Assert.Equal(900_000_000, other.GetProperty("usedBytes").GetInt64());
+        Assert.Equal("Warning", other.GetProperty("warningLevel").GetString());
+    }
+
+    /// <summary>
+    /// The three states the warning has, over HTTP, including the one a downgrade produces: a
+    /// business above its allowance is reported as full with the usage it actually has, and nothing
+    /// about its attachments has been deleted to make the figure fit.
+    /// </summary>
+    [Theory]
+    [InlineData(500_000_000L, "Normal")]
+    [InlineData(800_000_000L, "Warning")]
+    [InlineData(1_000_000_000L, "Full")]
+    [InlineData(1_500_000_000L, "Full")]
+    public async Task The_warning_state_turns_at_eighty_percent_and_again_at_the_allowance(
+        long usedBytes, string expected)
+    {
+        await _factory.CompleteGrandfatheringAsync(Cutoff);
+        await _factory.SeedExpenseAttachmentAsync(_factory.TradingBusinessId, usedBytes);
+
+        var storage = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("attachmentStorage");
+
+        Assert.Equal(usedBytes, storage.GetProperty("usedBytes").GetInt64());
+        Assert.Equal(expected, storage.GetProperty("warningLevel").GetString());
+    }
+
+    /// <summary>
+    /// A business on a paid plan is measured against that plan's larger allowance, read from the
+    /// same catalogue the price page reads.
+    /// </summary>
+    [Fact]
+    public async Task A_paid_plan_reports_its_own_larger_allowance()
+    {
+        await _factory.CompleteGrandfatheringAsync(Cutoff);
+        await _factory.SubscribeAsync(
+            _factory.TradingBusinessId,
+            SubscriptionPlan.Pro,
+            BillingSubscriptionStatus.Active,
+            Cutoff,
+            Cutoff.AddYears(5));
+        await _factory.SeedExpenseAttachmentAsync(_factory.TradingBusinessId, 1_500_000_000);
+
+        var storage = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("attachmentStorage");
+
+        Assert.Equal(
+            PlanCatalogue.For(SubscriptionPlan.Pro).AttachmentStorageLimitBytes,
+            storage.GetProperty("limitBytes").GetInt64());
+        Assert.Equal("Normal", storage.GetProperty("warningLevel").GetString());
+    }
+
     private Task<JsonElement> ReadAsync(string objectId) =>
         ReadEntitlementAsync(_factory.Authenticated(objectId));
 
@@ -475,6 +550,35 @@ public class MeAccessEntitlementApiTests : IClassFixture<MeAccessEntitlementApiT
             db.BusinessPlanGrants.RemoveRange(await db.BusinessPlanGrants.ToListAsync());
             db.BusinessBillingSubscriptions.RemoveRange(await db.BusinessBillingSubscriptions.ToListAsync());
             db.SubscriptionGrandfatherings.RemoveRange(await db.SubscriptionGrandfatherings.ToListAsync());
+            // And the attachments the storage figures of issue #968 are summed from, so a usage
+            // assertion is about what its own test stored.
+            db.OperatingExpenses.RemoveRange(await db.OperatingExpenses.ToListAsync());
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Records an expense with an attachment of <paramref name="sizeBytes"/> for one business
+        /// (issue #968), so the storage figures the access read reports have something to be about.
+        /// No file is written: usage is the <em>recorded</em> sizes of the attachments a business's
+        /// records refer to, which is exactly what makes a quota readable without touching storage.
+        /// </summary>
+        public async Task SeedExpenseAttachmentAsync(int businessId, long sizeBytes)
+        {
+            await using var db = Database();
+            db.OperatingExpenses.Add(new OperatingExpense
+            {
+                BusinessId = businessId,
+                ExpenseDate = Cutoff,
+                Category = OperatingExpenseCategory.Insurance,
+                Description = "Cover",
+                AmountExGst = 10m,
+                GstAmount = 1m,
+                TotalAmount = 11m,
+                AttachmentFileName = "invoice.pdf",
+                AttachmentStoredFileName = $"{Guid.NewGuid()}.pdf",
+                AttachmentContentType = "application/pdf",
+                AttachmentFileSizeBytes = sizeBytes,
+            });
             await db.SaveChangesAsync();
         }
 
