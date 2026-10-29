@@ -18,6 +18,8 @@ using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
+using InventoryApi.Adapters.Subscriptions;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.SupportSessions;
@@ -79,6 +81,17 @@ if (NayaxConnectionMigrationCommand.Matches(args))
 if (NayaxSaleProductResolutionCommand.Matches(args))
 {
     return await NayaxSaleProductResolutionCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Granting every established business its grandfathered plan is the sixth human-invoked command
+// (issue #966). It is what a person runs before plan enforcement is switched on: it fixes the
+// cutoff, grants the businesses that were already trading, and records the completion marker
+// enforcement waits for. It applies no migration and writes no business's data beyond that one
+// grant, and reaching this branch means the process was started to grandfather plans and will exit
+// when it has.
+if (BusinessPlanGrandfatheringCommand.Matches(args))
+{
+    return await BusinessPlanGrandfatheringCommand.RunAsync(args, CancellationToken.None);
 }
 
 // Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
@@ -312,6 +325,15 @@ builder.Services.AddScoped<IBusinessDeactivationHook, EndSupportSessionsOnBusine
 builder.Services.AddSingleton<ISelfServiceOnboardingFlag>(
     new ConfiguredSelfServiceOnboardingFlag(builder.Configuration));
 
+// Whether plan entitlement is enforced at all (issue #966). Read once here for the reason the
+// onboarding flag above is - only the composition root reads configuration - and published as the
+// Application layer's narrow port so the entitlement GET /api/me/access reports, the startup check
+// below and every later enforcement decision cannot disagree about it. Off unless the setting says
+// otherwise: an absent, blank or unparseable value leaves it off, and while it is off every business
+// is unrestricted. A singleton, because it is one startup decision rather than a per-request one.
+builder.Services.AddSingleton<ISubscriptionEnforcementFlag>(
+    new ConfiguredSubscriptionEnforcementFlag(builder.Configuration));
+
 // How long an issued price collector run stays open (issue #924). Read once here, because only the
 // composition root reads configuration, and published as the Application layer's narrow port so the
 // run that is stored and the expiry the work list publishes cannot disagree. A blank, unparseable or
@@ -464,6 +486,17 @@ using (var scope = app.Services.CreateScope())
     DatabaseSchemaStartup.EnsureSchema(db, app.Environment, app.Configuration, loggerFactory);
 
     TenantOwnershipReadiness.Report(db, loggerFactory);
+
+    // Whether plan enforcement can take effect (issue #966), reported after the schema step because
+    // it reads the grandfathering row the schema step may just have created. It enforces nothing: a
+    // deployment that has switched the setting on without having run the grandfathering command
+    // still treats every business as unrestricted, and this is what says so in the log - with the
+    // missing step named - instead of letting that go unnoticed.
+    await SubscriptionEnforcementStartup.ReportAsync(
+        app.Services.GetRequiredService<ISubscriptionEnforcementFlag>(),
+        scope.ServiceProvider.GetRequiredService<ISubscriptionGrandfatheringStore>(),
+        loggerFactory,
+        CancellationToken.None);
 }
 
 // Isolated end-to-end test data (issue #46). This does nothing at all unless the process was
