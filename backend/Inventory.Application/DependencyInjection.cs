@@ -39,6 +39,7 @@ using Inventory.Application.SalesSync;
 using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.SupportSessions;
@@ -166,6 +167,13 @@ public static class ApplicationServiceCollectionExtensions
         // business, so neither one's scope selects anything.
         services.AddScoped<GetOptionVisibility>();
         services.AddScoped<SetHistoricalGstClassificationVisibility>();
+
+        // What the business this request acts in has bought (issue #966). Scoped for the reason the
+        // capability set is: the answer belongs to one request's resolved business - the viewed one
+        // inside a support session - and is computed per request with no server cache, so a grant
+        // that ends or a subscription that is cancelled applies on the next request rather than when
+        // something expires a cache.
+        services.AddScoped<GetEffectiveEntitlement>();
 
         // Issuing the price collector's work list (issue #924, parent #817). Scoped like the
         // platform-admin surfaces above, and for the same reason: it reads and writes through the
