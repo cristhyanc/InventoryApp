@@ -172,6 +172,33 @@ export function resolveSiteUrl(value, allowed = JB_METRO_SITE_URLS) {
   return origin;
 }
 
+/** Reads the text after `--search`, as the index it leaves the loop at. */
+function consumeSearchOption(argv, index) {
+  const nextIndex = index + 1;
+  const searchText = nextIndex < argv.length ? text(argv[nextIndex]) : null;
+  if (searchText === null) throw new Error('--search needs the text to search for.');
+  return { searchText, nextIndex };
+}
+
+/** Reads and stores one `--<option> <n>` pair in place, as the index it leaves the loop at. */
+function consumeNumericOption(argv, index, argument, options) {
+  const nextIndex = index + 1;
+  const raw = nextIndex < argv.length ? String(argv[nextIndex]) : '';
+  if (!/^[1-9]\d*$/.test(raw)) throw new Error(`${argument} needs a positive whole number, not "${clean(raw, 40)}".`);
+  options[NUMERIC_OPTIONS[argument]] = Number(raw);
+  return nextIndex;
+}
+
+/** Builds the parsed result once the loop has read every argument, refusing an incomplete form. */
+function finishParsedArguments(searchText, positional, options) {
+  if (searchText !== null) {
+    if (positional.length !== 1) throw new Error(`The search form takes exactly one site URL.\n${USAGE}`);
+    return { mode: 'search', searchText, siteUrl: positional[0], skus: [], options };
+  }
+  if (positional.length < 2) throw new Error(`The SKU form takes a site URL and at least one SKU.\n${USAGE}`);
+  return { mode: 'sku', searchText: null, siteUrl: positional[0], skus: positional.slice(1), options };
+}
+
 export function parseArguments(argv) {
   const positional = [];
   const options = { ...DEFAULT_OPTIONS };
@@ -180,28 +207,20 @@ export function parseArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = String(argv[index]);
     if (argument === '--search') {
-      index += 1;
-      searchText = index < argv.length ? text(argv[index]) : null;
-      if (searchText === null) throw new Error('--search needs the text to search for.');
+      const consumed = consumeSearchOption(argv, index);
+      searchText = consumed.searchText;
+      index = consumed.nextIndex;
       continue;
     }
     if (Object.hasOwn(NUMERIC_OPTIONS, argument)) {
-      index += 1;
-      const raw = index < argv.length ? String(argv[index]) : '';
-      if (!/^[1-9][0-9]*$/.test(raw)) throw new Error(`${argument} needs a positive whole number, not "${clean(raw, 40)}".`);
-      options[NUMERIC_OPTIONS[argument]] = Number(raw);
+      index = consumeNumericOption(argv, index, argument, options);
       continue;
     }
     if (argument.startsWith('--')) throw new Error(`Unknown option ${clean(argument, 40)}.\n${USAGE}`);
     positional.push(argument);
   }
 
-  if (searchText !== null) {
-    if (positional.length !== 1) throw new Error(`The search form takes exactly one site URL.\n${USAGE}`);
-    return { mode: 'search', searchText, siteUrl: positional[0], skus: [], options };
-  }
-  if (positional.length < 2) throw new Error(`The SKU form takes a site URL and at least one SKU.\n${USAGE}`);
-  return { mode: 'sku', searchText: null, siteUrl: positional[0], skus: positional.slice(1), options };
+  return finishParsedArguments(searchText, positional, options);
 }
 
 /** Flattens `custom_attributesV2` into code → value, including attributes published as options. */
@@ -315,6 +334,18 @@ function totalPagesOf(read, totalCount, pageSize) {
   return Math.ceil(totalCount / pageSize);
 }
 
+/** Maps and appends one page's items, as the count read (0 means the page carried nothing further). */
+function collectPageItems(answer, siteUrl, products) {
+  const items = Array.isArray(answer.products.items) ? answer.products.items : [];
+  for (const item of items) products.push(mapProduct(item, siteUrl));
+  return items.length;
+}
+
+/** Whether the page just read was the last one: it carried nothing, or the count says so. */
+function isLastPage(itemCount, totalPages, page) {
+  return itemCount === 0 || (totalPages !== null && page >= totalPages);
+}
+
 /**
  * Reads one paged `products` query to its end: `total_count` first, then further pages until every
  * result has been read, a page fails after its retries, or the page cap stops it. `truncated` is
@@ -343,11 +374,8 @@ async function readPages({ fetchImpl, sleep, siteUrl, query, variablesForPage, o
     if (totalCount === null) totalCount = count(answer.products.total_count);
     if (totalPages === null) totalPages = totalPagesOf(answer.products, totalCount, options.pageSize);
 
-    const items = Array.isArray(answer.products.items) ? answer.products.items : [];
-    for (const item of items) products.push(mapProduct(item, siteUrl));
-
-    if (items.length === 0) break;
-    if (totalPages !== null && page >= totalPages) break;
+    const itemCount = collectPageItems(answer, siteUrl, products);
+    if (isLastPage(itemCount, totalPages, page)) break;
     if (page >= options.maxPages) truncated = true;
   }
 
@@ -374,13 +402,8 @@ function batchesOf(values, size) {
   return batches;
 }
 
-/**
- * Looks products up by SKU in bounded batches. A batch that fails after its retries is reported and
- * the next one still runs; a SKU the site answered for but did not return is `notFound`, while one
- * whose batch failed is neither found nor not found — nothing answered for it.
- */
-export async function lookupSkus({ fetchImpl, sleep = sleepFor, siteUrl, skus, options = {} }) {
-  const resolved = withDefaults(options);
+/** De-duplicates the requested SKUs case-insensitively, keeping the first spelling of each. */
+function dedupeSkus(skus) {
   const requested = [];
   const seen = new Set();
   for (const sku of skus ?? []) {
@@ -389,6 +412,40 @@ export async function lookupSkus({ fetchImpl, sleep = sleepFor, siteUrl, skus, o
     seen.add(trimmed.toLowerCase());
     requested.push(trimmed);
   }
+  return requested;
+}
+
+/** Reads one SKU batch through the same paged reader the search uses. */
+function lookupBatch({ fetchImpl, sleep, siteUrl, batch, resolved }) {
+  return readPages({
+    fetchImpl,
+    sleep,
+    siteUrl,
+    query: SKU_QUERY,
+    variablesForPage: (currentPage) => ({ skus: batch, pageSize: Math.max(resolved.pageSize, batch.length), currentPage }),
+    options: resolved,
+    failureContext: (pageNumber) => ({ scope: 'sku', skus: batch, page: pageNumber }),
+  });
+}
+
+/** Appends one batch's products, keeping the first match for a SKU the site answered for twice. */
+function mergeBatchProducts(page, found, products) {
+  for (const product of page.products) {
+    const key = product.sku === null ? null : product.sku.toLowerCase();
+    if (key !== null && found.has(key)) continue;
+    if (key !== null) found.add(key);
+    products.push(product);
+  }
+}
+
+/**
+ * Looks products up by SKU in bounded batches. A batch that fails after its retries is reported and
+ * the next one still runs; a SKU the site answered for but did not return is `notFound`, while one
+ * whose batch failed is neither found nor not found — nothing answered for it.
+ */
+export async function lookupSkus({ fetchImpl, sleep = sleepFor, siteUrl, skus, options = {} }) {
+  const resolved = withDefaults(options);
+  const requested = dedupeSkus(skus);
 
   const products = [];
   const errors = [];
@@ -397,22 +454,10 @@ export async function lookupSkus({ fetchImpl, sleep = sleepFor, siteUrl, skus, o
   let truncated = false;
 
   for (const batch of batchesOf(requested, resolved.batchSize)) {
-    const page = await readPages({
-      fetchImpl,
-      sleep,
-      siteUrl,
-      query: SKU_QUERY,
-      variablesForPage: (currentPage) => ({ skus: batch, pageSize: Math.max(resolved.pageSize, batch.length), currentPage }),
-      options: resolved,
-      failureContext: (pageNumber) => ({ scope: 'sku', skus: batch, page: pageNumber }),
-    });
+    // Sequential by design: batches throttle the site rather than racing it concurrently.
+    const page = await lookupBatch({ fetchImpl, sleep, siteUrl, batch, resolved });
 
-    for (const product of page.products) {
-      const key = product.sku === null ? null : product.sku.toLowerCase();
-      if (key !== null && found.has(key)) continue;
-      if (key !== null) found.add(key);
-      products.push(product);
-    }
+    mergeBatchProducts(page, found, products);
     if (page.errors.length > 0) {
       errors.push(...page.errors);
       for (const sku of batch) unanswered.add(sku);
