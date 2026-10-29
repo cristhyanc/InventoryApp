@@ -59,7 +59,8 @@ internal static class MachineDashboardAssembler
             lastWeek.DirectProfit,
             monthToDate.DirectProfit,
             twoWeeksAgo.DirectProfit,
-            profitabilityStatus);
+            profitabilityStatus,
+            machine.CustomerID);
     }
 
     private static (decimal GrossRevenue, decimal? DirectProfit) Resolve(MachineDashboardPeriodFacts period) =>

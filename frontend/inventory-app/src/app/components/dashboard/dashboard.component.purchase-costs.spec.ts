@@ -11,6 +11,7 @@ import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -164,6 +165,7 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries } },
+      { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => doubles.financials ?? of(true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]
@@ -185,10 +187,16 @@ function alertHeaders(host: HTMLElement): (string | undefined)[] {
   return Array.from(alertsSection(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
 }
 
-/** One array of trimmed cell texts per rendered reorder-alert row. */
+/**
+ * One array of trimmed cell texts per rendered reorder-alert row, without the observed Cheapest
+ * supplier cell issue #981 appended: these tests are about the recorded purchase costs, and the
+ * supplier column has its own spec.
+ */
 function alertRows(host: HTMLElement): (string | undefined)[][] {
   return Array.from(alertsSection(host).querySelectorAll('tbody tr')).map((row) =>
-    Array.from(row.querySelectorAll('td')).map((cell) => cell.textContent?.trim())
+    Array.from(row.querySelectorAll('td'))
+      .filter((cell) => cell.querySelector('app-cheapest-supplier-cell') === null)
+      .map((cell) => cell.textContent?.trim())
   );
 }
 
@@ -211,7 +219,8 @@ describe('Reorder Alerts purchase-cost columns (issue #789)', () => {
       'Machine need',
       'Need to Order',
       'Last purchase',
-      'Cheapest purchase'
+      'Cheapest purchase',
+      'Cheapest supplier'
     ]);
   });
 
@@ -301,7 +310,9 @@ describe('Reorder Alerts purchase costs without Dashboard.ViewFinancials (issue 
   it('still shows the rest of the Reorder Alerts row', async () => {
     const { host } = await render({ financials: of(false) });
 
-    expect(alertHeaders(host)).toEqual(['Product', 'Storage stock', 'Machine need', 'Need to Order']);
+    // The observed Cheapest supplier column (issue #981) follows its endpoint's own Dashboard.View,
+    // exactly as on Needs Ordering; only the recorded purchase costs are withheld.
+    expect(alertHeaders(host)).toEqual(['Product', 'Storage stock', 'Machine need', 'Need to Order', 'Cheapest supplier']);
     expect(alertRows(host)[0]).toEqual(['Cola 375mL', '2', '4', '28']);
     expect(host.querySelector('[data-testid="purchase-cost-note"]')).toBeNull();
   });

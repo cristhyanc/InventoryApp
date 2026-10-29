@@ -18,6 +18,11 @@ namespace Inventory.Application.Machines;
 /// given it.</b> Since issue #741 every <c>api/machines/{id}</c> route takes the local id, so the
 /// route already knows it: <see cref="GetMachineDashboard"/> looks nothing up and leaves it
 /// <c>null</c>, and the controller answers the id the route was given.</para>
+///
+/// <para><paramref name="SiteId"/> is the site the provider places the machine at - its
+/// <c>CustomerID</c>, the same value the site reads group the fleet by and publish as a site's id -
+/// or <c>null</c> when the machine is at no site (issue #980). It is copied from the machine read,
+/// never derived, so the dashboard can list each site's machines under that site.</para>
 /// </summary>
 public sealed record MachineSummary(
     long MachineId,
@@ -37,4 +42,5 @@ public sealed record MachineSummary(
     decimal? LastWeekDirectProfit,
     decimal? MonthToDateDirectProfit,
     decimal? TwoWeeksAgoDirectProfit,
-    string? ProfitabilityStatus);
+    string? ProfitabilityStatus,
+    long? SiteId);

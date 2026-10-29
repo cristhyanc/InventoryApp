@@ -394,7 +394,7 @@
     <div class="card-header flex-wrap gap-2">
       <div>
         <h2 id="machine-performance-title" class="card-title text-lg font-semibold text-rr-navy">Machine performance</h2>
-        <p class="m-0 text-sm text-rr-muted">Machines, their sales and direct profit</p>
+        <p class="m-0 text-sm text-rr-muted">Machines under their sites, with their sales and direct profit</p>
       </div>
     </div>
     <div class="card-body p-0">
@@ -423,39 +423,52 @@
                 }
               </tr>
             </thead>
-            <tbody>
-              @for (machine of machines; track machine.machineID) {
-                <tr class="table-row table-row-link" (click)="followMachineRowLink($event)" (keydown.enter)="followMachineRowLink($event)">
-                  <td class="table-cell">
-                    <a
-                      class="table-row-anchor"
-                      [routerLink]="machine.localMachineId != null ? ['/machines', machine.localMachineId] : null"
-                      [attr.aria-label]="'View details for ' + (machine.machineName || 'Unnamed machine')">{{ machine.machineName || 'Unnamed machine' }}</a>
-                  </td>
-                  @if (canViewFinancials) {
-                    <td class="table-cell table-num">
-                      <div>{{ periodSalesText(machine, 'today') }}</div>
-                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'today') }}</div>
+            <!--
+              One row group per site (issue #980), in the Sites section's order, headed by the site;
+              machines at no listed site follow under "Other machines". Every machine appears once.
+            -->
+            @for (group of machineGroups; track group.key) {
+              <tbody [attr.data-testid]="'machine-group-' + group.key">
+                @if (group.label !== null) {
+                  <tr class="bg-rr-surface">
+                    <th scope="rowgroup" [attr.colspan]="canViewFinancials ? 6 : 1" class="table-cell text-left text-xs font-semibold uppercase tracking-wider text-rr-muted">
+                      {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
+                    </th>
+                  </tr>
+                }
+                @for (machine of group.machines; track machine.machineID) {
+                  <tr class="table-row table-row-link" (click)="followMachineRowLink($event)" (keydown.enter)="followMachineRowLink($event)">
+                    <td class="table-cell">
+                      <a
+                        class="table-row-anchor"
+                        [routerLink]="machine.localMachineId != null ? ['/machines', machine.localMachineId] : null"
+                        [attr.aria-label]="'View details for ' + (machine.machineName || 'Unnamed machine')">{{ machine.machineName || 'Unnamed machine' }}</a>
                     </td>
-                    <td class="table-cell table-num">
-                      <div>{{ periodSalesText(machine, 'week') }}</div>
-                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'week') }}</div>
-                    </td>
-                    <td class="table-cell table-num">
-                      <div>{{ periodSalesText(machine, 'lastWeek') }}</div>
-                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'lastWeek') }}</div>
-                    </td>
-                    <td class="table-cell table-num" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
-                      {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }}
-                    </td>
-                    <td class="table-cell table-num">
-                      <div>{{ periodSalesText(machine, 'monthToDate') }}</div>
-                      <div class="text-xs value-muted">{{ periodProfitText(machine, 'monthToDate') }}</div>
-                    </td>
-                  }
-                </tr>
-              }
-            </tbody>
+                    @if (canViewFinancials) {
+                      <td class="table-cell table-num">
+                        <div>{{ periodSalesText(machine, 'today') }}</div>
+                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'today') }}</div>
+                      </td>
+                      <td class="table-cell table-num">
+                        <div>{{ periodSalesText(machine, 'week') }}</div>
+                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'week') }}</div>
+                      </td>
+                      <td class="table-cell table-num">
+                        <div>{{ periodSalesText(machine, 'lastWeek') }}</div>
+                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'lastWeek') }}</div>
+                      </td>
+                      <td class="table-cell table-num" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
+                        {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }}
+                      </td>
+                      <td class="table-cell table-num">
+                        <div>{{ periodSalesText(machine, 'monthToDate') }}</div>
+                        <div class="text-xs value-muted">{{ periodProfitText(machine, 'monthToDate') }}</div>
+                      </td>
+                    }
+                  </tr>
+                }
+              </tbody>
+            }
             @if (canViewFinancials) {
               <tfoot class="bg-rr-surface font-semibold">
                 <tr>
@@ -507,26 +520,35 @@
               }
             </fieldset>
           }
-          <ul class="m-0 flex list-none flex-col gap-3 p-3">
-            @for (machine of machines; track machine.machineID) {
-              <li class="rounded-lg border border-rr-line bg-white p-3">
-                @if (machine.localMachineId != null) {
-                  <a [routerLink]="['/machines', machine.localMachineId]" class="break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</a>
-                } @else {
-                  <p class="m-0 break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</p>
+          @for (group of machineGroups; track group.key) {
+            <div [attr.data-testid]="'machine-card-group-' + group.key">
+              @if (group.label !== null) {
+                <h3 class="m-0 px-3 pt-3 text-xs font-semibold uppercase tracking-wider text-rr-muted">
+                  {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
+                </h3>
+              }
+              <ul class="m-0 flex list-none flex-col gap-3 p-3">
+                @for (machine of group.machines; track machine.machineID) {
+                  <li class="rounded-lg border border-rr-line bg-white p-3">
+                    @if (machine.localMachineId != null) {
+                      <a [routerLink]="['/machines', machine.localMachineId]" class="break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</a>
+                    } @else {
+                      <p class="m-0 break-words font-semibold text-rr-navy">{{ machine.machineName || 'Unnamed machine' }}</p>
+                    }
+                    @if (canViewFinancials) {
+                      <p class="m-0 mt-2 text-sm font-semibold">{{ periodSalesText(machine, machinePeriod) }}</p>
+                      <p class="m-0 text-xs text-rr-muted">{{ periodProfitText(machine, machinePeriod) }}</p>
+                      @if (machinePeriod === 'week') {
+                        <p class="m-0 text-xs" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
+                          {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }} vs same time last week
+                        </p>
+                      }
+                    }
+                  </li>
                 }
-                @if (canViewFinancials) {
-                  <p class="m-0 mt-2 text-sm font-semibold">{{ periodSalesText(machine, machinePeriod) }}</p>
-                  <p class="m-0 text-xs text-rr-muted">{{ periodProfitText(machine, machinePeriod) }}</p>
-                  @if (machinePeriod === 'week') {
-                    <p class="m-0 text-xs" [ngClass]="trendClass(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue)">
-                      {{ trendLabel(machine.currentWeekGrossRevenue, machine.previousComparableWeekGrossRevenue) }} vs same time last week
-                    </p>
-                  }
-                }
-              </li>
-            }
-          </ul>
+              </ul>
+            </div>
+          }
           @if (canViewFinancials) {
             <div class="mx-3 mb-3 rounded-lg bg-rr-surface p-3 text-sm" data-testid="machine-totals-card">
               <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-muted">Fleet total · {{ machinePeriodLabel }}</p>
@@ -573,6 +595,18 @@
       } @else if (lowStock.length === 0) {
         <p class="p-4 text-md-body value-muted">No reorder alerts. Everything looks good! ✅</p>
       } @else {
+        <!--
+          Observed supplier prices (issue #981, read by issue #930's shared component) and recorded
+          purchase costs are different kinds of figure, so each says what it is.
+        -->
+        <p class="m-0 flex items-start gap-2 border-b border-md-gray-200 px-4 py-3 text-sm text-rr-muted" data-testid="supplier-price-note">
+          <span class="shrink-0" aria-hidden="true"><app-icon name="storefront" [size]="16" /></span>
+          Cheapest supplier is the lowest price your own suppliers currently list per unit - observed prices for purchasing guidance, not costs you have paid.
+        </p>
+        <app-cheapest-suppliers
+          [productIds]="reorderPriorityIds"
+          (suppliersChange)="cheapestSuppliers = $event"
+        ></app-cheapest-suppliers>
         @if (arePurchaseCostColumnsShown) {
           <p class="m-0 flex items-start gap-2 border-b border-md-gray-200 px-4 py-3 text-sm text-rr-muted" data-testid="purchase-cost-note">
             <span class="shrink-0" aria-hidden="true"><app-icon name="info" [size]="16" /></span>
@@ -603,6 +637,7 @@
                   <th scope="col" class="table-cell">Last purchase</th>
                   <th scope="col" class="table-cell">Cheapest purchase</th>
                 }
+                <th scope="col" class="table-cell">Cheapest supplier</th>
               </tr>
             </thead>
             <tbody>
@@ -623,6 +658,14 @@
                     <td class="table-cell" [ngClass]="purchaseCostCellClass(p)">{{ lastPurchaseDisplay(p) }}</td>
                     <td class="table-cell" [ngClass]="purchaseCostCellClass(p)">{{ cheapestPurchaseDisplay(p) }}</td>
                   }
+                  <td class="table-cell">
+                    <app-cheapest-supplier-cell
+                      [product]="cheapestSupplier(p)"
+                      [state]="cheapestSuppliers.state"
+                      [displayBasis]="cheapestSuppliers.displayBasis"
+                      [productName]="p.name"
+                    ></app-cheapest-supplier-cell>
+                  </td>
                 </tr>
               }
             </tbody>
@@ -663,6 +706,15 @@
                   <div class="break-words"><dt class="inline text-rr-muted">Cheapest purchase:</dt> <dd class="m-0 inline">{{ cheapestPurchaseDisplay(p) }}</dd></div>
                 </dl>
               }
+              <div class="mt-2 break-words text-sm" data-testid="reorder-card-cheapest-supplier">
+                <span class="text-rr-muted">Cheapest supplier:</span>
+                <app-cheapest-supplier-cell
+                  [product]="cheapestSupplier(p)"
+                  [state]="cheapestSuppliers.state"
+                  [displayBasis]="cheapestSuppliers.displayBasis"
+                  [productName]="p.name"
+                ></app-cheapest-supplier-cell>
+              </div>
             </li>
           }
         </ul>

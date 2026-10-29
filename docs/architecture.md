@@ -8706,11 +8706,20 @@ renders it as five parts:
    pending work or a failed read, so the badge can never disagree with the tiles. The reminder's
    14-day window and its `restockFrom` link to the oldest pending date (#948/#949) are unchanged.
    The only actions are the existing Pick List and Needs Ordering routes.
-3. **Site performance** and 4. **Machine performance**, as two separate lists: `GET /api/machines`
-   carries no site, so machines cannot be grouped under sites without a contract change, which is
-   out of scope here (follow-up). Every period stays; the machine list shows all of them in a table
-   on a wide screen and one chosen period (`machinePeriod`) on a narrow one. A part-week comparison
-   is labelled "vs same time last week". A period total is shown only when every machine returned that
+3. **Site performance** and 4. **Machine performance**, with machines grouped under their sites
+   (issue #980). `GET /api/machines` carries each machine's `siteId` - the provider's
+   `NayaxMachine.CustomerID`, the same key `ListSites`/`GetSiteSummaries` group by; it is appended
+   after `localMachineId`, nullable, and kept in the redacted (no-financials) projection because it
+   is identity, not a figure; no other field, endpoint or capability changed - and
+   `groupMachinesBySite` (in `dashboard.component.ts`) pairs it with the sites read: one group per
+   site in the Sites order, sites without machines skipped, and machines whose site is `null` or not
+   listed last under "Other machines". When there is no site group (the sites read failed, or no
+   machine has a listed site) the single group has no heading, so the list reads as before. Each
+   group is its own `tbody` with a `scope="rowgroup"` heading row on a wide screen and its own `h3`
+   and list on a narrow one; the totals row still sums every machine. Every period stays; the
+   machine list shows all of them in a table on a wide screen and one chosen period
+   (`machinePeriod`) on a narrow one. A part-week comparison is labelled "vs same time last week". A
+   period total is shown only when every machine returned that
 period's figure, and otherwise says "Unavailable". One pre-existing inconsistency is reported, not
 changed (calculations are out of scope): the fleet total's week comparison falls back to a machine's
 full `lastWeekGrossRevenue` when its `previousComparableWeekGrossRevenue` is `null`, mixing a full
@@ -8719,9 +8728,14 @@ week into a part-week comparison.
    authoritative low-stock list in its own order, and `reorderViewAllLabel` names the list's real
    length. The purchase-cost read (#788/#789) is requested only for those rows and still only with
    `Dashboard.ViewFinancials`. Last and Cheapest purchase remain labelled as historical costs from
-   this business's own purchases. The observed-supplier-price component of #930/#939 is not reused
-   yet because it has not landed; the column is added when it does, beside — never in place of — the
-   historical columns.
+   this business's own purchases. The **Cheapest supplier** column (issue #981, the same column #939
+   asks for) reuses #930's `CheapestSuppliersComponent` and `CheapestSupplierCellComponent`
+   unchanged, beside - never in place of - the historical columns: `reorderPriorityIds` is set once
+   per reorder read, so the component makes one summary request for the five ids and re-reads only
+   when the list changes. It follows the endpoint's `Dashboard.View`, so it shows without
+   `Dashboard.ViewFinancials`; its failure (with Retry) and support-session "unavailable" states are
+   the component's own and leave the rest of the dashboard alone. A note above the table says these
+   are observed supplier prices, not costs paid.
 
 Financial gating (`canViewFinancials`), provider-optional rendering (`isLiveFleetShown`,
 `isProviderUsable`), the support-session behaviour and the business-timezone date rules (#499) are
@@ -13303,7 +13317,7 @@ SupplierListings (platform, #923)
 
 ### The cheapest-supplier summary and the Cheapest supplier column (issue #930)
 
-The section above compares offers; this one, the fifth task of [#817](https://github.com/cristhyanc/InventoryApp/issues/817), is what a person finally sees. On Needs Ordering each tracked product shows its cheapest supplier per unit — "JB Metro $0.95/unit (special)" — and clicking it opens a popup listing every one of the business's own suppliers with their prices. The Dashboard's Reorder Alerts ([#939](https://github.com/cristhyanc/InventoryApp/issues/939)) and Products ([#940](https://github.com/cristhyanc/InventoryApp/issues/940)) are the same column on two more pages and are outside this task; this one ships the endpoint, the shared component and Needs Ordering.
+The section above compares offers; this one, the fifth task of [#817](https://github.com/cristhyanc/InventoryApp/issues/817), is what a person finally sees. On Needs Ordering each tracked product shows its cheapest supplier per unit — "JB Metro $0.95/unit (special)" — and clicking it opens a popup listing every one of the business's own suppliers with their prices. The Dashboard's Reorder Alerts ([#939](https://github.com/cristhyanc/InventoryApp/issues/939), delivered as the Dashboard's Reorder priorities column by [#981](https://github.com/cristhyanc/InventoryApp/issues/981)) and Products ([#940](https://github.com/cristhyanc/InventoryApp/issues/940)) are the same column on two more pages and are outside this task; this one ships the endpoint, the shared component and Needs Ordering.
 
 **One endpoint, called with a page's product ids.**
 
