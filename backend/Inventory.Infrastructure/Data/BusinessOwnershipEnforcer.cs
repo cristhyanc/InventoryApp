@@ -106,34 +106,7 @@ internal static class BusinessOwnershipEnforcer
 
         if (scope.BusinessId is not { } businessId)
         {
-            // Denied scope. Reads already return nothing; writes must not be the way around it -
-            // with one reviewed exception, below, which is narrower than this branch rather than a
-            // way out of it.
-            if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
-            {
-                EnforceSupplierProvisioning(context, provisionedBusinessId);
-                return;
-            }
-
-            if (context.PriceCatalogueMatchingLeased)
-            {
-                EnforcePriceCatalogueMatching(context);
-                return;
-            }
-
-            if (context.PlanGrantWriteBusinessId is { } grantedBusinessId)
-            {
-                EnforcePlanGrantWrite(context, grantedBusinessId);
-                return;
-            }
-
-            if (context.ChangeTracker.Entries<IBusinessOwned>().Any(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
-            {
-                throw new CrossBusinessAccessException(
-                    "A tenant-owned write was attempted without a resolved current business. "
-                        + "The caller has no business membership, so the write is refused.");
-            }
-
+            EnforceDeniedScope(context);
             return;
         }
 
@@ -159,6 +132,41 @@ internal static class BusinessOwnershipEnforcer
         }
 
         EnforceRelationships(context, businessId);
+    }
+
+    /// <summary>
+    /// The denied-scope branch of <see cref="Enforce"/>: a request that resolved no business writes
+    /// nothing tenant-owned, except through one of the three reviewed leases.
+    /// </summary>
+    private static void EnforceDeniedScope(AppDbContext context)
+    {
+        // Denied scope. Reads already return nothing; writes must not be the way around it -
+        // with three reviewed exceptions, below, each narrower than this branch rather than a
+        // way out of it.
+        if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
+        {
+            EnforceSupplierProvisioning(context, provisionedBusinessId);
+            return;
+        }
+
+        if (context.PriceCatalogueMatchingLeased)
+        {
+            EnforcePriceCatalogueMatching(context);
+            return;
+        }
+
+        if (context.PlanGrantWriteBusinessId is { } grantedBusinessId)
+        {
+            EnforcePlanGrantWrite(context, grantedBusinessId);
+            return;
+        }
+
+        if (context.ChangeTracker.Entries<IBusinessOwned>().Any(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
+        {
+            throw new CrossBusinessAccessException(
+                "A tenant-owned write was attempted without a resolved current business. "
+                    + "The caller has no business membership, so the write is refused.");
+        }
     }
 
     /// <summary>
