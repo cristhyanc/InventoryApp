@@ -130,7 +130,7 @@
           <button type="button" class="btn btn-secondary" (click)="refresh()">Retry</button>
         </div>
       } @else if (loading) {
-        <p data-testid="plan-picks-loading" role="status" class="text-md-body value-muted">Loading the plan&hellip;</p>
+        <output data-testid="plan-picks-loading" class="block text-md-body value-muted">Loading the plan&hellip;</output>
       } @else if (visibleProducts().length === 0) {
         <p data-testid="plan-picks-empty" class="text-md-body value-muted">
           @if (pickListProducts.length > 0 && filtersActive) {

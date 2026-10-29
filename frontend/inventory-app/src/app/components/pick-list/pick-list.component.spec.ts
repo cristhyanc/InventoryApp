@@ -812,9 +812,9 @@ describe('PickListComponent rendered structure', () => {
     planFor('Machine A', 'Machine B');
 
     const cards = requireElement('[data-testid="plan-picks-cards"]');
-    expect(cards.querySelectorAll('li').length).toBe(2);
+    expect(cards.querySelectorAll('li')).toHaveLength(2);
     expect(cards.textContent).toContain('Current: 6 of 10');
-    expect(requireElement<HTMLSelectElement>('[data-testid="plan-picks-machine-focus"]').options.length).toBe(2);
+    expect(requireElement<HTMLSelectElement>('[data-testid="plan-picks-machine-focus"]').options).toHaveLength(2);
     expect(host.querySelector('[data-testid="plan-picks-focus-summary"]')?.textContent).toContain('Machine A');
   });
 

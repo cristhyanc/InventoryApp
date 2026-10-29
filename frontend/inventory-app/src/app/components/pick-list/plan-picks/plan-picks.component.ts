@@ -756,12 +756,12 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
           .map((cell) => cellKey(product.productId, cell.machineId))
       )
     );
-    for (const key of [...this.overrides.keys()]) {
+    for (const key of this.overrides.keys()) {
       if (!live.has(key)) {
         this.overrides.delete(key);
       }
     }
-    for (const key of [...this.completed]) {
+    for (const key of this.completed) {
       if (!live.has(key)) {
         this.completed.delete(key);
       }
@@ -786,12 +786,12 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
   }
 
   private discardMachineWork(machineId: number): void {
-    for (const key of [...this.overrides.keys()]) {
+    for (const key of this.overrides.keys()) {
       if (keyMachineId(key) === machineId) {
         this.overrides.delete(key);
       }
     }
-    for (const key of [...this.completed]) {
+    for (const key of this.completed) {
       if (keyMachineId(key) === machineId) {
         this.completed.delete(key);
       }

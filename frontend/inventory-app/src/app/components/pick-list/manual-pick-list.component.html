@@ -94,7 +94,7 @@
     <div class="card-body p-0">
       <!-- Only a successful read may be described as having no products; see ManualPickListCatalogueState. -->
       @if (catalogueState === 'loading') {
-        <p data-testid="manual-pick-list-catalogue-loading" role="status" class="p-4 text-md-body value-muted">Loading products&hellip;</p>
+        <output data-testid="manual-pick-list-catalogue-loading" class="block p-4 text-md-body value-muted">Loading products&hellip;</output>
       } @else if (catalogueState === 'failed') {
         <div class="p-4 flex flex-wrap items-center gap-4">
           <p data-testid="manual-pick-list-catalogue-failed" role="alert" class="text-md-body text-md-danger-text">{{ catalogueLoadFailedMessage }}</p>
@@ -109,11 +109,9 @@
           container rather than widening the page. Below md: the product cards underneath replace it
           entirely, so a phone never gets a squeezed matrix.
         -->
-        <div
+        <section
           data-testid="manual-pick-list-table-scroll"
           class="hidden max-h-[70vh] overflow-auto md:block"
-          tabindex="0"
-          role="region"
           aria-label="Record refill entries, scrollable">
           <table class="table">
             <thead class="table-head">
@@ -195,7 +193,7 @@
               }
             </tbody>
           </table>
-        </div>
+        </section>
 
         <!--
           The narrow layout: one card per product, with a comfortable numeric box that takes direct
@@ -332,7 +330,7 @@
         <p data-testid="manual-pick-list-request-error" role="alert" class="text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
       }
       @if (recordedSummary; as summary) {
-        <p data-testid="manual-pick-list-recorded" role="status" class="text-md-body text-md-success-text">{{ summary }}</p>
+        <output data-testid="manual-pick-list-recorded" class="block text-md-body text-md-success-text">{{ summary }}</output>
       }
       <!--
         An uncertain outcome keeps one action and one action only: resend the exact request that was

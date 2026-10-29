@@ -41,7 +41,7 @@
           [attr.aria-pressed]="mode === 'manual'"
           (click)="switchMode('manual')">{{ recordRefillViewName }}</button>
         @if (manualSaveInFlight) {
-          <p data-testid="pick-list-save-in-flight" role="status" class="text-md-body value-muted">Recording your refill. The view stays here until this save finishes.</p>
+          <output data-testid="pick-list-save-in-flight" class="block text-md-body value-muted">Recording your refill. The view stays here until this save finishes.</output>
         }
       </div>
     </section>
