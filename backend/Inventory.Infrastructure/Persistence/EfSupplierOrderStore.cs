@@ -28,7 +28,11 @@ public sealed class EfSupplierOrderStore : ISupplierOrderStore
             .Include(order => order.Supplier)
             .Include(order => order.Lines)
                 .ThenInclude(line => line.Product)
-            .Where(order => order.Status != SupplierOrderStatus.Cancelled && order.Status != SupplierOrderStatus.Received)
+            // The three closed states, all excluded for the same reason: nothing is still expected
+            // on any of them. ClosedPartiallyDelivered joined the list in issue #974.
+            .Where(order => order.Status != SupplierOrderStatus.Cancelled &&
+                order.Status != SupplierOrderStatus.Received &&
+                order.Status != SupplierOrderStatus.ClosedPartiallyDelivered)
             .OrderBy(order => order.ExpectedDate ?? order.OrderDate)
             .ThenBy(order => order.Id)
             .ToListAsync(cancellationToken);
@@ -93,7 +97,15 @@ public sealed class EfSupplierOrderStore : ISupplierOrderStore
     public async Task<bool> CancelAsync(int id, CancellationToken cancellationToken)
     {
         var order = await _db.SupplierOrders.FindAsync([id], cancellationToken);
-        if (order is null || order.Status is SupplierOrderStatus.Cancelled or SupplierOrderStatus.Received) return false;
+        // An order that is already closed is not cancellable, and an explicit completion is never
+        // relabelled as a cancellation (issue #974).
+        if (order is null ||
+            order.Status is SupplierOrderStatus.Cancelled
+                or SupplierOrderStatus.Received
+                or SupplierOrderStatus.ClosedPartiallyDelivered)
+        {
+            return false;
+        }
 
         order.Status = SupplierOrderStatus.Cancelled;
         order.UpdatedAt = DateTime.UtcNow;
@@ -113,7 +125,8 @@ public sealed class EfSupplierOrderStore : ISupplierOrderStore
         (Inventory.Domain.SupplierOrders.SupplierOrderStatus)order.Status,
         order.CreatedAt,
         order.UpdatedAt,
-        order.Lines.Select(ToLineRecord).ToList());
+        order.Lines.Select(ToLineRecord).ToList(),
+        order.CompletedWithUndeliveredAt);
 
     private static SupplierOrderSupplierRecord ToSupplierRecord(Supplier supplier) => new(
         supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address,

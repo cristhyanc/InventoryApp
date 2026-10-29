@@ -316,6 +316,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetSupplierOrder>();
         services.AddScoped<CreateSupplierOrder>();
         services.AddScoped<CancelSupplierOrder>();
+        services.AddScoped<PreviewSupplierOrderCompletion>();
         services.AddScoped<CalculateReorderNeeds>();
         services.AddScoped<ListProducts>();
         services.AddScoped<GetProduct>();

@@ -2434,6 +2434,15 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("CompletedByDirectoryTenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CompletedByObjectId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedWithUndeliveredAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
