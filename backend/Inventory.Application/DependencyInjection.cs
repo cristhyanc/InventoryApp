@@ -200,6 +200,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<AnswerPriceCollectorSearch>();
         services.AddScoped<CompletePriceCollectorRun>();
 
+        // And what that run thinks the products it searched for are (issue #941), on the same terms
+        // again: one use case over one narrow transactional port, which decides the obvious matches
+        // itself and leaves everything else to the Super Admin.
+        services.AddScoped<RecordCollectorProductMatches>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed

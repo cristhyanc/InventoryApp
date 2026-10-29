@@ -828,13 +828,17 @@ Uploaded purchase and expense documents are stored outside the API web root, und
 
 ## The scheduled price collector (issue #924)
 
-The shared supplier price catalogue is collected by a scheduled GitHub Actions workflow, and it signs in to this API **without a person and without a stored password**. This section is the human setup that makes that possible; the boundary itself is [docs/architecture.md § The price collector's app-only path](docs/architecture.md#the-price-collectors-app-only-path-issue-924) and [§ Collector work list](docs/architecture.md#collector-work-list-issue-924).
+The shared supplier price catalogue is collected by a scheduled GitHub Actions workflow, and it signs in to this API **without a person and without a stored password**. This section is the human setup that makes that possible; the boundary itself is [docs/architecture.md § The price collector's app-only path](docs/architecture.md#the-price-collectors-app-only-path-issue-924), [§ Collector work list](docs/architecture.md#collector-work-list-issue-924), [§ Collector results](docs/architecture.md#collector-results-issue-937) and [§ Collector product matching](docs/architecture.md#collector-product-matching-issue-941).
 
 ```text
-GET /api/price-collector/work   issues one run and answers the work it is to do
+GET  /api/price-collector/work                          issues one run and answers the work it is to do
+POST /api/price-collector/results                       one batch of what it read off a shelf
+POST /api/price-collector/matches                       what it thinks each waiting product is
+POST /api/price-collector/work-items/{id}/outcome       finishes one search
+POST /api/price-collector/runs/{id}/complete            closes the run
 ```
 
-**What has shipped.** The authentication path and the work list. The results endpoint (#937), the matches endpoint (#941), the workflow itself (#929) and the collector prompt and scripts (#926, #927) are separate tasks.
+**What has shipped.** The authentication path, the work list, the results endpoints (#937) and the matches endpoint (#941). The workflow itself (#929) and the collector prompt and scripts (#926, #927) are separate tasks.
 
 **The shipped state trusts no collector.** `PriceCollector__TenantId` and `PriceCollector__ClientId` are **empty** in `appsettings.json`, which is both the fail-closed state and the rollback lever: with them empty the collector endpoint answers `401` to every request, issues nothing, and no other endpoint is affected in any way. A half-filled or malformed section means the same thing and is logged as a startup error. Neither identifier is a credential — the API validates with Entra's published signing keys and the collector holds no secret either — so they are ordinary application settings with no Key Vault reference, and no real identifier may be committed. Supply them with `dotnet user-secrets` locally or application settings in Azure; see [Configuration and secrets](#configuration-and-secrets).
 
@@ -851,7 +855,7 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 
 **How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
 
-**What the collector can and cannot reach.** One route. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. The response carries no business id, business name, business product id or price. The two tables it writes, the collector runs and their work items, belong to no business. Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
+**What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
 
 ## Platform diagnostics API
 

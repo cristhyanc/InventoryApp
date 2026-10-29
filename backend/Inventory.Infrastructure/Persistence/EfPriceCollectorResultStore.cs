@@ -339,48 +339,22 @@ public sealed class EfPriceCollectorResultStore : IPriceCollectorResultStore
     /// The run this request is about while it is still open, <see langword="null"/> when no run has
     /// that id - and an expiry, committed, when the run was overdue.
     ///
-    /// <para><strong>Touching an overdue run expires it, and then refuses the request.</strong> That
-    /// is the issue's own wording - "expired the next time it is touched" - and the order matters:
-    /// the expiry is committed so the run's unanswered searches are recorded as
-    /// <c>NotSearched</c> rather than left open until something else notices, and only then is the
-    /// caller told the run is closed. A run that was already finished is refused without being
-    /// touched.</para>
+    /// <para>The rule itself is <see cref="PriceCollectorOpenRun"/>'s, shared with the matches
+    /// endpoint of issue #941: every collector endpoint that writes asks the same question before it
+    /// writes anything, and two copies of "closed, overdue or open" would be two answers to it. The
+    /// transaction is this method's own, because the expiry it may commit is this request's.</para>
     /// </summary>
-    private async Task<PriceCollectorRun?> FindOpenRunAsync(
+    private Task<PriceCollectorRun?> FindOpenRunAsync(
         long runId,
         DateTime asOfUtc,
         IDbContextTransaction transaction,
-        CancellationToken cancellationToken)
-    {
-        var run = await _db.PriceCollectorRuns
-            .FirstOrDefaultAsync(candidate => candidate.Id == runId, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (run is null)
-        {
-            return null;
-        }
-
-        if (PriceCollectorRunPolicy.IsFinished(run.Status))
-        {
-            throw new DomainConflictException(PriceCollectorRunPolicy.AlreadyFinishedMessage);
-        }
-
-        if (run.ExpiresAtUtc is { } expiresAtUtc
-            && PriceCollectorRunPolicy.HasExpired(expiresAtUtc, asOfUtc))
-        {
-            await PriceCollectorRunClosure
-                .CloseAsync(_db, run, asOfUtc, PriceCollectorRunStatus.Expired, cancellationToken)
-                .ConfigureAwait(false);
-
-            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-
-            throw new DomainConflictException(PriceCollectorRunPolicy.AlreadyFinishedMessage);
-        }
-
-        return run;
-    }
+        CancellationToken cancellationToken) =>
+        PriceCollectorOpenRun.FindAsync(
+            _db,
+            runId,
+            asOfUtc,
+            transaction.CommitAsync,
+            cancellationToken);
 
     /// <summary>
     /// Records that a complete search did not find the known listings it was looking for: every

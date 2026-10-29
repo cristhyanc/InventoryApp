@@ -13,7 +13,7 @@ public class ProductMatchSuggestionPolicyTests
 {
     /// <summary>
     /// The criterion this table exists for: a rejected or undone pair is never auto-applied again.
-    /// Asserted per state, so a sixth status cannot quietly join the group that is still fair game.
+    /// Asserted per state, so a seventh status cannot quietly join the group that is still fair game.
     /// </summary>
     [Theory]
     [InlineData(ProductMatchSuggestionStatus.Tentative, false)]
@@ -21,10 +21,29 @@ public class ProductMatchSuggestionPolicyTests
     [InlineData(ProductMatchSuggestionStatus.Accepted, false)]
     [InlineData(ProductMatchSuggestionStatus.Rejected, true)]
     [InlineData(ProductMatchSuggestionStatus.Undone, true)]
+    [InlineData(ProductMatchSuggestionStatus.Repeated, false)]
     public void A_rejected_or_undone_suggestion_blocks_automatic_matching(
         ProductMatchSuggestionStatus status,
         bool blocks) =>
         Assert.Equal(blocks, ProductMatchSuggestionPolicy.BlocksAutomaticMatching(status));
+
+    /// <summary>
+    /// Only a tentative suggestion is one a reviewer still has to decide, which is what the
+    /// deduplication of #941 is about: a decided row is nobody's pending decision, and neither is the
+    /// record a run leaves of having repeated a proposal somebody else is already looking at. Asserted
+    /// per state for the same reason as above.
+    /// </summary>
+    [Theory]
+    [InlineData(ProductMatchSuggestionStatus.Tentative, true)]
+    [InlineData(ProductMatchSuggestionStatus.AutoApplied, false)]
+    [InlineData(ProductMatchSuggestionStatus.Accepted, false)]
+    [InlineData(ProductMatchSuggestionStatus.Rejected, false)]
+    [InlineData(ProductMatchSuggestionStatus.Undone, false)]
+    [InlineData(ProductMatchSuggestionStatus.Repeated, false)]
+    public void Only_a_tentative_suggestion_awaits_a_reviewers_decision(
+        ProductMatchSuggestionStatus status,
+        bool awaits) =>
+        Assert.Equal(awaits, ProductMatchSuggestionPolicy.AwaitsReview(status));
 
     #region One proposal
 
