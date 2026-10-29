@@ -611,7 +611,20 @@ public class AppDbContext : DbContext
 
         // Purchase/PurchaseItem are the Purchase-language CLR types; explicitly mapped to
         // their legacy "Receipt"/"ReceiptItem" tables so the rename does not change the schema.
-        modelBuilder.Entity<Purchase>().ToTable("Receipts");
+        //
+        // The check constraint is issue #976's half of "a purchase may have no document": the four
+        // document columns are nullable, and they are all present or all absent. It is in the
+        // database rather than only in code because a half-recorded document is not recoverable -
+        // it would be a row claiming bytes nothing can open, or bytes nothing names - and the
+        // "has no document" answer every read and the attach-only-if-empty write depend on would
+        // then be ambiguous. Inventory.Domain.Purchases.PurchaseDocumentPolicy.IsMetadataConsistent
+        // is the same rule stated once for the application.
+        modelBuilder.Entity<Purchase>().ToTable("Receipts", table => table.HasCheckConstraint(
+            "CK_Receipts_DocumentMetadataAllOrNothing",
+            @"(""StoredFileName"" IS NULL AND ""ContentType"" IS NULL "
+                + @"AND ""FileName"" IS NULL AND ""FileSizeBytes"" IS NULL) "
+                + @"OR (""StoredFileName"" IS NOT NULL AND ""ContentType"" IS NOT NULL "
+                + @"AND ""FileName"" IS NOT NULL AND ""FileSizeBytes"" IS NOT NULL)"));
         modelBuilder.Entity<PurchaseItem>().ToTable("ReceiptItems");
 
         modelBuilder.Entity<Purchase>()

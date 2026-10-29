@@ -272,6 +272,9 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
         Assert.NotNull(purchase);
         Assert.Equal(businessId, purchase.BusinessId);
+        // Non-null because this purchase was uploaded with a document; nullable on the record since
+        // issue #976, where a purchase may have none.
+        Assert.NotNull(purchase.StoredFileName);
         return (purchase.Id, purchase.StoredFileName);
     }
 

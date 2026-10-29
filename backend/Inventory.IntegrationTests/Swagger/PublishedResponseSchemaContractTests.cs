@@ -489,11 +489,19 @@ public class PublishedResponseSchemaContractTests
     /// generation. Keep these literal: they are the client-visible contract, not a restatement of
     /// whatever the current CLR types happen to produce.
     ///
-    /// They have moved exactly once since issue #304 pinned them: issue #429 added the per-line and
+    /// They have moved exactly twice since issue #304 pinned them. Issue #429 added the per-line and
     /// per-charge GST classification keys, which that issue's acceptance criteria require the
-    /// purchase API to return. That is an additive contract change - no existing key was renamed,
+    /// purchase API to return. That was an additive contract change - no existing key was renamed,
     /// reordered relative to the others, retyped or dropped - and each classification sits next to
-    /// the amount it describes. Nothing else may move these baselines without its own issue.
+    /// the amount it describes.
+    ///
+    /// <para>Issue #976 is the second: <c>fileSizeBytes</c> gained <c>"nullable": true</c>, because a
+    /// purchase may now have no document at all and its four document values are then <c>null</c>
+    /// together. It is the one key that moved - the other three were already published as nullable -
+    /// and the issue's own risk areas name the public API contract. The alternative, emitting
+    /// <c>0</c> for a purchase with no document, would have been a false statement about the
+    /// document's size that no client could tell from a real one. Nothing else may move these
+    /// baselines without its own issue.</para>
     /// </summary>
     private static readonly Dictionary<string, string> BaseContractSchemas = new(StringComparer.Ordinal)
     {
@@ -522,7 +530,7 @@ public class PublishedResponseSchemaContractTests
             "fileName": { "type": "string", "nullable": true },
             "storedFileName": { "type": "string", "nullable": true },
             "contentType": { "type": "string", "nullable": true },
-            "fileSizeBytes": { "type": "integer", "format": "int64" },
+            "fileSizeBytes": { "type": "integer", "format": "int64", "nullable": true },
             "createdAt": { "type": "string", "format": "date-time" }
           },
           "additionalProperties": false

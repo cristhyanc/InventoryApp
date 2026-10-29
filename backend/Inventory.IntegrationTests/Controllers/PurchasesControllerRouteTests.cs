@@ -47,6 +47,9 @@ public class PurchasesControllerRouteTests
     [InlineData("PUT", "api/purchases/{id}")]
     [InlineData("DELETE", "api/purchases/{id}")]
     [InlineData("GET", "api/purchases/{id}/file")]
+    // Issue #976's "add a document": the same resource as the read above, on the verb that creates
+    // it, so adding a purchase's document is not a route of its own to remember.
+    [InlineData("POST", "api/purchases/{id}/file")]
     public void Canonical_purchase_endpoint_is_available(string httpMethod, string relativePath)
     {
         var descriptions = ApiContractTestHost.GetApiDescriptionsFor<PurchasesController>();

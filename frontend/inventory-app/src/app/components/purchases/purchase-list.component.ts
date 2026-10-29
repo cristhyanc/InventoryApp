@@ -7,6 +7,7 @@ import { GstClassification, Purchase, PurchaseGstSummary, PurchaseValidation } f
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { IconComponent } from '../shared/icon.component';
 import { gstClassificationLabel, isChargePresent } from './gst-classification-options';
+import { PurchaseDocumentAttachComponent } from './purchase-document-attach/purchase-document-attach.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 /**
@@ -14,11 +15,16 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  * `/purchases/:id/edit` page (`purchase-edit/purchase-edit-page.component.ts`), which the Edit
  * action links to; this component holds no edit form, no edit state and no update request, which is
  * what keeps the list compact.
+ *
+ * <p>A purchase may have no supporting document at all (issue #976). This page reports that as
+ * "No document" - a real state, never a blank cell - and composes in
+ * `PurchaseDocumentAttachComponent` to offer one, which keeps that workflow's own file, saving and
+ * error state out of the page.</p>
  */
 @Component({
   selector: 'app-purchase-list',
   standalone: true,
-  imports: [CommonModule, RouterLink, IconComponent],
+  imports: [CommonModule, RouterLink, IconComponent, PurchaseDocumentAttachComponent],
   templateUrl: './purchase-list.component.html'
 })
 export class PurchaseListComponent implements OnInit, OnDestroy {
@@ -94,6 +100,14 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     });
   }
 
+  /**
+   * Whether this purchase has a supporting document at all (issue #976). The four metadata values
+   * are all present or all absent, so the stored name alone answers it.
+   */
+  hasDocument(purchase: Purchase): boolean {
+    return purchase.storedFileName !== null && purchase.storedFileName !== undefined;
+  }
+
   private loadThumbnails(): void {
     this.objectUrls.releaseAll();
     this.thumbnailUrls = new Map<number, string>();
@@ -108,7 +122,8 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
   }
 
   isImage(purchase: Purchase): boolean {
-    return purchase.contentType.startsWith('image/');
+    // A purchase with no document has no content type either, and is no kind of image (issue #976).
+    return purchase.contentType?.startsWith('image/') ?? false;
   }
 
   remove(purchase: Purchase): void {
@@ -121,7 +136,10 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
     this.purchaseService.delete(purchase.id).subscribe(() => this.load());
   }
 
-  formatSize(bytes: number): string {
+  formatSize(bytes: number | null): string {
+    // Only ever asked for a purchase that has a document; a null size is no size at all and must
+    // not be shown as "0 B", which would be a false statement about a document that is not there.
+    if (bytes === null || bytes === undefined) return '';
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;

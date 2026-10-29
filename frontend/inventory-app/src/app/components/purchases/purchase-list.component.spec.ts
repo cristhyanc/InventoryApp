@@ -51,12 +51,25 @@ function purchase(overrides: Partial<Purchase> = {}): Purchase {
   };
 }
 
+/** A purchase recorded with no supporting document at all (issue #976): all four values absent. */
+function withoutDocument(overrides: Partial<Purchase> = {}): Purchase {
+  return purchase({
+    fileName: null,
+    storedFileName: null,
+    contentType: null,
+    fileSizeBytes: null,
+    ...overrides
+  });
+}
+
 async function render(
   purchases: Purchase[],
   gst: PurchaseGstSummary | null = null,
   validation: PurchaseValidation | null = null,
   sessionActive: Observable<boolean> = of(false)
 ) {
+  const getAll = jest.fn(() => of(purchases));
+  const attachDocument = jest.fn(() => of(purchases[0]));
   await TestBed.configureTestingModule({
     imports: [PurchaseListComponent],
     providers: [
@@ -64,9 +77,10 @@ async function render(
       {
         provide: PurchaseService,
         useValue: {
-          getAll: jest.fn(() => of(purchases)),
+          getAll,
           delete: jest.fn(() => of(undefined)),
           getFile: jest.fn(() => of(new Blob())),
+          attachDocument,
           getValidationFor: jest.fn(() => validation),
           getGstSummaryFor: jest.fn(() => gst)
         }
@@ -77,7 +91,7 @@ async function render(
 
   const fixture = TestBed.createComponent(PurchaseListComponent);
   fixture.detectChanges();
-  return { fixture, host: fixture.nativeElement as HTMLElement };
+  return { fixture, host: fixture.nativeElement as HTMLElement, getAll, attachDocument };
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -222,6 +236,64 @@ describe('PurchaseListComponent Actions column layout (issue #449)', () => {
     deleteButton.click();
 
     expect(removeSpy).toHaveBeenCalledWith(stored);
+  });
+});
+
+/**
+ * A purchase with no supporting document (issue #976). "No document" is a real state the page has
+ * to report, and the purchase that has none is where the offer to add one belongs.
+ */
+describe('PurchaseListComponent purchases with no document (issue #976)', () => {
+  it('reports "No document" and offers to add one, rather than leaving the cell blank', async () => {
+    const { host } = await render([withoutDocument()]);
+
+    expect(host.querySelector('[data-testid="purchase-no-document"]')?.textContent).toContain('No document');
+    expect(host.querySelector('[data-testid="purchase-document-name"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-document-attach"]')).not.toBeNull();
+  });
+
+  it('offers no way to open a document that is not there', async () => {
+    const { host } = await render([withoutDocument()]);
+
+    expect(host.querySelector('[aria-label="Open document for Weekly restock"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-no-document-placeholder"]')).not.toBeNull();
+  });
+
+  it('requests no thumbnail for a purchase with no document', async () => {
+    await render([withoutDocument()]);
+
+    expect(TestBed.inject(PurchaseService).getFile).not.toHaveBeenCalled();
+  });
+
+  it('shows the document name and size, and no "Add document", for a purchase that has one', async () => {
+    const { host } = await render([purchase()]);
+
+    expect(host.querySelector('[data-testid="purchase-document-name"]')?.textContent).toContain('invoice.pdf');
+    expect(host.querySelector('[data-testid="purchase-document-name"]')?.textContent).toContain('1.0 KB');
+    expect(host.querySelector('[data-testid="purchase-no-document"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-document-attach"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Open document for Weekly restock"]')).not.toBeNull();
+  });
+
+  /**
+   * Adding a document is a write, so it is hidden while a support session is active for exactly the
+   * reason Delete is: the session grants `PurchasingOperate`, and the backend refuses the write by
+   * its own read-only method rule rather than by withholding the capability.
+   */
+  it('hides "Add document" while a support session is active, and still says there is none', async () => {
+    const { host } = await render([withoutDocument()], null, null, of(true));
+
+    expect(host.querySelector('[data-testid="purchase-no-document"]')?.textContent).toContain('No document');
+    expect(host.querySelector('[data-testid="purchase-document-attach"]')).toBeNull();
+  });
+
+  it('reloads the list once a document has been added, so the row stops saying there is none', async () => {
+    const { fixture, getAll } = await render([withoutDocument()]);
+    expect(getAll).toHaveBeenCalledTimes(1);
+
+    fixture.componentInstance.load();
+
+    expect(getAll).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -1078,10 +1078,16 @@ export interface Purchase {
   purchaseDate: string;
   supplierId?: number | null;
   supplier?: Supplier | null;
-  fileName: string;
-  storedFileName: string;
-  contentType: string;
-  fileSizeBytes: number;
+  /**
+   * The supporting document's metadata, or `null` on all four when the purchase has none (issue
+   * #976). They are never half present: the API reports all four or none, so a single `null` check
+   * is the whole question "does this purchase have a document?". A purchase with none shows
+   * "No document" and can be given one later.
+   */
+  fileName: string | null;
+  storedFileName: string | null;
+  contentType: string | null;
+  fileSizeBytes: number | null;
   createdAt: string;
   items?: PurchaseItem[];
 }

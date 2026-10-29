@@ -14,6 +14,17 @@ namespace Inventory.Application.Purchases;
 /// document storage - then saves the document and persists the purchase, deleting the document
 /// again if persistence fails.
 ///
+/// <para><strong>The document is optional since issue #976</strong> (child of #965): a business
+/// with no receipt to attach, or no storage left to put one in, must still be able to record what
+/// it bought. A <c>null</c> file stores no document and no document metadata, and changes nothing
+/// else - the supplier, item, GST and cost-transition validation, the stock movements, the
+/// allocations and the cost rebuild are identical either way. With a file, every rule is the one
+/// that was already here, now stated once in
+/// <see cref="PurchaseDocumentPolicy"/> so the create and
+/// <see cref="AttachPurchaseDocument"/> cannot drift apart. The one thing a purchase with no
+/// document cannot do is fall back to the uploaded file's name for its title, so a blank title is
+/// refused instead of stored empty.</para>
+///
 /// <para>Since issue #974 the request may also carry the operator's decision to complete a linked
 /// supplier order with whatever stays undelivered. This use case adds only the attribution a client
 /// may not supply - who decided, and when - and hands the decision to the same
@@ -23,9 +34,6 @@ namespace Inventory.Application.Purchases;
 /// </summary>
 public sealed class UploadPurchase
 {
-    private static readonly string[] AllowedExtensions = [".jpg", ".jpeg", ".png", ".pdf", ".webp", ".heic"];
-    private const long MaxFileSizeBytes = 10 * 1024 * 1024;
-
     private readonly IPurchaseStore _store;
     private readonly IDocumentStorage _documents;
     private readonly IAuthenticatedActorAccessor _actors;
@@ -41,24 +49,29 @@ public sealed class UploadPurchase
     }
 
     public async Task<PurchaseRecord?> Handle(
-        PurchaseFileInput file,
+        PurchaseFileInput? file,
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
         CancellationToken cancellationToken)
         => await Handle(file, fields, items, supplierOrderCompletion: null, cancellationToken);
 
     public async Task<PurchaseRecord?> Handle(
-        PurchaseFileInput file,
+        PurchaseFileInput? file,
         PurchaseFields fields,
         IReadOnlyList<PurchaseItemInput> items,
         SupplierOrderCompletionRequest? supplierOrderCompletion,
         CancellationToken cancellationToken)
     {
-        if (file.Length == 0) return null;
-        if (file.Length > MaxFileSizeBytes) return null;
+        // The document's own rules, unchanged, and only when there is a document (issue #976).
+        var extension = file is null ? null : Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (file is not null && !PurchaseDocumentPolicy.IsSizeValid(file.Length)) return null;
+        if (file is not null && !PurchaseDocumentPolicy.IsExtensionAllowed(extension)) return null;
 
-        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
-        if (!AllowedExtensions.Contains(extension)) return null;
+        // Nothing stands in for the uploaded file's name when there is no uploaded file, so a
+        // purchase with no document has to be named. Refused before anything is validated further,
+        // because it is a property of the request rather than of the data it refers to.
+        if (file is null && string.IsNullOrWhiteSpace(fields.Title))
+            throw new InvalidOperationException(PurchaseDocumentPolicy.TitleRequiredWithoutDocumentMessage);
 
         if (fields.SupplierId.HasValue && !await _store.SupplierExistsAsync(fields.SupplierId.Value, cancellationToken))
             return null;
@@ -87,16 +100,25 @@ public sealed class UploadPurchase
                 PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(
                     conflictingBaseline.CutoffAt, conflictingBaseline.ProductId, conflictingBaseline.ProductName));
 
-        var storedFileName = $"{Guid.NewGuid()}{extension}";
-        await using (var source = file.OpenReadStream())
+        string? storedFileName = null;
+        PurchaseFileMetadata? fileMetadata = null;
+        if (file is not null)
         {
-            await _documents.SaveAsync(DocumentCategory.PurchaseDocument, storedFileName, source, cancellationToken);
+            storedFileName = $"{Guid.NewGuid()}{extension}";
+            await using (var source = file.OpenReadStream())
+            {
+                await _documents.SaveAsync(DocumentCategory.PurchaseDocument, storedFileName, source, cancellationToken);
+            }
+
+            fileMetadata = new PurchaseFileMetadata(
+                storedFileName, file.ContentType ?? string.Empty, file.FileName, file.Length);
         }
 
-        var fileMetadata = new PurchaseFileMetadata(storedFileName, file.ContentType ?? string.Empty, file.FileName, file.Length);
         var resolvedFields = fields with
         {
-            Title = string.IsNullOrWhiteSpace(fields.Title) ? file.FileName : fields.Title,
+            // The file-name fallback only has something to fall back to when there is a file; a
+            // blank title with no document was already refused above.
+            Title = string.IsNullOrWhiteSpace(fields.Title) ? file?.FileName : fields.Title,
             PurchaseDate = effectivePurchaseDate,
         };
 
@@ -106,7 +128,10 @@ public sealed class UploadPurchase
         }
         catch
         {
-            await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
+            // Only bytes this request wrote are removed; with no document there are none, and the
+            // purchase that failed to save is simply not there.
+            if (storedFileName is not null)
+                await _documents.DeleteAsync(DocumentCategory.PurchaseDocument, storedFileName, cancellationToken);
             throw;
         }
     }

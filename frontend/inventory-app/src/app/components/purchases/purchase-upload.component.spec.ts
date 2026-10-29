@@ -731,3 +731,61 @@ describe('PurchaseUploadComponent supplier-order completion choice (issue #974)'
     expect(component.saving).toBe(false);
   });
 });
+
+/**
+ * Saving a purchase with no supporting document (issue #976, child of #965). A business with no
+ * receipt to attach - or no storage left to put one in - still has to be able to record what it
+ * bought, and the document can be added to the saved purchase afterwards.
+ */
+describe('PurchaseUploadComponent saving without a document (issue #976)', () => {
+  /** The same ready-to-submit form `readyToUpload` builds, with no file chosen. */
+  function readyWithoutDocument() {
+    const harness = createHarness(null);
+    harness.component.form.title = 'Weekly restock';
+    harness.component.addItem();
+    const item = harness.component.items[0];
+    item.productId = 5;
+    harness.component.onLineQuantityChange(item, 3);
+    harness.component.onLineTotalChange(item, 6);
+    return harness;
+  }
+
+  it('saves the purchase with no file and reports no error', () => {
+    const { component, upload, navigate } = readyWithoutDocument();
+
+    component.upload();
+
+    expect(component.error).toBe('');
+    expect(uploadedPayload(upload).file).toBeNull();
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 3, unitCost: 2 }]);
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+
+  it('still sends the chosen document when there is one', () => {
+    const { component, upload } = readyToUpload();
+
+    component.upload();
+
+    expect(uploadedPayload(upload).file).toBeInstanceOf(File);
+  });
+
+  it('still requires a title, which no file name can stand in for', () => {
+    const { component, upload } = readyWithoutDocument();
+    component.form.title = '   ';
+
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please enter a purchase title.');
+  });
+
+  it('asks about the supplier order it is receiving even with no document', () => {
+    const harness = createHarness('9');
+    harness.component.form.title = 'Weekly restock';
+
+    harness.component.upload();
+
+    expect(harness.component.completionChoice).not.toBeNull();
+    expect(harness.upload).not.toHaveBeenCalled();
+  });
+});

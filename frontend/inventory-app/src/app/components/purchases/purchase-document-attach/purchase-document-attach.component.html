@@ -1,0 +1,25 @@
+<div data-testid="purchase-document-attach" class="flex flex-col items-start gap-1">
+  <label class="field-label" [attr.for]="inputId">Add document</label>
+  <input
+    [id]="inputId"
+    type="file"
+    accept="image/*,.pdf"
+    [disabled]="saving"
+    [attr.aria-label]="'Add a document to ' + purchase.title"
+    (change)="onFileSelected($event)"
+  />
+  @if (selectedFile) {
+    <button
+      data-testid="purchase-document-attach-upload"
+      type="button"
+      class="btn btn-sm btn-primary"
+      [disabled]="saving"
+      (click)="attach()"
+    >
+      {{ saving ? 'Adding...' : 'Add document' }}
+    </button>
+  }
+  @if (error) {
+    <p data-testid="purchase-document-attach-error" role="alert" class="text-xs text-md-danger-text">{{ error }}</p>
+  }
+</div>

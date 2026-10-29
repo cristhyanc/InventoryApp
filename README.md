@@ -6,7 +6,10 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 - Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A supplier that came from the platform's supplier list keeps that list's name and website, cannot be deleted, and can be marked **Not used** to keep it out of the pickers; a business receives the ones that serve the state it trades in, picks up more when it changes state, and can add any other that serves it in one click from **Available to add** (see [Suppliers from the platform list](#suppliers-from-the-platform-list)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
-- Purchases, their supporting documents, supplier orders, and stock movements. Recording the final delivery
+- Purchases, their supporting documents, supplier orders, and stock movements. A purchase's receipt is
+  **optional**, and one can be added to a purchase that has none later, so running out of somewhere to put a
+  receipt never stops you recording what you bought (see [A purchase without a
+  receipt](#a-purchase-without-a-receipt)). Recording the final delivery
   against a supplier order that arrived short offers, before anything is saved, a choice between keeping the
   order open and completing it with the remainder undelivered (see [Receiving a supplier order: keep it open,
   or complete it](#receiving-a-supplier-order-keep-it-open-or-complete-it)).
@@ -1247,6 +1250,25 @@ amounts.
 
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.
+
+## A purchase without a receipt
+
+A purchase is the record of what you bought; the receipt is paperwork about it. So the **Supporting Document**
+field on Add Purchase is optional: leave it empty and the purchase is saved exactly as it would be with a
+receipt attached - the same stock, the same cost, the same GST, the same supplier-order handling. A purchase
+still needs a **Purchase Title**, because with no file there is no file name for it to fall back to.
+
+The Purchases list says **No document** for a purchase that has none, and offers **Add document** on that row.
+Pick the receipt when it turns up and it is added to the purchase that was already recorded; it then opens and
+downloads from the list like any other.
+
+- Adding a document **adds** one; it never replaces one. A purchase that already has a document is left alone,
+  and if somebody else attaches one between your choosing a file and pressing the button, you are told the
+  purchase already has a document rather than having theirs quietly thrown away.
+- The receipt itself follows the same rules it always has: an image or a PDF, up to 10 MB. A file that is
+  refused leaves the purchase exactly as it was, with no document recorded.
+- **Add document** is not offered while a Super Admin is looking at your business in a support session, for
+  the same reason Delete is not: a support session can read, never write.
 
 ## Receiving a supplier order: keep it open, or complete it
 

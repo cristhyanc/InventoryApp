@@ -283,7 +283,9 @@ public static class DocumentMigrator
                 purchase.Id,
                 purchase.BusinessId,
                 DocumentCategory.PurchaseDocument,
-                purchase.StoredFileName))
+                // Non-null by the filter above; nullable on the entity since issue #976, because a
+                // purchase may have no document at all - and one that has none is not a candidate.
+                purchase.StoredFileName!))
             .ToListAsync(cancellationToken);
 
         var expenses = await db.OperatingExpenses.AsNoTracking()

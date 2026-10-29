@@ -317,6 +317,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetPurchase>();
         services.AddScoped<GetPurchaseFile>();
         services.AddScoped<UploadPurchase>();
+        services.AddScoped<AttachPurchaseDocument>();
         services.AddScoped<UpdatePurchase>();
         services.AddScoped<DeletePurchase>();
         services.AddScoped<ListActiveSupplierOrders>();

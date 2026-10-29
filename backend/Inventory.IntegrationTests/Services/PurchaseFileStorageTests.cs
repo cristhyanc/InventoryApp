@@ -32,7 +32,9 @@ public sealed class PurchaseFileStorageTests : IDisposable
         var purchase = await Upload(useCases, CreateFile("receipt.jpg"));
 
         Assert.NotNull(purchase);
-        var storedFileName = purchase!.StoredFileName;
+        // Non-null because this purchase was uploaded with a document; nullable on the record since
+        // issue #976, where a purchase may have none.
+        var storedFileName = Assert.IsType<string>(purchase!.StoredFileName);
         Assert.True(File.Exists(Path.Combine(_contentRoot, "protected-files", "receipts", storedFileName)));
         Assert.False(File.Exists(Path.Combine(_webRoot, "receipts", storedFileName)));
         Assert.False(Directory.Exists(Path.Combine(_webRoot, "receipts")));

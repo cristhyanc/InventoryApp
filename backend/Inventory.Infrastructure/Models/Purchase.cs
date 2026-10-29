@@ -47,10 +47,19 @@ public class Purchase : IBusinessOwned
 
     // Stored file info for the uploaded scan/photo of the supporting document.
     // Distinct from the purchase business record itself (see PurchaseItem/Purchase above).
-    public string FileName { get; set; } = string.Empty;
-    public string StoredFileName { get; set; } = string.Empty;
-    public string ContentType { get; set; } = string.Empty;
-    public long FileSizeBytes { get; set; }
+    //
+    // All four are nullable since issue #976 (child of #965): a purchase may have no supporting
+    // document at all, so a business with no receipt to attach - or no storage left to put one in -
+    // can still record what it bought. They are all present or all absent, never half: the
+    // "CK_Receipts_DocumentMetadataAllOrNothing" check constraint enforces that in the database
+    // (see AppDbContext and the AllowPurchaseWithoutDocument migration), and
+    // Inventory.Domain.Purchases.PurchaseDocumentPolicy is where the rule is written. StoredFileName
+    // being null is the authoritative "has no document", and it is what the attach-only-if-empty
+    // write in EfPurchaseStore.AttachDocumentAsync reads.
+    public string? FileName { get; set; }
+    public string? StoredFileName { get; set; }
+    public string? ContentType { get; set; }
+    public long? FileSizeBytes { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }

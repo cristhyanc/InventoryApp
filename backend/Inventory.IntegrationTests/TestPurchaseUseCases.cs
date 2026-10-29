@@ -32,6 +32,10 @@ internal static class TestPurchaseUseCases
             actors ?? FakeAuthenticatedActorAccessor.Identified(Operator),
             clock ?? new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc)));
 
+    /// <summary>Issue #976's "add a document later" use case, for the controller tests that construct it.</summary>
+    public static AttachPurchaseDocument Attach(IPurchaseStore store, IDocumentStorage documents) =>
+        new(store, documents);
+
     private static ActorIdentity Actor(string objectId)
     {
         ActorIdentity.TryCreate("22222222-2222-2222-2222-222222222222", objectId, out var actor);
