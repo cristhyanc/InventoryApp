@@ -10863,6 +10863,20 @@ commits, Escape restores, and `parsePlannedQuantity`
 `MAXIMUM_PICK_QUANTITY` - the one 32-bit ceiling both views now share - refusing anything else
 inline with `role="alert"` and `aria-invalid`, committing nothing.
 
+**An uncommitted quantity is planning work too.** `hasDirtyEditor` is true while the open editor's
+text would commit something other than the quantity it was opened on - the baseline `startEdit`
+records - so "4" left alone, "04" and " 4 " are not work while "7", a cleared box and a refused
+"abc" each are, a refused value included because it is still what the operator has in front of them.
+`hasPlanningWork` and `planningWorkChange` both cover it, which is what puts it behind the page's
+navigation guard, and `machineWorkPresent` counts it against its own machine column so a removal
+question names the right column. Every transition that would drop it asks first - Refresh, Reset, a
+removed column, and an applied Products selection that leaves its row out
+(`DISCARD_OPEN_EDIT_ON_APPLY`, the one case the removal question cannot cover) - and a refusal leaves
+the editor open on exactly the text it held. An Apply or a removal that keeps the draft's cell keeps
+the draft, `reconcilePlanningWork` closes an editor whose cell the new snapshot no longer holds so
+nothing reports work that is not drawn, and the explicit **Cancel** is the one discard that is never
+asked about, because the operator just asked for it.
+
 **Every figure is the applied run's, with the overrides in place.** Totals, the shortage per product,
 the progress sentence ("12 of 20 picks completed") and the remaining count are taken over
 `pickListProducts` and `appliedMachineIds`, never over the filtered rows, and the visible-row count
@@ -10926,21 +10940,24 @@ before confirmation.
 `canDeactivate` guard (`pickListUnsavedWorkGuard`, the only `canDeactivate` in `app.routes.ts`) and
 the page's own `beforeunload` handler. It covers the three kinds of work this page holds, most
 serious first: an unresolved or in-flight submission (whose retry context would be lost, and whose
-warning says so), entered-but-unrecorded quantities, and planning edits or checked picks. Asking
-changes nothing, so a cancelled departure leaves every entry, override, mark and kept submission
-exactly as it was. A browser's reload/close prompt carries the browser's own wording, which no page
+warning says so), entered-but-unrecorded quantities, and planning edits, checked picks or a planning
+quantity still being typed. Asking changes nothing, so a cancelled departure leaves every entry,
+override, mark, open editor and kept submission exactly as it was. A browser's reload/close prompt carries the browser's own wording, which no page
 can change - the explanation lives on the in-app confirmation. Durable cross-reload draft recovery is
 deliberately not implemented (out of scope): the guard is what stands between the operator and a
 loss, not storage.
 
 **Proved by** `plan-picks/plan-picks.component.spec.ts` (the selection and fetch rules, Refresh
 re-reading an unchanged selection, the four stale-response cases, the override lifecycle including
-every refused input, the committed-zero skip, the completion-clearing commit, the totals, shortages
+every refused input, the committed-zero skip, the completion-clearing commit, the uncommitted
+draft - what counts as one, what does not, and each transition that discards it, refused and
+confirmed - the totals, shortages
 and progress over the applied run, the view filters, the machine focus, the site grouping with and
 without site data, the sort behaviour, and that no mutation endpoint is called across a whole
 planning interaction), `pick-list.component.spec.ts` (the page's three reads, the guard's three
 warnings and that cancelling changes nothing, and the rendered matrix: the sticky/focusable scroll
-area, the site header row, the edit-focus-select-commit path, the inline refusal, the checkbox with
+area, the site header row, the edit-focus-select-commit path, the inline refusal, the departure
+guard over a typed-but-unconfirmed quantity, the checkbox with
 its word for the state, the summary without a progress bar, both filters, Refresh and Retry, and that
 switching views hides rather than destroys the plan), `manual-pick-list.component.spec.ts` (the
 storage-excess rules including the cross-machine aggregate with hidden rows, Clear, the reveal of

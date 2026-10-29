@@ -22,6 +22,14 @@ export const DISCARD_PLANNING_WORK_ON_REFRESH =
 export const DISCARD_PLANNING_WORK_ON_RESET =
   'Reset clears your selection, the quantities you edited and the picks you checked. Continue?';
 
+/**
+ * What the operator is asked before applying a selection that leaves out the row they are still
+ * typing a quantity into. The machine-removal question below covers an editor whose own column is
+ * going; this one covers the case it cannot - the column stays and the Products filter drops the row.
+ */
+export const DISCARD_OPEN_EDIT_ON_APPLY =
+  'The quantity you are editing has not been confirmed. Applying this selection discards it. Continue?';
+
 /** What the operator is asked before machine columns that hold edited or checked picks are removed. */
 export function discardPlanningWorkOnMachineRemoval(...machineNames: string[]): string {
   const columns = machineNames.length === 1 ? 'column' : 'columns';
@@ -69,6 +77,13 @@ export interface PlanPicksMachineGroup {
  * size has not been done yet. A committed `0` is a deliberate skip: it leaves the cell out of the
  * actionable count and the progress figure, and stays editable and resettable.
  *
+ * **A quantity still being typed is planning work too.** An open editor counts as soon as its text
+ * would commit something other than the quantity it was opened on ({@link hasDirtyEditor}), so
+ * {@link hasPlanningWork} and {@link planningWorkChange} cover it and Refresh, Reset, a removed
+ * column, an applied selection that drops its row, and leaving the page all ask before it goes. An
+ * editor merely opened, one typed back to what it found, and an explicit Cancel are not work and
+ * warn about nothing.
+ *
  * **Totals, shortages and progress are the applied run's**, over every applied machine and every
  * product in the snapshot, with the committed overrides in place - never only the rows a filter
  * leaves visible. The shortage is the projection's own rule
@@ -111,8 +126,9 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
   @Input() machinesError = '';
 
   /**
-   * Emitted whenever this view starts or stops holding planning work - an edited quantity or a
-   * checked pick - so the page's navigation guard can warn before it is lost.
+   * Emitted whenever this view starts or stops holding planning work - a committed override, a
+   * checked pick, or a quantity being typed that has not been committed yet - so the page's
+   * navigation guard can warn before it is lost.
    */
   @Output() readonly planningWorkChange = new EventEmitter<boolean>();
 
@@ -165,6 +181,12 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
   editValue = '';
   editError = '';
 
+  /**
+   * The quantity the open editor was opened on, as the text it was opened with, so an editor that
+   * has actually been typed into can be told from one that is merely open. `''` while none is open.
+   */
+  private editBaseline = '';
+
   /** The committed planning overrides, keyed by `productId:machineId`. Never sent anywhere. */
   private readonly overrides = new Map<string, number>();
 
@@ -210,9 +232,34 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     return this.machinesError === '';
   }
 
-  /** Whether this view holds work an operator would mind losing. */
+  /**
+   * Whether this view holds work an operator would mind losing: a committed override, a checked
+   * pick, or a quantity being typed that has not been committed yet. An open editor counts only
+   * once it has actually been changed - see {@link hasDirtyEditor} - so merely opening one, or
+   * cancelling it, never produces a warning about nothing.
+   */
   get hasPlanningWork(): boolean {
-    return this.overrides.size > 0 || this.completed.size > 0;
+    return this.overrides.size > 0 || this.completed.size > 0 || this.hasDirtyEditor;
+  }
+
+  /**
+   * Whether the open editor holds a draft that would be lost. The test is what it would commit
+   * against what it opened with: "4" left alone, "04" and " 4 " all commit the quantity already
+   * planned and are not work, while "7", a cleared box and "abc" are each something typed that a
+   * discard would throw away - a refused value included, because it is still what the operator has
+   * in front of them.
+   */
+  get hasDirtyEditor(): boolean {
+    return this.dirtyEditorKey !== null;
+  }
+
+  /** The open editor's cell key while it holds such a draft, else `null`. */
+  private get dirtyEditorKey(): string | null {
+    if (this.editingKey === null || this.editValue === this.editBaseline) {
+      return null;
+    }
+    const parsed = parsePlannedQuantity(this.editValue);
+    return 'error' in parsed || String(parsed.quantity) !== this.editBaseline ? this.editingKey : null;
   }
 
   // ----- selection -------------------------------------------------------------------------
@@ -262,19 +309,23 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
 
   /**
    * Applies the staged Products/Machines selections together; only a changed machine selection
-   * refetches. Removing a machine that holds planning work asks first, and a refusal changes
-   * nothing at all - neither the selection nor one override.
+   * refetches. Removing a machine that holds planning work asks first, as does leaving out the row
+   * an uncommitted quantity is being typed into, and a refusal changes nothing at all - neither the
+   * selection, nor one override, nor the editor.
    */
   applyFilters(): void {
     const removed = this.appliedMachineIds.filter((id) => !this.stagedMachineIds.includes(id));
     if (!this.confirmMachineRemoval(removed)) {
       return;
     }
+    if (!this.confirmOpenEditDiscard(this.stagedMachineIds, this.stagedProductIds)) {
+      return;
+    }
 
     const machineSelectionChanged = !sameIds(this.stagedMachineIds, this.appliedMachineIds);
     this.appliedProductIds = [...this.stagedProductIds];
     this.appliedMachineIds = [...this.stagedMachineIds];
-    this.cancelEdit();
+    this.closeEditorUnlessStillPlanned();
     removed.forEach((id) => this.discardMachineWork(id));
 
     if (machineSelectionChanged) {
@@ -291,7 +342,7 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     }
     this.appliedMachineIds = this.appliedMachineIds.filter((id) => id !== machineId);
     this.stagedMachineIds = this.stagedMachineIds.filter((id) => id !== machineId);
-    this.cancelEdit();
+    this.closeEditorUnlessStillPlanned();
     this.discardMachineWork(machineId);
     this.fetchOrClear();
   }
@@ -309,7 +360,6 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     if (this.hasPlanningWork && !window.confirm(DISCARD_PLANNING_WORK_ON_REFRESH)) {
       return;
     }
-    this.cancelEdit();
     this.discardAllPlanningWork();
     this.fetch([...this.appliedMachineIds]);
   }
@@ -334,7 +384,6 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     this.loading = false;
     this.loadFailed = false;
     this.focusMachineId = null;
-    this.cancelEdit();
     this.discardAllPlanningWork();
     this.appliedToken++;
   }
@@ -513,14 +562,20 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     return this.editingKey === cellKey(productId, machineId);
   }
 
-  /** Opens the editor on this cell's current planned quantity. */
+  /**
+   * Opens the editor on this cell's current planned quantity. Opening one is not work in itself -
+   * the baseline it records is what makes a later keystroke one - but opening a *second* editor
+   * drops whatever was being typed into the first, so the page is told either way.
+   */
   startEdit(productId: number, cell: PickListMachineQuantity): void {
     if (!this.isEditable(productId, cell)) {
       return;
     }
     this.editingKey = cellKey(productId, cell.machineId);
     this.editValue = String(this.pickQuantity(productId, cell));
+    this.editBaseline = this.editValue;
     this.editError = '';
+    this.notifyPlanningWork();
   }
 
   /**
@@ -537,6 +592,7 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     const parsed = parsePlannedQuantity(this.editValue);
     if ('error' in parsed) {
       this.editError = parsed.error;
+      this.notifyPlanningWork();
       return;
     }
 
@@ -550,27 +606,32 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     if (parsed.quantity !== previous) {
       this.completed.delete(key);
     }
-    this.editingKey = null;
-    this.editValue = '';
-    this.editError = '';
+    this.closeEditor();
     this.alignFocusMachine();
     this.notifyPlanningWork();
   }
 
-  /** Closes the editor and restores what was planned before it opened. */
+  /**
+   * Closes the editor and restores what was planned before it opened. This is the explicit Cancel,
+   * so it is the one discard that is never asked about: the operator just said to throw the draft
+   * away, and the page is told the work went with it.
+   */
   cancelEdit(): void {
-    this.editingKey = null;
-    this.editValue = '';
-    this.editError = '';
+    this.closeEditor();
+    this.notifyPlanningWork();
   }
 
   /**
    * What is in the editor right now. It is bound as a plain value/input pair rather than through
    * `ngModel`, which applies its first value in a microtask: the editor has to carry the quantity
    * the moment it appears, because that is when it is focused and its value selected.
+   *
+   * A keystroke that actually changes the quantity is pending planning work, so the page's
+   * departure guards are told about it here rather than only once it is committed.
    */
   onEditValueInput(event: Event): void {
     this.editValue = (event.target as HTMLInputElement).value;
+    this.notifyPlanningWork();
   }
 
   /** Enter commits, Escape cancels; the editor is a text box, so neither is the browser's default. */
@@ -747,15 +808,26 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     });
   }
 
-  /** Drops any override or mark whose cell no longer exists or no longer has a pick to plan. */
+  /**
+   * Drops any override or mark whose cell no longer exists or no longer has a pick to plan, and
+   * closes an editor whose cell the new snapshot does not hold at all: it is not drawn any more, so
+   * leaving it open would report work the operator can neither see nor commit.
+   */
   private reconcilePlanningWork(): void {
-    const live = new Set(
-      this.pickListProducts.flatMap((product) =>
-        product.machineQuantities
-          .filter((cell) => cell.quantityToPick > 0 && this.appliedMachineIds.includes(cell.machineId))
-          .map((cell) => cellKey(product.productId, cell.machineId))
-      )
-    );
+    const live = new Set<string>();
+    const present = new Set<string>();
+    for (const product of this.pickListProducts) {
+      for (const cell of product.machineQuantities) {
+        if (!this.appliedMachineIds.includes(cell.machineId)) {
+          continue;
+        }
+        const key = cellKey(product.productId, cell.machineId);
+        present.add(key);
+        if (cell.quantityToPick > 0) {
+          live.add(key);
+        }
+      }
+    }
     for (const key of this.overrides.keys()) {
       if (!live.has(key)) {
         this.overrides.delete(key);
@@ -765,6 +837,9 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
       if (!live.has(key)) {
         this.completed.delete(key);
       }
+    }
+    if (this.editingKey !== null && !present.has(this.editingKey)) {
+      this.closeEditor();
     }
     this.notifyPlanningWork();
   }
@@ -778,11 +853,41 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     return window.confirm(discardPlanningWorkOnMachineRemoval(...withWork.map((id) => this.machineLabel(id))));
   }
 
+  /**
+   * Whether one machine column holds planning work: a committed override, a checked pick, or the
+   * quantity being typed into one of its cells. `false` means removing that column loses nothing.
+   */
   private machineWorkPresent(machineId: number): boolean {
+    const editing = this.dirtyEditorKey;
     return (
+      (editing !== null && keyMachineId(editing) === machineId) ||
       [...this.overrides.keys()].some((key) => keyMachineId(key) === machineId) ||
       [...this.completed].some((key) => keyMachineId(key) === machineId)
     );
+  }
+
+  /**
+   * Asks before an applied selection discards the quantity still being typed, in the one case
+   * {@link confirmMachineRemoval} cannot cover: the editor's own column stays applied and it is the
+   * Products selection that leaves its row out. `false` means change nothing at all.
+   */
+  private confirmOpenEditDiscard(machineIds: readonly number[], productIds: readonly number[]): boolean {
+    const editing = this.dirtyEditorKey;
+    if (editing === null || !machineIds.includes(keyMachineId(editing)) || productIds.includes(keyProductId(editing))) {
+      return true;
+    }
+    return window.confirm(DISCARD_OPEN_EDIT_ON_APPLY);
+  }
+
+  /** Closes the editor when its cell has just left the applied selection, and leaves it alone otherwise. */
+  private closeEditorUnlessStillPlanned(): void {
+    const editing = this.editingKey;
+    if (editing === null) {
+      return;
+    }
+    if (!this.appliedMachineIds.includes(keyMachineId(editing)) || !this.appliedProductIds.includes(keyProductId(editing))) {
+      this.closeEditor();
+    }
   }
 
   private discardMachineWork(machineId: number): void {
@@ -799,10 +904,20 @@ export class PlanPicksComponent implements OnChanges, OnDestroy {
     this.notifyPlanningWork();
   }
 
+  /** Drops every kind of planning work this view holds, the quantity being typed included. */
   private discardAllPlanningWork(): void {
+    this.closeEditor();
     this.overrides.clear();
     this.completed.clear();
     this.notifyPlanningWork();
+  }
+
+  /** Resets the editor's own state. The callers report the planning work they end up holding. */
+  private closeEditor(): void {
+    this.editingKey = null;
+    this.editValue = '';
+    this.editBaseline = '';
+    this.editError = '';
   }
 
   private notifyPlanningWork(): void {
@@ -911,6 +1026,10 @@ function tieBreak(left: PickListProduct, right: PickListProduct): number {
 
 function cellKey(productId: number, machineId: number): string {
   return `${productId}:${machineId}`;
+}
+
+function keyProductId(key: string): number {
+  return Number(key.split(':')[0]);
 }
 
 function keyMachineId(key: string): number {

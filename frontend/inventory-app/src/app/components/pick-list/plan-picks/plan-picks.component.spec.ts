@@ -3,7 +3,13 @@ import { Subject, of, throwError } from 'rxjs';
 import { Machine, PickListProduct, PickListResult, Product, SiteListItem } from '../../../models/models';
 import { PickListService } from '../../../services/pick-list.service';
 import { PLANNED_QUANTITY_INVALID_MESSAGE, PLANNED_QUANTITY_TOO_LARGE_MESSAGE } from '../pick-list-quantity';
-import { PlanPicksComponent } from './plan-picks.component';
+import {
+  DISCARD_OPEN_EDIT_ON_APPLY,
+  DISCARD_PLANNING_WORK_ON_REFRESH,
+  DISCARD_PLANNING_WORK_ON_RESET,
+  PlanPicksComponent,
+  discardPlanningWorkOnMachineRemoval
+} from './plan-picks.component';
 
 function machine(overrides: Partial<Machine>): Machine {
   return {
@@ -171,6 +177,17 @@ function cellOf(component: PlanPicksComponent, productId: number, machineId: num
 
 function rowOf(component: PlanPicksComponent, productId: number): PickListProduct {
   return component.pickListProducts.find((p) => p.productId === productId)!;
+}
+
+/** Types into the open editor exactly as the template's `(input)` binding does. */
+function typeInEditor(component: PlanPicksComponent, value: string): void {
+  component.onEditValueInput({ target: { value } } as unknown as Event);
+}
+
+/** Opens the editor on a cell and types a value into it without committing anything. */
+function startDraft(component: PlanPicksComponent, productId: number, machineId: number, value: string): void {
+  component.startEdit(productId, cellOf(component, productId, machineId));
+  typeInEditor(component, value);
 }
 
 afterEach(() => jest.restoreAllMocks());
@@ -630,6 +647,271 @@ describe('PlanPicksComponent planning overrides (issue #996)', () => {
 
     expect(recordRefill).not.toHaveBeenCalled();
     expect(recordMultiMachineRefill).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A quantity that has been typed into an open editor but not committed is planning work: every
+ * transition that would throw it away asks first, a refusal keeps the draft exactly as it was, and
+ * the page is told so its route and `beforeunload` guards cover it. An editor that still holds the
+ * quantity it was opened on is not work, and an explicit Cancel is a discard the operator just
+ * asked for, so neither produces a warning.
+ */
+describe('PlanPicksComponent an uncommitted quantity draft (issue #996)', () => {
+  it('reports a changed but uncommitted quantity to the page as planning work', () => {
+    const { component, planningWork } = createHarness();
+    applyMachines(component, [10]);
+
+    component.startEdit(1, cellOf(component, 1, 10));
+    expect(component.hasPlanningWork).toBe(false);
+    expect(planningWork).toEqual([]);
+
+    typeInEditor(component, '7');
+
+    expect(component.hasDirtyEditor).toBe(true);
+    expect(component.hasPlanningWork).toBe(true);
+    expect(planningWork).toEqual([true]);
+    // Nothing is committed by typing: the planned quantity is still the backend's suggestion.
+    expect(component.isOverridden(1, 10)).toBe(false);
+    expect(component.pickQuantity(1, cellOf(component, 1, 10))).toBe(4);
+  });
+
+  it.each(['4', '04', ' 4 '])('is no work while the editor still holds the planned quantity as "%s"', (typed) => {
+    const { component, planningWork } = createHarness();
+    applyMachines(component, [10]);
+
+    startDraft(component, 1, 10, typed);
+
+    expect(component.hasDirtyEditor).toBe(false);
+    expect(component.hasPlanningWork).toBe(false);
+    expect(planningWork).toEqual([]);
+  });
+
+  it('reports a draft typed back to the quantity it opened on as work that has gone again', () => {
+    const { component, planningWork } = createHarness();
+    applyMachines(component, [10]);
+
+    startDraft(component, 1, 10, '7');
+    typeInEditor(component, '4');
+
+    expect(component.hasPlanningWork).toBe(false);
+    expect(planningWork).toEqual([true, false]);
+  });
+
+  it('counts a value that cannot be committed, because it is still what was typed', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+
+    startDraft(component, 1, 10, 'abc');
+    expect(component.hasPlanningWork).toBe(true);
+
+    component.commitEdit(1, cellOf(component, 1, 10));
+
+    expect(component.editError).toBe(PLANNED_QUANTITY_INVALID_MESSAGE);
+    expect(component.isEditing(1, 10)).toBe(true);
+    expect(component.hasPlanningWork).toBe(true);
+  });
+
+  it('discards the draft on an explicit Cancel, without asking, and reports the work as gone', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component, planningWork } = createHarness();
+    applyMachines(component, [10]);
+
+    startDraft(component, 1, 10, '7');
+    component.cancelEdit();
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(component.isEditing(1, 10)).toBe(false);
+    expect(component.hasPlanningWork).toBe(false);
+    expect(component.pickQuantity(1, cellOf(component, 1, 10))).toBe(4);
+    expect(planningWork).toEqual([true, false]);
+  });
+
+  it('stops reporting the draft once it is committed, as the override it became', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+
+    startDraft(component, 1, 10, '7');
+    component.commitEdit(1, cellOf(component, 1, 10));
+
+    expect(component.hasDirtyEditor).toBe(false);
+    expect(component.hasPlanningWork).toBe(true);
+    expect(component.pickQuantity(1, cellOf(component, 1, 10))).toBe(7);
+  });
+
+  it('asks before a refresh discards the draft, and a refusal keeps it in the open editor', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component, getPickList } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+    getPickList.mockClear();
+
+    component.refresh();
+
+    expect(confirm).toHaveBeenCalledWith(DISCARD_PLANNING_WORK_ON_REFRESH);
+    expect(getPickList).not.toHaveBeenCalled();
+    expect(component.isEditing(1, 10)).toBe(true);
+    expect(component.editValue).toBe('7');
+    expect(component.hasPlanningWork).toBe(true);
+  });
+
+  it('discards the draft once the refresh is confirmed', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component, getPickList } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+    getPickList.mockClear();
+
+    component.refresh();
+
+    expect(getPickList).toHaveBeenCalledWith([10]);
+    expect(component.isEditing(1, 10)).toBe(false);
+    expect(component.hasPlanningWork).toBe(false);
+    expect(component.pickQuantity(1, cellOf(component, 1, 10))).toBe(4);
+  });
+
+  it('asks before Reset discards the draft, and a refusal keeps it with the selection', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+
+    component.resetAll();
+
+    expect(confirm).toHaveBeenCalledWith(DISCARD_PLANNING_WORK_ON_RESET);
+    expect(component.appliedMachineIds).toEqual([10]);
+    expect(component.isEditing(1, 10)).toBe(true);
+    expect(component.editValue).toBe('7');
+  });
+
+  it('discards the draft once Reset is confirmed', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+
+    component.resetAll();
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.editingKey).toBeNull();
+    expect(component.editValue).toBe('');
+    expect(component.hasPlanningWork).toBe(false);
+  });
+
+  it('asks before removing the machine column the draft is in, and a refusal keeps everything', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component, getPickList } = createHarness();
+    applyMachines(component, [10, 20]);
+    startDraft(component, 1, 10, '7');
+    getPickList.mockClear();
+
+    component.removeMachine(10);
+
+    expect(confirm).toHaveBeenCalledWith(discardPlanningWorkOnMachineRemoval('Machine A'));
+    expect(getPickList).not.toHaveBeenCalled();
+    expect(component.appliedMachineIds).toEqual([10, 20]);
+    expect(component.isEditing(1, 10)).toBe(true);
+    expect(component.editValue).toBe('7');
+  });
+
+  it('discards the draft with the column once its removal is confirmed', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    startDraft(component, 1, 10, '7');
+
+    component.removeMachine(10);
+
+    expect(component.appliedMachineIds).toEqual([20]);
+    expect(component.editingKey).toBeNull();
+    expect(component.hasPlanningWork).toBe(false);
+  });
+
+  it('never asks about, and never drops, a draft in a column that is staying', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    startDraft(component, 1, 10, '7');
+
+    component.removeMachine(20);
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(component.appliedMachineIds).toEqual([10]);
+    expect(component.isEditing(1, 10)).toBe(true);
+    expect(component.editValue).toBe('7');
+    expect(component.hasPlanningWork).toBe(true);
+  });
+
+  it('asks before an applied Products selection leaves the draft’s row out, and a refusal changes nothing', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+    component.stagedProductIds = [2];
+
+    component.applyFilters();
+
+    expect(confirm).toHaveBeenCalledWith(DISCARD_OPEN_EDIT_ON_APPLY);
+    expect(component.appliedProductIds).toEqual([1, 2]);
+    expect(component.isEditing(1, 10)).toBe(true);
+    expect(component.editValue).toBe('7');
+  });
+
+  it('discards the draft once that Products selection is confirmed', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+    component.stagedProductIds = [2];
+
+    component.applyFilters();
+
+    expect(component.appliedProductIds).toEqual([2]);
+    expect(component.editingKey).toBeNull();
+    expect(component.hasPlanningWork).toBe(false);
+  });
+
+  it('keeps the draft through an Apply that still shows its row', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+    component.stagedProductIds = [1];
+
+    component.applyFilters();
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(component.isEditing(1, 10)).toBe(true);
+    expect(component.editValue).toBe('7');
+  });
+
+  it('stops reporting a draft whose cell the next snapshot no longer holds', () => {
+    const getPickList = jest
+      .fn()
+      .mockReturnValueOnce(of(pickListResult()))
+      .mockReturnValueOnce(of(pickListResult({ products: [rowFor(2, 'Chips')] })));
+    const { component, planningWork } = createHarness({ pickList: getPickList });
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    applyMachines(component, [10, 20]);
+    startDraft(component, 1, 10, '7');
+
+    // Machine 20 holds no work of its own, so this is not a confirmed discard of the draft: the
+    // refetch it triggers simply comes back without the row the draft was in.
+    component.removeMachine(20);
+
+    expect(component.editingKey).toBeNull();
+    expect(component.hasPlanningWork).toBe(false);
+    expect(planningWork).toEqual([true, false]);
+  });
+
+  it('tells the page the draft is gone when the view is destroyed', () => {
+    const { component, planningWork } = createHarness();
+    applyMachines(component, [10]);
+    startDraft(component, 1, 10, '7');
+
+    component.ngOnDestroy();
+
+    expect(planningWork).toEqual([true, false]);
   });
 });
 

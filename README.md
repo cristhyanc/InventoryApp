@@ -2464,7 +2464,10 @@ checking picks does not change inventory."*
   Editing it selects the number so you can type straight over it; Enter or **Confirm** commits it
   and Escape or **Cancel** puts it back. Only a whole number of 0 or more is accepted — a decimal, a
   minus sign, an empty box or an impossibly large number is refused on the cell, and nothing is
-  committed until it is valid.
+  committed until it is valid. A number you have typed but not confirmed counts as work in its own
+  right — every warning below is about it as much as about a committed edit, and **Cancel** is the
+  one way to throw it away without being asked. An editor you opened and left alone warns about
+  nothing.
 - **An edit is a local override and nothing else.** It never changes a machine's target, never moves
   stock and is never saved anywhere: it lives on the page, and leaving the page loses it (you are
   asked first). The suggestion itself is kept: a changed cell shows **Suggested: N** beneath your
@@ -2484,9 +2487,10 @@ checking picks does not change inventory."*
 - **Refresh is separate from Apply, and it is the retry.** Apply applies the selections you staged;
   **Refresh** re-reads the machines already applied whether or not the selection changed, which is
   what makes a failed snapshot retryable — the failure says to use Refresh, never to press Apply
-  again. A refresh rebuilds the plan from the new snapshot, so it asks first when you have edits or
-  ticks to lose, and so do **Reset** and removing a machine column; cancelling changes nothing at
-  all. A slow answer can never overwrite a newer selection or bring back a plan you cleared.
+  again. A refresh rebuilds the plan from the new snapshot, so it asks first when you have edits,
+  ticks or a quantity still being typed to lose, and so do **Reset**, removing a machine column and
+  applying a Products selection that leaves out the row you are typing into; cancelling changes
+  nothing at all, down to the number still in the box. A slow answer can never overwrite a newer selection or bring back a plan you cleared.
 - **The MDB code stays its own sortable column**, with product-name sorting beside it exactly as
   before; it is only the per-machine code inside each pick cell that is gone. A product with no code
   still reads "—" and still sorts last.

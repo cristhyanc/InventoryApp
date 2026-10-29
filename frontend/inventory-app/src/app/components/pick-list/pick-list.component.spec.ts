@@ -620,6 +620,34 @@ describe('PickListComponent rendered structure', () => {
     expect(quantities).toContain('4');
   });
 
+  it('guards a departure while a typed quantity has not been confirmed, and stops once it is cancelled', async () => {
+    const { fixture, requireElement, click, planFor } = await render();
+    planFor('Machine A');
+    click(requireElement<HTMLButtonElement>('[aria-label="Edit pick quantity: Coke at Machine A"]'));
+    const page = fixture.componentInstance;
+    // Merely opening the editor is not work: it still holds the quantity it was opened on.
+    expect(page.planningWorkPresent).toBe(false);
+    expect(page.unsavedWorkWarning).toBeNull();
+
+    const input = requireElement<HTMLInputElement>('[data-testid="plan-picks-edit-input"]');
+    input.value = '6';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    expect(page.planningWorkPresent).toBe(true);
+    expect(page.unsavedWorkWarning).toBe(LEAVE_WITH_PLANNING_WORK_WARNING);
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    expect(page.confirmLeave()).toBe(false);
+    expect(confirm).toHaveBeenCalledWith(LEAVE_WITH_PLANNING_WORK_WARNING);
+    // Declining the departure keeps the draft exactly where it was.
+    expect(requireElement<HTMLInputElement>('[data-testid="plan-picks-edit-input"]').value).toBe('6');
+
+    click(requireElement<HTMLButtonElement>('[data-testid="plan-picks-cancel-edit"]'));
+
+    expect(page.planningWorkPresent).toBe(false);
+    expect(page.unsavedWorkWarning).toBeNull();
+  });
+
   it('checks a pick off with a labelled checkbox beside the quantity, with a word for the state', async () => {
     const { host, requireElement, click, planFor } = await render();
     planFor('Machine A');
