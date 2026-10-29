@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "message": "Field \"attribute_codes\" is not defined by type \"ProductAttributeFilterInput\".",
+      "extensions": { "category": "graphql" },
+      "locations": [{ "line": 1, "column": 29 }]
+    }
+  ],
+  "data": { "products": null }
+}

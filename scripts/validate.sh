@@ -103,6 +103,10 @@ run_step "Test model-decision eval runner" \
 run_step "Test Project status sync" \
     node --test "${repo_root}/scripts/sync-project-status.test.mjs"
 
+# Fixture-driven only: the JB Metro lookup's tests never call a supplier's site.
+run_step "Test JB Metro price lookup" \
+    node --test "${repo_root}/scripts/price-collector/jbmetro-lookup.test.mjs"
+
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"
 

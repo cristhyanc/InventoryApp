@@ -129,6 +129,11 @@ Invoke-ExternalCommand -Label 'Test Project status sync' -Command {
     & node --test (Join-Path $RepositoryRoot 'scripts/sync-project-status.test.mjs')
 }
 
+# Fixture-driven only: the JB Metro lookup's tests never call a supplier's site.
+Invoke-ExternalCommand -Label 'Test JB Metro price lookup' -Command {
+    & node --test (Join-Path $RepositoryRoot 'scripts/price-collector/jbmetro-lookup.test.mjs')
+}
+
 Invoke-ExternalCommand -Label 'Restore backend' -Command {
     & dotnet restore $BackendSolution
 }
