@@ -285,6 +285,35 @@ billing subscription and nothing else a business owns.
 [docs/architecture.md § Business subscriptions and plan entitlements](docs/architecture.md#business-subscriptions-and-plan-entitlements-issue-966)
 for the state model, the entitlement rule and the rollout order.
 
+#### Recording each business's connected-machine count
+
+The daily job of issue #978. It records today's connected-machine count for every business whose plan
+has its machines counted and that has not been counted yet today — the dated evidence the extra-machine
+billing of issue #969 is charged from (see
+[Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)):
+
+```bash
+dotnet run --project backend/InventoryApi -- snapshot-connected-machines
+```
+
+On a deployed application use `dotnet InventoryApi.dll snapshot-connected-machines` instead.
+
+- **It takes no arguments at all** — no business, date, account series, count or limit. Which
+  businesses are counted is the plan records' answer, the day comes from the clock, and the account
+  series comes from each business's own stored connection.
+- **It is bounded and makes at most one Nayax call per business**: at most 100 fleet reads per run,
+  and reaching that bound is reported and logged. A business whose plan is not counted, whose Nayax
+  connection cannot be used, or that has already been counted today costs no call at all.
+- **Safe to run twice.** A second run on the same day records nothing. A business whose read failed is
+  logged, nothing is stored for it, and the next run is the retry; its last complete count remains and
+  is reported as stale with its age.
+- **It applies no migration** and refuses to run against a schema with pending ones. Exit code `0`
+  when the run completed, `1` when it was refused or any business's attempt failed.
+- **Most counts come from ordinary use of the application**: a complete fleet read any page already
+  makes records that day's count, so this job only tops up the businesses nothing read the fleet for.
+  **Putting it on a schedule is a deliberate operator step** — the same App Service WebJob mechanism as
+  the [database backup](#database-backup-and-restore) — and is not configured by this release.
+
 ### 2. How the frontend finds the API
 
 Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.
@@ -661,7 +690,7 @@ Prices are AUD per business per month, as agreed on issue #965. Whether the adve
 | Nayax connection and everything that needs it (below) | — | — | Yes |
 | Connected machines included | — | — | 5, then A$2/month each |
 
-A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**.
+A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**. How that count is taken, how old it may be, and what happens when the Nayax account changes are in [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978).
 
 Storage limits cover purchase and expense attachments combined — not transaction records — and attachments are **never deleted automatically** on a downgrade.
 
@@ -690,7 +719,7 @@ From those, one rule decides what the business may use:
 - **Expired, cancelled, missing or unreadable records → Free** for paid features. Free's own local features are never locked.
 - Grants and paid periods are **UTC instants**: a period applies from its start instant inclusive and stops at its end instant exclusive.
 
-`GET /api/me/access` publishes the answer beside the capability set — `entitlement.enforced`, the plan, where it came from (`ManualGrant`, `BillingSubscription`, `NoActiveRecord`, or the two unrestricted states) and when that record ends. It is computed per request with no server cache, there is no separate endpoint and no request names a business. Inside a [support session](#super-admin-support-sessions) it reports the **viewed** business's own plan, and a [role preview](#previewing-the-app-as-a-role-issues-720-and-721) narrows role capabilities only and never changes the plan.
+`GET /api/me/access` publishes the answer beside the capability set — `entitlement.enforced`, the plan, where it came from (`ManualGrant`, `BillingSubscription`, `NoActiveRecord`, or the two unrestricted states), when that record ends, and `entitlement.connectedMachines` with the machine allowance, the last recorded count and how old it is (`null` while nothing is enforced; see [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)). It is computed per request with no server cache, there is no separate endpoint and no request names a business. Inside a [support session](#super-admin-support-sessions) it reports the **viewed** business's own plan, and a [role preview](#previewing-the-app-as-a-role-issues-720-and-721) narrows role capabilities only and never changes the plan.
 
 ### Grandfathering, in one sentence
 
@@ -2735,6 +2764,60 @@ of the live Nayax fleet — so a business with no provider had no machines.
   above Machines in the menu since issue #868). Manual sites are a separate change.
 - **In a read-only support view** the machine list is readable and every one of its write controls is
   hidden, like every other write surface in that view.
+
+### Connected machines and the Pro allowance (issue #978)
+
+Pro includes **five connected machines** and bills **A$2 per month** for each one beyond that (see
+[Business plans](#business-plans-free-starter-and-pro)). This section is what that count is, where it
+comes from, and what it does when it cannot be taken. Nothing in this release shows or bills any of
+it: the counts are recorded so that the billing of issue #969 and the plan screens of #970 have dated
+evidence to work from, and while plan enforcement is switched off — the shipped state — nothing is
+displayed and nothing is charged.
+
+- **A connected machine is a machine on your Nayax account**, whether or not it is linked in this
+  application. That is deliberate: Nayax imports sales for every machine on the account either way, so
+  the count follows the data you actually receive. A **manual** machine — one you added here, with no
+  Nayax id — is never counted.
+- **The count comes from the same fleet read the Machines page already makes**, authenticated with your
+  own stored Nayax credentials. Every machine the read returns is counted once. Nayax's fleet response
+  does carry a `MachineStatusBit`, but the Nayax documentation gives that field a meaning only for
+  *creating* a machine, and says nothing about what a read returns for a machine that was removed — so
+  this application deliberately does not read it, and counts every machine Nayax returns. Excluding
+  inactive machines later is a change in its own right, with the then-confirmed Nayax contract behind
+  it.
+- **One count per day, as dated evidence.** The first complete fleet read of each UTC day records that
+  day's count — the number, the machine ids behind it and when it was taken. The recorded counts are
+  **append-only**: a later day is a later record, and nothing edits or deletes one, because the extra
+  machines are billed from them. Concurrent page loads and the daily job can never produce two counts
+  for one day: they all record through the same insert-if-absent claim, so the first to commit wins and
+  the others simply discard what they read.
+- **No extra Nayax calls on a page load.** The count is taken from a fleet read that was happening
+  anyway. A background job tops it up once a day for businesses nothing read the fleet for — one read
+  per business per day, only for businesses on a plan whose machines are counted and with a usable
+  connection, and bounded per run. It is a command of the deployed application,
+  `snapshot-connected-machines`, scheduled the same way the daily database backup is (see
+  [Database backup and restore](#database-backup-and-restore)); **putting it on a schedule is a
+  deliberate operator step**, and until it is scheduled the counts come from ordinary use of the
+  application.
+- **Above the allowance you are billed, never blocked.** Being over five machines never stops you
+  linking a machine, importing sales, running a report or using the pick list, and nothing removes a
+  link or any history. The entitlement the application reads reports the allowance, the current count,
+  the day it was taken and how many machines are over the allowance — as an amount to charge for,
+  never as a limit.
+- **A count that could not be refreshed stays the count, and says how old it is.** A failed or partial
+  fleet read records nothing at all: the last complete count remains, reported as *stale* with its age
+  in days. It is never replaced by a zero — a fleet nobody could read is not a fleet with no machines
+  in it.
+- **No usable connection means "count unavailable".** If Nayax is not connected, or the stored
+  credentials need attention, no call is made and no count is reported at all. Reconnecting and the
+  next complete fleet read restore it.
+- **Changing your Nayax account starts a new count series.** Saving credentials for a **different**
+  Nayax operator id begins a new series, and the time of the change is recorded. The previous
+  account's counts are kept exactly as they are and are never reported as the new account's, so a day
+  you switched on can hold one count per account — the later one being that day's count. Re-saving or
+  re-testing credentials for the **same** account changes nothing: it is the same account and the same
+  fleet. Until the new account has been counted once, the count reads as unavailable rather than
+  showing the account you left.
 
 ### Connecting Nayax when you already have machines (issue #742)
 
