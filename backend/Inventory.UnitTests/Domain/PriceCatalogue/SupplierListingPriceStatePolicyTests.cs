@@ -176,4 +176,36 @@ public class SupplierListingPriceStatePolicyTests
 
         Assert.Equal(5, state.LatestObservationId);
     }
+
+    /// <summary>
+    /// A reading that lost its instant to the one recorded first never was the price, so it does
+    /// not move the change instant: 30 before the run, then 30 (recorded first) and 40 at one
+    /// instant, leaves the price unchanged since before the run.
+    /// </summary>
+    [Fact]
+    public void A_reading_that_lost_a_tied_instant_does_not_change_the_price()
+    {
+        var before = Checked.AddDays(-1);
+
+        var state = SupplierListingPriceStatePolicy.StateAfterRun(
+            30m,
+            before,
+            [new(12, Checked, 40m), new(11, Checked, 30m)]);
+
+        Assert.Equal(new SupplierListingPriceState(11, Checked, before), state);
+    }
+
+    /// <summary>And a genuine change after the tied instant is still the change.</summary>
+    [Fact]
+    public void A_change_after_a_tied_instant_is_still_recorded()
+    {
+        var state = SupplierListingPriceStatePolicy.StateAfterRun(
+            30m,
+            Checked.AddDays(-1),
+            [new(12, Checked, 40m), new(11, Checked, 30m), new(13, Checked.AddMinutes(30), 35m)]);
+
+        Assert.Equal(
+            new SupplierListingPriceState(13, Checked.AddMinutes(30), Checked.AddMinutes(30)),
+            state);
+    }
 }

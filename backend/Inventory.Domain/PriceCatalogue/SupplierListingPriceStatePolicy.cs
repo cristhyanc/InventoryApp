@@ -103,7 +103,8 @@ public static class SupplierListingPriceStatePolicy
     /// before the run, so the answer depends only on which readings the run accepted and never on
     /// how the collector split or ordered them. The latest observed reading is the current one
     /// (<see cref="ReplacesCurrentReading"/>: of two bearing the same instant, the one recorded
-    /// first stands); the change instant is the first reading of the trailing stretch at that price,
+    /// first stands, and the others of that instant are not replayed at all - they never were the
+    /// price, so they cannot have changed it); the change instant is the first reading of the trailing stretch at that price,
     /// so a run that moved a price and then re-read it unchanged records the change at the first of
     /// the two instants, and a run that only re-read the price it started with leaves the change
     /// where it was.</para>
@@ -129,11 +130,13 @@ public static class SupplierListingPriceStatePolicy
             throw new ArgumentException("A run's state needs at least one accepted reading.", nameof(runReadings));
         }
 
-        // Observed order, and among equal instants the reading recorded first walked last, so it is
-        // the one that stands.
+        // One reading per observed instant - the one recorded first, which is the one that stands -
+        // and only then the replay. Walking every reading of a tied instant would let a reading that
+        // never became the price still move the change instant.
         var timeline = runReadings
-            .OrderBy(reading => reading.ObservedAtUtc)
-            .ThenByDescending(reading => reading.ObservationId);
+            .GroupBy(reading => reading.ObservedAtUtc)
+            .Select(tied => tied.MinBy(reading => reading.ObservationId)!)
+            .OrderBy(reading => reading.ObservedAtUtc);
 
         var price = priceBeforeRun;
         var changedAtUtc = priceChangeBeforeRunUtc;
