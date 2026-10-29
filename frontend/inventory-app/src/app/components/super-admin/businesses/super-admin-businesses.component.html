@@ -87,6 +87,14 @@
                       <button type="button" class="btn btn-secondary btn-sm" (click)="requestViewAs(business)">
                         View as this business
                       </button>
+                      <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        data-testid="plan-grant"
+                        (click)="openPlanGrant(business)"
+                      >
+                        Plan
+                      </button>
                       <button type="button" class="btn btn-danger btn-sm" (click)="requestDeactivate(business)">
                         Deactivate
                       </button>
@@ -137,6 +145,15 @@
     (closed)="closeMembers()"
     (memberReleased)="onMemberReleased()"
   ></app-business-members-dialog>
+}
+
+@if (planGrantTarget) {
+  <app-business-plan-grant-dialog
+    [businessId]="planGrantTarget.businessId"
+    [businessName]="planGrantTarget.name"
+    (saved)="onPlanGrantSaved()"
+    (closed)="closePlanGrant()"
+  ></app-business-plan-grant-dialog>
 }
 
 @if (viewAsTarget) {

@@ -7,6 +7,7 @@ import { ToastService } from '../../../services/toast.service';
 import { SuperAdminBusiness, SuperAdminBusinessesService } from '../../../services/super-admin-businesses.service';
 import type { NayaxConnectionStatusName } from '../../../services/nayax-connection.service';
 import { BusinessMembersDialogComponent } from './business-members-dialog.component';
+import { BusinessPlanGrantDialogComponent } from './business-plan-grant-dialog.component';
 import { BusinessRejectDialogComponent } from './business-reject-dialog.component';
 import { ViewAsBusinessDialogComponent } from './view-as-business-dialog.component';
 
@@ -66,6 +67,11 @@ type PendingBusinessAction =
  * "View as this business" (issue #553, a slice of #513) is the one dedicated feature component
  * composed the same way Reject and Members are: its own reason text, submission state and error,
  * reached through `[businessId]`/`[businessName]` and reacting only to `(started)`/`(canceled)`.
+ *
+ * "Plan" (issue #982) is composed the same way again: the manual grant a Super Admin may create,
+ * change or end lives entirely in its own dialog, with its own load, form, revision and error. This
+ * page neither reads nor decides a plan - the businesses list carries none, because the grant is read
+ * through its own endpoint rather than by widening the directory this table shows.
  */
 @Component({
   selector: 'app-super-admin-businesses',
@@ -77,6 +83,7 @@ type PendingBusinessAction =
     ConfirmationDialogComponent,
     BusinessRejectDialogComponent,
     BusinessMembersDialogComponent,
+    BusinessPlanGrantDialogComponent,
     ViewAsBusinessDialogComponent
   ],
   templateUrl: './super-admin-businesses.component.html'
@@ -93,6 +100,7 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
   rejectTarget: SuperAdminBusiness | null = null;
   membersTarget: SuperAdminBusiness | null = null;
   viewAsTarget: SuperAdminBusiness | null = null;
+  planGrantTarget: SuperAdminBusiness | null = null;
 
   private readonly destroying$ = new Subject<void>();
 
@@ -170,6 +178,23 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
 
   requestViewAs(business: SuperAdminBusiness): void {
     this.viewAsTarget = business;
+  }
+
+  openPlanGrant(business: SuperAdminBusiness): void {
+    this.planGrantTarget = business;
+  }
+
+  closePlanGrant(): void {
+    this.planGrantTarget = null;
+  }
+
+  /**
+   * A committed grant, change or end. The dialog stays open showing what was stored - its own answer
+   * carries the new revision - and this page only reports it, because the businesses table shows no
+   * plan to refresh.
+   */
+  onPlanGrantSaved(): void {
+    this.toast.success('The plan grant was saved.');
   }
 
   onViewAsStarted(): void {
