@@ -435,7 +435,12 @@ public sealed class CheapestSupplierSummaryApiTests
         /// <summary>The cheapest pack price, GST-inclusive as observed.</summary>
         public const decimal CheapPackPrice = 22.80m;
 
-        private static readonly DateTime ObservedAtUtc = new(2026, 10, 28, 4, 0, 0, DateTimeKind.Utc);
+        /// <summary>
+        /// When the seeded prices were observed: an hour before the fixture is built, so they stay
+        /// inside <see cref="SupplierPriceFreshnessPolicy.DailyCheckLimitHours"/>
+        /// whatever day the suite runs. A fixed date expired 30 hours after it was written.
+        /// </summary>
+        private static readonly DateTime ObservedAtUtc = DateTime.UtcNow.AddHours(-1);
 
         private readonly SqliteConnection _connection = new("Data Source=:memory:");
         private readonly SemaphoreSlim _seedLock = new(1, 1);
