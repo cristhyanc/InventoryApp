@@ -263,13 +263,17 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
         var entitlement = json.GetProperty("entitlement");
 
         Assert.Equal(
-            ["endsAtUtc", "enforced", "plan", "source"],
+            ["connectedMachines", "endsAtUtc", "enforced", "plan", "source"],
             entitlement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.False(entitlement.GetProperty("enforced").GetBoolean());
         // Null rather than a plan name: "unrestricted" is not a plan anybody is on.
         Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("plan").ValueKind);
         Assert.Equal("EnforcementDisabled", entitlement.GetProperty("source").GetString());
         Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("endsAtUtc").ValueKind);
+        // And no connected-machine answer at all (issue #978): there is no plan to report an
+        // allowance against, so nothing about the business's machines is read or published while
+        // nothing is enforced.
+        Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("connectedMachines").ValueKind);
     }
 
     private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response) =>

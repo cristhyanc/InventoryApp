@@ -1,3 +1,5 @@
+using Inventory.Domain.ConnectedMachines;
+
 namespace Inventory.Domain.Subscriptions;
 
 /// <summary>
@@ -59,7 +61,22 @@ public sealed record EffectiveEntitlement(
     bool Enforced,
     SubscriptionPlan? Plan,
     EntitlementSource Source,
-    DateTime? EndsAtUtc);
+    DateTime? EndsAtUtc)
+{
+    /// <summary>
+    /// What the business's connected machines cost it (issue #978): the allowance, the count the
+    /// current Nayax account series was last counted at, how well known that count is, and how many
+    /// machines are over the allowance.
+    ///
+    /// <para>It is an additive member rather than a fifth positional one so that every existing
+    /// caller keeps saying exactly what it said before, and it is <see langword="null"/> whenever
+    /// there is nothing to report: while <see cref="Enforced"/> is <see langword="false"/> nothing
+    /// about the business is read at all, which is #966's rule and the reason a deployment that has
+    /// switched nothing on makes no extra query. Being over the allowance is billed, never blocked
+    /// (see <see cref="ConnectedMachineEntitlement"/>).</para>
+    /// </summary>
+    public ConnectedMachineEntitlement? ConnectedMachines { get; init; }
+}
 
 /// <summary>
 /// The single effective-entitlement rule (issue #966, states decided 29 October 2026 on #965).

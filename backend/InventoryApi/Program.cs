@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
+using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.Onboarding;
@@ -92,6 +93,16 @@ if (NayaxSaleProductResolutionCommand.Matches(args))
 if (BusinessPlanGrandfatheringCommand.Matches(args))
 {
     return await BusinessPlanGrandfatheringCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Counting each counted business's connected machines is the seventh, and the first that a schedule
+// rather than a person normally starts (issue #978). It is the daily job of that issue: one bounded
+// pass that records today's snapshot for every business whose plan has its machines counted and that
+// has not been counted yet today. It applies no migration, writes nothing but append-only evidence,
+// and is safe to run twice - the second run records nothing.
+if (ConnectedMachineSnapshotCommand.Matches(args))
+{
+    return await ConnectedMachineSnapshotCommand.RunAsync(args, CancellationToken.None);
 }
 
 // Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
@@ -375,6 +386,12 @@ builder.Services.AddCors(options =>
 if (E2ETestEnvironment.IsEnabled(builder.Environment))
 {
     builder.Services.AddScoped<INayaxLynxClient, E2ETestNayaxLynxClient>();
+
+    // The connected-machine fleet read of issue #978 over that same stub, so this host composes
+    // completely and an E2E run counts the fleet it has: none. Outside this host the registration
+    // comes from AddNayaxLynxClient, which hands the reader the inner typed client rather than the
+    // port it decorates.
+    builder.Services.AddScoped<IConnectedMachineFleetReader, NayaxConnectedMachineFleetReader>();
 }
 else
 {

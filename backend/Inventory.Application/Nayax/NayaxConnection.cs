@@ -48,6 +48,25 @@ public sealed record NayaxConnection(
     /// re-test once machines are set up, not to make a connection that works look incomplete.
     /// </summary>
     public bool MachineChecksPending { get; init; }
+
+    /// <summary>
+    /// Which Nayax <em>account</em> the stored credentials belong to, as this business's own internal
+    /// connection series (issue #978): <c>1</c> for the first account whose credentials were stored,
+    /// and one higher each time a <strong>different</strong> operator id is saved. Re-saving or
+    /// re-testing the same account keeps it.
+    ///
+    /// <para>It is deliberately not <see cref="CredentialRevision"/>, which counts every save: a new
+    /// token for the same Nayax account is the same fleet, and billing evidence about that fleet must
+    /// not be split by an operator pasting a fresh token. And it is deliberately not the operator id
+    /// either - the series identifier carries no part of a credential, so a connected-machine
+    /// snapshot can name the account it belongs to without naming the account.</para>
+    ///
+    /// <para>It is an additive member rather than a seventh positional one, like
+    /// <see cref="MachineChecksPending"/>, so every existing caller keeps saying what it said before.
+    /// <c>1</c> is its default because a stored connection always belongs to a series and the first
+    /// one is <c>1</c>.</para>
+    /// </summary>
+    public int AccountSeries { get; init; } = 1;
 }
 
 /// <summary>

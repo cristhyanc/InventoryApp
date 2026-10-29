@@ -143,6 +143,44 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("BusinessBillingSubscriptions");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessConnectedMachineSnapshot", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AccountSeries")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("MachineCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProviderMachineIds")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("ReadWasComplete")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("SnapshotDateUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("TakenAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "SnapshotDateUtc", "AccountSeries")
+                        .IsUnique();
+
+                    b.ToTable("BusinessConnectedMachineSnapshots");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>
                 {
                     b.Property<int>("Id")
@@ -206,6 +244,12 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<string>("AccessTokenCiphertext")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AccountSeries")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("AccountSeriesChangedAtUtc")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("BusinessId")

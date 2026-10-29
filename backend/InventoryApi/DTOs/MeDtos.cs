@@ -95,11 +95,83 @@ public sealed record MeAccessResponse(
 /// <c>null</c> when it has no recorded end - which is what a grandfathered grant has until an owner
 /// sets one. It is that one record's end, never a combination of both records' dates.
 /// </param>
+/// <param name="ConnectedMachines">
+/// What the business's connected machines cost it (issue #978), or <c>null</c> while nothing is
+/// enforced - which is the shipped state, where nothing about the business is read at all. Being over
+/// the allowance is billed, never blocked; see <see cref="MeConnectedMachinesResponse"/>.
+/// </param>
 public sealed record MeEntitlementResponse(
     bool Enforced,
     string? Plan,
     string Source,
-    DateTime? EndsAtUtc);
+    DateTime? EndsAtUtc,
+    MeConnectedMachinesResponse? ConnectedMachines);
+
+/// <summary>
+/// The business's connected machines, as <c>GET /api/me/access</c> reports them beside the plan
+/// (issue #978, child of #965).
+///
+/// <para><strong>A connected machine is a machine on the business's Nayax account</strong>, linked in
+/// this application or not - the decision of 29 October 2026, because Nayax imports sales for every
+/// machine on the account either way. A manual machine has no provider id and is never counted.</para>
+///
+/// <para><strong>The count is recorded evidence, not a live read.</strong> It is the stored snapshot
+/// of the latest complete fleet read for the business's <em>current</em> Nayax account, so this
+/// response costs no Nayax call: a count taken earlier today is <c>Current</c>, an older one stays the
+/// count and is reported <c>Stale</c> with its age, and a connection that cannot be read reports
+/// <c>Unavailable</c> with a reason - never a zero.</para>
+///
+/// <para><strong>Being over the allowance is billed, never blocked.</strong> No client may read
+/// <paramref name="MachinesOverAllowance"/> as a limit: linking a machine, importing sales, the
+/// reports and the pick list are unaffected by it, and nothing removes a link or any history. What an
+/// extra machine costs is the plan catalogue's, and the page that shows it is #970's work.</para>
+/// </summary>
+/// <param name="IncludedByPlan">
+/// How many connected machines the effective plan includes - five on Pro, none on a plan with no
+/// Nayax connection.
+/// </param>
+/// <param name="PurchasedAdditional">
+/// How many extra connected machines the business has bought. It is <c>0</c> until the billing
+/// integration of #969 records a purchase; an unrecorded purchase is none rather than a guess.
+/// </param>
+/// <param name="Allowance">
+/// <paramref name="IncludedByPlan"/> plus <paramref name="PurchasedAdditional"/>: the number the
+/// count is compared against.
+/// </param>
+/// <param name="Count">
+/// The machines the current account was last counted at, or <c>null</c> when there is no count. Null,
+/// never zero: a count nobody could take is not an empty fleet.
+/// </param>
+/// <param name="AsOfDateUtc">The UTC day that count was taken for, or <c>null</c> when there is none.</param>
+/// <param name="AgeInDays">
+/// How many UTC days old the count is: <c>0</c> while it is current, its real age while it is stale,
+/// and <c>null</c> when there is no count.
+/// </param>
+/// <param name="State">
+/// How well known the count is, as the published name of
+/// <c>Inventory.Domain.ConnectedMachines.ConnectedMachineCountState</c>: <c>Current</c>, <c>Stale</c>
+/// or <c>Unavailable</c>.
+/// </param>
+/// <param name="UnavailableReason">
+/// Why there is no count, as the published name of
+/// <c>Inventory.Domain.ConnectedMachines.ConnectedMachineCountUnavailableReason</c> -
+/// <c>NotConnected</c>, <c>ConnectionNeedsAttention</c>, <c>NeverCounted</c> or
+/// <c>AccountNotYetCounted</c> - and <c>None</c> when there is one.
+/// </param>
+/// <param name="MachinesOverAllowance">
+/// How many counted machines are above the allowance, never negative, and <c>null</c> when there is no
+/// count - because "none over" and "not known" are different answers.
+/// </param>
+public sealed record MeConnectedMachinesResponse(
+    int IncludedByPlan,
+    int PurchasedAdditional,
+    int Allowance,
+    int? Count,
+    DateTime? AsOfDateUtc,
+    int? AgeInDays,
+    string State,
+    string UnavailableReason,
+    int? MachinesOverAllowance);
 
 /// <summary>
 /// The support session a request is inside, as <c>GET /api/me/access</c> reports it (issue #551).

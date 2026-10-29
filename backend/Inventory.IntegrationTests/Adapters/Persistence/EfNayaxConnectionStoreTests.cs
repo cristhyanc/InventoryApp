@@ -95,6 +95,93 @@ public class EfNayaxConnectionStoreTests
     }
 
     /// <summary>
+    /// The first account a business stores credentials for is account series 1, and the series began
+    /// when they were stored (issue #978). The series is what connected-machine snapshots belong to,
+    /// and it is an internal counter: it carries no part of the operator id, the token or the key.
+    /// </summary>
+    [Fact]
+    public async Task A_first_save_starts_the_first_account_series()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+
+        var saved = await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        Assert.Equal(1, saved.AccountSeries);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+    }
+
+    /// <summary>
+    /// Re-saving the <em>same</em> Nayax account keeps the series, so a rotated token does not split
+    /// the business's connected-machine evidence in two (issue #978): a new token for the same account
+    /// is the same fleet. The credential revision still moves, because that counts saves.
+    /// </summary>
+    [Fact]
+    public async Task Re_saving_the_same_account_keeps_the_account_series()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+
+        await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        var resaved = await store.SaveCredentialAsync(OperatorId, OtherToken, CancellationToken.None);
+
+        Assert.Equal(1, resaved.AccountSeries);
+        Assert.Equal(2, resaved.CredentialRevision);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+    }
+
+    /// <summary>
+    /// Saving a <em>different</em> Nayax account starts a new series and records when it changed
+    /// (issue #978): the previous account's snapshots stay exactly as they are, and the new account's
+    /// own count is recorded against the new series rather than inheriting the old one's figure.
+    /// </summary>
+    [Fact]
+    public async Task Saving_a_different_account_starts_a_new_series_and_records_the_change()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+
+        await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        var moved = await store.SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        Assert.Equal(2, moved.AccountSeries);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(2, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+        Assert.Equal(OtherOperatorId, stored.OperatorId);
+    }
+
+    /// <summary>
+    /// A permission test result changes the status, not the account: re-testing the stored
+    /// credentials leaves the series exactly as it is (issue #978).
+    /// </summary>
+    [Fact]
+    public async Task A_status_result_leaves_the_account_series_alone()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        var applied = await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(1, NayaxConnectionStatus.Ready, TestedAt),
+            CancellationToken.None);
+
+        Assert.True(applied);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+        Assert.Equal(NayaxConnectionStatus.Ready, stored.Status);
+    }
+
+    /// <summary>
     /// A business has one sales provider, and changing it is a separate design (#761), so credentials
     /// for a different provider are refused - and refused <em>before</em> anything is written, which
     /// is what the absent credential row proves: a token that may not be used must not be sitting

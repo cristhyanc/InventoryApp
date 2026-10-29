@@ -1,4 +1,5 @@
 using Inventory.Application.Access;
+using Inventory.Domain.ConnectedMachines;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -69,8 +70,30 @@ public sealed class MeController : ControllerBase
                 access.Entitlement.Enforced,
                 access.Entitlement.Plan?.ToString(),
                 access.Entitlement.Source.ToString(),
-                access.Entitlement.EndsAtUtc)));
+                access.Entitlement.EndsAtUtc,
+                ConnectedMachines(access.Entitlement.ConnectedMachines))));
     }
+
+    /// <summary>
+    /// Projects the connected-machine answer of issue #978, or <see langword="null"/> while nothing is
+    /// enforced and there is therefore nothing to report. It formats and never calculates: the
+    /// allowance, the count, its age, its state and how many machines are over the allowance are all
+    /// decided by <c>Inventory.Domain.ConnectedMachines.ConnectedMachineCountPolicy</c>.
+    /// </summary>
+    private static MeConnectedMachinesResponse? ConnectedMachines(
+        ConnectedMachineEntitlement? connectedMachines) =>
+        connectedMachines is null
+            ? null
+            : new MeConnectedMachinesResponse(
+                connectedMachines.IncludedByPlan,
+                connectedMachines.PurchasedAdditional,
+                connectedMachines.Allowance,
+                connectedMachines.Count,
+                connectedMachines.AsOfDateUtc,
+                connectedMachines.AgeInDays,
+                connectedMachines.State.ToString(),
+                connectedMachines.UnavailableReason.ToString(),
+                connectedMachines.MachinesOverAllowance);
 
     /// <summary>
     /// Which state the caller's own account is in (issue #523), so a person the other endpoints

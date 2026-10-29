@@ -120,6 +120,7 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
                 connection.UpdatedAtUtc)
             {
                 MachineChecksPending = connection.MachineChecksPending,
+                AccountSeries = connection.AccountSeries,
             })
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -324,7 +325,25 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
                     .SetProperty(connection => connection.UpdatedAtUtc, savedAt)
                     .SetProperty(
                         connection => connection.CredentialRevision,
-                        connection => connection.CredentialRevision + 1),
+                        connection => connection.CredentialRevision + 1)
+                    // The account series (issue #978) moves only when the operator id does, and the
+                    // comparison is made in the same UPDATE as the write, against the row's own
+                    // stored value: SQL evaluates every SET expression against the pre-update row, so
+                    // "is this the same Nayax account?" is answered by the row being replaced and
+                    // never by a value this process read earlier. Re-saving or re-testing the same
+                    // account therefore keeps the series, and with it every snapshot recorded for
+                    // that account; a different account starts a new series and the instant of the
+                    // change is recorded beside it.
+                    .SetProperty(
+                        connection => connection.AccountSeries,
+                        connection => connection.OperatorId == operatorId
+                            ? connection.AccountSeries
+                            : connection.AccountSeries + 1)
+                    .SetProperty(
+                        connection => connection.AccountSeriesChangedAtUtc,
+                        connection => connection.OperatorId == operatorId
+                            ? connection.AccountSeriesChangedAtUtc
+                            : savedAt),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -491,6 +510,10 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
             CredentialRevision = 1,
             LastTestedAtUtc = null,
             MachineChecksPending = false,
+            // The first account this business stored credentials for is series 1, and the series
+            // began when they were stored (issue #978).
+            AccountSeries = 1,
+            AccountSeriesChangedAtUtc = savedAt,
             UpdatedAtUtc = savedAt,
         };
 
@@ -507,6 +530,7 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
             row.UpdatedAtUtc)
         {
             MachineChecksPending = row.MachineChecksPending,
+            AccountSeries = row.AccountSeries,
         };
     }
 

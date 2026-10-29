@@ -32,7 +32,8 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
         string accessToken,
         NayaxConnectionStatus status,
         int credentialRevision = 1,
-        bool machineChecksPending = false)
+        bool machineChecksPending = false,
+        int accountSeries = 1)
     {
         _connection = new NayaxConnection(
             operatorId,
@@ -42,6 +43,10 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
             UpdatedAtUtc: new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc))
         {
             MachineChecksPending = machineChecksPending,
+            // Which Nayax account the stored credentials belong to (issue #978). The first account a
+            // business stores is series 1, which is what a test gets unless it is about an account
+            // change.
+            AccountSeries = accountSeries,
         };
         _accessToken = accessToken;
     }

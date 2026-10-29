@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using Inventory.Domain.ConnectedMachines;
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Models;
@@ -324,6 +326,164 @@ public class MeAccessEntitlementApiTests : IClassFixture<MeAccessEntitlementApiT
             (await ReadBodyAsync(client)).GetProperty("entitlement").GetProperty("plan").GetString());
     }
 
+    /// <summary>
+    /// The connected machines of issue #978, over HTTP: a Pro business's allowance, the count its
+    /// current Nayax account was last counted at, and how many machines are over the allowance.
+    ///
+    /// <para>Being over the allowance changes nothing else in the response - it is billed, never
+    /// blocked - and the count is recorded evidence, so answering it makes no Nayax call.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_pro_business_reports_its_allowance_and_its_recorded_count()
+    {
+        await EnforcedProAsync();
+        await _factory.ConnectAsync(_factory.TradingBusinessId, accountSeries: 1);
+        await _factory.SnapshotAsync(_factory.TradingBusinessId, Today, accountSeries: 1, machineCount: 7);
+
+        var entitlement = await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        var connectedMachines = entitlement.GetProperty("connectedMachines");
+
+        Assert.Equal("Pro", entitlement.GetProperty("plan").GetString());
+        Assert.Equal(5, connectedMachines.GetProperty("includedByPlan").GetInt32());
+        Assert.Equal(0, connectedMachines.GetProperty("purchasedAdditional").GetInt32());
+        Assert.Equal(5, connectedMachines.GetProperty("allowance").GetInt32());
+        Assert.Equal(7, connectedMachines.GetProperty("count").GetInt32());
+        Assert.Equal(Today, connectedMachines.GetProperty("asOfDateUtc").GetDateTime());
+        Assert.Equal(0, connectedMachines.GetProperty("ageInDays").GetInt32());
+        Assert.Equal("Current", connectedMachines.GetProperty("state").GetString());
+        Assert.Equal("None", connectedMachines.GetProperty("unavailableReason").GetString());
+        Assert.Equal(2, connectedMachines.GetProperty("machinesOverAllowance").GetInt32());
+    }
+
+    /// <summary>
+    /// An older snapshot remains the count and is reported stale with its age - the answer a failed,
+    /// partial or paginated-incomplete read leaves in place, because such a read stores nothing.
+    /// </summary>
+    [Fact]
+    public async Task An_older_count_is_reported_stale_with_its_age()
+    {
+        await EnforcedProAsync();
+        await _factory.ConnectAsync(_factory.TradingBusinessId, accountSeries: 1);
+        await _factory.SnapshotAsync(
+            _factory.TradingBusinessId,
+            Today.AddDays(-3),
+            accountSeries: 1,
+            machineCount: 4);
+
+        var connectedMachines = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("connectedMachines");
+
+        Assert.Equal("Stale", connectedMachines.GetProperty("state").GetString());
+        Assert.Equal(4, connectedMachines.GetProperty("count").GetInt32());
+        Assert.Equal(3, connectedMachines.GetProperty("ageInDays").GetInt32());
+        Assert.Equal(Today.AddDays(-3), connectedMachines.GetProperty("asOfDateUtc").GetDateTime());
+    }
+
+    /// <summary>
+    /// Disconnected credentials report "count unavailable" with their reason, and a null count rather
+    /// than a zero: a fleet nobody could read is not a fleet with no machines in it.
+    /// </summary>
+    [Fact]
+    public async Task A_business_with_no_connection_reports_the_count_unavailable()
+    {
+        await EnforcedProAsync();
+
+        var connectedMachines = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("connectedMachines");
+
+        Assert.Equal("Unavailable", connectedMachines.GetProperty("state").GetString());
+        Assert.Equal("NotConnected", connectedMachines.GetProperty("unavailableReason").GetString());
+        Assert.Equal(JsonValueKind.Null, connectedMachines.GetProperty("count").ValueKind);
+        Assert.Equal(JsonValueKind.Null, connectedMachines.GetProperty("asOfDateUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, connectedMachines.GetProperty("machinesOverAllowance").ValueKind);
+        Assert.Equal(5, connectedMachines.GetProperty("allowance").GetInt32());
+    }
+
+    /// <summary>
+    /// Credentials that need attention make no call and report the count unavailable too, with the
+    /// reason that tells them apart from a business that was never connected.
+    /// </summary>
+    [Fact]
+    public async Task Credentials_that_need_attention_report_the_count_unavailable()
+    {
+        await EnforcedProAsync();
+        await _factory.ConnectAsync(
+            _factory.TradingBusinessId,
+            accountSeries: 1,
+            status: NayaxConnectionStatus.NeedsAttention);
+        await _factory.SnapshotAsync(_factory.TradingBusinessId, Today, accountSeries: 1, machineCount: 7);
+
+        var connectedMachines = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("connectedMachines");
+
+        Assert.Equal("Unavailable", connectedMachines.GetProperty("state").GetString());
+        Assert.Equal(
+            "ConnectionNeedsAttention",
+            connectedMachines.GetProperty("unavailableReason").GetString());
+        Assert.Equal(JsonValueKind.Null, connectedMachines.GetProperty("count").ValueKind);
+    }
+
+    /// <summary>
+    /// A snapshot of an account the business has left is not this account's count: the previous
+    /// series' rows stay exactly as they are and the new account is reported as not counted yet.
+    /// </summary>
+    [Fact]
+    public async Task A_snapshot_of_a_previous_account_is_not_this_accounts_count()
+    {
+        await EnforcedProAsync();
+        await _factory.ConnectAsync(_factory.TradingBusinessId, accountSeries: 2);
+        await _factory.SnapshotAsync(_factory.TradingBusinessId, Today, accountSeries: 1, machineCount: 9);
+
+        var connectedMachines = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("connectedMachines");
+
+        Assert.Equal("Unavailable", connectedMachines.GetProperty("state").GetString());
+        Assert.Equal(
+            "AccountNotYetCounted",
+            connectedMachines.GetProperty("unavailableReason").GetString());
+        Assert.Equal(JsonValueKind.Null, connectedMachines.GetProperty("count").ValueKind);
+    }
+
+    /// <summary>
+    /// And one business's count is never another's: the caller's own resolved business is the only one
+    /// this answer can come from, because no request carries a business id.
+    /// </summary>
+    [Fact]
+    public async Task Another_businesss_count_is_never_reported()
+    {
+        await EnforcedProAsync();
+        await _factory.ConnectAsync(_factory.TradingBusinessId, accountSeries: 1);
+        await _factory.ConnectAsync(_factory.OtherBusinessId, accountSeries: 1);
+        await _factory.SnapshotAsync(_factory.OtherBusinessId, Today, accountSeries: 1, machineCount: 9);
+
+        var connectedMachines = (await ReadAsync(SuperAdminBusinessesApiFactory.TradingOwnerObjectId))
+            .GetProperty("connectedMachines");
+
+        Assert.Equal("Unavailable", connectedMachines.GetProperty("state").GetString());
+        Assert.Equal("NeverCounted", connectedMachines.GetProperty("unavailableReason").GetString());
+    }
+
+    /// <summary>
+    /// The UTC day this host's own clock is on. The host answers against the real clock, so a count
+    /// "taken today" has to be taken on today's UTC day rather than on a pinned one.
+    /// </summary>
+    private static DateTime Today => DateTime.SpecifyKind(DateTime.UtcNow.Date, DateTimeKind.Utc);
+
+    /// <summary>
+    /// A deployment that is enforcing plans, with the trading business on a grandfathered Pro grant -
+    /// the state every connected-machine answer is reported in.
+    /// </summary>
+    private async Task EnforcedProAsync()
+    {
+        await _factory.CompleteGrandfatheringAsync(Cutoff);
+        await _factory.GrantAsync(
+            _factory.TradingBusinessId,
+            SubscriptionPlan.Pro,
+            ManualPlanGrantSource.Grandfathered,
+            Cutoff,
+            endsAtUtc: null);
+    }
+
     private Task<JsonElement> ReadAsync(string objectId) =>
         ReadEntitlementAsync(_factory.Authenticated(objectId));
 
@@ -405,6 +565,57 @@ public class MeAccessEntitlementApiTests : IClassFixture<MeAccessEntitlementApiT
             return grant.Id;
         }
 
+        /// <summary>
+        /// One business's stored Nayax connection, on a named account series (issue #978). The token
+        /// is an obvious fake: nothing here reaches Nayax, and the connected-machine count is read
+        /// from recorded snapshots rather than from a call.
+        /// </summary>
+        public async Task ConnectAsync(
+            int businessId,
+            int accountSeries,
+            NayaxConnectionStatus status = NayaxConnectionStatus.Ready)
+        {
+            await using var db = Database();
+            db.BusinessNayaxConnections.Add(new BusinessNayaxConnection
+            {
+                BusinessId = businessId,
+                OperatorId = "2002736764",
+                AccessTokenCiphertext = "not-a-real-ciphertext",
+                EncryptionKeyId = "test-key",
+                Status = status,
+                CredentialRevision = 1,
+                AccountSeries = accountSeries,
+                AccountSeriesChangedAtUtc = Cutoff,
+                UpdatedAtUtc = Cutoff,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// One recorded connected-machine snapshot, as a complete fleet read would have left it
+        /// (issue #978).
+        /// </summary>
+        public async Task SnapshotAsync(
+            int businessId,
+            DateTime dayUtc,
+            int accountSeries,
+            int machineCount)
+        {
+            await using var db = Database();
+            db.BusinessConnectedMachineSnapshots.Add(new BusinessConnectedMachineSnapshot
+            {
+                BusinessId = businessId,
+                SnapshotDateUtc = dayUtc,
+                AccountSeries = accountSeries,
+                MachineCount = machineCount,
+                ProviderMachineIds = ConnectedMachineFleetRead.FormatIds(
+                    Enumerable.Range(1, machineCount).Select(id => (long)id)),
+                TakenAtUtc = dayUtc.AddHours(6),
+                ReadWasComplete = true,
+            });
+            await db.SaveChangesAsync();
+        }
+
         /// <summary>Ends a grant outside the boundary, the way an owner setting an end date would.</summary>
         public async Task EndGrantAsync(int grantId, DateTime endsAtUtc)
         {
@@ -475,7 +686,14 @@ public class MeAccessEntitlementApiTests : IClassFixture<MeAccessEntitlementApiT
             db.BusinessPlanGrants.RemoveRange(await db.BusinessPlanGrants.ToListAsync());
             db.BusinessBillingSubscriptions.RemoveRange(await db.BusinessBillingSubscriptions.ToListAsync());
             db.SubscriptionGrandfatherings.RemoveRange(await db.SubscriptionGrandfatherings.ToListAsync());
+            db.BusinessNayaxConnections.RemoveRange(await db.BusinessNayaxConnections.ToListAsync());
             await db.SaveChangesAsync();
+
+            // The snapshots are append-only, so the enforcer refuses to delete them through the
+            // context (issue #978). A fixture putting the world back is outside the application's
+            // write paths altogether, so it removes the rows with a statement rather than by pretending
+            // an application could.
+            await db.Database.ExecuteSqlRawAsync(@"DELETE FROM ""BusinessConnectedMachineSnapshots"";");
         }
 
         private async Task WriteGrandfatheringAsync(DateTime cutoffUtc, DateTime? completedAtUtc)

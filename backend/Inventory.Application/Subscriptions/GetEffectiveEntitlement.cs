@@ -1,4 +1,8 @@
+using Inventory.Application.ConnectedMachines;
+using Inventory.Application.Nayax;
 using Inventory.Application.Time;
+using Inventory.Domain.ConnectedMachines;
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Subscriptions;
 
 namespace Inventory.Application.Subscriptions;
@@ -38,6 +42,8 @@ public sealed class GetEffectiveEntitlement
     private readonly ISubscriptionGrandfatheringStore _grandfathering;
     private readonly IManualPlanGrantStore _grants;
     private readonly IBillingSubscriptionStore _subscriptions;
+    private readonly INayaxConnectionStore _connections;
+    private readonly IConnectedMachineSnapshotStore _connectedMachines;
     private readonly IClock _clock;
 
     public GetEffectiveEntitlement(
@@ -45,12 +51,16 @@ public sealed class GetEffectiveEntitlement
         ISubscriptionGrandfatheringStore grandfathering,
         IManualPlanGrantStore grants,
         IBillingSubscriptionStore subscriptions,
+        INayaxConnectionStore connections,
+        IConnectedMachineSnapshotStore connectedMachines,
         IClock clock)
     {
         _enforcement = enforcement;
         _grandfathering = grandfathering;
         _grants = grants;
         _subscriptions = subscriptions;
+        _connections = connections;
+        _connectedMachines = connectedMachines;
         _clock = clock;
     }
 
@@ -76,14 +86,60 @@ public sealed class GetEffectiveEntitlement
             ? await _subscriptions.FindForCurrentBusinessAsync(cancellationToken).ConfigureAwait(false)
             : null;
 
-        return EffectiveEntitlementPolicy.Decide(
+        var entitlement = EffectiveEntitlementPolicy.Decide(
             enforcementEnabled,
             grandfatheringCompleted,
             grants,
             subscription,
             _clock.UtcNow);
+
+        // The connected machines (issue #978) are read on exactly the same terms as the two records
+        // above: only while enforcement may actually take effect, because while it cannot there is
+        // nothing to report an allowance against and a deployment that has switched nothing on must
+        // make no extra read per request.
+        return entitlement.Plan is { } plan
+            ? entitlement with { ConnectedMachines = await ConnectedMachinesAsync(plan, cancellationToken).ConfigureAwait(false) }
+            : entitlement;
     }
 
     private async Task<bool> IsGrandfatheringCompleteAsync(CancellationToken cancellationToken) =>
         await _grandfathering.FindAsync(cancellationToken).ConfigureAwait(false) is { IsComplete: true };
+
+    /// <summary>
+    /// What the business's connected machines cost it: the allowance from the effective plan's
+    /// catalogue entry, and the count the current Nayax account series was last counted at.
+    ///
+    /// <para>Two reads, both of the business's own rows: the connection, which says whether its
+    /// account can be read at all and which series it is on, and the snapshots of its latest recorded
+    /// day. Nothing is counted here and nothing is called remotely - the count is the stored evidence
+    /// of a read that already happened, which is what makes this answer cost no Nayax call. Every
+    /// decision belongs to <see cref="ConnectedMachineCountPolicy"/>.</para>
+    ///
+    /// <para>The purchased extras are <see cref="ConnectedMachineCountPolicy.NoPurchasedAdditionalMachines"/>:
+    /// nothing records a purchase until the billing integration of #969, and an unrecorded purchase is
+    /// none rather than a guess.</para>
+    /// </summary>
+    private async Task<ConnectedMachineEntitlement> ConnectedMachinesAsync(
+        SubscriptionPlan plan,
+        CancellationToken cancellationToken)
+    {
+        var connection = await _connections.FindAsync(cancellationToken).ConfigureAwait(false);
+
+        // The snapshots are read only for a connection whose own stored status could have produced
+        // one: a disconnected business and one whose credentials need attention report "count
+        // unavailable" whatever rows exist, which the policy decides either way - asking the same
+        // Domain predicate here only avoids a query whose answer cannot change the result.
+        var snapshots = connection is not null
+            && ConnectedMachineSnapshotPolicy.MayReadFleet(connection.Status)
+            ? await _connectedMachines.FindLatestDayAsync(cancellationToken).ConfigureAwait(false)
+            : [];
+
+        return ConnectedMachineCountPolicy.Decide(
+            plan,
+            ConnectedMachineCountPolicy.NoPurchasedAdditionalMachines,
+            connection?.Status ?? NayaxConnectionStatus.NotConfigured,
+            snapshots,
+            connection?.AccountSeries ?? 0,
+            _clock.UtcNow);
+    }
 }
