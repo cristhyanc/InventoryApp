@@ -95,6 +95,93 @@ public class EfNayaxConnectionStoreTests
     }
 
     /// <summary>
+    /// The first account a business stores credentials for is account series 1, and the series began
+    /// when they were stored (issue #978). The series is what connected-machine snapshots belong to,
+    /// and it is an internal counter: it carries no part of the operator id, the token or the key.
+    /// </summary>
+    [Fact]
+    public async Task A_first_save_starts_the_first_account_series()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+
+        var saved = await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        Assert.Equal(1, saved.AccountSeries);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+    }
+
+    /// <summary>
+    /// Re-saving the <em>same</em> Nayax account keeps the series, so a rotated token does not split
+    /// the business's connected-machine evidence in two (issue #978): a new token for the same account
+    /// is the same fleet. The credential revision still moves, because that counts saves.
+    /// </summary>
+    [Fact]
+    public async Task Re_saving_the_same_account_keeps_the_account_series()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+
+        await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        var resaved = await store.SaveCredentialAsync(OperatorId, OtherToken, CancellationToken.None);
+
+        Assert.Equal(1, resaved.AccountSeries);
+        Assert.Equal(2, resaved.CredentialRevision);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+    }
+
+    /// <summary>
+    /// Saving a <em>different</em> Nayax account starts a new series and records when it changed
+    /// (issue #978): the previous account's snapshots stay exactly as they are, and the new account's
+    /// own count is recorded against the new series rather than inheriting the old one's figure.
+    /// </summary>
+    [Fact]
+    public async Task Saving_a_different_account_starts_a_new_series_and_records_the_change()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+
+        await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        var moved = await store.SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        Assert.Equal(2, moved.AccountSeries);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(2, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+        Assert.Equal(OtherOperatorId, stored.OperatorId);
+    }
+
+    /// <summary>
+    /// A permission test result changes the status, not the account: re-testing the stored
+    /// credentials leaves the series exactly as it is (issue #978).
+    /// </summary>
+    [Fact]
+    public async Task A_status_result_leaves_the_account_series_alone()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        var applied = await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(1, NayaxConnectionStatus.Ready, TestedAt),
+            CancellationToken.None);
+
+        Assert.True(applied);
+
+        var stored = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(1, stored.AccountSeries);
+        Assert.Equal(SavedAt, stored.AccountSeriesChangedAtUtc);
+        Assert.Equal(NayaxConnectionStatus.Ready, stored.Status);
+    }
+
+    /// <summary>
     /// A business has one sales provider, and changing it is a separate design (#761), so credentials
     /// for a different provider are refused - and refused <em>before</em> anything is written, which
     /// is what the absent credential row proves: a token that may not be used must not be sitting
@@ -239,6 +326,68 @@ public class EfNayaxConnectionStoreTests
         Assert.NotNull(replaced);
         Assert.Equal(NayaxConnectionStatus.PendingPermissions, replaced!.Status);
         Assert.Equal((OtherOperatorId, OtherToken, 2), Values(replaced.Credential));
+    }
+
+    /// <summary>
+    /// That same read reports the account series of the row it read (issue #978), because that is the
+    /// account whose credentials the call is about to be made with: the connected-machine snapshot
+    /// taken from a fleet read is stamped with it, so reading it here rather than in a second query
+    /// is what makes the evidence attributable to the account that authenticated the request.
+    ///
+    /// <para>It moves with the account and not with the token: a different operator id starts a new
+    /// series, and rotating the same account's token keeps it - which is the difference between a
+    /// business's fleet evidence continuing and being split.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_operation_read_reports_the_account_series_of_the_same_row()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        var first = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.Equal(1, first!.AccountSeries);
+
+        // The same Nayax account with a fresh token: a new revision, the same series.
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OperatorId, OtherToken, CancellationToken.None);
+
+        var rotated = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.Equal(1, rotated!.AccountSeries);
+        Assert.Equal(2, rotated.Credential!.CredentialRevision);
+
+        // A different Nayax account: the next series.
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        var switched = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(Allowed, CancellationToken.None);
+
+        Assert.Equal(2, switched!.AccountSeries);
+    }
+
+    /// <summary>
+    /// And a status the caller's gate refuses still reports the series, because the series is not a
+    /// secret and is never the thing being withheld: what a refused status withholds is the token,
+    /// which stays undecrypted.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_status_still_reports_the_account_series_and_no_credential()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        var snapshot = await fixture.StoreFor(fixture.BusinessA)
+            .FindForOperationAsync(_ => false, CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Null(snapshot!.Credential);
+        Assert.Equal(1, snapshot.AccountSeries);
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
+using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Costing;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Expenses;
@@ -176,6 +177,13 @@ public static class ApplicationServiceCollectionExtensions
         // that ends or a subscription that is cancelled applies on the next request rather than when
         // something expires a cache.
         services.AddScoped<GetEffectiveEntitlement>();
+
+        // And how many connected machines it has (issue #978): the one writer of a connected-machine
+        // snapshot, reached from the fleet-read decorator on a page load and from the daily job.
+        // Scoped like every use case here, so it records through the request's or the job's own
+        // AppDbContext and under the business that scope resolved - a snapshot can never belong to a
+        // business a caller named.
+        services.AddScoped<IConnectedMachineSnapshotRecorder, RecordConnectedMachineSnapshot>();
 
         // And the Super Admin's manual grant on one business (issue #982). Scoped like the
         // platform-admin surfaces above and for the same reasons: the business read, the revision

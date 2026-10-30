@@ -139,7 +139,10 @@ public sealed class NayaxRequestCredentialProvider : INayaxRequestCredentialProv
             throw new NayaxNotConnectedException(NayaxConnectionStatus.NotConfigured);
         }
 
-        return new NayaxRequestCredential(snapshot.Credential, snapshot.Status);
+        // The series comes from the same snapshot as the status and the token (issue #978), so a
+        // call can later say which Nayax account it was authenticated as without anybody reading
+        // the connection a second time.
+        return new NayaxRequestCredential(snapshot.Credential, snapshot.Status, snapshot.AccountSeries);
     }
 
     /// <inheritdoc />

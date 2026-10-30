@@ -604,6 +604,16 @@ public class AppDbContext : DbContext
         Set<SubscriptionGrandfathering>();
 
     /// <summary>
+    /// Each business's recorded connected-machine counts (issue #978): one row per business per UTC
+    /// day per Nayax account series, append-only. Ordinary tenant-owned data - filtered and stamped
+    /// centrally - and the evidence the extra-machine billing of #969 is charged from, which is why
+    /// <see cref="ConnectedMachineSnapshotEnforcer"/> refuses every change and removal of a stored
+    /// row. See <see cref="BusinessConnectedMachineSnapshot"/>.
+    /// </summary>
+    public DbSet<BusinessConnectedMachineSnapshot> BusinessConnectedMachineSnapshots =>
+        Set<BusinessConnectedMachineSnapshot>();
+
+    /// <summary>
     /// The room uploads in progress have reserved in their business's attachment storage allowance
     /// (issue #968): ordinary tenant-owned data, so the business key, the index, the query filter
     /// and the ownership stamp are the central mechanism's with nothing added. See
@@ -638,6 +648,10 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessStateEnforcer"/> joins them on the same terms as the ABN (issue #933): the
     /// business's state or territory decides which supplier records it is offered, so a value
     /// outside the eight is refused centrally rather than per write path.
+    ///
+    /// <see cref="ConnectedMachineSnapshotEnforcer"/> joins them for a different reason (issue #978):
+    /// a connected-machine snapshot is append-only billing evidence, so a change or a removal of a
+    /// stored row is refused here rather than merely absent from today's code paths.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -647,6 +661,7 @@ public class AppDbContext : DbContext
         BusinessStateEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
         BusinessSalesProviderEnforcer.Enforce(this);
+        ConnectedMachineSnapshotEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -660,6 +675,7 @@ public class AppDbContext : DbContext
         BusinessStateEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
         BusinessSalesProviderEnforcer.Enforce(this);
+        ConnectedMachineSnapshotEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
@@ -808,6 +824,18 @@ public class AppDbContext : DbContext
             .HasConversion(
                 toProvider => toProvider,
                 fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        // The account series (issue #978) starts at 1 for the first stored account; the additive
+        // migration adds the column with a database default of 1, so a connection that already
+        // existed is series 1 and every snapshot taken for it belongs to the account it is already
+        // on. The instant beside it is when the series last changed - null on a row written before
+        // this column existed, which is "not recorded" and never "never changed".
+        modelBuilder.Entity<BusinessNayaxConnection>()
+            .Property(x => x.AccountSeriesChangedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => fromProvider.HasValue
+                    ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                    : fromProvider);
 
         // One connection-test draft per business (issue #536), for the same reason the connection
         // above has one row per business: "a new test replaces the previous draft" is then a schema
@@ -1767,6 +1795,48 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+
+        ConfigureConnectedMachineSnapshots(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps the connected-machine snapshots of issue #978: one tenant-owned table of append-only
+    /// billing evidence.
+    ///
+    /// <para><strong>The uniqueness rule is the whole mechanism.</strong> The unique index on
+    /// (business, UTC date, account series) is what makes "at most one snapshot per business per day
+    /// per series" true when a page load and the daily job read the same fleet at the same moment:
+    /// both record through one insert-if-absent operation, the first to commit wins, and the other's
+    /// insert is refused by the database rather than by a check it could have passed a moment
+    /// earlier. The index is led by the business key like every other per-business uniqueness rule in
+    /// this schema (AGENTS.md § Tenant ownership and data isolation), and the series is part of it
+    /// because an account change may legitimately add a second snapshot to the same day - one per
+    /// account, with the later series being that day's count.</para>
+    ///
+    /// <para>It is ordinary tenant-owned data: <see cref="ConfigureBusinessOwnership"/> gives it the
+    /// business key, its index, the query filter and the ownership stamp with nothing added here, and
+    /// nothing in this table is a credential or derived from one. Append-only is enforced on
+    /// <c>SaveChanges</c> by <see cref="ConnectedMachineSnapshotEnforcer"/>; a schema constraint
+    /// cannot express "insert only".</para>
+    ///
+    /// <para>Both instants are persisted UTC and marked UTC on the way out, for the reason the
+    /// subscription records' are: the SQLite provider returns an unspecified kind otherwise, and the
+    /// snapshot's date is reported through <c>GET /api/me/access</c>.</para>
+    /// </summary>
+    private static void ConfigureConnectedMachineSnapshots(ModelBuilder modelBuilder)
+    {
+        var snapshot = modelBuilder.Entity<BusinessConnectedMachineSnapshot>();
+
+        snapshot
+            .HasIndex(x => new { x.BusinessId, x.SnapshotDateUtc, x.AccountSeries })
+            .IsUnique();
+        snapshot.Property(x => x.ProviderMachineIds).IsRequired();
+        snapshot.Property(x => x.SnapshotDateUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        snapshot.Property(x => x.TakenAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>

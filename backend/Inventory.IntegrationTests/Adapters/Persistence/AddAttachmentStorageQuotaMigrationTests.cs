@@ -23,7 +23,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// </summary>
 public class AddAttachmentStorageQuotaMigrationTests
 {
-    private const string PreviousMigration = "20261029120000_AllowPurchaseWithoutDocument";
+    private const string PreviousMigration = "20261029180000_AddConnectedMachineSnapshots";
     private const string TargetMigration = "AddAttachmentStorageQuota";
     private const string ReservationsTable = "AttachmentStorageReservations";
 

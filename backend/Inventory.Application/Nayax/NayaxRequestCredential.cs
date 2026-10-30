@@ -25,12 +25,20 @@ public sealed class NayaxRequestCredential
 {
     /// <param name="credential">The operator id and decrypted token this call authenticates with.</param>
     /// <param name="status">The connection status of the snapshot that credential came from.</param>
-    public NayaxRequestCredential(NayaxConnectionCredential credential, NayaxConnectionStatus status)
+    /// <param name="accountSeries">
+    /// The account series of that same snapshot (issue #978), or <see langword="null"/> when the
+    /// snapshot's source cannot say. It is non-secret provenance, never a credential.
+    /// </param>
+    public NayaxRequestCredential(
+        NayaxConnectionCredential credential,
+        NayaxConnectionStatus status,
+        int? accountSeries = null)
     {
         ArgumentNullException.ThrowIfNull(credential);
 
         Credential = credential;
         Status = status;
+        AccountSeries = accountSeries;
     }
 
     /// <summary>The operator id and decrypted access token. Carries a secret; never serialise it.</summary>
@@ -38,6 +46,19 @@ public sealed class NayaxRequestCredential
 
     /// <summary>The connection status read in the same snapshot as the credential.</summary>
     public NayaxConnectionStatus Status { get; }
+
+    /// <summary>
+    /// Which Nayax <em>account</em> this call is authenticated as, in the business's own internal
+    /// series (issue #978), or <see langword="null"/> when the credential's source cannot say.
+    ///
+    /// <para>It is carried for the same reason <see cref="CredentialRevision"/> is: a fact written
+    /// about the answer to this call must name the account the call was actually made with, never
+    /// whatever is stored by the time the answer arrives. The connected-machine snapshot of #978 is
+    /// the one consumer, and this is the whole of what makes its evidence attributable - a series
+    /// read separately, before or after the request, describes a different fact. It carries no part
+    /// of a credential, so it is safe to put on a stored row.</para>
+    /// </summary>
+    public int? AccountSeries { get; }
 
     /// <summary>The Nayax operator id, the Lynx API's <c>OperatorID</c> path parameter.</summary>
     public string OperatorId => Credential.OperatorId;

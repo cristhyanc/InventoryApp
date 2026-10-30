@@ -6,6 +6,7 @@ using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
+using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Costing;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Documents;
@@ -60,6 +61,7 @@ using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Inventory.Infrastructure;
 
@@ -215,6 +217,13 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IBillingSubscriptionStore, EfBillingSubscriptionStore>();
         services.AddScoped<IManualPlanGrantStore, EfManualPlanGrantStore>();
         services.AddScoped<ISubscriptionGrandfatheringStore, EfSubscriptionGrandfatheringStore>();
+        // The connected-machine snapshots of issue #978: ordinary tenant-owned, append-only rows
+        // recorded through one insert-if-absent claim, with the uniqueness rule on (business, UTC
+        // date, account series) belonging to the database. Scoped like every adapter here, so a page
+        // load records on the request's own context and the daily job on the one it opened for that
+        // business.
+        services.AddScoped<IConnectedMachineSnapshotStore, EfConnectedMachineSnapshotStore>();
+
         // The Super Admin's manual plan grant (issue #982). A separate adapter rather than a method
         // on either store above, because it answers a different kind of question: the business is the
         // subject of a platform decision rather than the caller's own resolved scope, so this is the
@@ -535,12 +544,38 @@ public static class InfrastructureServiceCollectionExtensions
         // resolves the credential provider and the business scope per request like every other
         // consumer. A test can still put its own double behind it. Transient, as the typed client it
         // wraps is.
-        services.AddTransient<INayaxLynxClient>(serviceProvider => new CachingNayaxLynxClient(
-            serviceProvider.GetRequiredService<NayaxLynxClient>(),
-            serviceProvider.GetRequiredService<INayaxRequestCredentialProvider>(),
-            serviceProvider.GetRequiredService<IBusinessScope>(),
-            serviceProvider.GetRequiredService<NayaxMachineListCache>(),
-            serviceProvider.GetRequiredService<NayaxMachineProductsCache>()));
+        //
+        // Outside it sits the connected-machine counter of issue #978, which records the day's
+        // snapshot from a complete fleet read the application was performing anyway - so the count
+        // costs no extra Nayax call on a page load - and delegates everything else untouched. It is
+        // outermost because it must see the fresh reads every consumer makes, and it is the only
+        // place the refresh path records a snapshot. It takes the caching decorator as
+        // INayaxFleetProvenanceClient, because the fleet read has to come back with the account
+        // series of the credential snapshot that authenticated it: that is what the snapshot is
+        // stamped with, and reading the connection again afterwards would describe whichever account
+        // is stored by then rather than the one the fleet was read from.
+        services.AddTransient<INayaxLynxClient>(serviceProvider =>
+            new ConnectedMachineCountingNayaxLynxClient(
+                new CachingNayaxLynxClient(
+                    serviceProvider.GetRequiredService<NayaxLynxClient>(),
+                    serviceProvider.GetRequiredService<INayaxRequestCredentialProvider>(),
+                    serviceProvider.GetRequiredService<IBusinessScope>(),
+                    serviceProvider.GetRequiredService<NayaxMachineListCache>(),
+                    serviceProvider.GetRequiredService<NayaxMachineProductsCache>()),
+                serviceProvider.GetRequiredService<IConnectedMachineSnapshotRecorder>(),
+                serviceProvider
+                    .GetRequiredService<ILogger<ConnectedMachineCountingNayaxLynxClient>>()));
+
+        // The daily job's own fleet read (issue #978) is given the inner typed client explicitly,
+        // never the port registered above: the port is the decorator, so resolving it here would make
+        // the job's read record the snapshot twice over - once through the decorator and once through
+        // the job - and would be a resolution cycle besides. Every refusal is unchanged, because the
+        // status gate and the support-session rule belong to the credential provider the typed client
+        // already uses. The typed client is also an INayaxFleetProvenanceClient, so the job's read
+        // reports the account series it was authenticated as and the snapshot is stamped with that
+        // rather than with the series the job read before the call.
+        services.AddScoped<IConnectedMachineFleetReader>(serviceProvider =>
+            new NayaxConnectedMachineFleetReader(serviceProvider.GetRequiredService<NayaxLynxClient>()));
 
         // The connection-test check runner (issue #536) gets its own HttpClient from the same base
         // address and the same resilience handler, and registers no credential here either: it

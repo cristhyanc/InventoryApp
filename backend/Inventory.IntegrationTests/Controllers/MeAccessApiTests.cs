@@ -263,13 +263,18 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
         var entitlement = json.GetProperty("entitlement");
 
         Assert.Equal(
-            ["attachmentStorage", "endsAtUtc", "enforced", "plan", "source"],
+            ["attachmentStorage", "connectedMachines", "endsAtUtc", "enforced", "plan", "source"],
             entitlement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.False(entitlement.GetProperty("enforced").GetBoolean());
         // Null rather than a plan name: "unrestricted" is not a plan anybody is on.
         Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("plan").ValueKind);
         Assert.Equal("EnforcementDisabled", entitlement.GetProperty("source").GetString());
         Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("endsAtUtc").ValueKind);
+        // And no connected-machine answer at all (issue #978): there is no plan to report an
+        // allowance against, so nothing about the business's machines is read or published while
+        // nothing is enforced.
+        Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("connectedMachines").ValueKind);
+
         // And null attachment storage (issue #968): with no plan enforced there is no allowance to
         // report a percentage of, nothing is counted, and no upload is refused.
         Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("attachmentStorage").ValueKind);

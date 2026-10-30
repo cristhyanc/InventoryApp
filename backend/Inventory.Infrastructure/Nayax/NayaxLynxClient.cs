@@ -11,7 +11,7 @@ namespace Inventory.Infrastructure.Nayax;
 // Docs: https://devzone.nayax.com/docs/manage-data-operations/lynx-api
 // Auth: a Bearer token, resolved per call from the current business's own stored connection
 // (issue #520) through INayaxRequestCredentialProvider. Only the base URL is global.
-public class NayaxLynxClient : INayaxLynxCachedReadClient
+public class NayaxLynxClient : INayaxLynxCachedReadClient, INayaxFleetProvenanceClient
 {
     private readonly HttpClient _http;
     private readonly INayaxRequestCredentialProvider _credentials;
@@ -39,6 +39,23 @@ public class NayaxLynxClient : INayaxLynxCachedReadClient
     // runner builds this class directly and must never read or write a cache.
     public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
         GetMachinesAsync(ct);
+
+    /// <inheritdoc />
+    public async Task<NayaxFleetReadResult> ReadFleetFreshAsync(CancellationToken ct = default)
+    {
+        // One credential resolution, and it is the one the request is sent with - so the series this
+        // answer is attributed to is the series of the account that actually authenticated it
+        // (issue #978). Resolving here rather than letting SendAsync resolve its own is what makes
+        // the request and its provenance one operation; it is exactly what the machine-list cache
+        // does for its key, and it is still one connection read per Nayax call.
+        var credential = await _credentials.GetForOperationAsync(ct).ConfigureAwait(false);
+
+        var machines = await SendWithCredentialAsync<List<NayaxMachine>>(
+                nameof(GetMachinesAsync), HttpMethod.Get, _ => "machines", credential, ct)
+            .ConfigureAwait(false);
+
+        return new NayaxFleetReadResult(machines, credential.AccountSeries);
+    }
 
     /// <inheritdoc />
     public Task<List<NayaxMachine>> ReadMachinesAsync(

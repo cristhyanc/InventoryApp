@@ -9,7 +9,9 @@ using Inventory.Domain.Exceptions;
 using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Attachments;
+using InventoryApi.Tests.Application.ConnectedMachines;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.PlatformOptions;
 using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.SupportSessions;
@@ -71,6 +73,11 @@ public class GetCurrentAccessTests
             grandfathering,
             grants ?? new FakeManualPlanGrantStore(),
             new FakeBillingSubscriptionStore(),
+            // The connected machines of issue #978 travel with the plan; this file is about the plan
+            // travelling with the capability set, so the business here has no Nayax connection and no
+            // recorded count, which is what an unconnected business reports.
+            new FakeNayaxConnectionStore(),
+            new FakeConnectedMachineSnapshotStore(),
             new FakeClock(EntitlementNow));
 
     private static readonly DateTime EntitlementNow = new(2026, 11, 10, 6, 0, 0, DateTimeKind.Utc);

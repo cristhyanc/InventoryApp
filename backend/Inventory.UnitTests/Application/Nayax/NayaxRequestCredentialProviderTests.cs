@@ -49,6 +49,24 @@ public class NayaxRequestCredentialProviderTests
         Assert.Equal(status, credential.Status);
     }
 
+    /// <summary>
+    /// The account series travels out with the credential, from the same snapshot (issue #978): a
+    /// call that is about to be made has to be able to say which Nayax <em>account</em> it is
+    /// authenticated as, because the connected-machine snapshot taken from a fleet read is stamped
+    /// with it. A series read separately, after the answer arrives, would name whichever account is
+    /// stored by then.
+    /// </summary>
+    [Fact]
+    public async Task The_account_series_of_the_same_snapshot_travels_with_the_credential()
+    {
+        var store = new FakeNayaxConnectionStore(
+            OperatorId, Token, NayaxConnectionStatus.Ready, accountSeries: 3);
+
+        var credential = await CreateProvider(store).GetForOperationAsync(CancellationToken.None);
+
+        Assert.Equal(3, credential.AccountSeries);
+    }
+
     [Fact]
     public async Task Stored_but_untested_credentials_are_flagged_as_having_unverified_permissions()
     {

@@ -2,6 +2,8 @@ using Inventory.Application.Attachments;
 using Inventory.Application.Subscriptions;
 using Inventory.Domain.Attachments;
 using Inventory.Domain.Subscriptions;
+using InventoryApi.Tests.Application.ConnectedMachines;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 
@@ -98,6 +100,8 @@ public static class FakeAttachmentQuota
                 new FakeSubscriptionGrandfatheringStore(),
                 new FakeManualPlanGrantStore(),
                 new FakeBillingSubscriptionStore(),
+                new FakeNayaxConnectionStore(),
+                new FakeConnectedMachineSnapshotStore(),
                 new FakeClock(Now)),
             store ?? new FakeAttachmentQuotaStore());
 
@@ -113,6 +117,8 @@ public static class FakeAttachmentQuota
                     ManualPlanGrantSource.Grandfathered,
                     new EntitlementPeriod(Now.AddDays(-1), null))),
                 new FakeBillingSubscriptionStore(),
+                new FakeNayaxConnectionStore(),
+                new FakeConnectedMachineSnapshotStore(),
                 new FakeClock(Now)),
             store);
 }

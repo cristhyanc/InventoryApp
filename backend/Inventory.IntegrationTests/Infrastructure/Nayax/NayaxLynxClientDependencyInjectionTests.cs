@@ -1,6 +1,8 @@
+using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
+using Inventory.Domain.ConnectedMachines;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Nayax;
 using InventoryApi.Tests.Application.Time;
@@ -75,7 +77,9 @@ public sealed class NayaxLynxClientDependencyInjectionTests
     ///
     /// <para>Since issues #840 and #842 the port resolves to the caching decorator, which still
     /// takes that same credential provider (its refusals are what run before every cache hit) and
-    /// still wraps the one HTTP client, which also takes it.</para>
+    /// still wraps the one HTTP client, which also takes it. Since issue #978 the connected-machine
+    /// counter sits outside both, so the port resolves to <em>it</em>; it changes no refusal, because
+    /// every refusal belongs to the credential provider below it.</para>
     /// </summary>
     [Fact]
     public void The_registered_client_is_constructed_from_the_per_business_credential_provider()
@@ -83,9 +87,45 @@ public sealed class NayaxLynxClientDependencyInjectionTests
         using var provider = ContainerWithTheRegisteredClient();
         using var scope = provider.CreateScope();
 
-        Assert.IsType<CachingNayaxLynxClient>(
+        Assert.IsType<ConnectedMachineCountingNayaxLynxClient>(
             scope.ServiceProvider.GetRequiredService<INayaxLynxClient>());
         Assert.IsType<NayaxLynxClient>(scope.ServiceProvider.GetRequiredService<NayaxLynxClient>());
+    }
+
+    /// <summary>
+    /// And without that port there is no client at all: the registration has no constructor left
+    /// that takes a baked-in operator id and token, so a container missing the per-business
+    /// credential provider fails to produce one rather than falling back to something global.
+    /// </summary>
+    [Fact]
+    public void Without_the_per_business_credential_provider_no_client_can_be_produced()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddNayaxLynxClient(new NayaxLynxOptions { BaseUrl = "https://lynx.nayax.com" });
+        services.AddScoped<IBusinessScope>(_ => new BusinessScope());
+        services.AddScoped<IConnectedMachineSnapshotRecorder>(_ => new NeverCalledSnapshotRecorder());
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.Throws<InvalidOperationException>(
+            () => scope.ServiceProvider.GetRequiredService<INayaxLynxClient>());
+    }
+
+    /// <summary>
+    /// The connected-machine counter of issue #978 is the outermost registration, and the fleet read
+    /// the daily job uses is registered beside it over the <em>inner</em> typed client - never over
+    /// the port, which is the decorator itself.
+    /// </summary>
+    [Fact]
+    public void The_connected_machine_fleet_reader_is_registered_over_the_inner_client()
+    {
+        using var provider = ContainerWithTheRegisteredClient();
+        using var scope = provider.CreateScope();
+
+        Assert.IsType<NayaxConnectedMachineFleetReader>(
+            scope.ServiceProvider.GetRequiredService<IConnectedMachineFleetReader>());
     }
 
     /// <summary>
@@ -122,8 +162,28 @@ public sealed class NayaxLynxClientDependencyInjectionTests
             _ => new FakeNayaxRequestCredentialProvider("op-1", "fake-token-not-a-real-credential"));
         services.AddScoped<IBusinessScope>(_ => new BusinessScope());
         services.AddSingleton<IClock>(new FakeClock(new DateTime(2026, 10, 23, 0, 0, 0, DateTimeKind.Utc)));
+        // The connected-machine counter of issue #978 is the outermost decorator, so the port cannot
+        // be produced without its recorder. Nothing here reads the fleet, so the recorder is never
+        // called.
+        services.AddScoped<IConnectedMachineSnapshotRecorder>(_ => new NeverCalledSnapshotRecorder());
 
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>
+    /// The connected-machine recorder as a composition test needs it: present, and never called,
+    /// because nothing here performs a fleet read.
+    /// </summary>
+    private sealed class NeverCalledSnapshotRecorder : IConnectedMachineSnapshotRecorder
+    {
+        public Task<ConnectedMachineSnapshotOutcome> RecordFromFleetReadAsync(
+            ConnectedMachineFleetRead read,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("No fleet is read in a composition test.");
+
+        public Task<ConnectedMachineSnapshotAttempt> ReadFleetAndRecordAsync(
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("No fleet is read in a composition test.");
     }
 
     private static bool PipelineContains<THandler>(HttpMessageHandler handler)

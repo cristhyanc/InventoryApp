@@ -1,5 +1,7 @@
 using Inventory.Application.Subscriptions;
 using Inventory.Domain.Subscriptions;
+using InventoryApi.Tests.Application.ConnectedMachines;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -135,5 +137,14 @@ public class CurrentPlanTests
         ISubscriptionGrandfatheringStore grandfathering,
         IManualPlanGrantStore grants,
         IBillingSubscriptionStore subscriptions) =>
-        new(new GetEffectiveEntitlement(flag, grandfathering, grants, subscriptions, new FakeClock(Now)));
+        new(new GetEffectiveEntitlement(
+            flag,
+            grandfathering,
+            grants,
+            subscriptions,
+            // The connected machines of issue #978 travel with the plan; a plan feature question
+            // never reads them, so the business here has no Nayax connection and no recorded count.
+            new FakeNayaxConnectionStore(),
+            new FakeConnectedMachineSnapshotStore(),
+            new FakeClock(Now)));
 }
