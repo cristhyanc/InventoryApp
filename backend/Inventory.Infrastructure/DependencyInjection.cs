@@ -275,6 +275,15 @@ public static class InfrastructureServiceCollectionExtensions
         // request's own context like every adapter above, so nothing can hand it an unscoped one.
         // See EfPriceCollectorMatchStore and docs/architecture.md § Collector product matching.
         services.AddScoped<IPriceCollectorMatchStore, EfPriceCollectorMatchStore>();
+        // And the Super Admin's review of all of it (issue #928): the queue and the four decisions.
+        // It is the only writer of MasterProducts in the application, the only path that confirms a
+        // supplier listing or a pack size, and the second path that writes a mapping's match columns
+        // under a denied scope - through the narrow review window AppDbContext grants and
+        // BusinessOwnershipEnforcer bounds, and through one IgnoreQueryFilters read in one place.
+        // Scoped on the request's own context like every adapter above, so nothing can hand it an
+        // unscoped one. See EfPriceCatalogueReviewStore and docs/architecture.md § Super Admin review
+        // of the supplier price catalogue.
+        services.AddScoped<IPriceCatalogueReviewStore, EfPriceCatalogueReviewStore>();
         // The cheapest-supplier summary (issue #930): the read behind the Cheapest supplier column.
         // It reaches the platform catalogue only through the caller's own matched mappings and the
         // supplier records the caller holds a copy of, on the request's own scoped context like the

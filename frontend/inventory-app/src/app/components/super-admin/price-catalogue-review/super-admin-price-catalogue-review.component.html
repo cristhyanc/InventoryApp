@@ -1,0 +1,141 @@
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Supplier price review</h1>
+      <p class="page-subtitle">
+        The shared supplier price catalogue: which master product a search was for, the matches a
+        collector run applied by itself, and the supplier listings waiting to be confirmed. Nothing
+        here belongs to one business — a decision applies to every business tracking the product.
+      </p>
+    </div>
+    <button type="button" class="btn btn-secondary" [disabled]="loading" (click)="load()">Refresh</button>
+  </header>
+
+  @if (loading) {
+    <p class="text-sm value-muted">Loading the review queue…</p>
+  } @else if (loadError) {
+    <p class="text-sm text-red-600" role="alert">Unable to load the review queue.</p>
+  } @else if (queue) {
+    @if (isEmpty) {
+      <section class="card">
+        <div class="card-body">
+          <p class="text-sm value-muted">Nothing is waiting for a decision.</p>
+        </div>
+      </section>
+    }
+
+    @if (queue.waitingProducts.length > 0) {
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Products awaiting a match</h2>
+        </div>
+        <div class="card-body space-y-3">
+          @for (product of queue.waitingProducts; track product.waitingKey) {
+            <app-waiting-product-match
+              [product]="product"
+              [masterProducts]="queue.masterProducts"
+              (decided)="onDecided($event)"
+              (staleState)="onStaleState()"
+            ></app-waiting-product-match>
+          }
+        </div>
+      </section>
+    }
+
+    @if (queue.automaticMatches.length > 0) {
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Automatic matches to check</h2>
+          <p class="text-sm value-muted">
+            Applied by a collector run under the backend's own checks (issue #941). Confirming settles
+            them; undoing returns the businesses waiting under the search to awaiting a match and
+            never lets that pair be matched automatically again.
+          </p>
+        </div>
+        <div class="card-body">
+          <table class="table">
+            <thead class="table-head">
+              <tr>
+                <th scope="col" class="table-cell">Searched for</th>
+                <th scope="col" class="table-cell">Matched to</th>
+                <th scope="col" class="table-cell">Confidence</th>
+                <th scope="col" class="table-cell">Reason</th>
+                <th scope="col" class="table-cell">Run</th>
+                <th scope="col" class="table-cell">Applied</th>
+                <th scope="col" class="table-cell">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (match of queue.automaticMatches; track match.suggestionId) {
+                <tr class="table-row">
+                  <td class="table-cell">
+                    {{ searchedFor(match) }}
+                    <span class="badge badge-neutral">Auto-matched</span>
+                  </td>
+                  <td class="table-cell">{{ describe(match) }}</td>
+                  <td class="table-cell">{{ confidencePercent(match.confidence) }}%</td>
+                  <td class="table-cell">{{ match.reason }}</td>
+                  <td class="table-cell">{{ match.collectorRun }}</td>
+                  <td class="table-cell">{{ match.appliedAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}</td>
+                  <td class="table-cell">
+                    <div class="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="btn btn-primary btn-sm"
+                        [disabled]="decidingSuggestionId === match.suggestionId"
+                        (click)="confirmAutomaticMatch(match)"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-danger btn-sm"
+                        [disabled]="decidingSuggestionId === match.suggestionId"
+                        (click)="requestUndo(match)"
+                      >
+                        Undo
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    }
+
+    @if (queue.listings.length > 0) {
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title">Supplier listings awaiting a decision</h2>
+          <p class="text-sm value-muted">
+            Barcode matches first. A listing's price is only ever accepted once the listing is
+            confirmed, and only while the reading it is holding is fresh, describes the pack that was
+            confirmed and is inside the band around its last accepted price.
+          </p>
+        </div>
+        <div class="card-body space-y-3">
+          @for (listing of queue.listings; track listing.id) {
+            <app-supplier-listing-review
+              [listing]="listing"
+              (decided)="onDecided($event)"
+              (staleState)="onStaleState()"
+            ></app-supplier-listing-review>
+          }
+        </div>
+      </section>
+    }
+  }
+</div>
+
+@if (undoTarget) {
+  <app-confirmation-dialog
+    [title]="undoTitle"
+    [message]="undoMessage"
+    confirmLabel="Undo match"
+    cancelLabel="Cancel"
+    (confirmed)="confirmUndo()"
+    (canceled)="cancelUndo()"
+  ></app-confirmation-dialog>
+}

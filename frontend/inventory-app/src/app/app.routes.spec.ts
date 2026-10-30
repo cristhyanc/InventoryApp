@@ -28,6 +28,7 @@ import { NayaxSaleTimestampRepairComponent } from './components/admin/nayax-sale
 import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
 import { SuperAdminBusinessesComponent } from './components/super-admin/businesses/super-admin-businesses.component';
 import { SuperAdminSupplierPresetsComponent } from './components/super-admin/supplier-presets/super-admin-supplier-presets.component';
+import { SuperAdminPriceCatalogueReviewComponent } from './components/super-admin/price-catalogue-review/super-admin-price-catalogue-review.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
 import { BusinessSettingsComponent } from './components/admin/business-settings/business-settings.component';
@@ -401,6 +402,25 @@ describe('super-admin routing (issue #546)', () => {
 
   it('loads the Super Admin Supplier presets page component', async () => {
     await expect(loadedComponent('super-admin/supplier-presets')).resolves.toBe(SuperAdminSupplierPresetsComponent);
+  });
+
+  /**
+   * The Supplier price review page (issue #928) is guarded exactly like the three above, for the
+   * same reason: its authority is the platform-admin check and no business role or membership. It
+   * decides the shared catalogue, which belongs to no business at all.
+   */
+  it('guards /super-admin/price-catalogue-review with MsalGuard then platformAdminGuard, and nothing else', () => {
+    expect(route('super-admin/price-catalogue-review').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+  });
+
+  it('carries no accountStateGuard on /super-admin/price-catalogue-review either', () => {
+    expect(route('super-admin/price-catalogue-review').canActivate ?? []).not.toContain(accountStateGuard);
+  });
+
+  it('loads the Super Admin Supplier price review page component', async () => {
+    await expect(loadedComponent('super-admin/price-catalogue-review')).resolves.toBe(
+      SuperAdminPriceCatalogueReviewComponent
+    );
   });
 });
 

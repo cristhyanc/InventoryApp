@@ -331,6 +331,11 @@ public class EndpointPlanRequirementTests
         new("SuperAdminBusinessesController.Reject", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reject
         new("SuperAdminBusinessesController.ReleaseMember", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/members/{membershipId:int}/release
         new("SuperAdminOptionVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/option-visibility
+        new("SuperAdminPriceCatalogueReviewController.ConfirmAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm
+        new("SuperAdminPriceCatalogueReviewController.DecideListing", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/listings/{supplierListingId:long}/decision
+        new("SuperAdminPriceCatalogueReviewController.DecideMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/matches
+        new("SuperAdminPriceCatalogueReviewController.Queue", PlanRequirementKind.None), // GET api/super-admin/price-catalogue-review
+        new("SuperAdminPriceCatalogueReviewController.UndoAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo
         new("SuperAdminPlanGrantsController.End", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/plan-grant/end
         new("SuperAdminPlanGrantsController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/plan-grant
         new("SuperAdminPlanGrantsController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/plan-grant

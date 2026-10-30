@@ -370,6 +370,18 @@ export const supplierPresetsNavLink: NavLink = {
 };
 
 /**
+ * The Supplier price review page (issue #928): the shared supplier price catalogue's own review -
+ * waiting products, automatic matches and the listings waiting to be confirmed. Like the three links
+ * above it declares no capability, because no business role grants it: only the platform-admin probe
+ * below does.
+ */
+export const priceCatalogueReviewNavLink: NavLink = {
+  kind: 'link',
+  label: 'Supplier Price Review',
+  route: '/super-admin/price-catalogue-review'
+};
+
+/**
  * The top-level Super Admin group (issue #546, parent #510 under #328): kept apart from the
  * business `Admin` group because neither of its destinations is granted by a business role.
  * `navigationFor` composes it in only while `GET /api/admin/diagnostics/access` confirms the
@@ -380,7 +392,7 @@ export const superAdminNavGroup: NavGroup = {
   kind: 'group',
   label: 'Super Admin',
   icon: 'settings',
-  children: [platformDiagnosticsNavLink, businessesNavLink, supplierPresetsNavLink]
+  children: [platformDiagnosticsNavLink, businessesNavLink, supplierPresetsNavLink, priceCatalogueReviewNavLink]
 };
 
 /**

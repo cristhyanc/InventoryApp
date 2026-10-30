@@ -109,6 +109,13 @@ public class SupplierPriceObservationBoundaryTests
         // decision rather than a discovery.
         "Inventory.Application/PriceCatalogue/CheapestSupplierSummary.cs",
         "Inventory.Application/PriceCatalogue/ICheapestSupplierSummaryStore.cs",
+        // Issue #928's Super Admin review: the Domain rule that decides whether a held reading may
+        // become a listing's accepted price, the port it is reached through, and the adapter that
+        // stores it. These three are the <em>second</em> writer of an observed price in the
+        // application - the collector's results (#937) are the first - and that is exactly why they
+        // are declared here rather than discovered: an observed price is still purchasing guidance,
+        // and nothing in these files reads a cost, a valuation or a report.
+        "Inventory.Application/PriceCatalogue/IPriceCatalogueReviewStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCatalogueWorkListStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorResultStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunSettings.cs",
@@ -121,6 +128,7 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Domain/PriceCatalogue/PriceCollectorWorkItemPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorWorkListPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierListingPriceStatePolicy.cs",
+        "Inventory.Domain/PriceCatalogue/SupplierListingReviewPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierPriceFreshnessPolicy.cs",
         "Inventory.Domain/PriceCatalogue/SupplierPriceObservationPolicy.cs",
         "Inventory.Infrastructure/Data/AppDbContext.cs",
@@ -134,6 +142,7 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Infrastructure/Persistence/EfCheapestSupplierSummaryStore.cs",
         "InventoryApi/Controllers/CheapestSuppliersController.cs",
         "InventoryApi/DTOs/CheapestSupplierDtos.cs",
+        "Inventory.Infrastructure/Persistence/EfPriceCatalogueReviewStore.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCatalogueWorkListStore.cs",
         // Issue #941's matches endpoint: the adapter that decides and stores a match, and the shared
         // "is this run still open?" gate it and the results adapter both ask. Neither reads a price -
