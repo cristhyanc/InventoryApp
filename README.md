@@ -888,7 +888,7 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 
 **How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
 
-**What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
+**What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). **Nothing it reports becomes a price by itself**: a reading of a listing nobody has confirmed is held where a person can see it, and the [Super Admin supplier price review](#super-admin-supplier-price-review) is what confirms, corrects or refuses it. Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
 
 ## Platform diagnostics API
 
@@ -1027,6 +1027,75 @@ it is still waiting for a decision — never one without the other.
   editing its copy changes neither the preset nor another business's copy. What the business may
   change about a linked copy is in [Suppliers from the platform list](#suppliers-from-the-platform-list)
   below.
+
+## Super Admin supplier price review
+
+The shared supplier price catalogue is collected automatically — a daily run searches each supplier's
+site for the products businesses asked to have priced — and **nothing it finds takes part in a price
+comparison until a person has confirmed it**. That person is the Super Admin, and this is the page
+they do it on (issue #928, the seventh task of #817). The data is shared by every business, so one
+wrong pack quantity would be one wrong "cheapest supplier" for everybody tracking the product: Claude
+may propose, and a Business Owner may not confirm anything here at all.
+
+```text
+GET  /api/super-admin/price-catalogue-review                  the whole review queue
+POST /api/super-admin/price-catalogue-review/listings/{id}/decision
+                                                              confirm (as reviewed) or refuse one listing
+POST /api/super-admin/price-catalogue-review/matches          { waitingKey, decision, … }
+POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/confirm
+POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
+```
+
+- **Who may use it.** Exactly the same answer as every Super Admin route above: the configured Entra
+  `(tid, oid)` pair alone. An Owner, a Manager and an Operator are refused, a role preview cannot
+  write, and a member who presents a support-session id is still an ordinary member. The request
+  resolves no business at all.
+- **Products awaiting a match** are listed by their **search name and unit label** with a **count of
+  the businesses waiting** — never which business asked, which is not in the API at all — together
+  with what the collector suggested, how sure it was, why, which run said so, and the supplier
+  listings its searches have found. The Super Admin can accept the suggestion, pick another master
+  product, create one (prefilled from the suggestion), refuse the suggestion, or record that nothing
+  in the catalogue is this product. A match settles every business waiting under that search at once
+  and moves the listings it had collected to the product — still as proposals, because a match says
+  which product a search was for and never that somebody confirmed a listing.
+- **Automatic matches** are listed separately and flagged **Auto-matched**, with the run, the
+  confidence and the reason. **Confirm** settles them. **Undo** returns the businesses waiting under
+  the search to awaiting a match, moves the *proposed* listings back to it, leaves **confirmed**
+  listings exactly as they are, and records the pair so it is never matched automatically again.
+- **Confirming a listing is the only thing that confirms a pack size.** The pack quantity, the barcode
+  and its scope, the variant and the individual size are confirmed as reviewed — correcting any of
+  them and confirming is one action, which is how a BIG W row whose pack count was read out of its
+  name ("Coca Cola 375Ml Coke 36Pk 36 Pack") gets the count a comparison then divides by.
+- **Confirming also accepts the price the listing was holding, but only when it stands up.** The
+  reading must be inside that supplier's own freshness limit, must describe the pack that was
+  confirmed, and must be inside the band around the listing's last accepted price (no more than 50%
+  below, no more than 100% above). Otherwise the listing is **confirmed with no current price** and is
+  priced on the next run — the page says which of the two happened and why.
+- **A price exception is explicit.** A price past the band is accepted only when the Super Admin ticks
+  **Approve this price exception**, which is offered only when the band is what would otherwise refuse
+  the reading; the accepted price then becomes the reference the next run's band is measured against.
+  The exception overrides the band and nothing else — it cannot make a stale reading fresh — and it is
+  **audited separately** from the listing decision, because it overrides a financial safeguard.
+- **Barcode matches are shown first.** A listing whose barcode is a **confirmed** listing's barcode in
+  the same scope is flagged as a barcode match and shows which listing it matches, because that is the
+  one fact two suppliers can publish about the same physical pack. It still needs confirming.
+- **Decisions are kept.** A refused listing is not shown again unless its identity changes, a confirmed
+  one comes back only when a later run flags it, and the same shelf found every day proposes nothing
+  twice. Supplier wording is shown as plain text, and the listing's own page is the only link.
+- **Audit.** Every committed decision emits one structured `ILogger` event with the actor
+  `(tid, oid)`, which decision it was, the listing, master product and suggestion keys, the search key,
+  whether a price was accepted and the pack quantity confirmed — and a second event when a price
+  exception was used. It carries **no business, no supplier name, no listing title and no price**, and
+  there is no audit table. **The log destination and retention period are platform configuration, as
+  for the trails above, and a human must verify them before relying on this trail.**
+- **The page.** The Angular app offers it at `/super-admin/price-catalogue-review`, shown as
+  **Supplier Price Review** in the sidebar's **Super Admin** group only while
+  `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like the three links beside
+  it; entering the URL directly works identically, because the policy decides access on every request.
+  It shows the three sections above, re-reads the queue after every decision so what is on screen is
+  what is stored, and shows the API's own refusal sentence verbatim — including the `409` that says
+  somebody else decided the same row first. See
+  [docs/architecture.md § Super Admin review of the supplier price catalogue](docs/architecture.md#super-admin-review-of-the-supplier-price-catalogue-issue-928).
 
 ## Super Admin option visibility
 
