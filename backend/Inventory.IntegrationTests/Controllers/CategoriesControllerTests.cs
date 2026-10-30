@@ -143,4 +143,24 @@ public class CategoriesControllerTests
         store.RefusalToReturn = null;
         Assert.IsType<NoContentResult>(await controller.Delete(1, CancellationToken.None));
     }
+
+    /// <summary>
+    /// A category the business's sales provider names is refused the same way, as a <c>409</c>
+    /// naming the provider (issue #1026): the refusal itself is decided by the store
+    /// (<c>EfCategoryStoreTests</c>), proved here is that the controller carries it through
+    /// unchanged.
+    /// </summary>
+    [Fact]
+    public async Task Delete_returns_conflict_with_the_provider_refusal()
+    {
+        var store = new FakeCategoryStore([new CategoryRecord(1, "Nayax Drinks", null, IsProviderManaged: true)])
+        {
+            RefusalToReturn = "This category comes from Nayax and cannot be deleted here. Nothing was deleted."
+        };
+        var controller = CreateController(store);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(await controller.Delete(1, CancellationToken.None));
+
+        Assert.Equal("This category comes from Nayax and cannot be deleted here. Nothing was deleted.", conflict.Value);
+    }
 }
