@@ -115,12 +115,21 @@ public class SupplierPriceObservationBoundaryTests
         // application - the collector's results (#937) are the first - and that is exactly why they
         // are declared here rather than discovered: an observed price is still purchasing guidance,
         // and nothing in these files reads a cost, a valuation or a report.
+        // Issue #1023's read-only Super Admin view of the master products: the port, the contracts it
+        // answers with and the adapter behind it. None of them writes an observed price and none of
+        // them compares one - what they publish is the pack price of the one accepted reading a
+        // listing already points at, with its currency, its basis and its instant, so a person can see
+        // what a supplier currently charges for a pack of a product in the catalogue. They are
+        // declared here rather than discovered for the reason every other reader is: a new reader of
+        // an observed price is a decision.
+        "Inventory.Application/PriceCatalogue/IMasterProductCatalogueStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCatalogueReviewStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCatalogueWorkListStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorResultStore.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunSettings.cs",
         "Inventory.Application/PriceCatalogue/IPriceCollectorRunStore.cs",
         "Inventory.Application/PriceCatalogue/IssuePriceCollectorWorkList.cs",
+        "Inventory.Application/PriceCatalogue/MasterProductCatalogueContracts.cs",
         "Inventory.Application/PriceCatalogue/PriceCollectorResultContracts.cs",
         "Inventory.Domain/PriceCatalogue/CheapestUnitOfferPolicy.cs",
         "Inventory.Domain/PriceCatalogue/PriceCollectorResultPolicy.cs",
@@ -140,6 +149,7 @@ public class SupplierPriceObservationBoundaryTests
         "Inventory.Infrastructure/Models/SupplierPreset.cs",
         "Inventory.Infrastructure/Models/SupplierPriceObservation.cs",
         "Inventory.Infrastructure/Persistence/EfCheapestSupplierSummaryStore.cs",
+        "Inventory.Infrastructure/Persistence/EfMasterProductCatalogueStore.cs",
         "InventoryApi/Controllers/CheapestSuppliersController.cs",
         "InventoryApi/DTOs/CheapestSupplierDtos.cs",
         "Inventory.Infrastructure/Persistence/EfPriceCatalogueReviewStore.cs",
