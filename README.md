@@ -873,7 +873,7 @@ POST /api/price-collector/work-items/{id}/outcome       finishes one search
 POST /api/price-collector/runs/{id}/complete            closes the run
 ```
 
-**What has shipped.** The authentication path, the work list, the results endpoints (#937) and the matches endpoint (#941). The workflow itself (#929) and the collector prompt and scripts (#926, #927) are separate tasks.
+**What has shipped.** The authentication path, the work list, the results endpoints (#937), the matches endpoint (#941), the JB Metro lookup script (#927), and the collector prompt, the Apify limits and the helper scripts (#926, see [Running the collector scripts locally](#running-the-collector-scripts-locally) below). The scheduled workflow itself, its Claude CLI flags, its permission settings and its secrets (#929) are a separate task, so nothing runs this on a schedule yet.
 
 **The shipped state trusts no collector.** `PriceCollector__TenantId` and `PriceCollector__ClientId` are **empty** in `appsettings.json`, which is both the fail-closed state and the rollback lever: with them empty the collector endpoint answers `401` to every request, issues nothing, and no other endpoint is affected in any way. A half-filled or malformed section means the same thing and is logged as a startup error. Neither identifier is a credential — the API validates with Entra's published signing keys and the collector holds no secret either — so they are ordinary application settings with no Key Vault reference, and no real identifier may be committed. Supply them with `dotnet user-secrets` locally or application settings in Azure; see [Configuration and secrets](#configuration-and-secrets).
 
@@ -889,6 +889,35 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 **Why both identifiers are pinned, and not just the role.** The workforce scheme is multi-tenant (`TenantId: common`), so another Entra tenant can consent to this API and assign `PriceCollector.Run` to an application of its own — and Microsoft signs that tenant's tokens with the same key set, so the signature is genuine. Pinning `tid` is what makes that somebody else's token, and pinning `azp`/`appid` is what stops the owner's *other* workloads. The token must also carry **no delegated scope at all**, because Entra puts an assigned application role in a signed-in person's token too: that rule is what stops a person impersonating the collector.
 
 **How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
+
+### Running the collector scripts locally
+
+The collector side lives in `scripts/price-collector/` and is plain Node with no dependencies: the run's instructions (`prompt.md`), the Apify MCP configuration and per-actor rules (`apify-mcp.json`, `apify-limits.json`), the `PreToolUse` guard that enforces them (`apify-guard.mjs`), and the two scripts that talk to this API. The complete design is [docs/architecture.md § The collector prompt, the Apify limits and the helper scripts](docs/architecture.md#the-collector-prompt-the-apify-limits-and-the-helper-scripts-issue-926).
+
+Both scripts read the API base URL and the collector's bearer token from the environment, and never from an argument or a default — a token on a command line is a token in a process list:
+
+```bash
+export PRICE_COLLECTOR_API_BASE_URL="https://localhost:7001"   # your test API, no trailing slash needed
+export PRICE_COLLECTOR_API_TOKEN="<an app-only token for the configured collector application>"
+
+# 1. The work list. Run it once: reading it issues a run, and a second call expires the first.
+node scripts/price-collector/get-work.mjs            # the collector's view: one entry per search
+node scripts/price-collector/get-work.mjs --raw      # the API's answer verbatim
+
+# 2. What a run would write, by hand, for one of the work items the step above printed:
+mkdir -p price-collector-out
+# price-collector-out/<work-item-id>.json   — see scripts/price-collector/output.schema.json
+# price-collector-out/match-<key>.json      — one match proposal, when something is awaiting one
+
+# 3. The submission the scheduled workflow runs after the collector finishes or stops.
+node scripts/price-collector/submit-results.mjs --dir price-collector-out --run-id 41
+```
+
+`get-work.mjs` exits `1` on a non-2xx answer, an unreachable API or an answer that is not a work list, and `2` when a setting is missing — printing nothing on stdout in each case, because half a work list read as the night's work is a night of listings silently not checked. `submit-results.mjs` validates every file on its own, skips and reports one it cannot use, posts the match files before the result files, sends a work item's outcome only after all of its batches succeeded, and always completes the run at the end so unanswered searches are recorded as "not searched". Both print counts and reasons only: no price, product name, supplier product id, base URL or token. `price-collector-out/` is git-ignored; never commit a collector output file, and never put a token in one.
+
+To see what the run itself would do without spending anything, read `scripts/price-collector/prompt.md`: it is the reviewed instruction set, and the guard beside it is what makes the spending caps and the write-once output folder true whatever the model does. The tests (`bash scripts/validate.sh`) make no live call at all.
+
+**What the guard refuses, and why it refuses more than you might expect.** `apify-guard.mjs` is the `PreToolUse` hook that decides every Apify call in its own process, and it spends nothing it cannot account for. It calls only an actor `apify-limits.json` lists **and** marks `actorIdConfirmed: true` — the three actors whose ids and input field names the owner has still to confirm in the bounded dry run are refused outright, so today Varnmill is the only Apify actor a run may call (the JB Metro route is not an Apify actor) and confirming another is a one-line change in that file. Each allowed call is **reserved** before it is allowed: the run's accounting is read, compared against the per-run caps and written inside a cross-process lock, and flushed to the disk before the answer comes back, so two calls at once cannot spend the same remaining allowance. Only a state file that does not exist yet is read as an empty budget; an accounting that cannot be read, is corrupt, cannot be locked or cannot be written refuses the paid call instead of starting the run's budget again. A refused call leaves the accounting untouched, and a `Write` is guarded without consulting it at all — a broken state file can stop a run from spending and can never make the output folder permissive.
 
 **What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
 
