@@ -329,6 +329,12 @@ builder.Services.AddScoped<ISupplierPresetAudit, LoggingSupplierPresetAudit>();
 // no field for a business, a member or anything of theirs, because this setting is about none of
 // them.
 builder.Services.AddScoped<IOptionVisibilityAudit, LoggingOptionVisibilityAudit>();
+// The price-catalogue review trail (issue #928): one event per committed decision, and a second one
+// beside it when a price outside the band was accepted on the reviewer's explicit exception. A
+// separate port again, for the same reason as the four above - a different event with different
+// fields, and an entry type with no field for a business, a count of businesses, a supplier name, a
+// listing title or an accepted price, so none of them can reach the trail by a sink's discretion.
+builder.Services.AddScoped<IPriceCatalogueReviewAudit, LoggingPriceCatalogueReviewAudit>();
 // The manual plan grant trail (issue #982): one event per committed create, change or end. A
 // separate port again, on the same terms - a different event with different fields - and its entry
 // type has no field for the administrator's reason text or for any name, so the reason stays in the

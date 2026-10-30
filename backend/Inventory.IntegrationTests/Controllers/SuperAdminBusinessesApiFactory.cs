@@ -249,6 +249,48 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>
+    /// Puts the shared price catalogue back to empty (issue #928), in the order its restricted
+    /// references allow: a held reading, a recorded result row, then the listings' own pointers into
+    /// the accepted observations, then the observations, the listings, the issued work, the match
+    /// suggestions, the master products and the runs.
+    ///
+    /// <para>It is deliberately not part of <see cref="ResetAsync"/>, like
+    /// <see cref="ResetSupplierPresetsAsync"/>: most tests on this factory never touch the catalogue,
+    /// and a reset that deleted rows nothing had created would be work every test paid for. It runs
+    /// <strong>before</strong> the preset reset, because a listing's supplier master record is
+    /// restricted on delete.</para>
+    /// </summary>
+    public async Task ResetPriceCatalogueAsync()
+    {
+        await using var db = Database();
+
+        db.SupplierListingPendingObservations.RemoveRange(
+            await db.SupplierListingPendingObservations.ToListAsync());
+        db.PriceCollectorResultRows.RemoveRange(await db.PriceCollectorResultRows.ToListAsync());
+        await db.SaveChangesAsync();
+
+        foreach (var listing in await db.SupplierListings.ToListAsync())
+        {
+            listing.LatestObservationId = null;
+            listing.LastCheckedAtUtc = null;
+            listing.LastPriceChangeAtUtc = null;
+        }
+
+        await db.SaveChangesAsync();
+
+        db.SupplierPriceObservations.RemoveRange(await db.SupplierPriceObservations.ToListAsync());
+        db.SupplierListings.RemoveRange(await db.SupplierListings.ToListAsync());
+        db.PriceCollectorWorkItems.RemoveRange(await db.PriceCollectorWorkItems.ToListAsync());
+        db.ProductMatchSuggestions.RemoveRange(await db.ProductMatchSuggestions.ToListAsync());
+        db.ProductPriceTrackings.RemoveRange(await db.ProductPriceTrackings.ToListAsync());
+        await db.SaveChangesAsync();
+
+        db.MasterProducts.RemoveRange(await db.MasterProducts.ToListAsync());
+        db.PriceCollectorRuns.RemoveRange(await db.PriceCollectorRuns.ToListAsync());
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
     /// One more business in the state a test needs - a second trading business for somebody released
     /// from a deactivated one to join, for example (issue #545).
     /// </summary>

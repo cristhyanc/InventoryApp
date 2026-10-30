@@ -706,6 +706,14 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/supplier-presets", "GET")]
     [InlineData("api/super-admin/supplier-presets", "POST")]
     [InlineData("api/super-admin/supplier-presets/{id:int}", "PUT")]
+    // Issue #928's review of the shared price catalogue: the one authority that may confirm, correct
+    // or refuse a supplier listing, match a waiting product, or confirm or undo an automatic match.
+    // Class 2 again - one class, one marker, one policy - and not a sixth class.
+    [InlineData("api/super-admin/price-catalogue-review", "GET")]
+    [InlineData("api/super-admin/price-catalogue-review/listings/{supplierListingId:long}/decision", "POST")]
+    [InlineData("api/super-admin/price-catalogue-review/matches", "POST")]
+    [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm", "POST")]
+    [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo", "POST")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);
