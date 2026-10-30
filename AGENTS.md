@@ -53,6 +53,10 @@ scripts/validate-documentation-impact.mjs  Documentation-impact declaration pars
 scripts/run-agent-evals.mjs           InventoryApp Agent Evals runner (with .test.mjs)
 scripts/run-agent-model-evals.mjs     On-demand model-decision evals over a bounded critical set (with .test.mjs)
 scripts/price-collector/jbmetro-lookup.mjs  JB Metro GraphQL search and SKU lookup for the scheduled price collector (with .test.mjs and recorded fixtures/)
+scripts/price-collector/prompt.md     The scheduled collector run's own instructions (issue #926)
+scripts/price-collector/get-work.mjs  Reads the collector work list; submit-results.mjs posts the matches, rows, outcomes and run completion (each with .test.mjs)
+scripts/price-collector/apify-guard.mjs    PreToolUse hook enforcing apify-limits.json and the write-once price-collector-out/ folder (with .test.mjs); apify-mcp.json is the MCP server it is paired with
+scripts/price-collector/output.schema.json The collector output contract, with output-schema.mjs and pagination.mjs as its two rule modules (each with .test.mjs); stub-server.mjs is test support only
 evals/agent/                          Agent Evals corpus, schema and baseline report (see evals/agent/README.md)
 ```
 
