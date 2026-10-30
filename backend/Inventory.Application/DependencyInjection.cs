@@ -221,6 +221,17 @@ public static class ApplicationServiceCollectionExtensions
         // itself and leaves everything else to the Super Admin.
         services.AddScoped<RecordCollectorProductMatches>();
 
+        // And the Super Admin's review of what all of that proposed (issue #928): the queue and the
+        // four decisions - a listing, a waiting product's match, and confirming or undoing an
+        // automatic one. Scoped like the platform-admin surfaces above and for the same reason: each
+        // decision reads and writes through the request's own AppDbContext, which carries a denied
+        // business scope because the reviewer is a member of no business, and inside one
+        // BEGIN IMMEDIATE transaction on that same context.
+        services.AddScoped<GetPriceCatalogueReviewQueue>();
+        services.AddScoped<DecideSupplierListingReview>();
+        services.AddScoped<DecideProductMatchReview>();
+        services.AddScoped<DecideAutomaticProductMatchReview>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed
