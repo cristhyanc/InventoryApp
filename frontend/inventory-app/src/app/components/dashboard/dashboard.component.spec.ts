@@ -891,7 +891,14 @@ describe('DashboardComponent performance financial figures gated on Dashboard.Vi
   });
 
   it('renders without error when a granted role is sent a site and machine with the figures absent', async () => {
-    const withheldSite: Site = { ...SITE, todayRevenue: null, currentWeekRevenue: null, previousComparableWeekRevenue: null };
+    const withheldSite: Site = {
+      ...SITE,
+      todayRevenue: null,
+      currentWeekRevenue: null,
+      previousComparableWeekRevenue: null,
+      lastWeekRevenue: null,
+      monthToDateRevenue: null
+    };
     const withheldMachine: Machine = {
       ...MACHINE,
       todayGrossRevenue: null,

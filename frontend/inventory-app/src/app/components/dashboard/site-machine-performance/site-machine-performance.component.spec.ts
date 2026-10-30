@@ -5,7 +5,6 @@ import {
   MACHINE_FIGURE_UNAVAILABLE,
   NO_PERIOD_COMPARISON,
   OTHER_MACHINES_LABEL,
-  SITE_PERIOD_NOT_PUBLISHED,
   SiteMachinePerformanceComponent,
   groupSitesAndMachines
 } from './site-machine-performance.component';
@@ -51,6 +50,8 @@ function site(siteId: number, siteName: string, overrides: Partial<Site> = {}): 
     todayRevenue: 10,
     currentWeekRevenue: 20,
     previousComparableWeekRevenue: 16,
+    lastWeekRevenue: 40,
+    monthToDateRevenue: 75,
     ...overrides
   };
 }
@@ -302,18 +303,49 @@ describe('Site and machine performance shared period controls (issue #987)', () 
     expect(totals(host)).toContain('$150.00 sales');
   });
 
-  it('says a site publishes no sales for Last week or Month to date rather than inventing one', async () => {
+  it('shows a site its own published sales for every one of the four periods', async () => {
     const { fixture, host } = await render();
     const siteRow = () => host.querySelector('[data-testid="site-row-1"]') as HTMLElement;
+    const siteCard = () =>
+      host.querySelector('[data-testid="performance-card-group-site-1"]') as HTMLElement;
 
     expect(siteRow().textContent).toContain('$20.00');
+    expect(siteCard().textContent).toContain('$20.00');
+
+    for (const [label, amount] of [
+      ['Today', '$10.00'],
+      ['Last week', '$40.00'],
+      ['Month to date', '$75.00']
+    ]) {
+      periodButton(host, label).click();
+      fixture.detectChanges();
+
+      expect(headers(host)).toContain(`Sales · ${label}`);
+      expect(siteRow().textContent).toContain(amount);
+      expect(siteCard().textContent).toContain(amount);
+    }
+  });
+
+  it('shows $0.00 for a period with no sales and Unavailable for a withheld figure', async () => {
+    const quiet = site(1, 'Harbour Point Plaza', { monthToDateRevenue: 0, lastWeekRevenue: null });
+    const { fixture, host } = await render({ sites: [quiet, PAVILLION] });
+    const siteRow = () => host.querySelector('[data-testid="site-row-1"]') as HTMLElement;
 
     periodButton(host, 'Month to date').click();
     fixture.detectChanges();
+    expect(siteRow().textContent).toContain('$0.00');
 
-    expect(siteRow().textContent).toContain(SITE_PERIOD_NOT_PUBLISHED);
-    expect(siteRow().textContent).not.toContain('$');
-    expect(host.querySelector('[data-testid="site-period-note"]')?.textContent).toContain('Today');
+    periodButton(host, 'Last week').click();
+    fixture.detectChanges();
+    expect(siteRow().textContent).toContain('Unavailable');
+    expect(siteRow().textContent).not.toContain('$0.00');
+  });
+
+  it('no longer says a site publishes only some of the periods', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="site-period-note"]')).toBeNull();
+    expect(host.textContent).not.toContain('Not published for sites');
   });
 
   it('keeps "vs same time last week" to the week comparison the API actually publishes', async () => {

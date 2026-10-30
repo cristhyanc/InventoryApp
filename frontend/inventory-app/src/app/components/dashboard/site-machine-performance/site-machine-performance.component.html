@@ -69,9 +69,6 @@
 
       @if (hasRows) {
         <p class="m-0 border-b border-rr-line px-4 py-3 text-sm text-rr-muted" data-testid="machine-stock-note">{{ machineStockNote }}</p>
-        @if (canViewFinancials) {
-          <p class="m-0 border-b border-rr-line px-4 py-3 text-sm text-rr-muted" data-testid="site-period-note">{{ sitePeriodNote }}</p>
-        }
 
         <div class="hidden overflow-x-auto md:block">
           <table class="table" data-testid="performance-table">

@@ -272,12 +272,18 @@ public record PurchaseResponseDto(
     PurchaseGstSummaryDto? Gst = null
 );
 
-// One row of GET /api/sites. The three revenue figures are nullable since issue #697: a caller
+// One row of GET /api/sites. Every revenue figure is nullable since issue #697: a caller
 // without Dashboard.ViewFinancials - today an Operator - is sent null for each of them, never 0,
 // and GetSiteSummaries does not read the site's completed sales for that caller at all. Null here
 // means "not this caller's to see"; a period a caller may see that holds no completed sale is an
 // honest 0. Every other field, the route and the status codes are unchanged, and a Manager's and an
 // Owner's response is what it always was.
+//
+// lastWeekRevenue and monthToDateRevenue are additive (issue #1012): a site row now publishes the
+// same four sales periods a machine row does, resolved from the same MachineDashboardWindow, so the
+// combined dashboard card needs no period a site is silent about. todayRevenue, currentWeekRevenue
+// and previousComparableWeekRevenue keep their existing meaning and values, and the comparison
+// baseline is still the previous comparable week alone.
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
@@ -287,7 +293,9 @@ public record SiteSummaryDto(
     int EmptyProductCount,
     decimal? TodayRevenue,
     decimal? CurrentWeekRevenue,
-    decimal? PreviousComparableWeekRevenue
+    decimal? PreviousComparableWeekRevenue,
+    decimal? LastWeekRevenue,
+    decimal? MonthToDateRevenue
 );
 
 // One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id

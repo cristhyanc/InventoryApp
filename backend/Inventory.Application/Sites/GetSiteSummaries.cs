@@ -18,9 +18,20 @@ namespace Inventory.Application.Sites;
 /// The two <see cref="ISiteFactsStore"/> reads are awaited one at a time and the completed-sale facts
 /// for every site are loaded by one scoped read and distributed per machine in memory (issue #313),
 /// because the scoped store's EF adapter shares a single <c>AppDbContext</c>, which supports only one
-/// operation at a time. Its today/week-to-date/previous-comparable-week periods come from the
-/// business day rather than the host's local clock (issue #310; see
-/// <see cref="MachineDashboardWindow"/>, shared with the machine dashboard).
+/// operation at a time. Its periods come from the business day rather than the host's local clock
+/// (issue #310; see <see cref="MachineDashboardWindow"/>, shared with the machine dashboard).
+///
+/// <para><b>Four published sales periods, and no period arithmetic of its own</b> (issue #1012). A
+/// summary publishes today, week-to-date, last week and month-to-date revenue, plus the
+/// previous-comparable-week baseline of the one comparison these figures carry. Each is
+/// <see cref="MachineDashboardWindow"/>'s own period of that name, compared against the same
+/// persisted instants with the same inclusive bounds the machine rows use, which is what makes a
+/// site's figure the sum of the gross revenue of the machine rows grouped under it for every one of
+/// the four. Membership is the machine's current <c>CustomerID</c> in every period, as it already
+/// was for today and week-to-date: a sale is counted at the site its machine stands at now, never at
+/// the site it stood at when the sale happened. The completed-sales read's lower bound is derived
+/// from the window too (see <see cref="EarliestPublishedPeriodStartUtc"/>) rather than from a fixed
+/// day count, so every published period is read in full from its own first instant.</para>
 ///
 /// <para>A mapping's <c>NayaxProductID</c> is resolved to a local product through
 /// <see cref="INayaxProductLinkStore"/> (issue #733) before the stock facts are built, instead of
@@ -32,7 +43,7 @@ namespace Inventory.Application.Sites;
 ///
 /// <para><b>The revenue figures depend on what the request may see (issue #697).</b> Sites is part of
 /// the day-to-day inventory work, so the endpoint requires <c>Inventory.Operate</c> and every role
-/// keeps reaching it; the three revenue figures additionally need
+/// keeps reaching it; the revenue figures additionally need
 /// <c>Dashboard.ViewFinancials</c>. For a request that does not hold it
 /// <see cref="ISiteFactsStore.GetRecentCompletedSalesAsync"/> is not called at all and each figure is
 /// <see langword="null"/> - withheld because it was never calculated, not stripped on the way out,
@@ -157,10 +168,15 @@ public sealed class GetSiteSummaries
                 .ToList(),
             cancellationToken);
 
-        // One scoped read covers every site's machines over the same 16-day lookback the former
-        // per-site reads each requested, instead of one overlapping read per site; the facts carry
-        // their machine id, so each site's own sales are selected from the result in memory. The
-        // lookback counts back from the current UTC instant, the time base the sale facts are stored in.
+        // One scoped read covers every site's machines, instead of one overlapping read per site;
+        // the facts carry their machine id, so each site's own sales are selected from the result in
+        // memory. Its lower bound is derived from the window - the first instant of the earliest
+        // period a summary publishes - rather than from a day count (issue #1012), so the read
+        // always covers every published period in full. A fixed count cannot: a 16-day lookback
+        // covered last week but reached only part of month to date, which after about the sixteenth
+        // of a month silently shortened that figure. The bound is in UTC, the time base the sale
+        // facts are stored in, and inclusive, so a sale at exactly a period's start is counted by
+        // the read and by RevenueIn alike.
         //
         // It is not read at all for a request that may not be shown the revenue (issue #697): there
         // is no completed-sales query in that request, which is also why a withheld figure below is
@@ -169,7 +185,7 @@ public sealed class GetSiteSummaries
         var salesByMachine = mayViewFinancials
             ? (await _facts.GetRecentCompletedSalesAsync(
                     sitesWithProducts.SelectMany(site => site.Machines).Select(machine => machine.MachineID).Distinct().ToList(),
-                    window.NowUtc.AddDays(-16),
+                    EarliestPublishedPeriodStartUtc(window),
                     cancellationToken))
                 .GroupBy(sale => sale.MachineId)
                 .ToDictionary(group => group.Key, group => group.ToList())
@@ -188,6 +204,25 @@ public sealed class GetSiteSummaries
 
         return summaries.OrderBy(summary => summary.SiteName).ToList();
     }
+
+    /// <summary>
+    /// The first instant any period a summary publishes begins at, which is how far back the
+    /// completed-sales read has to reach (issue #1012). It is a minimum over the published periods
+    /// rather than a period of its own, because which of them starts earliest depends on the date:
+    /// month to date is the earliest for most of a month, and last week - which the previous
+    /// comparable week shares a start with - is earlier in the first half of one.
+    /// <see cref="MachineDashboardWindow.TwoWeeksAgo"/> is deliberately absent: a site row publishes
+    /// no figure for it, so reading it would be reading sales nothing reports.
+    /// </summary>
+    private static DateTime EarliestPublishedPeriodStartUtc(MachineDashboardWindow window) =>
+        new[]
+        {
+            window.Today.StartUtc,
+            window.CurrentWeek.StartUtc,
+            window.PreviousComparableWeek.StartUtc,
+            window.LastWeek.StartUtc,
+            window.MonthToDate.StartUtc,
+        }.Min();
 
     /// <summary>
     /// A site's own completed sales, or <see langword="null"/> when none were read because the
@@ -240,7 +275,9 @@ public sealed class GetSiteSummaries
             emptyProductCount,
             RevenueIn(sales, window.Today),
             RevenueIn(sales, window.CurrentWeek),
-            RevenueIn(sales, window.PreviousComparableWeek));
+            RevenueIn(sales, window.PreviousComparableWeek),
+            RevenueIn(sales, window.LastWeek),
+            RevenueIn(sales, window.MonthToDate));
     }
 
     /// <summary>

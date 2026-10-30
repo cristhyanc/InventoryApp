@@ -250,7 +250,7 @@ public class MachineProductsSitePricingStalenessTests
             throw new NotSupportedException();
 
         public Task<IReadOnlyList<SiteCompletedSaleFact>> GetRecentCompletedSalesAsync(
-            IReadOnlyCollection<long> machineIds, DateTime since, CancellationToken cancellationToken) =>
+            IReadOnlyCollection<long> machineIds, DateTime fromUtc, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<IReadOnlyDictionary<long, SiteProductCostBasis>> GetProductCostBasisAsync(

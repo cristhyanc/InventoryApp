@@ -30,7 +30,9 @@ public static class SiteResponseMapper
         summary.EmptyProductCount,
         summary.TodayRevenue,
         summary.CurrentWeekRevenue,
-        summary.PreviousComparableWeekRevenue);
+        summary.PreviousComparableWeekRevenue,
+        summary.LastWeekRevenue,
+        summary.MonthToDateRevenue);
 
     /// <summary>
     /// The light site list row (issue #841). Three already-resolved values copied across: the site

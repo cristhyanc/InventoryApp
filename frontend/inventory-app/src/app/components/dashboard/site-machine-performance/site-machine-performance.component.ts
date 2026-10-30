@@ -38,9 +38,6 @@ export const OTHER_MACHINES_LABEL = 'Other machines';
  */
 export const MACHINE_FIGURE_UNAVAILABLE = 'Unavailable';
 
-/** What a site row says for a period `GET api/sites` publishes no sales figure for at all. */
-export const SITE_PERIOD_NOT_PUBLISHED = 'Not published for sites';
-
 /** What a row says for a period no comparison is published for; see {@link comparisonHeader}. */
 export const NO_PERIOD_COMPARISON = 'No comparison for this period';
 
@@ -90,6 +87,11 @@ export function groupSitesAndMachines(
  * `GET api/sites` for the site rows, `GET api/machines` for the machine rows and the fleet totals,
  * and nothing is calculated here beyond the direct margin the machine rows already displayed, which
  * is the same `profit / sales` presentation the former card did.
+ *
+ * Since issue #1012 `GET api/sites` publishes all four periods, so a site row shows a sales figure
+ * for every one of them on both layouts. The comparison column is unchanged - "vs same time last
+ * week" belongs to This week and no other period borrows it - and the fleet totals are still taken
+ * over the machine rows alone.
  *
  * It is a dedicated feature component rather than more markup on the page (the page-composition
  * rule, `docs/architecture.md` § Page composition boundary): it owns substantial UI plus its own
@@ -143,11 +145,6 @@ export class SiteMachinePerformanceComponent {
   readonly machineStockNote =
     'Stock levels and low or empty selection counts are published per site. The machine read publishes no ' +
     'equivalent figure, so machine rows show them as unavailable rather than repeating a site figure.';
-
-  /** Said once in the card: which periods the sites read publishes a sales figure for at all. */
-  readonly sitePeriodNote =
-    'Sites publish sales for Today and This week only. Last week and Month to date are machine figures, ' +
-    'and the comparison is the published "vs same time last week" one.';
 
   /**
    * The sites whose machines the reader has collapsed, by group key. Collapsed rather than expanded
@@ -312,7 +309,6 @@ export class SiteMachinePerformanceComponent {
   /** One site's sales for the selected period, exactly as `GET api/sites` published them. */
   siteSalesText(site: Site): string {
     const sales = siteSales(site, this.period);
-    if (sales === undefined) return SITE_PERIOD_NOT_PUBLISHED;
     return sales == null ? UNAVAILABLE : money(sales);
   }
 
@@ -447,18 +443,21 @@ export class SiteMachinePerformanceComponent {
 }
 
 /**
- * One site's published sales for a period: the figure, `null` for a figure the response carried as
- * unknown or withheld, and `undefined` for a period `GET api/sites` publishes no figure for at all.
- * The three are different answers and the card says each of them differently.
+ * One site's published sales for a period (issue #1012): the figure, or `null` for one the response
+ * carried as unknown or withheld. `GET api/sites` publishes all four periods, so no period is
+ * silent for a site any more and nothing here falls back to a figure a different period published.
+ * Nothing is summed: each value is the server's own sum for that period.
  */
-function siteSales(site: Site, period: PerformancePeriod): number | null | undefined {
+function siteSales(site: Site, period: PerformancePeriod): number | null {
   switch (period) {
     case 'today':
       return site.todayRevenue ?? null;
     case 'week':
       return site.currentWeekRevenue ?? null;
-    default:
-      return undefined;
+    case 'lastWeek':
+      return site.lastWeekRevenue ?? null;
+    case 'monthToDate':
+      return site.monthToDateRevenue ?? null;
   }
 }
 
