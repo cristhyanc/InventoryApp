@@ -24,6 +24,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - CSV/XLSX exports that use the same backend calculations as the UI.
 - Microsoft Entra sign-in and delegated-scope API authorization (see [Authentication configuration](#authentication-configuration)).
 - Owner-only business settings — name, contact email, ABN, GST registration, time zone and the Australian state or territory the business trades in, with a confirmation before a time zone change (see [Business settings (Admin page)](#business-settings-admin-page)).
+- A **Plan page** every member can reach: the business's current plan, its attachment storage and connected-machine standing, and the Free/Starter/Pro comparison from the server's own catalogue (see [The Plan page](#the-plan-page-issue-970)).
 
 ## Technology
 
@@ -797,6 +798,17 @@ Each plan includes an amount of purchase and expense attachment storage, and tha
 - **If two people replace the same attachment at once, exactly one wins.** The other is refused with "This attachment was replaced by someone else while the upload was in progress. Reload the record and try again." — its file is removed, nothing about the record changed, and retrying from the reloaded record is safe.
 - **An abandoned or crashed upload stops holding storage on its own**, within 30 minutes, without anybody having to clean anything up.
 - **After a downgrade a business can be above its new allowance, and nothing is deleted.** Every existing attachment stays viewable, downloadable and deletable; only new uploads that would add bytes are refused, until enough has been freed or the plan is upgraded again.
+
+### The Plan page (issue #970)
+
+Every member reaches **Plan**, a top-level entry under the sidebar's **Settings** heading beside Admin (route `/plan`) — it needs no stronger capability than `Dashboard.View`, which every role and a [support session](#super-admin-support-sessions) hold, because the figures it shows are visible to everybody.
+
+- **The current plan, in plain language.** It shows the effective plan and where it came from, using only the five `entitlement.source` values the server actually publishes today: a paid subscription, a manual grant (labelled "Manual grant" — the page never guesses whether a grant is complimentary or grandfathered, because the server does not say), no active subscription (never labelled cancelled or expired), or, while enforcement is off or grandfathering has not completed, a plain statement that **no plan limits currently apply**. A source value a build does not recognise is shown by its raw name rather than an invented friendly one. Pending, past-due, cancelled, grace and a separate complimentary/grandfathered display are deferred until issue #969 or a reviewed contract extension publishes them.
+- **What that plan costs, from the same catalogue the comparison table uses.** The current plan's monthly price is the matching row of the server catalogue, never a figure kept in the app. If the catalogue cannot be read, or has no row for the plan the server named, the card says the price is unavailable rather than showing one it guessed.
+- **Storage and connected machines beside it**, read from the same `GET /api/me/access` answer: an accessible progress bar for attachment storage with the 80% warning and 100% full message (see [Attachment storage](#attachment-storage) above), and the connected-machine count against the Pro allowance with its "as of" time, a **stale** badge with its age, or a plain-language reason when the count is unavailable (see [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)). Machines over the allowance are noted as billed, never blocked.
+- **The Free/Starter/Pro comparison table comes from the server's own catalogue** (`GET /api/me/plan-catalogue`, read from `Inventory.Domain.Subscriptions.PlanCatalogue`) rather than any price hard-coded in Angular. Every plan's price and storage allowance are visible to every member; the per-extra-machine rate on Pro additionally needs `Dashboard.ViewFinancials`, the same capability that gates every other billing figure.
+- **An Owner sees an upgrade/manage-billing action, and everyone else is told to ask their Owner** — both are withheld entirely inside a support session or a [role preview](#previewing-the-app-as-a-role-issues-720-and-721), because neither is a context a write or a billing action belongs in. Until billing (issue #969) exists the Owner's action is text only — "coming soon" — with no checkout or success state.
+- **It re-reads itself for free.** The page subscribes to the same cached `GET /api/me/access` answer every other capability-aware page does, so a support session starting or ending and a role preview changing both reach it through the existing re-reads those features already trigger, with no extra call of its own. There is no business switching on it — a member sees only their own current business.
 
 ### Grandfathering, in one sentence
 
@@ -2969,10 +2981,9 @@ of the live Nayax fleet — so a business with no provider had no machines.
 
 Pro includes **five connected machines** and bills **A$2 per month** for each one beyond that (see
 [Business plans](#business-plans-free-starter-and-pro)). This section is what that count is, where it
-comes from, and what it does when it cannot be taken. Nothing in this release shows or bills any of
-it: the counts are recorded so that the billing of issue #969 and the plan screens of #970 have dated
-evidence to work from, and while plan enforcement is switched off — the shipped state — nothing is
-displayed and nothing is charged.
+comes from, and what it does when it cannot be taken. The [Plan page](#the-plan-page-issue-970) is
+what now displays it; nothing here is billed yet, because that is issue #969's own work. While plan
+enforcement is switched off — the shipped state — nothing is displayed and nothing is charged.
 
 - **A connected machine is a machine on your Nayax account**, whether or not it is linked in this
   application. That is deliberate: Nayax imports sales for every machine on the account either way, so

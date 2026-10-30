@@ -568,6 +568,17 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
+    /// The plan catalogue of issue #970 is visible to every member, so it declares
+    /// <c>Dashboard.View</c> - the capability every role and a support session hold - rather than a
+    /// narrower one.
+    /// </summary>
+    [Fact]
+    public void The_plan_catalogue_endpoint_declares_dashboard_view() =>
+        Assert.Equal(
+            [Capability.DashboardView],
+            CapabilitiesOf(Endpoint("api/me/plan-catalogue", "GET")));
+
+    /// <summary>
     /// A preview is as restricted as its apply. Every action of every data-repair controller
     /// requires <c>Data.Repair</c> and declares no second, weaker capability beside it: a preview
     /// and a dry run read exactly the financial history the apply rewrites, and for

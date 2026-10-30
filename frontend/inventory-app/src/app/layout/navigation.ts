@@ -322,6 +322,11 @@ export const primaryNavigation: readonly NavItem[] = [
     ]
   },
   section('Settings'),
+  // The Plan page (issue #970): the business's plan, storage and connected machines. It declares
+  // Dashboard.View - every role and a support session hold it - because it is visible to every
+  // member rather than gated like the Admin group beside it, so it sits as its own top-level link
+  // under the same heading rather than one of Admin's children.
+  { kind: 'link', label: 'Plan', route: '/plan', icon: 'attach_money', capability: 'Dashboard.View' },
   adminNavGroup
 ];
 

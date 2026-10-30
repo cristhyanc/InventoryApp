@@ -215,6 +215,39 @@ public sealed record MeConnectedMachinesResponse(
     int? MachinesOverAllowance);
 
 /// <summary>
+/// The Free/Starter/Pro catalogue, as <c>GET /api/me/plan-catalogue</c> reports it (issue #970), so
+/// the plan page can show every plan's price, storage allowance and connected-machine terms without
+/// keeping a second copy of <c>Inventory.Domain.Subscriptions.PlanCatalogue</c> in Angular.
+///
+/// It is visible to every member and carries no business fact: every row is the same for every
+/// caller, whatever the business holds or has bought. What the business itself has - the effective
+/// plan, its source and its own usage - stays on <c>GET /api/me/access</c>'s
+/// <see cref="MeEntitlementResponse"/>.
+/// </summary>
+public sealed record MePlanCatalogueResponse(IReadOnlyList<MePlanCatalogueEntryResponse> Plans);
+
+/// <summary>
+/// One plan's price and inclusions, as <c>GET /api/me/plan-catalogue</c> reports it (issue #970),
+/// read directly from <c>Inventory.Domain.Subscriptions.PlanCatalogue</c>.
+/// </summary>
+/// <param name="Plan">The plan's published name - <c>Free</c>, <c>Starter</c> or <c>Pro</c>.</param>
+/// <param name="MonthlyPriceMinorUnits">The advertised monthly price, in minor units of <paramref name="CurrencyCode"/>.</param>
+/// <param name="CurrencyCode">The ISO 4217 code the price is in.</param>
+/// <param name="AttachmentStorageLimitBytes">The plan's combined purchase/expense attachment storage allowance.</param>
+/// <param name="IncludedConnectedMachines">How many connected machines the price includes.</param>
+/// <param name="AdditionalConnectedMachinePriceMinorUnits">
+/// What each connected machine beyond <paramref name="IncludedConnectedMachines"/> costs per month,
+/// or <see langword="null"/> when the plan offers no connected machines to add to.
+/// </param>
+public sealed record MePlanCatalogueEntryResponse(
+    string Plan,
+    int MonthlyPriceMinorUnits,
+    string CurrencyCode,
+    long AttachmentStorageLimitBytes,
+    int IncludedConnectedMachines,
+    int? AdditionalConnectedMachinePriceMinorUnits);
+
+/// <summary>
 /// The support session a request is inside, as <c>GET /api/me/access</c> reports it (issue #551).
 ///
 /// It deliberately carries no session id - that value is a credential, reported once by the start

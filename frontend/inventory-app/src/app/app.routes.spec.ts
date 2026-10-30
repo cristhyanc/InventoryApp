@@ -31,6 +31,7 @@ import { SuperAdminSupplierPresetsComponent } from './components/super-admin/sup
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
 import { BusinessSettingsComponent } from './components/admin/business-settings/business-settings.component';
+import { PlanComponent } from './components/plan/plan.component';
 import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/purchase-edit-page.component';
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
 import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
@@ -133,6 +134,17 @@ describe('Admin Roles route (issue #530)', () => {
   it('serves the dedicated Admin Roles page at /admin/roles, behind authentication and Roles.View', async () => {
     expect(route('admin/roles').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('admin/roles')).resolves.toBe(RolesComponent);
+  });
+});
+
+describe('Plan route (issue #970)', () => {
+  it('serves the Plan page at /plan, behind authentication and Dashboard.View - every role holds it', async () => {
+    const guards = route('plan').canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent('plan')).resolves.toBe(PlanComponent);
   });
 });
 

@@ -188,6 +188,7 @@ describe('SidebarNavComponent structure (issue #391)', () => {
     expect(link(host, '/machines')).not.toBeNull();
     expect(link(host, '/sites')).not.toBeNull();
     expect(link(host, '/expenses')).not.toBeNull();
+    expect(link(host, '/plan')).not.toBeNull();
   });
 
   it('keeps every group collapsed until its heading is used, and exposes aria-expanded on it', async () => {
@@ -418,7 +419,9 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
       'Machines',
       'Inventory & purchasing',
       'Inventory',
-      'Purchases'
+      'Purchases',
+      'Settings',
+      'Plan'
     ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       '/',
@@ -431,7 +434,8 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
       '/stock-history',
       '/purchases',
       '/purchases/orders',
-      '/suppliers'
+      '/suppliers',
+      '/plan'
     ]);
     expect(host.textContent).not.toContain('Super Admin');
     expect(link(host, '/super-admin/businesses')).toBeNull();
@@ -1360,6 +1364,7 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
     'Expenses',
     'Reports',
     'Settings',
+    'Plan',
     'Admin'
   ];
   it.each([

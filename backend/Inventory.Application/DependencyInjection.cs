@@ -178,6 +178,13 @@ public static class ApplicationServiceCollectionExtensions
         // something expires a cache.
         services.AddScoped<GetEffectiveEntitlement>();
 
+        // And what each plan costs and includes (issue #970), which the plan page's comparison
+        // table reads. Deliberately a singleton rather than scoped, unlike the entitlement above:
+        // it holds no state, reads no request value and touches no AppDbContext - the catalogue is
+        // a compiled table that is identical for every caller and every request - so a per-request
+        // instance would claim a scope it has no use for.
+        services.AddSingleton<GetPlanCatalogue>();
+
         // And how many connected machines it has (issue #978): the one writer of a connected-machine
         // snapshot, reached from the fleet-read decorator on a page load and from the daily job.
         // Scoped like every use case here, so it records through the request's or the job's own

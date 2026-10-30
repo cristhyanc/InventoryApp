@@ -1,4 +1,5 @@
 using Inventory.Application.Access;
+using Inventory.Application.Subscriptions;
 using Inventory.Domain.ConnectedMachines;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
@@ -42,11 +43,16 @@ public sealed class MeController : ControllerBase
 {
     private readonly GetCurrentAccess _getCurrentAccess;
     private readonly GetAccountState _getAccountState;
+    private readonly GetPlanCatalogue _getPlanCatalogue;
 
-    public MeController(GetCurrentAccess getCurrentAccess, GetAccountState getAccountState)
+    public MeController(
+        GetCurrentAccess getCurrentAccess,
+        GetAccountState getAccountState,
+        GetPlanCatalogue getPlanCatalogue)
     {
         _getCurrentAccess = getCurrentAccess;
         _getAccountState = getAccountState;
+        _getPlanCatalogue = getPlanCatalogue;
     }
 
     [HttpGet("access")]
@@ -78,6 +84,33 @@ public sealed class MeController : ControllerBase
                         storage.WarningLevel.ToString())
                     : null,
                 ConnectedMachines(access.Entitlement.ConnectedMachines))));
+    }
+
+    /// <summary>
+    /// The Free/Starter/Pro catalogue (issue #970): every plan's advertised price, storage allowance
+    /// and connected-machine terms, from <see cref="GetPlanCatalogue"/> - the Application read over
+    /// the one definition every plan-aware surface shares, so this page never hard-codes a price or
+    /// a limit of its own. This action binds nothing, decides nothing and maps the use case's
+    /// result, exactly as every other action here does. It names no business and carries no
+    /// entitlement fact; what the business itself has bought is <see cref="Access"/>'s own answer,
+    /// read separately.
+    ///
+    /// It declares <see cref="Capability.DashboardView"/>, which every role and a support session
+    /// hold, because the catalogue - like the price and storage figures the plan page shows beside
+    /// it - is visible to every member rather than gated by what a role may do.
+    /// </summary>
+    [HttpGet("plan-catalogue")]
+    [RequireCapability(Capability.DashboardView)]
+    public ActionResult<MePlanCatalogueResponse> PlanCatalogue()
+    {
+        return Ok(new MePlanCatalogueResponse(
+            [.. _getPlanCatalogue.Handle().Select(definition => new MePlanCatalogueEntryResponse(
+                definition.Plan.ToString(),
+                definition.MonthlyPriceMinorUnits,
+                definition.CurrencyCode,
+                definition.AttachmentStorageLimitBytes,
+                definition.IncludedConnectedMachines,
+                definition.AdditionalConnectedMachinePriceMinorUnits))]));
     }
 
     /// <summary>

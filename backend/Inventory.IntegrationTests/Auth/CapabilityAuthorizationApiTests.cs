@@ -190,6 +190,12 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // endpoint stopped being reachable under a read-only capability without any current role's
         // access changing.
         { "Dashboard.View", "POST", "/api/nayax-sales-sync", "Operator,Manager,Owner" },
+
+        // Issue #970. The plan catalogue - every plan's price, storage allowance and
+        // connected-machine terms - is visible to every member, exactly like the price and storage
+        // figures the plan page shows beside it, so it declares Dashboard.View rather than a
+        // narrower capability.
+        { "Dashboard.View", "GET", "/api/me/plan-catalogue", "Operator,Manager,Owner" },
     };
 
     /// <summary>
@@ -306,6 +312,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
     [InlineData("/api/site-commissions/agreements", "Manager,Owner")]
     [InlineData("/api/settings/nayax-processing-fee-rates", "Owner")]
     [InlineData("/api/business/settings", "Owner")]
+    [InlineData("/api/me/plan-catalogue", "Operator,Manager,Owner")]
     public async Task A_role_that_holds_the_capability_is_answered_normally(string route, string rolesThatHoldIt)
     {
         await _factory.SeedAsync();
