@@ -254,7 +254,9 @@ public static class InfrastructureServiceCollectionExtensions
         // AppDbContext like every adapter here, and neither is given an unscoped context. The work
         // list store is where issue #924's reviewed cross-business read lives: two
         // IgnoreQueryFilters statements over the mappings' business-free text columns, reachable only
-        // from the collector endpoint - see EfPriceCatalogueWorkListStore and
+        // from the collector endpoint - and, since issue #977, the plan read that decides which
+        // businesses those two statements may reach at all, which is the one place a business id
+        // exists on this path and never leaves it. See EfPriceCatalogueWorkListStore and
         // docs/architecture.md § Collector work list.
         services.AddScoped<IProductPriceTrackingStore, EfProductPriceTrackingStore>();
         services.AddScoped<IPriceCatalogueWorkListStore, EfPriceCatalogueWorkListStore>();

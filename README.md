@@ -704,7 +704,7 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 
 Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
 
-**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Supplier price data (#977) and the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
+**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Issue #977 is the same enforcement over the supplier price comparisons and the daily collection behind them; the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
 
 ### The plans
 
@@ -728,7 +728,7 @@ Storage limits cover purchase and expense attachments combined — not transacti
 
 The split is the same one the application already makes for a business with no usable provider, and [The menu without a usable provider](#the-menu-without-a-usable-provider) is the list of what Nayax is behind. Said in plan terms:
 
-- **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, and **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)).
+- **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)), and the **Track supplier prices** switch itself (see below).
 - **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
 - **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list).
 
@@ -755,10 +755,12 @@ Each of those answers carries a **distinct reason** — `PlanRequired`, not "Nay
 
 **What a plan refuses outright answers `403` with the code `plan_required`** and names the plan the business would need. That applies to:
 
-- **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports.
+- **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports; and the **supplier price comparisons** — the one read behind the **Cheapest supplier** column on Needs Ordering, All Products and the Dashboard.
 - **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report, agreements and payments); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
 
 A report and its own download always need the same plan. A refused save or import changes nothing at all — the plan is checked before the request body is read, so no credential is written and no row is imported.
+
+**Supplier price comparisons, in plan terms.** On Free, the **Cheapest supplier** column reads as unavailable and the rest of those pages — the row, the purchase-cost columns beside it and every action — is untouched. The daily collection follows the same line: a product is looked up at the suppliers while **at least one** business on Starter or Pro is tracking it, so a product you and a Starter business both track is still priced and nothing you have tracked is ever deleted. And the **Track supplier prices** switch stays available on every plan: you can turn it on and off on Free, the setting is kept through a downgrade, and the prices appear as soon as the plan includes them. See [Track supplier prices on a product](#track-supplier-prices-on-a-product) and [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
 
 **Reading the connection status stays available on every plan**, to every role that can see it today, and makes no Nayax call. That is deliberate: a business that moves to a plan without the connection keeps its saved credentials and their status, and the Integrations page still shows them. Nothing is deleted or changed by a plan change — sales, costs, product links, history, agreements, payments and attachments are all exactly as they were, and they become readable again the moment the plan includes them.
 
@@ -1892,6 +1894,14 @@ product you have not switched on.
 - **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
   permission is involved. It is unavailable while you are looking at a business in read-only support
   view, and while a Super Admin is previewing a role, like every other write in those states.
+- **It works on every plan, and the prices it leads to are a Starter feature.** The switch, its
+  status and the **Tracked** column are available whatever the business's
+  [plan](#business-plans-free-starter-and-pro) says: you can turn tracking on and off on Free, and
+  the setting is kept if the plan changes — nothing clears it on a downgrade. What a plan decides is
+  whether the **prices** are shown (the column below) and whether the daily collection is run for
+  your product: a product only Free businesses track is not looked up at the suppliers, while a
+  product you and a Starter or Pro business both track still is. Turn the plan back on and the
+  prices come back with it, from the request you had already made.
 
 ## The cheapest supplier, on Needs Ordering
 
@@ -1938,6 +1948,12 @@ same column, cell and popup — everything below applies to all three.
   role holds — these are suppliers' published prices rather than your own financial figures. The
   column reads as **Unavailable** while a Super Admin is looking at your business in read-only
   support view, which is read-only and asks for nothing.
+- **And which plan.** Supplier price comparisons are a **Starter** feature (see
+  [Business plans](#business-plans-free-starter-and-pro)). While plans are being enforced, a Free
+  business is refused this one read and the column reads as unavailable; everything else on the
+  page, including **Last purchase** and **Cheapest purchase**, which are your own purchase history,
+  is unaffected. Nothing you have tracked is lost, and the column fills in again as soon as the plan
+  includes it.
 - **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
   the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
   disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the

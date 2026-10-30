@@ -120,6 +120,29 @@ describe('CheapestSuppliersComponent (issue #930)', () => {
     expect(published[published.length - 1].state).toBe('loaded');
   });
 
+  it('keeps the rest of the page working when the business plan refuses the prices (issue #977)', async () => {
+    // The refusal a Free business now gets from the summary endpoint: 403 with the plan_required
+    // code. The column states that it could not be read and the page around it is untouched; the
+    // inline lock that names the plan instead is issue #979's work.
+    const getSummary = jest.fn(() =>
+      throwError(() => ({
+        status: 403,
+        error: { code: 'plan_required', requiredPlan: 'Starter', planFeature: 'ObservedSupplierPrices' }
+      }))
+    );
+    const { host, published, show } = await render({ getSummary });
+
+    show([1, 2]);
+
+    const answer = published[published.length - 1];
+    expect(answer.state).toBe('failed');
+    // And never as an answer about a product: "nobody could tell us" is not "this product has no
+    // cheapest supplier".
+    expect(cheapestSupplierFor(answer, 1)).toBeUndefined();
+    expect(cheapestSupplierFor(answer, 2)).toBeUndefined();
+    expect(host.textContent).toContain(CHEAPEST_SUPPLIERS_FAILED_MESSAGE);
+  });
+
   it('asks for nothing in a read-only support session and says the column is unavailable there', async () => {
     const getSummary = jest.fn(() => of(summary([1])));
     const { host, published, show } = await render({ getSummary, sessionActive: true });

@@ -1,4 +1,5 @@
 using System.Reflection;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Subscriptions;
 using InventoryApi.Auth;
 using Microsoft.AspNetCore.Mvc;
@@ -115,9 +116,9 @@ public class EndpointPlanRequirementTests
         new("CategoriesController.GetAll", PlanRequirementKind.None), // GET api/Categories
         new("CategoriesController.Update", PlanRequirementKind.None), // PUT api/Categories/{id:long}
 
-        // Supplier price data is issue #977's decision, not this one's: explicitly out of scope
-        // here, and unchanged until that task is implemented.
-        new("CheapestSuppliersController.Summary", PlanRequirementKind.None), // POST api/cheapest-suppliers/summary
+        // Supplier price data, decided by issue #977: the one endpoint that serves it is Starter,
+        // and the shared collection that produces it is gated on the same feature.
+        new("CheapestSuppliersController.Summary", PlanRequirementKind.Declared, PlanFeature.ObservedSupplierPrices), // POST api/cheapest-suppliers/summary
 
         // The home Dashboard. Its one live fleet read is behind the credential gate, so a business
         // whose plan excludes the provider keeps the whole local summary with the refill card
@@ -250,7 +251,9 @@ public class EndpointPlanRequirementTests
         // The catalogue, and the two listings that carry the reorder calculation: asked with
         // lowStockOnly, the product listing is the reorder-alert listing, so both are behind the
         // credential gate and answer in storage-only mode without the provider. Everything else
-        // here is a local read or write, price tracking included (issue #977 decides that surface).
+        // here is a local read or write, price tracking included: issue #977 decided that the
+        // switch and its two reads stay on every plan, because which of its own products a business
+        // wants priced is its own record and is kept through a downgrade.
         new("ProductsController.Create", PlanRequirementKind.None), // POST api/Products
         new("ProductsController.Delete", PlanRequirementKind.None), // DELETE api/Products/{id:long}
         new("ProductsController.Get", PlanRequirementKind.None), // GET api/Products/{id:long}
@@ -529,6 +532,7 @@ public class EndpointPlanRequirementTests
     [InlineData("NayaxConnectionController.Test", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Save", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Retest", SubscriptionPlan.Pro)]
+    [InlineData("CheapestSuppliersController.Summary", SubscriptionPlan.Starter)]
     public void The_listed_endpoints_require_the_plan_the_issue_assigns_them(
         string endpointKey,
         SubscriptionPlan expected)
@@ -551,10 +555,31 @@ public class EndpointPlanRequirementTests
     [InlineData("ImportsController.ImportPendingXmlFiles")]
     [InlineData("PickListController.RecordRefill")]
     [InlineData("PickListController.RecordMultiMachineRefill")]
+    [InlineData("ProductsController.SetPriceTracking")]
+    [InlineData("ProductsController.GetPriceTracking")]
+    [InlineData("ProductsController.PriceTracking")]
     public void The_listed_endpoints_are_included_in_every_plan(string endpointKey) =>
         Assert.Equal(
             PlanRequirementKind.None,
             Inventory.Single(candidate => candidate.Endpoint == endpointKey).Kind);
+
+    /// <summary>
+    /// Issue #977's two halves name <strong>one</strong> feature: the endpoint that serves supplier
+    /// price data and the shared collection that produces it are decided by the same
+    /// <see cref="PlanFeature"/>, so nothing can be searched for at a supplier on behalf of a
+    /// business that would be refused the answer, and nothing a business is entitled to see goes
+    /// uncollected. A later change that moved one of them fails here rather than only in a
+    /// relational test of the work list.
+    /// </summary>
+    [Fact]
+    public void The_price_data_endpoint_and_the_collection_gate_name_one_feature()
+    {
+        var entry = Inventory.Single(
+            candidate => candidate.Endpoint == "CheapestSuppliersController.Summary");
+
+        Assert.Equal(PlanRequirementKind.Declared, entry.Kind);
+        Assert.Equal(PriceCollectionEligibilityPolicy.Feature, entry.Feature);
+    }
 
     /// <summary>
     /// The per-report marker is on exactly one endpoint. It is a mechanism, so a second use of it
