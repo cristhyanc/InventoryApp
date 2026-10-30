@@ -280,6 +280,14 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
     /// <para>The submitted identity is validated <strong>before</strong> anything is changed, so a
     /// value this catalogue would not store leaves the listing exactly as it was - decision included.
     /// </para>
+    ///
+    /// <para><strong>A confirmation that moves the identity withdraws the price the listing was
+    /// publishing</strong> (<see cref="SupplierListingReviewPolicy.ConfirmationWithdrawsCurrentPrice"/>),
+    /// because the comparison reads the listing's pack quantity beside the observation the listing
+    /// points at: leaving the pointer would publish a 24-pack's price as a 36-pack's. The observation
+    /// itself is kept - <c>SupplierPriceObservations</c> is append-only - and the listing is confirmed
+    /// with no current price unless the reading it holds becomes one on its own merits, which is the
+    /// same "priced on the next run" answer a refused reading already gives.</para>
     /// </summary>
     private async Task<SupplierListingReviewResult> ConfirmListingAsync(
         SupplierListing listing,
@@ -306,6 +314,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             barcodeScope,
             unitsPerPack);
 
+        // Read before the identity is written: the price the listing is publishing was accepted
+        // against the identity it holds now, and that is what decides whether it survives.
+        var storedIdentity = IdentityOf(listing);
         var accepted = await LastAcceptedPriceAsync(listing, cancellationToken).ConfigureAwait(false);
 
         var decision = SupplierListingReviewPolicy.DecidePendingPrice(
@@ -321,6 +332,13 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             asOfUtc,
             submission.ApprovePriceException);
 
+        // The price the listing was publishing is a price of the pack it was read against, so a
+        // confirmation that moves the identity takes it away rather than re-dividing it.
+        var withdrawsCurrentPrice = accepted is not null
+            && SupplierListingReviewPolicy.ConfirmationWithdrawsCurrentPrice(
+                storedIdentity,
+                confirmedIdentity);
+
         listing.Variant = variant;
         listing.SizeValue = sizeValue;
         listing.SizeUnit = sizeUnit;
@@ -329,6 +347,11 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
         listing.BarcodeScope = barcodeScope;
         listing.MatchStatus = SupplierListingMatchStatus.Confirmed;
         listing.UpdatedAtUtc = asOfUtc;
+
+        if (withdrawsCurrentPrice)
+        {
+            WithdrawCurrentPrice(listing);
+        }
 
         SupplierPriceObservation? observation = null;
 
@@ -343,7 +366,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
         {
             // After the save, because the state names the observation's own key and a row this
             // transaction created has none until then - the shape #937's own price state uses.
-            ApplyCurrentPriceState(listing, observation, accepted);
+            // A withdrawn price is no longer the price this reading is compared with or replaces:
+            // the accepted reading is this pack's first, whenever it was observed.
+            ApplyCurrentPriceState(listing, observation, withdrawsCurrentPrice ? null : accepted);
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -396,6 +421,34 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
         _db.SupplierListingPendingObservations.Remove(pending);
 
         return observation;
+    }
+
+    /// <summary>
+    /// Takes away the price the listing was publishing, because the pack just confirmed is not the
+    /// pack that price was read against (<see cref="SupplierListingReviewPolicy.ConfirmationWithdrawsCurrentPrice"/>).
+    ///
+    /// <para>All three price-check facts go together, which is the one coherent "never checked" state
+    /// <see cref="SupplierListingPriceStatePolicy"/> describes and the database's own
+    /// <c>CK_SupplierListings_PriceStateConsistent</c> allows: a listing cannot hold a last successful
+    /// check with no observation behind it, and a price change it no longer has a price for is not a
+    /// change. The invariant is asserted here rather than assumed, for the reason
+    /// <see cref="ApplyCurrentPriceState"/> asserts it after a write.</para>
+    ///
+    /// <para><strong>The observation is not touched.</strong> It stays in
+    /// <c>SupplierPriceObservations</c>, which is append-only history: what a supplier charged at an
+    /// instant stays true after a reviewer corrected what pack it was. What is withdrawn is only this
+    /// listing's claim that it is the price <em>now</em>.</para>
+    /// </summary>
+    private static void WithdrawCurrentPrice(SupplierListing listing)
+    {
+        listing.LatestObservationId = null;
+        listing.LastCheckedAtUtc = null;
+        listing.LastPriceChangeAtUtc = null;
+
+        SupplierListingPriceStatePolicy.RequireConsistentState(
+            listing.LatestObservationId,
+            listing.LastCheckedAtUtc,
+            listing.LastPriceChangeAtUtc);
     }
 
     /// <summary>
@@ -1279,6 +1332,19 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             reading.Barcode,
             reading.BarcodeScope,
             reading.UnitsPerPack);
+
+    /// <summary>
+    /// The identity the catalogue holds for one listing, which is the identity its accepted price was
+    /// read against.
+    /// </summary>
+    private static SupplierListingIdentity IdentityOf(SupplierListing listing) =>
+        new(
+            listing.Variant,
+            listing.SizeValue,
+            listing.SizeUnit,
+            listing.Barcode,
+            listing.BarcodeScope,
+            listing.UnitsPerPack);
 
     /// <summary>
     /// What one price-tracking mapping contributes to the queue: a product description, a state, and

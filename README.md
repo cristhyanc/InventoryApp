@@ -1071,6 +1071,13 @@ POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
   confirmed, and must be inside the band around the listing's last accepted price (no more than 50%
   below, no more than 100% above). Otherwise the listing is **confirmed with no current price** and is
   priced on the next run — the page says which of the two happened and why.
+- **Correcting the pack also withdraws the price the listing was already showing.** A comparison
+  divides a listing's pack price by the listing's own pack count, so a $40 30-pack confirmed as a
+  36-pack would otherwise have been shown as $40 for 36 — a price no supplier ever charged. Changing
+  the pack quantity, the variant, the individual size or the barcode therefore leaves the listing with
+  **no current price** until the next run reads the pack that was confirmed; a confirmation that
+  corrects nothing keeps the price it had. Nothing is deleted: every price ever observed stays in the
+  history, and the business is shown "not checked yet" rather than a wrong number.
 - **A price exception is explicit.** A price past the band is accepted only when the Super Admin ticks
   **Approve this price exception**, which is offered only when the band is what would otherwise refuse
   the reading; the accepted price then becomes the reference the next run's band is measured against.

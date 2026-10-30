@@ -34,6 +34,15 @@ public class PriceCatalogueReviewTests
     /// <summary>A reading old enough for the supplier's own freshness limit to refuse it.</summary>
     private static readonly DateTime LongAgo = new(2026, 10, 25, 5, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>
+    /// The collector run after a review, for the one test that states "priced on the next run" over
+    /// the real results endpoint: started after the decision and still open when it submits.
+    /// </summary>
+    private static readonly DateTime NextRunStarted = new(2026, 10, 28, 7, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime NextRunExpires = new(2026, 10, 28, 13, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime NextRunObserved = new(2026, 10, 28, 8, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime NextRunNow = new(2026, 10, 28, 9, 0, 0, DateTimeKind.Utc);
+
     private static string ColaKey => PriceCatalogueWaitingKey.For("Coca-Cola Classic", "375mL");
 
     #region The queue
@@ -401,6 +410,208 @@ public class PriceCatalogueReviewTests
         var listing = await fixture.ListingAsync(arranged.ListingId);
         Assert.Equal(36, listing.UnitsPerPack);
         Assert.Equal(42.50m, Assert.Single(await fixture.AllObservationsAsync()).PackPrice);
+    }
+
+    /// <summary>
+    /// <strong>The regression of the review finding of 30 October 2026.</strong> A confirmation that
+    /// changes the pack must never leave the price the listing was already publishing in place: the
+    /// comparison reads the listing's own pack quantity beside the observation the listing points at,
+    /// so a $40 30-pack confirmed as a 36-pack was being presented as $40 for 36 - a per-unit price no
+    /// supplier ever published.
+    ///
+    /// <para>Stated end to end over the <strong>real</strong> cheapest-supplier summary (#930) rather
+    /// than over the listing's columns alone, because what was wrong was what a business saw. While
+    /// the listing is flagged its price is recorded but compared with nothing; the confirmation is
+    /// what makes it eligible again, and after a confirmation that moved the pack the summary reports
+    /// "not checked yet" rather than a wrong number. The accepted observation is still in the
+    /// append-only history, and the next collector run's reading of the pack that was confirmed
+    /// restores a correct comparison.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_old_packs_price_is_not_published_against_a_newly_confirmed_pack()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var arranged = await ArrangeComparedListingAsync(
+            fixture,
+            acceptedPackPrice: 40.00m,
+            pendingPackPrice: 42.50m,
+            pendingObservedAtUtc: LongAgo);
+
+        // What the business sees while the listing is flagged: the price the catalogue holds, per unit
+        // against the 30-pack it was read for, and compared with nothing until somebody confirms the
+        // listing. The confirmation is what makes it eligible again - which is exactly why a
+        // confirmation that moves the pack is the moment a wrong number would reach a business.
+        var before = await ComparedOfferAsync(fixture, Now);
+        Assert.True(before.HasPrice);
+        Assert.Equal(40.00m, before.PackPrice);
+        Assert.Equal(30, before.PackQuantity);
+        Assert.NotNull(before.UnitPrice);
+        Assert.Equal(SupplierOfferIneligibility.ListingNotConfirmed, before.Ineligibility);
+        Assert.False(before.IsCheapest);
+
+        // The reviewer corrects the pack to 36 while the reading in front of them is too old to be
+        // guidance, so no replacement price is accepted.
+        var result = await fixture.DeniedReviewStore().DecideListingAsync(
+            Confirm(arranged.ListingId) with { UnitsPerPack = 36 },
+            Now,
+            CancellationToken.None);
+
+        Assert.False(result!.PriceAccepted);
+        Assert.Equal(SupplierListingReviewPolicy.StaleReadingReason, result.PriceReason);
+        Assert.Equal(36, result.ConfirmedUnitsPerPack);
+
+        // The listing is confirmed at the reviewed pack and holds no current price at all - the one
+        // coherent "never checked" state, which the database's own check constraint also allows.
+        var listing = await fixture.ListingAsync(arranged.ListingId);
+        Assert.Equal(SupplierListingMatchStatus.Confirmed, listing.MatchStatus);
+        Assert.Equal(36, listing.UnitsPerPack);
+        Assert.Null(listing.LatestObservationId);
+        Assert.Null(listing.LastCheckedAtUtc);
+        Assert.Null(listing.LastPriceChangeAtUtc);
+
+        // History is preserved: what the supplier charged for the pack that was there stays recorded.
+        var history = Assert.Single(await fixture.AllObservationsAsync());
+        Assert.Equal(arranged.AcceptedObservationId, history.Id);
+        Assert.Equal(40.00m, history.PackPrice);
+
+        // And the business is told "not checked yet" rather than shown the old pack's price under the
+        // new pack: no price, no unit price, and nothing to be cheapest.
+        var after = await ComparedOfferAsync(fixture, Now);
+        Assert.True(after.HasListing);
+        Assert.False(after.HasPrice);
+        Assert.Null(after.PackPrice);
+        Assert.Null(after.UnitPrice);
+        Assert.Equal(36, after.PackQuantity);
+        Assert.Null(after.Ineligibility);
+
+        var summaryAfter = await SummaryAsync(fixture, Now);
+        Assert.Null(Assert.Single(summaryAfter.Products).CheapestUnitPrice);
+
+        // Priced on the next run, which is the issue's own answer: the real collector results
+        // endpoint reads the pack that was confirmed and that reading becomes the price.
+        var nextRunId = await fixture.SeedRunAsync(NextRunStarted, NextRunExpires);
+        var nextWorkItemId = await fixture.SeedWorkItemAsync(nextRunId, arranged.MasterProductId, null);
+
+        var receipt = await new RecordPriceCollectorResults(
+                fixture.DeniedResultStore(),
+                new InventoryApi.Tests.Application.Time.FakeClock(NextRunNow))
+            .Handle(
+                new PriceCollectorResultBatch(
+                    nextRunId,
+                    [ConfirmedPackRow(nextWorkItemId, fixture.SupplierPresetId, 55.00m)]),
+                CancellationToken.None);
+
+        Assert.Single(receipt!.Accepted);
+
+        var restored = await ComparedOfferAsync(fixture, NextRunNow);
+        Assert.True(restored.HasPrice);
+        Assert.Equal(55.00m, restored.PackPrice);
+        Assert.Equal(36, restored.PackQuantity);
+        Assert.NotNull(restored.UnitPrice);
+
+        var summaryRestored = await SummaryAsync(fixture, NextRunNow);
+        Assert.Equal(
+            restored.UnitPrice,
+            Assert.Single(summaryRestored.Products).CheapestUnitPrice);
+
+        // Still append-only: the withdrawn price and the new one are both there.
+        Assert.Equal(
+            [40.00m, 55.00m],
+            (await fixture.AllObservationsAsync()).Select(row => row.PackPrice).Order().ToArray());
+    }
+
+    /// <summary>
+    /// The same withdrawal on every path that refuses the held reading, because none of them is a
+    /// reason to keep publishing the old pack's price: a reading too old to be guidance, a reading of
+    /// another pack, and a reading outside the band with no exception approved.
+    ///
+    /// <para>The listing ends confirmed at the reviewed pack with no current price in all three, and
+    /// the accepted observation stays in the append-only history in all three. A refused reading is
+    /// never accepted just to fill the gap that leaves - which is what each case's own reason says.
+    /// </para>
+    /// </summary>
+    [Theory]
+    [InlineData("stale")]
+    [InlineData("another pack")]
+    [InlineData("out of band")]
+    public async Task A_refused_reading_leaves_a_corrected_pack_with_no_current_price(string refusal)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var arranged = await ArrangePendingListingAsync(
+            fixture,
+            packPrice: refusal == "out of band" ? 9.00m : 42.50m,
+            observedAtUtc: refusal == "stale" ? LongAgo : PriceCatalogueFixture.CreatedAt,
+            lastAcceptedPackPrice: 40.00m,
+            status: SupplierListingMatchStatus.NeedsReview);
+
+        var submission = Confirm(arranged.ListingId) with { UnitsPerPack = 36 };
+
+        if (refusal == "another pack")
+        {
+            submission = submission with { Variant = "Zero Sugar" };
+        }
+
+        var result = await fixture.DeniedReviewStore().DecideListingAsync(
+            submission,
+            Now,
+            CancellationToken.None);
+
+        Assert.False(result!.PriceAccepted);
+        Assert.False(result.PriceExceptionUsed);
+        Assert.Equal(
+            refusal switch
+            {
+                "stale" => SupplierListingReviewPolicy.StaleReadingReason,
+                "another pack" => SupplierListingReviewPolicy.ReadingDescribesAnotherPackReason,
+                _ => SupplierListingReviewPolicy.PriceExceptionNotApprovedReason,
+            },
+            result.PriceReason);
+
+        var listing = await fixture.ListingAsync(arranged.ListingId);
+        Assert.Equal(SupplierListingMatchStatus.Confirmed, listing.MatchStatus);
+        Assert.Equal(36, listing.UnitsPerPack);
+        Assert.Null(listing.LatestObservationId);
+        Assert.Null(listing.LastCheckedAtUtc);
+        Assert.Null(listing.LastPriceChangeAtUtc);
+
+        Assert.Equal(40.00m, Assert.Single(await fixture.AllObservationsAsync()).PackPrice);
+    }
+
+    /// <summary>
+    /// The control case, and the documented handling of a <em>compatible</em> historical price: a
+    /// confirmation that corrects nothing leaves the price the listing was publishing exactly where it
+    /// was, because that accepted reading is still a reading of this pack. It is not re-accepted and
+    /// the comparison is unchanged; its own freshness limit is what eventually stops it being
+    /// compared (#925).
+    /// </summary>
+    [Fact]
+    public async Task A_confirmation_that_corrects_nothing_keeps_the_price_the_listing_was_publishing()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var arranged = await ArrangeComparedListingAsync(
+            fixture,
+            acceptedPackPrice: 40.00m,
+            pendingPackPrice: 42.50m,
+            pendingObservedAtUtc: LongAgo);
+
+        var result = await fixture.DeniedReviewStore().DecideListingAsync(
+            Confirm(arranged.ListingId),
+            Now,
+            CancellationToken.None);
+
+        Assert.False(result!.PriceAccepted);
+        Assert.Equal(SupplierListingReviewPolicy.StaleReadingReason, result.PriceReason);
+
+        var listing = await fixture.ListingAsync(arranged.ListingId);
+        Assert.Equal(30, listing.UnitsPerPack);
+        Assert.Equal(arranged.AcceptedObservationId, listing.LatestObservationId);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, listing.LastCheckedAtUtc);
+        Assert.Equal(PriceCatalogueFixture.CreatedAt, listing.LastPriceChangeAtUtc);
+
+        var offer = await ComparedOfferAsync(fixture, Now);
+        Assert.True(offer.HasPrice);
+        Assert.Equal(40.00m, offer.PackPrice);
+        Assert.Equal(30, offer.PackQuantity);
     }
 
     /// <summary>
@@ -1305,6 +1516,116 @@ public class PriceCatalogueReviewTests
 
         return new ArrangedListing(listingId, runId, workItemId);
     }
+
+    private sealed record ArrangedComparedListing(
+        long ListingId,
+        long MasterProductId,
+        long AcceptedObservationId);
+
+    /// <summary>
+    /// One shelf a business is already comparing, flagged for review: its own linked supplier, its own
+    /// matched mapping, a <em>confirmed</em> listing of the master product that mapping names, an
+    /// accepted price still inside the supplier's freshness limit, and the reading #937 held back.
+    ///
+    /// <para>It is arranged so the whole claim can be stated over the real cheapest-supplier summary:
+    /// everything a price needs to reach a business is here, so a comparison that changes after a
+    /// review changed because of the review.</para>
+    /// </summary>
+    private static async Task<ArrangedComparedListing> ArrangeComparedListingAsync(
+        PriceCatalogueFixture fixture,
+        decimal acceptedPackPrice,
+        decimal pendingPackPrice,
+        DateTime pendingObservedAtUtc)
+    {
+        await fixture.SeedSupplierAsync(
+            fixture.FirstBusinessId,
+            "Alpha Grocer",
+            fixture.SupplierPresetId);
+
+        var mapping = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var master = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        await fixture.MatchAsync(mapping.Id, master);
+
+        var listingId = await fixture.SeedIdentifiedListingAsync(
+            master,
+            waitingKey: null,
+            "SKU-COLA-30",
+            SupplierListingMatchStatus.Confirmed);
+
+        var runId = await fixture.SeedRunAsync(PriceCatalogueFixture.CreatedAt, null);
+        var workItemId = await fixture.SeedWorkItemAsync(runId, master, null);
+
+        // The price the business compares today, accepted against the 30-pack the catalogue holds.
+        var acceptedObservationId = await fixture.SeedObservationAsync(
+            listingId,
+            runId,
+            acceptedPackPrice);
+
+        // And then a run flagged it, so the reviewer is looking at a held reading on a listing that
+        // already has a price - which is the state the finding of 30 October 2026 is about.
+        await fixture.SetListingStatusAsync(listingId, SupplierListingMatchStatus.NeedsReview);
+        await fixture.SeedPendingObservationAsync(
+            listingId,
+            runId,
+            workItemId,
+            pendingPackPrice,
+            pendingObservedAtUtc);
+
+        return new ArrangedComparedListing(listingId, master, acceptedObservationId);
+    }
+
+    /// <summary>
+    /// The first business's whole cheapest-supplier answer for its cola, through the
+    /// <strong>real</strong> use case over the <strong>real</strong> adapter on that business's own
+    /// scope: nothing about the comparison is restated here.
+    /// </summary>
+    private static Task<CheapestSupplierSummary> SummaryAsync(
+        PriceCatalogueFixture fixture,
+        DateTime asOfUtc) =>
+        new GetCheapestSupplierSummary(
+                new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(
+                    fixture.FirstBusinessId),
+                fixture.SummaryStoreFor(fixture.FirstBusinessId),
+                new InventoryApi.Tests.Application.Time.FakeClock(asOfUtc))
+            .Handle([fixture.FirstBusinessColaId], CancellationToken.None);
+
+    /// <summary>The one supplier offer in that answer.</summary>
+    private static async Task<SupplierUnitPriceOffer> ComparedOfferAsync(
+        PriceCatalogueFixture fixture,
+        DateTime asOfUtc) =>
+        Assert.Single(Assert.Single((await SummaryAsync(fixture, asOfUtc)).Products).Suppliers);
+
+    /// <summary>
+    /// One collector row reading the pack the reviewer confirmed: the stored identity exactly, on the
+    /// supplier master record's own price basis and with the rate that supplier charges, so the only
+    /// thing it says is the price.
+    /// </summary>
+    private static PriceCollectorResultRowSubmission ConfirmedPackRow(
+        long workItemId,
+        int supplierPresetId,
+        decimal packPrice) =>
+        new(
+            workItemId,
+            supplierPresetId,
+            "SKU-COLA-30",
+            "Alpha Grocer cola",
+            "Classic",
+            375m,
+            MasterProductSizeUnit.Millilitre,
+            "0012345678905",
+            BarcodeScope.Unit,
+            36,
+            packPrice,
+            RegularPackPrice: null,
+            SupplierPriceObservationPolicy.Currency,
+            SupplierPriceBasis.ExclusiveOfGst,
+            SupplierGstRate: 0.1000m,
+            IsPromotion: false,
+            PromotionEndsAtUtc: null,
+            SupplierStockStatus.InStock,
+            NextRunObserved,
+            "review-regression",
+            SourceUrl: null);
 
     private sealed record ArrangedAutomaticMatch(
         long SuggestionId,

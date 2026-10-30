@@ -97,6 +97,15 @@ public sealed record ReviewedPendingPriceDecision(
 /// because a reading of a different pack is not a price for this one. See
 /// <see cref="ReadingDescribesConfirmedPack"/>.</para>
 ///
+/// <para><strong>A confirmation never leaves an older price standing against a pack it is not a price
+/// of.</strong> The identity a reviewer confirms is stored on the listing, and the listing is what a
+/// comparison reads its pack quantity from - so confirming a 36-pack on a row whose accepted price was
+/// read against a 24-pack would publish that price divided by the wrong number. The price that was
+/// current is therefore withdrawn whenever the confirmed identity is not the one it was read against
+/// (<see cref="ConfirmationWithdrawsCurrentPrice"/>), and the listing is confirmed with
+/// <strong>no current price</strong> unless the reading it is holding becomes one on its own merits.
+/// A refused reading is never accepted just to fill the gap that leaves.</para>
+///
 /// <para><strong>It stores nothing and reads nothing.</strong> Every method is a pure function of the
 /// values it is handed, exactly as <see cref="PriceCollectorResultPolicy"/>'s are, so the rules can be
 /// stated over a table of cases rather than through an endpoint.</para>
@@ -207,6 +216,42 @@ public static class SupplierListingReviewPolicy
             confirmed with { UnitsPerPack = read.UnitsPerPack },
             read);
     }
+
+    /// <summary>
+    /// Whether confirming <paramref name="confirmed"/> on a listing the catalogue holds as
+    /// <paramref name="stored"/> takes away the price that listing is currently publishing: the
+    /// accepted observation it points at was read against the stored identity, and a confirmation
+    /// that moves that identity makes it a price for another pack.
+    ///
+    /// <para><strong>The pack quantity is compared here, and that is the whole of the difference from
+    /// <see cref="ReadingDescribesConfirmedPack"/>.</strong> That rule decides whether the reading in
+    /// front of the reviewer is a reading of the pack they are confirming, where the quantity is the
+    /// reviewer's own answer and the reading's disagreement about it is the thing being settled. This
+    /// rule is about a price that was accepted <em>earlier</em>, against a quantity somebody already
+    /// settled: a $40 24-pack confirmed as a 36-pack is still $40, and a per-unit comparison would
+    /// divide it by 36 and report a price no supplier ever published. So a changed pack quantity
+    /// withdraws the current price exactly as a changed variant, individual size or barcode does.
+    /// </para>
+    ///
+    /// <para><strong>A compatible identity keeps its price, deliberately.</strong> When the confirmed
+    /// identity is the stored one - which is every confirmation that corrects nothing, including one
+    /// that only restyles the variant's spacing or case - the accepted observation is still a reading
+    /// of this pack and stays the listing's current price. It is not re-accepted and nothing about it
+    /// is rewritten; <see cref="SupplierPriceFreshnessPolicy"/> is what eventually stops it being
+    /// compared, which is the same restraint #925 states about a check that never happened.</para>
+    ///
+    /// <para><strong>Nothing is withdrawn from history.</strong> What this rule can take away is the
+    /// listing's <em>pointer</em> at a current price; <c>SupplierPriceObservations</c> is append-only
+    /// and every accepted reading stays in it, because what a supplier charged at an instant remains
+    /// true after a reviewer corrected what pack it was. A withdrawn pointer is recovered by the next
+    /// accepted reading of the confirmed pack and never by promoting an older observation: this
+    /// catalogue records an identity on the listing rather than on each observation, so which
+    /// historical reading described which pack is not a question the stored rows can answer.</para>
+    /// </summary>
+    public static bool ConfirmationWithdrawsCurrentPrice(
+        SupplierListingIdentity stored,
+        SupplierListingIdentity confirmed) =>
+        PriceCollectorResultPolicy.HasIdentityChanged(stored, confirmed);
 
     /// <summary>
     /// Whether <paramref name="packPrice"/> may only be accepted with an explicit price exception:

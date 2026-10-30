@@ -240,6 +240,64 @@ public class SupplierListingReviewPolicyTests
     }
 
     /// <summary>
+    /// The other side of that answer, and the rule the two must not be confused: a pack quantity the
+    /// reviewer <em>changes</em> withdraws the price the listing was already publishing, because that
+    /// price was accepted against the stored quantity and a per-unit comparison divides the listing's
+    /// pack price by the listing's own pack count. A $40 24-pack confirmed as a 36-pack is not a
+    /// 36-pack's price.
+    /// </summary>
+    [Theory]
+    [InlineData(24)]
+    [InlineData(36)]
+    [InlineData(null)]
+    public void A_changed_pack_quantity_withdraws_the_price_the_listing_was_publishing(
+        int? confirmedQuantity)
+    {
+        var confirmed = Confirmed with { UnitsPerPack = confirmedQuantity };
+
+        Assert.True(SupplierListingReviewPolicy.ConfirmationWithdrawsCurrentPrice(Confirmed, confirmed));
+    }
+
+    /// <summary>
+    /// Every other identity field withdraws it for the same reason: an accepted price of the Classic
+    /// 375 mL unit pack is not a price of the Zero Sugar, of a 355 mL item, of another barcode or of
+    /// the carton that barcode might be.
+    /// </summary>
+    [Theory]
+    [InlineData("Zero Sugar", 375, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Unit)]
+    [InlineData("Classic", 355, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Unit)]
+    [InlineData("Classic", 375, MasterProductSizeUnit.Gram, "0012345678905", BarcodeScope.Unit)]
+    [InlineData("Classic", 375, MasterProductSizeUnit.Millilitre, "12345678905", BarcodeScope.Unit)]
+    [InlineData("Classic", 375, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Carton)]
+    public void A_changed_identity_field_withdraws_the_price_the_listing_was_publishing(
+        string variant,
+        decimal size,
+        MasterProductSizeUnit unit,
+        string barcode,
+        BarcodeScope scope)
+    {
+        var confirmed = new SupplierListingIdentity(variant, size, unit, barcode, scope, 30);
+
+        Assert.True(SupplierListingReviewPolicy.ConfirmationWithdrawsCurrentPrice(Confirmed, confirmed));
+    }
+
+    /// <summary>
+    /// A confirmation that corrects nothing keeps the price: the stored observation is still a reading
+    /// of this pack, and a restyled variant - the supplier's own wording, trimmed and compared without
+    /// regard to case - is the same pack too.
+    /// </summary>
+    [Theory]
+    [InlineData("Classic")]
+    [InlineData("  classic  ")]
+    [InlineData("CLASSIC")]
+    public void A_compatible_identity_keeps_the_price_the_listing_was_publishing(string variant)
+    {
+        var confirmed = Confirmed with { Variant = variant };
+
+        Assert.False(SupplierListingReviewPolicy.ConfirmationWithdrawsCurrentPrice(Confirmed, confirmed));
+    }
+
+    /// <summary>
     /// The band is #937's: no more than 50% below and no more than 100% above the last accepted
     /// price, with both edges <em>inside</em> it, so a supplier running a half-price special needs no
     /// exception at all. A listing with no accepted price has no band.
