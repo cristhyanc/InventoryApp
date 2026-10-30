@@ -15,9 +15,9 @@ namespace InventoryApi.Tests.Domain.Subscriptions;
 public class PlanFeaturePolicyTests
 {
     /// <summary>
-    /// The decided table: the two provider-free reports are Starter, and everything that depends on
-    /// the sales provider - including the uploaded sales file, which reads no Nayax API at all - is
-    /// Pro.
+    /// The decided table: the two provider-free reports and the observed supplier prices (issue
+    /// #977) are Starter, and everything that depends on the sales provider - including the uploaded
+    /// sales file, which reads no Nayax API at all - is Pro.
     /// </summary>
     [Theory]
     [InlineData(PlanFeature.SalesProviderIntegration, SubscriptionPlan.Pro)]
@@ -25,6 +25,7 @@ public class PlanFeaturePolicyTests
     [InlineData(PlanFeature.ProviderSalesReports, SubscriptionPlan.Pro)]
     [InlineData(PlanFeature.SiteCommissions, SubscriptionPlan.Pro)]
     [InlineData(PlanFeature.SalesFileImport, SubscriptionPlan.Pro)]
+    [InlineData(PlanFeature.ObservedSupplierPrices, SubscriptionPlan.Starter)]
     public void Every_feature_requires_the_decided_plan(PlanFeature feature, SubscriptionPlan expected) =>
         Assert.Equal(expected, PlanFeaturePolicy.RequiredPlan(feature));
 
@@ -42,7 +43,7 @@ public class PlanFeaturePolicyTests
 
     /// <summary>The declared vocabulary, so a feature added later is added here too.</summary>
     [Fact]
-    public void The_declared_features_are_exactly_the_five()
+    public void The_declared_features_are_exactly_the_six()
     {
         Assert.Equal(
             [
@@ -51,6 +52,7 @@ public class PlanFeaturePolicyTests
                 PlanFeature.ProviderSalesReports,
                 PlanFeature.SiteCommissions,
                 PlanFeature.SalesFileImport,
+                PlanFeature.ObservedSupplierPrices,
             ],
             PlanFeatures.All);
         Assert.Equal(PlanFeatures.All.Count, Enum.GetValues<PlanFeature>().Length);
@@ -85,7 +87,8 @@ public class PlanFeaturePolicyTests
 
     /// <summary>
     /// The plan × feature matrix, as the plan page advertises it: Free includes none of them,
-    /// Starter adds only the two provider-free reports, and Pro includes everything.
+    /// Starter adds the two provider-free reports and the observed supplier prices, and Pro includes
+    /// everything.
     /// </summary>
     [Theory]
     [InlineData(SubscriptionPlan.Free, PlanFeature.SalesProviderIntegration, false)]
@@ -93,16 +96,19 @@ public class PlanFeaturePolicyTests
     [InlineData(SubscriptionPlan.Free, PlanFeature.ProviderSalesReports, false)]
     [InlineData(SubscriptionPlan.Free, PlanFeature.SiteCommissions, false)]
     [InlineData(SubscriptionPlan.Free, PlanFeature.SalesFileImport, false)]
+    [InlineData(SubscriptionPlan.Free, PlanFeature.ObservedSupplierPrices, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.SalesProviderIntegration, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.BookkeepingAndGstReports, true)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.ProviderSalesReports, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.SiteCommissions, false)]
     [InlineData(SubscriptionPlan.Starter, PlanFeature.SalesFileImport, false)]
+    [InlineData(SubscriptionPlan.Starter, PlanFeature.ObservedSupplierPrices, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.SalesProviderIntegration, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.BookkeepingAndGstReports, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.ProviderSalesReports, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.SiteCommissions, true)]
     [InlineData(SubscriptionPlan.Pro, PlanFeature.SalesFileImport, true)]
+    [InlineData(SubscriptionPlan.Pro, PlanFeature.ObservedSupplierPrices, true)]
     public void Each_plan_includes_exactly_the_features_the_catalogue_advertises(
         SubscriptionPlan plan,
         PlanFeature feature,

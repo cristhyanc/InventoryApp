@@ -207,6 +207,109 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
     }
 
     /// <summary>
+    /// The supplier price data of issue #977: the one endpoint that serves it is Starter, and a Free
+    /// business is refused it. The ids are this business's own, so a served answer really is the
+    /// summary rather than a validation failure.
+    /// </summary>
+    [Theory]
+    [InlineData(SubscriptionPlan.Free, false)]
+    [InlineData(SubscriptionPlan.Starter, true)]
+    [InlineData(SubscriptionPlan.Pro, true)]
+    public async Task The_cheapest_supplier_summary_is_served_or_refused_by_the_business_plan(
+        SubscriptionPlan plan,
+        bool served)
+    {
+        var productId = await _factory.SeedTrackableProductAsync();
+        await _factory.GrantAsync(_factory.TradingBusinessId, plan);
+
+        var response = await Owner().PostAsync(
+            "/api/cheapest-suppliers/summary",
+            Json($"{{\"productIds\":[{productId}]}}"));
+
+        if (!served)
+        {
+            var problem = await AssertPlanRefusalAsync(response);
+            Assert.Equal("Starter", problem.GetProperty("requiredPlan").GetString());
+            Assert.Equal(
+                PlanFeatures.Name(PlanFeature.ObservedSupplierPrices),
+                problem.GetProperty("planFeature").GetString());
+            return;
+        }
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var summary = await ReadJsonAsync(response);
+        Assert.Equal(1, summary.GetProperty("products").GetArrayLength());
+    }
+
+    /// <summary>
+    /// The issue's fourth criterion: a Free business still switches "Track supplier prices" on and
+    /// off, and reads where its own products stand. The mapping is its own record rather than the
+    /// price data, so the plan withholds none of the three endpoints - and the request that turns it
+    /// on really does store the mapping, which is what makes "the setting is kept and takes effect
+    /// when the business upgrades" possible at all.
+    /// </summary>
+    [Fact]
+    public async Task A_free_business_still_switches_price_tracking_on_and_off()
+    {
+        var productId = await _factory.SeedTrackableProductAsync();
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Free);
+
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await Owner().PutAsync(
+                $"/api/products/{productId}/price-tracking",
+                Json("{\"tracked\":true}"))).StatusCode);
+        Assert.Equal(1, await _factory.PriceTrackingCountAsync());
+
+        var read = await Owner().GetAsync($"/api/products/{productId}/price-tracking");
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        Assert.True((await ReadJsonAsync(read)).GetProperty("tracked").GetBoolean());
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await Owner().GetAsync("/api/products/price-tracking")).StatusCode);
+
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await Owner().PutAsync(
+                $"/api/products/{productId}/price-tracking",
+                Json("{\"tracked\":false}"))).StatusCode);
+        Assert.Equal(0, await _factory.PriceTrackingCountAsync());
+    }
+
+    /// <summary>
+    /// And a downgrade never clears the setting: the mapping a Starter business asked for is still
+    /// there after the business is refused the prices, and the prices come back with the plan.
+    /// </summary>
+    [Fact]
+    public async Task A_downgrade_keeps_the_tracking_setting_and_an_upgrade_restores_the_prices()
+    {
+        var productId = await _factory.SeedTrackableProductAsync();
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Starter);
+        await Owner().PutAsync(
+            $"/api/products/{productId}/price-tracking",
+            Json("{\"tracked\":true}"));
+
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Free);
+        await AssertPlanRefusalAsync(await Owner().PostAsync(
+            "/api/cheapest-suppliers/summary",
+            Json($"{{\"productIds\":[{productId}]}}")));
+
+        Assert.Equal(1, await _factory.PriceTrackingCountAsync());
+        var read = await ReadJsonAsync(
+            await Owner().GetAsync($"/api/products/{productId}/price-tracking"));
+        Assert.True(read.GetProperty("tracked").GetBoolean());
+
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Starter);
+
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await Owner().PostAsync(
+                "/api/cheapest-suppliers/summary",
+                Json($"{{\"productIds\":[{productId}]}}"))).StatusCode);
+        Assert.Equal(1, await _factory.PriceTrackingCountAsync());
+    }
+
+    /// <summary>
     /// The Nayax sales file import is Pro, and a refused upload imports nothing: the plan is
     /// evaluated before the multipart body is read at all.
     /// </summary>
@@ -816,6 +919,39 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
             await db.SaveChangesAsync();
         }
 
+        /// <summary>
+        /// One product of the trading business that may be tracked (issue #977): a real name and a
+        /// real unit label, which is what <c>ProductPriceTrackingPolicy</c> requires before the
+        /// "Track supplier prices" switch may be turned on at all.
+        /// </summary>
+        public async Task<long> SeedTrackableProductAsync()
+        {
+            await using var db = Database();
+            var product = new Product
+            {
+                BusinessId = TradingBusinessId,
+                Name = "Coca-Cola Classic",
+                Unit = "375mL",
+                CreatedAt = Cutoff,
+                UpdatedAt = Cutoff,
+            };
+
+            db.Products.Add(product);
+            await db.SaveChangesAsync();
+
+            return product.Id;
+        }
+
+        /// <summary>
+        /// How many price-tracking mappings exist, so "a downgrade never clears the setting" is a
+        /// count rather than an inference.
+        /// </summary>
+        public async Task<int> PriceTrackingCountAsync()
+        {
+            await using var db = Database();
+            return await db.ProductPriceTrackings.CountAsync();
+        }
+
         /// <summary>One completed sale, so "stored sales are never altered" has a subject.</summary>
         public async Task SeedCompletedSaleAsync()
         {
@@ -924,6 +1060,10 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
             db.NayaxConnectionTestDrafts.RemoveRange(await db.NayaxConnectionTestDrafts.ToListAsync());
             db.NayaxSales.RemoveRange(await db.NayaxSales.ToListAsync());
             db.SiteCommissionAgreements.RemoveRange(await db.SiteCommissionAgreements.ToListAsync());
+            // The mappings before the products they belong to: the foreign key is restricted on
+            // delete, as every tenant-owned relationship here is.
+            db.ProductPriceTrackings.RemoveRange(await db.ProductPriceTrackings.ToListAsync());
+            db.Products.RemoveRange(await db.Products.ToListAsync());
             await db.SaveChangesAsync();
         }
     }
@@ -965,6 +1105,26 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
             Assert.Equal(
                 HttpStatusCode.OK,
                 (await _factory.AsOwner().GetAsync(uri)).StatusCode);
+
+        /// <summary>
+        /// Including the supplier price data of issue #977, whose own criterion is that nothing
+        /// changes for any business until enforcement is switched on: the business here holds no
+        /// record at all and is served the summary.
+        /// </summary>
+        [Fact]
+        public async Task The_cheapest_supplier_summary_is_not_withheld_either()
+        {
+            var productId = await _factory.SeedTrackableProductAsync();
+
+            var response = await _factory.AsOwner().PostAsync(
+                "/api/cheapest-suppliers/summary",
+                new StringContent(
+                    $"{{\"productIds\":[{productId}]}}",
+                    Encoding.UTF8,
+                    "application/json"));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
 
         /// <summary>
         /// And the ordinary Nayax path is untouched: the stored credentials resolve and the fleet is

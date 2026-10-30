@@ -134,6 +134,17 @@ Invoke-ExternalCommand -Label 'Test JB Metro price lookup' -Command {
     & node --test (Join-Path $RepositoryRoot 'scripts/price-collector/jbmetro-lookup.test.mjs')
 }
 
+# Stub-driven only: the collector scripts' tests answer themselves over a loopback HTTP stub and
+# never call Restockroo, Apify or a supplier.
+Invoke-ExternalCommand -Label 'Test price collector scripts' -Command {
+    & node --test `
+        (Join-Path $RepositoryRoot 'scripts/price-collector/get-work.test.mjs') `
+        (Join-Path $RepositoryRoot 'scripts/price-collector/submit-results.test.mjs') `
+        (Join-Path $RepositoryRoot 'scripts/price-collector/apify-guard.test.mjs') `
+        (Join-Path $RepositoryRoot 'scripts/price-collector/output-schema.test.mjs') `
+        (Join-Path $RepositoryRoot 'scripts/price-collector/pagination.test.mjs')
+}
+
 Invoke-ExternalCommand -Label 'Restore backend' -Command {
     & dotnet restore $BackendSolution
 }

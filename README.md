@@ -704,7 +704,7 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 
 Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
 
-**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Supplier price data (#977) and the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
+**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Issue #977 is the same enforcement over the supplier price comparisons and the daily collection behind them; the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
 
 ### The plans
 
@@ -728,7 +728,7 @@ Storage limits cover purchase and expense attachments combined — not transacti
 
 The split is the same one the application already makes for a business with no usable provider, and [The menu without a usable provider](#the-menu-without-a-usable-provider) is the list of what Nayax is behind. Said in plan terms:
 
-- **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, and **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)).
+- **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)), and the **Track supplier prices** switch itself (see below).
 - **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
 - **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list).
 
@@ -755,10 +755,12 @@ Each of those answers carries a **distinct reason** — `PlanRequired`, not "Nay
 
 **What a plan refuses outright answers `403` with the code `plan_required`** and names the plan the business would need. That applies to:
 
-- **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports.
+- **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports; and the **supplier price comparisons** — the one read behind the **Cheapest supplier** column on Needs Ordering, All Products and the Dashboard.
 - **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report, agreements and payments); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
 
 A report and its own download always need the same plan. A refused save or import changes nothing at all — the plan is checked before the request body is read, so no credential is written and no row is imported.
+
+**Supplier price comparisons, in plan terms.** On Free, the **Cheapest supplier** column reads as unavailable and the rest of those pages — the row, the purchase-cost columns beside it and every action — is untouched. The daily collection follows the same line: a product is looked up at the suppliers while **at least one** business on Starter or Pro is tracking it, so a product you and a Starter business both track is still priced and nothing you have tracked is ever deleted. And the **Track supplier prices** switch stays available on every plan: you can turn it on and off on Free, the setting is kept through a downgrade, and the prices appear as soon as the plan includes them. See [Track supplier prices on a product](#track-supplier-prices-on-a-product) and [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
 
 **Reading the connection status stays available on every plan**, to every role that can see it today, and makes no Nayax call. That is deliberate: a business that moves to a plan without the connection keeps its saved credentials and their status, and the Integrations page still shows them. Nothing is deleted or changed by a plan change — sales, costs, product links, history, agreements, payments and attachments are all exactly as they were, and they become readable again the moment the plan includes them.
 
@@ -871,7 +873,7 @@ POST /api/price-collector/work-items/{id}/outcome       finishes one search
 POST /api/price-collector/runs/{id}/complete            closes the run
 ```
 
-**What has shipped.** The authentication path, the work list, the results endpoints (#937) and the matches endpoint (#941). The workflow itself (#929) and the collector prompt and scripts (#926, #927) are separate tasks.
+**What has shipped.** The authentication path, the work list, the results endpoints (#937), the matches endpoint (#941), the JB Metro lookup script (#927), and the collector prompt, the Apify limits and the helper scripts (#926, see [Running the collector scripts locally](#running-the-collector-scripts-locally) below). The scheduled workflow itself, its Claude CLI flags, its permission settings and its secrets (#929) are a separate task, so nothing runs this on a schedule yet.
 
 **The shipped state trusts no collector.** `PriceCollector__TenantId` and `PriceCollector__ClientId` are **empty** in `appsettings.json`, which is both the fail-closed state and the rollback lever: with them empty the collector endpoint answers `401` to every request, issues nothing, and no other endpoint is affected in any way. A half-filled or malformed section means the same thing and is logged as a startup error. Neither identifier is a credential — the API validates with Entra's published signing keys and the collector holds no secret either — so they are ordinary application settings with no Key Vault reference, and no real identifier may be committed. Supply them with `dotnet user-secrets` locally or application settings in Azure; see [Configuration and secrets](#configuration-and-secrets).
 
@@ -887,6 +889,35 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 **Why both identifiers are pinned, and not just the role.** The workforce scheme is multi-tenant (`TenantId: common`), so another Entra tenant can consent to this API and assign `PriceCollector.Run` to an application of its own — and Microsoft signs that tenant's tokens with the same key set, so the signature is genuine. Pinning `tid` is what makes that somebody else's token, and pinning `azp`/`appid` is what stops the owner's *other* workloads. The token must also carry **no delegated scope at all**, because Entra puts an assigned application role in a signed-in person's token too: that rule is what stops a person impersonating the collector.
 
 **How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
+
+### Running the collector scripts locally
+
+The collector side lives in `scripts/price-collector/` and is plain Node with no dependencies: the run's instructions (`prompt.md`), the Apify MCP configuration and per-actor rules (`apify-mcp.json`, `apify-limits.json`), the `PreToolUse` guard that enforces them (`apify-guard.mjs`), and the two scripts that talk to this API. The complete design is [docs/architecture.md § The collector prompt, the Apify limits and the helper scripts](docs/architecture.md#the-collector-prompt-the-apify-limits-and-the-helper-scripts-issue-926).
+
+Both scripts read the API base URL and the collector's bearer token from the environment, and never from an argument or a default — a token on a command line is a token in a process list:
+
+```bash
+export PRICE_COLLECTOR_API_BASE_URL="https://localhost:7001"   # your test API, no trailing slash needed
+export PRICE_COLLECTOR_API_TOKEN="<an app-only token for the configured collector application>"
+
+# 1. The work list. Run it once: reading it issues a run, and a second call expires the first.
+node scripts/price-collector/get-work.mjs            # the collector's view: one entry per search
+node scripts/price-collector/get-work.mjs --raw      # the API's answer verbatim
+
+# 2. What a run would write, by hand, for one of the work items the step above printed:
+mkdir -p price-collector-out
+# price-collector-out/<work-item-id>.json   — see scripts/price-collector/output.schema.json
+# price-collector-out/match-<key>.json      — one match proposal, when something is awaiting one
+
+# 3. The submission the scheduled workflow runs after the collector finishes or stops.
+node scripts/price-collector/submit-results.mjs --dir price-collector-out --run-id 41
+```
+
+`get-work.mjs` exits `1` on a non-2xx answer, an unreachable API or an answer that is not a work list, and `2` when a setting is missing — printing nothing on stdout in each case, because half a work list read as the night's work is a night of listings silently not checked. `submit-results.mjs` validates every file on its own, skips and reports one it cannot use, posts the match files before the result files, sends a work item's outcome only after all of its batches succeeded, and always completes the run at the end so unanswered searches are recorded as "not searched". Both print counts and reasons only: no price, product name, supplier product id, base URL or token. `price-collector-out/` is git-ignored; never commit a collector output file, and never put a token in one.
+
+To see what the run itself would do without spending anything, read `scripts/price-collector/prompt.md`: it is the reviewed instruction set, and the guard beside it is what makes the spending caps and the write-once output folder true whatever the model does. The tests (`bash scripts/validate.sh`) make no live call at all.
+
+**What the guard refuses, and why it refuses more than you might expect.** `apify-guard.mjs` is the `PreToolUse` hook that decides every Apify call in its own process, and it spends nothing it cannot account for. It calls only an actor `apify-limits.json` lists **and** marks `actorIdConfirmed: true` — the three actors whose ids and input field names the owner has still to confirm in the bounded dry run are refused outright, so today Varnmill is the only Apify actor a run may call (the JB Metro route is not an Apify actor) and confirming another is a one-line change in that file. Each allowed call is **reserved** before it is allowed: the run's accounting is read, compared against the per-run caps and written inside a cross-process lock, and flushed to the disk before the answer comes back, so two calls at once cannot spend the same remaining allowance. Only a state file that does not exist yet is read as an empty budget; an accounting that cannot be read, is corrupt, cannot be locked or cannot be written refuses the paid call instead of starting the run's budget again. A refused call leaves the accounting untouched, and a `Write` is guarded without consulting it at all — a broken state file can stop a run from spending and can never make the output folder permissive.
 
 **What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). **Nothing it reports becomes a price by itself**: a reading of a listing nobody has confirmed is held where a person can see it, and the [Super Admin supplier price review](#super-admin-supplier-price-review) is what confirms, corrects or refuses it. Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
 
@@ -1968,6 +1999,14 @@ product you have not switched on.
 - **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
   permission is involved. It is unavailable while you are looking at a business in read-only support
   view, and while a Super Admin is previewing a role, like every other write in those states.
+- **It works on every plan, and the prices it leads to are a Starter feature.** The switch, its
+  status and the **Tracked** column are available whatever the business's
+  [plan](#business-plans-free-starter-and-pro) says: you can turn tracking on and off on Free, and
+  the setting is kept if the plan changes — nothing clears it on a downgrade. What a plan decides is
+  whether the **prices** are shown (the column below) and whether the daily collection is run for
+  your product: a product only Free businesses track is not looked up at the suppliers, while a
+  product you and a Starter or Pro business both track still is. Turn the plan back on and the
+  prices come back with it, from the request you had already made.
 
 ## The cheapest supplier, on Needs Ordering
 
@@ -2014,6 +2053,12 @@ same column, cell and popup — everything below applies to all three.
   role holds — these are suppliers' published prices rather than your own financial figures. The
   column reads as **Unavailable** while a Super Admin is looking at your business in read-only
   support view, which is read-only and asks for nothing.
+- **And which plan.** Supplier price comparisons are a **Starter** feature (see
+  [Business plans](#business-plans-free-starter-and-pro)). While plans are being enforced, a Free
+  business is refused this one read and the column reads as unavailable; everything else on the
+  page, including **Last purchase** and **Cheapest purchase**, which are your own purchase history,
+  is unaffected. Nothing you have tracked is lost, and the column fills in again as soon as the plan
+  includes it.
 - **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
   the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
   disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the
