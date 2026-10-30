@@ -2817,7 +2817,16 @@ Nayax call changed; everything below happens in the browser.
   follow it. An adjusted cell shows "Suggested: N" with **Use suggested** to go back, and the label
   disappears once it matches the suggestion again. **0 means skip that machine** for this product; a
   skipped cell has no tick box but keeps its box, so you can change your mind. The adjustment lives
-  only in this browser tab: it is never saved, never sent to Nayax and never changes stock.
+  only in this browser tab: it is never sent to Nayax and never changes stock.
+- **Your plan is waiting when you come back (issue #1021).** Everything you have adjusted, ticked or
+  half-typed is kept in this browser tab, together with the snapshot you planned against and the
+  time it was read, so going to another page and back — or reloading — brings the whole plan back
+  exactly as you left it, without reading a new pick list from Nayax. It is kept per tab: closing
+  the tab clears it, another tab or another device never sees it, it is never sent to the server,
+  and it is never kept or restored for a different sign-in, a different business, a support session
+  or a role preview. Your search, category, filters, sorting and the machine a phone is focused on
+  are not restored — only the plan is. If a machine has gone from your fleet since, it is quietly
+  dropped from the restored plan with whatever you had entered for it.
 - **A quantity the list cannot use is never guessed at.** A negative, fractional, non-numeric or
   too-large entry is refused whole — never cut down to the part that happens to be a number — and an
   empty box means "not filled in yet", not 0. The cell keeps exactly what you typed, says what is
@@ -2836,7 +2845,8 @@ Nayax call changed; everything below happens in the browser.
 - **Discarding is always asked first.** **Refresh** (or **Retry** after a failed read) re-reads
   exactly the same selection from Nayax and **Reset** clears it; if you have adjusted or ticked
   anything, or left a box holding something that is not yet a usable quantity, both ask before throwing it away, and so does removing a machine whose cells you changed.
-  Cancel changes nothing. The time of the snapshot you are looking at is shown beside Refresh, and an
+  Cancel changes nothing, including the copy kept in this tab; a discard you confirm throws that copy
+  away too, so it cannot come back later. The time of the snapshot you are looking at is shown beside Refresh, and an
   answer to an earlier, superseded request is ignored rather than replacing a newer one.
 - **On a phone** the matrix becomes one card per product with the machine picks inside it, a
   machine strip to focus on one stop, the same − | box | + controls and tick box, Current/Target
@@ -2857,9 +2867,12 @@ Nayax call changed; everything below happens in the browser.
 - **An unconfirmed save stays put.** If the outcome of a submission is unknown, a persistent **Retry
   save** resends exactly the same refill under the same idempotency key and the entries stay locked
   until it is answered (see above).
-- **Leaving is guarded.** Navigating away from the Pick List, or closing or reloading the tab, while
-  Plan picks has adjustments, ticks or a box still being corrected, Record refill has entered
-  quantities, or a save is outstanding or unconfirmed asks you to confirm first.
+- **Leaving is guarded, for what would actually be lost.** Navigating away from the Pick List, or
+  closing or reloading the tab, while Record refill has entered quantities, or a save is outstanding
+  or unconfirmed, asks you to confirm first. Plan picks no longer asks, because its plan is kept in
+  this tab (above) — unless this browser refuses to keep it, for instance in private mode or when
+  site data is blocked, in which case the old warning appears exactly as before, because the work
+  really would be lost.
 - **On a phone** Record refill also uses cards, with a machine strip, steppers and the totals and
   record button kept above the bottom bar.
 
