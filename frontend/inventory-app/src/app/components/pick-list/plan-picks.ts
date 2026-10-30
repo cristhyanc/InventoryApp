@@ -20,6 +20,16 @@ export const PICK_QUANTITY_TOO_LARGE_MESSAGE = `Enter a quantity of ${MAXIMUM_PI
 export type ParsedPickQuantity = { readonly quantity: number } | { readonly error: string };
 
 /**
+ * What one cell's always-visible quantity box holds while it is not a quantity the plan can use
+ * (issue #1008): the operator's text exactly as typed, never truncated or coerced, and the message
+ * refusing it. The cell's last valid effective quantity goes on carrying every total meanwhile.
+ */
+export interface InvalidPickQuantity {
+  readonly text: string;
+  readonly error: string;
+}
+
+/**
  * Accepts only a nonnegative whole number the pick list can represent. Unlike a refill entry, a
  * blank box is not "nothing": the operator is committing a planned quantity, and `0` is the explicit
  * way to plan a deliberate skip.
@@ -41,6 +51,16 @@ export function planCellKey(productId: number, machineId: number): string {
 /** The machine id a {@link planCellKey} names. */
 export function planCellMachineId(key: string): number {
   return Number(key.split(':')[1]);
+}
+
+/**
+ * Whether an unknown value is a {@link planCellKey} - two nonnegative whole numbers either side of
+ * one colon. Nothing read back out of browser storage is a key until this says so (issue #1021):
+ * `planCellMachineId` answers `NaN` for anything else, which would silently survive every
+ * machine-scoped comparison the page makes.
+ */
+export function isPlanCellKey(value: unknown): value is string {
+  return typeof value === 'string' && /^\d+:\d+$/.test(value);
 }
 
 /**

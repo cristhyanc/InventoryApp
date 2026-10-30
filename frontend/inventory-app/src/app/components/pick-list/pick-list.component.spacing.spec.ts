@@ -14,6 +14,7 @@ import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
+import { providePlanPicksStore } from './plan-picks-store.spec-helpers';
 
 function machine(machineID: number, machineName: string): Machine {
   return { machineID, machineName } as Machine;
@@ -40,6 +41,7 @@ async function render(machinesResult: Observable<Machine[]> = of([machine(10, 'M
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
+      providePlanPicksStore(),
       provideNayaxConnectionStatus('Ready')
     ]
   }).compileComponents();

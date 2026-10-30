@@ -2,7 +2,7 @@ import { Component, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
-import { EMPTY, catchError, tap } from 'rxjs';
+import { EMPTY, Subscription, catchError, tap } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
 import { PickListService } from '../../services/pick-list.service';
@@ -20,6 +20,7 @@ import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortCol
 import { ManualPickListCatalogueState, ManualPickListComponent } from './manual-pick-list.component';
 import { refillCellKey } from './pick-list-refill-errors';
 import {
+  InvalidPickQuantity,
   MAXIMUM_PICK_QUANTITY,
   parsePickQuantity,
   picksCompletedLabel,
@@ -27,6 +28,8 @@ import {
   planCellMachineId,
   storageShortage
 } from './plan-picks';
+import { PlanPicksRestoration, PlanPicksStoreService } from './plan-picks-store.service';
+import { StoredPlanPicks } from './plan-picks-storage';
 import { PendingWorkGuarded } from './pick-list-leave.guard';
 
 type PickListSortColumn = 'name' | 'mdbCode';
@@ -61,16 +64,6 @@ export interface ColumnGroup {
   siteId: number | null;
   siteName: string | null;
   machineIds: number[];
-}
-
-/**
- * What one cell's always-visible quantity box holds while it is not a quantity the plan can use
- * (issue #1008): the operator's text exactly as typed, never truncated or coerced, and the message
- * refusing it. The cell's last valid effective quantity goes on carrying every total meanwhile.
- */
-interface InvalidPickQuantity {
-  readonly text: string;
-  readonly error: string;
 }
 
 /** Below this width the page shows product cards with machine focus instead of the matrix. */
@@ -119,10 +112,21 @@ const COMPACT_LAYOUT_QUERY = '(max-width: 767px)';
  * created the first time it is shown ({@link manualViewCreated}) and hidden rather than destroyed
  * afterwards, and while a save is in flight ({@link manualSaveInFlight}) switching away is refused.
  *
+ * **Plan picks survives leaving the page, because the plan is kept in this tab** (issue #1021).
+ * Every change to the applied selection, the snapshot or the operator's own overrides, ticks and
+ * pending text is written to `sessionStorage` through {@link PlanPicksStoreService}, and opening the
+ * page again restores all of it - including the snapshot and its original "last refreshed" instant,
+ * so coming back reads no new pick list and the overrides stay tied to the snapshot they were made
+ * against. Display state (search, category, status filter, sort, phone machine focus) is not
+ * restored. Every existing discard clears the stored copy too, and a stored plan is trimmed to the
+ * machines the fleet read still lists.
+ *
  * **Leaving the page is guarded** ({@link confirmLeave}, wired as the route's `canDeactivate`, and
- * {@link onBeforeUnload} for a reload or a closed tab): typed refill quantities, edited or checked
- * planning work, and above all an unconfirmed save - whose retry context leaving destroys - all ask
- * first. A cancelled departure changes nothing.
+ * {@link onBeforeUnload} for a reload or a closed tab): typed refill quantities, planning work this
+ * tab could not store, and above all an unconfirmed save - whose retry context leaving destroys -
+ * all ask first. Planning work stops asking only once the complete plan has actually been stored
+ * ({@link unsavedPlanningWork}); a refused write keeps the warning, because the work really would
+ * be lost. A cancelled departure changes nothing.
  *
  * **A machine-details page can open straight into a preselected Record refill**: its link is this
  * route with `?mode=manual&machineId=<local id>`, read once from the route snapshot in `ngOnInit`.
@@ -180,16 +184,21 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   /** Whether the page is showing its phone layout (cards and machine focus) rather than the matrix. */
   compactLayout = false;
 
-  /** Planning overrides, keyed by {@link planCellKey}. A cell without one picks its suggestion. Never persisted. */
+  /**
+   * Planning overrides, keyed by {@link planCellKey}. A cell without one picks its suggestion.
+   * Kept in this browser tab since issue #1021 ({@link PlanPicksStoreService}): stored beside the
+   * snapshot it was made against, restored when the page opens again, and never sent anywhere.
+   */
   private readonly overrides = new Map<string, number>();
 
-  /** Checked-off picks, keyed by {@link planCellKey}. Never persisted. */
+  /** Checked-off picks, keyed by {@link planCellKey}. Kept in this tab exactly as {@link overrides} is. */
   private readonly pickedCells = new Set<string>();
 
   /**
-   * The cells whose box holds text the plan cannot use, keyed by {@link planCellKey}. Unsaved work
-   * exactly as an override is: filtering, sorting, a mode switch and a changed machine focus all
-   * leave it alone, and only the confirmed discards clear it. Never persisted.
+   * The cells whose box holds text the plan cannot use, keyed by {@link planCellKey}. Work in
+   * progress exactly as an override is: filtering, sorting, a mode switch and a changed machine
+   * focus all leave it alone, only the confirmed discards clear it, and it is kept in this tab and
+   * restored with the rest of the plan.
    */
   private readonly invalidQuantities = new Map<string, InvalidPickQuantity>();
 
@@ -214,6 +223,40 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
 
   /** The "Record refill" link's `machineId` query parameter, or `null` for ordinary pick-list entry. */
   preselectedMachineId: number | null = null;
+
+  /**
+   * Whether the complete plan now on screen is in this tab's storage (issue #1021). Only a
+   * successful write sets it, which is what makes {@link leaveWarning} safe: a refused write leaves
+   * it `false` and the departure warning keeps asking, because the work really would be lost.
+   */
+  private planPersisted = false;
+
+  /**
+   * The stored plan read on arrival, held until the fleet read says which of its machines still
+   * exist. `null` once it has been applied, dropped or found absent.
+   */
+  private pendingRestoration: PlanPicksRestoration | null = null;
+
+  /** Whether the stored-plan read has answered, either way. */
+  private restorationSettled = false;
+
+  /** Whether the machine list has settled, which is what a stored plan is trimmed against. */
+  private machinesSettled = false;
+
+  /** Whether the one restore attempt this page makes is over, however it ended. */
+  private restorationDone = false;
+
+  /**
+   * The stored-plan read, dropped when the page is destroyed: it waits for the scope to be known,
+   * which a page left before anybody signed in would never see.
+   */
+  private restoration?: Subscription;
+
+  /**
+   * Whether a restored plan decided the Products selection, so the first catalogue read must not
+   * seed it with every product and undo that.
+   */
+  private productSelectionRestored = false;
 
   /**
    * The suggestions Record refill may show beside an entry: the applied snapshot's suggested
@@ -241,7 +284,8 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     private readonly toastService: ToastService,
     private readonly provider: ProviderAvailabilityService,
     private readonly route: ActivatedRoute,
-    private readonly siteService: SiteService
+    private readonly siteService: SiteService,
+    private readonly planStore: PlanPicksStoreService
   ) {}
 
   ngOnInit(): void {
@@ -256,6 +300,14 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
 
     this.observeLayout();
 
+    // Asked for before the fleet read below, and applied only once that read has settled: a stored
+    // plan is restored against the machines the business still has (issue #1021).
+    this.restoration = this.planStore.restore().subscribe((restoration) => {
+      this.pendingRestoration = restoration;
+      this.restorationSettled = true;
+      this.restorePlanWhenReady();
+    });
+
     loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe((outcome) => {
       this.allMachines = outcome.kind === 'listed' ? outcome.items : [];
       this.machinesUnavailable =
@@ -269,6 +321,8 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
       if (outcome.kind === 'listed' && outcome.items.some((m) => m.siteId != null)) {
         this.loadSites();
       }
+      this.machinesSettled = true;
+      this.restorePlanWhenReady();
     });
     // Checked up front, beside the machine fleet above: a usable connection does not mean Nayax has
     // granted every read Plan picks needs, and a permission this session already knows is refused
@@ -284,11 +338,13 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
 
   ngOnDestroy(): void {
     this.compactQuery?.removeEventListener('change', this.onCompactChange);
+    this.restoration?.unsubscribe();
   }
 
   /**
    * Reads the active catalogue: on arrival, after each recorded refill, and whenever the operator
-   * retries a failed read. Only the first successful read seeds the Products filter's selection.
+   * retries a failed read. Only the first successful read seeds the Products filter's selection,
+   * and not even that one when a restored plan has already chosen it.
    */
   loadProducts(): void {
     const token = this.productsLoadState.start();
@@ -296,7 +352,9 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
       next: (products) => {
         if (this.productsLoadState.isCurrent(token)) {
           this.allProducts = products;
-          if (!this.productsEverLoaded) {
+          // A restored plan already decided the Products selection (issue #1021), and seeding it
+          // with every product would quietly widen the run the operator came back to.
+          if (!this.productsEverLoaded && !this.productSelectionRestored) {
             const allProductIds = products.map((p) => p.id);
             this.stagedProductIds = allProductIds;
             this.appliedProductIds = allProductIds;
@@ -467,6 +525,10 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
       this.fetchSnapshot();
     } else if (removed.length > 0) {
       this.afterMachinesRemoved(removed);
+    } else {
+      // A product-only change keeps the loaded snapshot, so the stored plan only has to record the
+      // narrower run the operator would come back to.
+      this.persistPlan();
     }
   }
 
@@ -613,6 +675,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     } else {
       this.pickedCells.add(key);
     }
+    this.persistPlan();
   }
 
   /** Whether a cell may be checked off right now: it plans a positive pick and its box is readable. */
@@ -651,6 +714,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     if ('error' in parsed) {
       this.invalidQuantities.set(key, { text: raw, error: parsed.error });
       this.pickedCells.delete(key);
+      this.persistPlan();
       return;
     }
     this.invalidQuantities.delete(key);
@@ -772,12 +836,22 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     return this.overrides.size > 0 || this.pickedCells.size > 0 || this.invalidQuantities.size > 0;
   }
 
+  /**
+   * Whether leaving would actually lose planning work: there is some, and this tab could not store
+   * it (issue #1021). A plan that is stored is waiting on the page the operator comes back to, so
+   * there is nothing to warn about; a refused write is not a stored plan, however much was
+   * attempted, and goes on warning exactly as it did before.
+   */
+  private unsavedPlanningWork(): boolean {
+    return this.hasPlanningWork() && !this.planPersisted;
+  }
+
   /** The departure warning that applies right now, or `null` when leaving loses nothing. */
   leaveWarning(): string | null {
     if (this.manualSaveInFlight || this.manualView?.unresolvedSubmission) {
       return UNRESOLVED_SAVE_LEAVE_WARNING;
     }
-    if (this.manualView?.hasEnteredQuantities() || this.hasPlanningWork()) {
+    if (this.manualView?.hasEnteredQuantities() || this.unsavedPlanningWork()) {
       return UNSAVED_WORK_LEAVE_WARNING;
     }
     return null;
@@ -848,6 +922,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     } else {
       this.overrides.set(key, quantity);
     }
+    this.persistPlan();
   }
 
   /** Asks before removing machines that hold planning work; `true` when there is nothing to lose or the operator agreed. */
@@ -889,12 +964,18 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
       this.fetchSnapshot();
     }
     this.updateRefillSuggestions();
+    // The removed machines' keys are gone from the stored copy too, so coming back cannot bring
+    // back a plan for a machine the operator dropped (issue #1021).
+    this.persistPlan();
   }
 
   private discardPlanningWork(): void {
     this.overrides.clear();
     this.pickedCells.clear();
     this.invalidQuantities.clear();
+    // Every discard is also a discard of the stored copy: a confirmed Refresh, Reset or
+    // snapshot-replacing Apply must not be undone by coming back to the page (issue #1021).
+    this.forgetPersistedPlan();
   }
 
   /** Empties the plan and supersedes any read still in flight, so it cannot bring the plan back. */
@@ -922,6 +1003,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
           this.pickListProducts = result.products;
           this.lastRefreshedAt = new Date();
           this.updateRefillSuggestions();
+          this.persistPlan();
         }
         this.loadState.succeed(token);
       }),
@@ -942,6 +1024,124 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
         return EMPTY;
       })
     ).subscribe();
+  }
+
+  /**
+   * Applies the stored plan once both answers it depends on are in: the stored-plan read and the
+   * fleet read it is trimmed against. Whatever happens, it is attempted once.
+   */
+  private restorePlanWhenReady(): void {
+    if (this.restorationDone || !this.restorationSettled || !this.machinesSettled) {
+      return;
+    }
+
+    this.restorationDone = true;
+    const restoration = this.pendingRestoration;
+    this.pendingRestoration = null;
+    if (restoration === null) {
+      return;
+    }
+
+    // The scope the plan was read for must still be the one in effect: the identity, the business
+    // or the session context may have changed while the fleet read was outstanding, and a plan read
+    // under the previous one belongs to neither the operator nor the business now in view.
+    if (!this.planStore.isCurrentScope(restoration.scopeToken)) {
+      return;
+    }
+
+    // The operator got there first - they applied a selection of their own while the reads were
+    // outstanding - so the page they are using is not replaced by one they left earlier.
+    if (this.appliedMachineIds.length > 0) {
+      return;
+    }
+
+    this.applyRestoredPlan(restoration.plan);
+  }
+
+  /**
+   * Puts a stored plan back on screen, trimmed to what still exists: machines the fleet read no
+   * longer lists are dropped with their cells and their keys, and a plan with nothing left is
+   * ignored and forgotten. Nothing here reads the pick list again, so the restored figures and
+   * their "last refreshed" instant are exactly the ones the operator planned against; nothing here
+   * touches {@link mode}, the preselected machine or Record refill either.
+   */
+  private applyRestoredPlan(plan: StoredPlanPicks): void {
+    const machineIds = plan.appliedMachineIds.filter((id) => this.allMachines.some((m) => m.machineID === id));
+    const products = plan.products
+      .map((product) => ({
+        ...product,
+        machineQuantities: product.machineQuantities.filter((cell) => machineIds.includes(cell.machineId))
+      }))
+      .filter((product) => product.machineQuantities.length > 0);
+    if (machineIds.length === 0 || products.length === 0) {
+      this.forgetPersistedPlan();
+      return;
+    }
+
+    const cellKeys = new Set(
+      products.flatMap((product) => product.machineQuantities.map((cell) => planCellKey(product.productId, cell.machineId)))
+    );
+
+    this.appliedMachineIds = machineIds;
+    this.stagedMachineIds = [...machineIds];
+    this.appliedProductIds = [...plan.appliedProductIds];
+    this.stagedProductIds = [...plan.appliedProductIds];
+    this.productSelectionRestored = true;
+    this.pickListProducts = products;
+    this.lastRefreshedAt = new Date(plan.lastRefreshedAt);
+
+    for (const override of plan.overrides) {
+      if (cellKeys.has(override.key)) {
+        this.overrides.set(override.key, override.quantity);
+      }
+    }
+    for (const key of plan.pickedCells) {
+      if (cellKeys.has(key)) {
+        this.pickedCells.add(key);
+      }
+    }
+    for (const invalid of plan.invalidQuantities) {
+      if (cellKeys.has(invalid.key)) {
+        this.invalidQuantities.set(invalid.key, { text: invalid.text, error: invalid.error });
+      }
+    }
+
+    // The matrix is showing a loaded snapshot, without a request having been made for it.
+    this.loadState.succeed(this.loadState.start());
+    this.updateRefillSuggestions();
+    // What is on screen is the trimmed plan, so that is what the stored copy must now be - and
+    // writing it is also what confirms the work is still safely stored for the next departure.
+    this.persistPlan();
+  }
+
+  /**
+   * Writes the complete plan to this tab, or forgets the stored copy when there is no loaded
+   * snapshot left to come back to. {@link planPersisted} records the honest outcome, and a refused
+   * write takes the previous copy with it rather than leaving an older plan as the newest one.
+   */
+  private persistPlan(): void {
+    if (this.appliedMachineIds.length === 0 || this.lastRefreshedAt === null) {
+      this.forgetPersistedPlan();
+      return;
+    }
+
+    this.planPersisted = this.planStore.save({
+      appliedMachineIds: [...this.appliedMachineIds],
+      appliedProductIds: [...this.appliedProductIds],
+      products: this.pickListProducts,
+      lastRefreshedAt: this.lastRefreshedAt.toISOString(),
+      overrides: [...this.overrides].map(([key, quantity]) => ({ key, quantity })),
+      pickedCells: [...this.pickedCells],
+      invalidQuantities: [...this.invalidQuantities].map(([key, invalid]) => ({ key, ...invalid }))
+    });
+    if (!this.planPersisted) {
+      this.planStore.clear();
+    }
+  }
+
+  private forgetPersistedPlan(): void {
+    this.planStore.clear();
+    this.planPersisted = false;
   }
 
   private actionableCells(products: PickListProduct[]): { productId: number; machineId: number }[] {

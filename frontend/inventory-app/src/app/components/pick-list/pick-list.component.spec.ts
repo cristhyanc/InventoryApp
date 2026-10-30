@@ -21,6 +21,7 @@ import { BusinessTimeZoneService } from '../../formatting/business-time-zone.ser
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 import { providerAvailabilityDouble } from '../../provider/provider-availability.spec-helpers';
+import { planPicksStoreDouble, providePlanPicksStore } from './plan-picks-store.spec-helpers';
 
 function localMachine(overrides: Partial<LocalMachine>): LocalMachine {
   return { id: 1, name: 'Machine', isActive: true, isProviderNamed: false, ...overrides };
@@ -183,7 +184,8 @@ function createHarness(
     toast as unknown as ToastService,
     providerAvailabilityDouble(),
     { snapshot: { queryParamMap: convertToParamMap({}) } } as unknown as ActivatedRoute,
-    { getList: jest.fn(() => of([])) } as unknown as SiteService
+    { getList: jest.fn(() => of([])) } as unknown as SiteService,
+    planPicksStoreDouble().service
   );
   component.ngOnInit();
 
@@ -673,7 +675,8 @@ describe('PickListComponent rendered structure', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: { active$: of(false) } }
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        providePlanPicksStore()
       ]
     }).compileComponents();
 
