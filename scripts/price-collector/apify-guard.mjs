@@ -93,7 +93,7 @@ function resolveActorId({ toolName, toolInput, container, limits }) {
 
   for (const pattern of limits.toolNamePatterns ?? []) {
     const stripped = toolName.replace(new RegExp(pattern), '');
-    const candidate = stripped.replace(/-slash-/g, '/').trim().toLowerCase();
+    const candidate = stripped.replaceAll('-slash-', '/').trim().toLowerCase();
     if (candidate !== '' && Object.hasOwn(limits.actors, candidate)) return candidate;
   }
 
@@ -166,7 +166,7 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
     [limits.chargeField]: charge.value,
     [actor.itemLimitField]: items.value,
     // Forced, not defaulted: an enrichment nothing reads must be off however the call asked for it.
-    ...(actor.forcedInput ?? {}),
+    ...actor.forcedInput,
   };
   const updatedInput =
     containerField === null ? { ...toolInput, ...fixed } : { ...toolInput, [containerField]: fixed };

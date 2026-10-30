@@ -62,14 +62,14 @@ export function shouldRequestNextPage({ returned, pageSize, reportedTotal = null
   const filledThePage = returned >= pageSize;
   const totalSaysMore = reportedTotal !== null && itemsSoFar < reportedTotal;
   const moreAvailable = filledThePage || totalSaysMore;
+  const requestNextPage = moreAvailable && pagesRead < maxPages;
 
-  return {
-    moreAvailable,
-    requestNextPage: moreAvailable && pagesRead < maxPages,
-    reason: moreAvailable
-      ? (pagesRead < maxPages ? 'the actor has more results to give' : 'the page cap stopped this search')
-      : 'every result the actor reported has been read',
-  };
+  let reason = 'every result the actor reported has been read';
+  if (moreAvailable) {
+    reason = requestNextPage ? 'the actor has more results to give' : 'the page cap stopped this search';
+  }
+
+  return { moreAvailable, requestNextPage, reason };
 }
 
 /**

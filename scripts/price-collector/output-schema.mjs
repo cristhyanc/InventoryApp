@@ -47,12 +47,10 @@ function typeMatches(expected, value) {
   }
 }
 
-function checkValue(schema, value, path, problems) {
-  if (!typeMatches(schema.type, value)) {
-    problems.push(`${path} must be ${schema.type === 'integer' ? 'a whole number' : `a ${schema.type}`}.`);
-    return;
-  }
+const typeLabel = (type) => (type === 'integer' ? 'a whole number' : `a ${type}`);
 
+/** The scalar constraints a schema may declare, beyond its own type and nesting. */
+function checkConstraints(schema, value, path, problems) {
   if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
     problems.push(`${path} must be one of: ${schema.enum.join(', ')}.`);
   }
@@ -74,6 +72,15 @@ function checkValue(schema, value, path, problems) {
   if (schema.format === 'date-time' && Number.isNaN(Date.parse(value))) {
     problems.push(`${path} must be an instant a date can be read from.`);
   }
+}
+
+function checkValue(schema, value, path, problems) {
+  if (!typeMatches(schema.type, value)) {
+    problems.push(`${path} must be ${typeLabel(schema.type)}.`);
+    return;
+  }
+
+  checkConstraints(schema, value, path, problems);
 
   if (schema.type === 'object') checkObject(schema, value, path, problems);
   if (schema.type === 'array' && schema.items !== undefined) {

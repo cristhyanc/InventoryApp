@@ -61,6 +61,18 @@ export const USAGE = 'submit-results.mjs [--dir price-collector-out] [--run-id n
 const RESULT_FILE_NAME = /^(\d+)\.json$/;
 const MATCH_FILE_NAME = /^match-.+\.json$/;
 
+function parseFolderOption(value) {
+  if (value === '') throw new ConfigurationError(`--dir needs a folder.\n${USAGE}`);
+  return value;
+}
+
+function parsePositiveIntegerOption(argument, value) {
+  if (!/^[1-9]\d*$/.test(value)) {
+    throw new ConfigurationError(`${argument} needs a positive whole number, not "${value}".\n${USAGE}`);
+  }
+  return Number(value);
+}
+
 function parseArguments(argv) {
   const options = { dir: DEFAULT_OUTPUT_DIR, runId: null, batchSize: MAX_BATCH };
 
@@ -68,16 +80,12 @@ function parseArguments(argv) {
     const argument = String(argv[index]);
     const value = index + 1 < argv.length ? String(argv[index + 1]) : '';
     if (argument === '--dir') {
-      if (value === '') throw new ConfigurationError(`--dir needs a folder.\n${USAGE}`);
-      options.dir = value;
+      options.dir = parseFolderOption(value);
       index += 1;
       continue;
     }
     if (argument === '--run-id' || argument === '--batch-size') {
-      if (!/^[1-9]\d*$/.test(value)) {
-        throw new ConfigurationError(`${argument} needs a positive whole number, not "${value}".\n${USAGE}`);
-      }
-      options[argument === '--run-id' ? 'runId' : 'batchSize'] = Number(value);
+      options[argument === '--run-id' ? 'runId' : 'batchSize'] = parsePositiveIntegerOption(argument, value);
       index += 1;
       continue;
     }
@@ -95,6 +103,30 @@ export function batchesOf(values, size) {
   const batches = [];
   for (let index = 0; index < values.length; index += size) batches.push(values.slice(index, index + size));
   return batches;
+}
+
+/** One file, read and validated on its own: a result, a match, or a reason it is skipped. */
+async function classifyOutputFile(dir, name) {
+  if (!RESULT_FILE_NAME.test(name) && !MATCH_FILE_NAME.test(name)) {
+    return { skip: 'it is not a result file (<work-item-id>.json) or a match file (match-<key>.json)' };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await readFile(join(dir, name), 'utf8'));
+  } catch (error) {
+    return { skip: `it could not be read as JSON (${String(error?.message ?? error).slice(0, 120)})` };
+  }
+
+  const isResult = RESULT_FILE_NAME.test(name);
+  const checked = isResult ? validateResultFile(parsed) : validateMatchFile(parsed);
+  if (!checked.ok) return { skip: checked.problems[0] };
+
+  if (isResult && parsed.workItemId !== Number(RESULT_FILE_NAME.exec(name)[1])) {
+    return { skip: `it answers work item ${parsed.workItemId}, which is not the work item its name states` };
+  }
+
+  return { isResult, file: parsed };
 }
 
 /**
@@ -116,33 +148,12 @@ export async function readOutputFiles(dir) {
   const skipped = [];
 
   for (const name of names) {
-    if (!RESULT_FILE_NAME.test(name) && !MATCH_FILE_NAME.test(name)) {
-      skipped.push({ name, reason: 'it is not a result file (<work-item-id>.json) or a match file (match-<key>.json)' });
+    const classified = await classifyOutputFile(dir, name);
+    if (classified.skip !== undefined) {
+      skipped.push({ name, reason: classified.skip });
       continue;
     }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(await readFile(join(dir, name), 'utf8'));
-    } catch (error) {
-      skipped.push({ name, reason: `it could not be read as JSON (${String(error?.message ?? error).slice(0, 120)})` });
-      continue;
-    }
-
-    const isResult = RESULT_FILE_NAME.test(name);
-    const checked = isResult ? validateResultFile(parsed) : validateMatchFile(parsed);
-    if (!checked.ok) {
-      skipped.push({ name, reason: checked.problems[0] });
-      continue;
-    }
-
-    const workItemFromName = isResult ? Number(RESULT_FILE_NAME.exec(name)[1]) : null;
-    if (isResult && parsed.workItemId !== workItemFromName) {
-      skipped.push({ name, reason: `it answers work item ${parsed.workItemId}, which is not the work item its name states` });
-      continue;
-    }
-
-    (isResult ? results : matches).push({ name, file: parsed });
+    (classified.isResult ? results : matches).push({ name, file: classified.file });
   }
 
   return { results, matches, skipped };
@@ -263,6 +274,85 @@ function report({ runId, counted, searchCounts, answered, withoutOutcome, skippe
   return `${lines.join('\n')}\n`;
 }
 
+/** Parses, resolves the API and reads the output folder, or throws the one reason it cannot run. */
+async function loadSubmission({ argv, env }) {
+  const options = parseArguments(argv);
+  const api = resolveApi(env);
+  const dir = resolve(options.dir);
+
+  let found;
+  try {
+    found = await readOutputFiles(dir);
+  } catch (error) {
+    throw new ConfigurationError(`The output folder ${options.dir} could not be read (${String(error?.code ?? error?.message)}).`);
+  }
+
+  const resolved = resolveRunId({ runId: options.runId, ...found, skipped: found.skipped });
+  return { options, api, found, resolved };
+}
+
+/** The matches, before any result row: a key matched now is a key whose rows can attach to its
+ *  master product in this same run (#937). */
+async function submitMatches({ matches, runId, batchSize, post, record, counted }) {
+  for (const batch of batchesOf(matches, batchSize)) {
+    try {
+      const { body } = await post(MATCHES_PATH, { runId, proposals: batch.map((entry) => proposalFor(entry.file)) });
+      tally(counted.autoMatched, body?.autoMatched);
+      tally(counted.tentative, body?.tentative);
+      tally(counted.matchesRejected, body?.rejected);
+    } catch (error) {
+      record(error);
+    }
+  }
+}
+
+/** One work item's rows, then its outcome - the outcome only after every batch of it succeeded. */
+async function submitResultFile({ file, runId, batchSize, post, record, counted, searchCounts }) {
+  searchCounts[file.outcome] += 1;
+
+  for (const batch of batchesOf(file.rows, batchSize)) {
+    try {
+      const { body } = await post(RESULTS_PATH, { runId, rows: batch.map((row) => rowFor(file, row)) });
+      tally(counted.accepted, body?.accepted);
+      tally(counted.sentToReview, body?.sentToReview);
+      tally(counted.pending, body?.pending);
+      tally(counted.rejected, body?.rejected);
+    } catch (error) {
+      record(error);
+      return false;
+    }
+  }
+
+  try {
+    await post(`/api/price-collector/work-items/${file.workItemId}/outcome`, {
+      runId,
+      outcome: numberFor(SEARCH_OUTCOME_NUMBERS, file.outcome, 'A search outcome'),
+      failureReason: Object.hasOwn(file, 'failureReason')
+        ? numberFor(SEARCH_FAILURE_REASON_NUMBERS, file.failureReason, 'A failure reason')
+        : null,
+      // Distinct supplier product ids: the schema refuses a file that reports one twice.
+      submittedRowCount: file.rows.length,
+    });
+    return true;
+  } catch (error) {
+    record(error);
+    return false;
+  }
+}
+
+/** Each work item's rows, then its outcome - and the outcome only after every batch of it
+ *  succeeded. */
+async function submitResults({ results, runId, batchSize, post, record, counted, searchCounts }) {
+  let answered = 0;
+  let withoutOutcome = 0;
+  for (const entry of results) {
+    const wasAnswered = await submitResultFile({ file: entry.file, runId, batchSize, post, record, counted, searchCounts });
+    if (wasAnswered) answered += 1;
+    else withoutOutcome += 1;
+  }
+  return { answered, withoutOutcome };
+}
+
 /** One invocation. Exits 0 only when every file was submitted and every request succeeded. */
 export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } = {}) {
   let options;
@@ -270,15 +360,7 @@ export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } =
   let found;
   let resolved;
   try {
-    options = parseArguments(argv);
-    api = resolveApi(env);
-    const dir = resolve(options.dir);
-    try {
-      found = await readOutputFiles(dir);
-    } catch (error) {
-      throw new ConfigurationError(`The output folder ${options.dir} could not be read (${String(error?.code ?? error?.message)}).`);
-    }
-    resolved = resolveRunId({ runId: options.runId, ...found, skipped: found.skipped });
+    ({ options, api, found, resolved } = await loadSubmission({ argv, env }));
   } catch (error) {
     return { exitCode: 2, out: '', err: `${String(error?.message ?? error)}\n` };
   }
@@ -296,69 +378,25 @@ export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } =
   };
   const searchCounts = { complete: 0, truncated: 0, no_matches: 0, failed: 0 };
   const errors = [];
-  let answered = 0;
-  let withoutOutcome = 0;
 
   const post = (path, body) => requestJson({ api, method: 'POST', path, body, fetchImpl });
   const record = (error) => {
     errors.push(error instanceof ApiError ? error.message : redact(String(error?.message ?? error)));
   };
 
-  // 1. The matches, before any result row: a key matched now is a key whose rows can attach to its
-  //    master product in this same run (#937).
-  for (const batch of batchesOf(resolved.matches, options.batchSize)) {
-    try {
-      const { body } = await post(MATCHES_PATH, { runId, proposals: batch.map((entry) => proposalFor(entry.file)) });
-      tally(counted.autoMatched, body?.autoMatched);
-      tally(counted.tentative, body?.tentative);
-      tally(counted.matchesRejected, body?.rejected);
-    } catch (error) {
-      record(error);
-    }
-  }
+  // 1. The matches, before any result row.
+  await submitMatches({ matches: resolved.matches, runId, batchSize: options.batchSize, post, record, counted });
 
-  // 2. Each work item's rows, then its outcome - and the outcome only after every batch of it
-  //    succeeded.
-  for (const entry of resolved.results) {
-    const file = entry.file;
-    searchCounts[file.outcome] += 1;
-
-    let batchFailed = false;
-    for (const batch of batchesOf(file.rows, options.batchSize)) {
-      try {
-        const { body } = await post(RESULTS_PATH, { runId, rows: batch.map((row) => rowFor(file, row)) });
-        tally(counted.accepted, body?.accepted);
-        tally(counted.sentToReview, body?.sentToReview);
-        tally(counted.pending, body?.pending);
-        tally(counted.rejected, body?.rejected);
-      } catch (error) {
-        record(error);
-        batchFailed = true;
-        break;
-      }
-    }
-
-    if (batchFailed) {
-      withoutOutcome += 1;
-      continue;
-    }
-
-    try {
-      await post(`/api/price-collector/work-items/${file.workItemId}/outcome`, {
-        runId,
-        outcome: numberFor(SEARCH_OUTCOME_NUMBERS, file.outcome, 'A search outcome'),
-        failureReason: Object.hasOwn(file, 'failureReason')
-          ? numberFor(SEARCH_FAILURE_REASON_NUMBERS, file.failureReason, 'A failure reason')
-          : null,
-        // Distinct supplier product ids: the schema refuses a file that reports one twice.
-        submittedRowCount: file.rows.length,
-      });
-      answered += 1;
-    } catch (error) {
-      record(error);
-      withoutOutcome += 1;
-    }
-  }
+  // 2. Each work item's rows, then its outcome.
+  const { answered, withoutOutcome } = await submitResults({
+    results: resolved.results,
+    runId,
+    batchSize: options.batchSize,
+    post,
+    record,
+    counted,
+    searchCounts,
+  });
 
   // 3. The run, once, whatever happened above: an unanswered search is `not_searched`, and silence
   //    would leave the run open until it expired.
