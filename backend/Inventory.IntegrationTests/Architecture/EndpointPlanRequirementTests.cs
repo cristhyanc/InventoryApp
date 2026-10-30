@@ -192,6 +192,10 @@ public class EndpointPlanRequirementTests
         // never enforced: a member who cannot ask what they may do cannot be told anything.
         new("MeController.Access", PlanRequirementKind.None), // GET api/me/access
         new("MeController.AccountState", PlanRequirementKind.None), // GET api/me/account-state
+        // The Free/Starter/Pro catalogue (issue #970) is the same rows for every caller whatever
+        // their business has bought - it is what a business could buy, not something it needs to
+        // have bought already - so it is never gated by a plan requirement.
+        new("MeController.PlanCatalogue", PlanRequirementKind.None), // GET api/me/plan-catalogue
 
         // Members and invites: who may reach the business, which no plan decides.
         new("MemberInvitesController.Cancel", PlanRequirementKind.None), // POST api/members/invites/{inviteId:int}/cancel

@@ -547,6 +547,15 @@ export const routes: Routes = [
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
   },
+  {
+    // The Plan page (issue #970): the business's plan, storage and connected machines. It
+    // declares Dashboard.View - every role and a support session hold it - because the catalogue,
+    // the prices and the storage figures it shows are visible to every member, not gated by what a
+    // role may do.
+    path: 'plan',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Dashboard.View')],
+    loadComponent: () => import('./components/plan/plan.component').then((m) => m.PlanComponent)
+  },
   // Empty in every optimized build; the unoptimized dev/e2e servers add the #411 screenshot
   // fixture. Must stay above the wildcard, which would otherwise swallow it.
   ...designSystemRoutes,

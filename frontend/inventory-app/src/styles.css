@@ -2417,6 +2417,11 @@ video {
   background-color: rgb(37 99 235 / var(--tw-bg-opacity, 1));
 }
 
+.bg-md-danger {
+  --tw-bg-opacity: 1;
+  background-color: rgb(244 67 53 / var(--tw-bg-opacity, 1));
+}
+
 .bg-md-dark {
   --tw-bg-opacity: 1;
   background-color: rgb(38 38 38 / var(--tw-bg-opacity, 1));
@@ -2442,6 +2447,11 @@ video {
 
 .bg-md-success\/15 {
   background-color: rgb(76 175 80 / 0.15);
+}
+
+.bg-md-warning {
+  --tw-bg-opacity: 1;
+  background-color: rgb(251 140 0 / var(--tw-bg-opacity, 1));
 }
 
 .bg-md-warning\/15 {

@@ -153,6 +153,7 @@ describe('primary navigation (issue #391)', () => {
       'link:Expenses',
       'group:Reports',
       'section:Settings',
+      'link:Plan',
       'group:Admin'
     ]);
     // A heading only labels: there is no provider section heading and no heading sentence.
@@ -207,13 +208,14 @@ describe('primary navigation (issue #391)', () => {
     expect(machines.hiddenWithoutProvider).toBeUndefined();
   });
 
-  it('keeps Pick List, Sites, Machines and Expenses as top-level direct links', () => {
+  it('keeps Pick List, Sites, Machines, Expenses and Plan as top-level direct links', () => {
     expect(primaryNavigation.filter((entry) => entry.kind === 'link').map((entry) => (entry as NavLink).route)).toEqual([
       '/',
       '/pick-list',
       '/sites',
       '/machines',
-      '/expenses'
+      '/expenses',
+      '/plan'
     ]);
   });
 
@@ -420,6 +422,7 @@ describe('navigationFor (issue #546)', () => {
       'Expenses',
       'Reports',
       'Settings',
+      'Plan',
       'Admin'
     ]);
   });
@@ -504,10 +507,10 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(undeclared).toEqual([]);
   });
 
-  it('offers an Operator no Expenses, no Reports group and no Admin group', () => {
+  it('offers an Operator no Expenses, no Reports group and no Admin group, but keeps Plan', () => {
     const operator = navigationFor(OPERATOR, false, 'offered');
 
-    expect(labels(operator)).toEqual(['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases']);
+    expect(labels(operator)).toEqual(['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases', 'Plan']);
     expect(navLinks(operator).map((entry) => entry.route)).toEqual([
       '/',
       '/pick-list',
@@ -519,7 +522,8 @@ describe('navigationFor capabilities (issue #528)', () => {
       '/stock-history',
       '/purchases',
       '/purchases/orders',
-      '/suppliers'
+      '/suppliers',
+      '/plan'
     ]);
   });
 
@@ -535,6 +539,7 @@ describe('navigationFor capabilities (issue #528)', () => {
       'Purchases',
       'Expenses',
       'Reports',
+      'Plan',
       'Admin'
     ]);
     expect(childRoutes('Reports', manager).map((child) => child.route)).toEqual(
@@ -1172,8 +1177,8 @@ describe('navigation group headings (issue #972)', () => {
     expect(headings(ownerNavigation())).toEqual(['Operations', 'Inventory & purchasing', 'Finance & reports', 'Settings']);
   });
 
-  it('drops the headings an Operator has nothing under', () => {
-    expect(headings(navigationFor(OPERATOR, false, 'offered'))).toEqual(['Operations', 'Inventory & purchasing']);
+  it('keeps the Settings heading for an Operator, who still has Plan under it', () => {
+    expect(headings(navigationFor(OPERATOR, false, 'offered'))).toEqual(['Operations', 'Inventory & purchasing', 'Settings']);
   });
 
   it('keeps a heading for the one entry a capability set leaves under it', () => {
