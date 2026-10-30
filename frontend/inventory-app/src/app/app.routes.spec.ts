@@ -14,6 +14,8 @@ import { ApplicationRejectedComponent } from './access/application-rejected.comp
 import { routes } from './app.routes';
 import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
+import { PLAN_LOCKED_PATH } from './access/plan-lock';
+import { PlanLockedComponent } from './access/plan-locked.component';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
 import { ProviderLockedComponent } from './provider/provider-locked.component';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
@@ -252,17 +254,17 @@ describe('capability route guards (issue #528)', () => {
 
   /**
    * `/access-not-allowed` is where a capability guard *sends* a member, so guarding it by one
-   * would send them away from their own explanation, and `/needs-provider` (issue #729) is there
-   * for exactly the same reason - with the added one that the destinations redirecting to it need
-   * different capabilities, each already checked by the capability guard that ran before
-   * `requireProvider`. The account-state routing destinations and
-   * the invite route (issue #529) are the other exceptions, with the business application form
-   * (issue #543) that those destinations link to, for the same reason `accountStateGuard`
-   * is absent from them - see the `account-state routing and the global 403 handler` describe
-   * block below. `/super-admin/diagnostics` is decided by the diagnostics API per request rather
-   * than by any business role (issue #335) and carries `platformAdminGuard` instead (issue #546,
-   * see the describe block below), so it is guarded but not by a capability and does not appear
-   * here.
+   * would send them away from their own explanation, and `/needs-provider` (issue #729) and
+   * `/needs-plan` (issue #979) are there for exactly the same reason - with the added one that the
+   * destinations redirecting to either need different capabilities, each already checked by the
+   * capability guard that ran before `requireProvider` or `requirePlan`. The account-state routing
+   * destinations and the invite route (issue #529) are the other exceptions, with the business
+   * application form (issue #543) that those destinations link to, for the same reason
+   * `accountStateGuard` is absent from them - see the `account-state routing and the global 403
+   * handler` describe block below. `/super-admin/diagnostics` is decided by the diagnostics API per
+   * request rather than by any business role (issue #335) and carries `platformAdminGuard` instead
+   * (issue #546, see the describe block below), so it is guarded but not by a capability and does
+   * not appear here.
    */
   it('guards every authenticated route with a capability, except the ones that cannot carry one', () => {
     const unguarded = authenticatedRoutes()
@@ -272,6 +274,7 @@ describe('capability route guards (issue #528)', () => {
     expect(unguarded).toEqual([
       ACCESS_NOT_ALLOWED_PATH,
       PROVIDER_LOCKED_PATH,
+      PLAN_LOCKED_PATH,
       'welcome',
       'application-pending',
       'application-rejected',
@@ -468,38 +471,59 @@ describe('provider-locked routes (issues #729, #868)', () => {
     await expect(loadedComponent(PROVIDER_LOCKED_PATH)).resolves.toBe(ProviderLockedComponent);
   });
 
+  /**
+   * Every one of these routes also carries `requirePlan` since issue #979, declared **after** the
+   * capability guard and **before** `requireProvider` - the order of checks is role, then plan,
+   * then connection - so the length and the order asserted here grew by one guard without the
+   * provider guard's own position (last) changing.
+   */
   it('guards every live provider route, after its capability guard rather than before it', () => {
     for (const path of [...lockedPaths, ...PROVIDER_RECORD_REPORT_PATHS]) {
       const guards = route(path).canActivate ?? [];
 
-      expect(guards).toHaveLength(4);
+      expect(guards).toHaveLength(5);
       expect(guards[0]).toBe(MsalGuard);
       expect(guards[1]).toBe(accountStateGuard);
-      // The capability guard stays third, so a role that does not include the page is sent to its
-      // own explanation rather than told to connect a provider it still could not use.
+      // The capability guard stays third, and the plan guard fourth, so a role that does not
+      // include the page is sent to its own explanation rather than told to upgrade or connect a
+      // provider it still could not use.
       expect(guards[2]).not.toBe(guards[3]);
+      expect(guards[3]).not.toBe(guards[4]);
+      expect(guards[2]).not.toBe(guards[4]);
     }
   });
 
   /**
    * Issue #868 supersedes decision P5 for exactly these five: each declares `requireProvider`
-   * **after** `requireCapability('Reports.View')`, so a member without that capability still
-   * reaches the access-not-allowed page rather than an invitation to connect Nayax.
+   * **after** `requireCapability('Reports.View')` and, since issue #979, `requirePlan`, so a member
+   * without that capability still reaches the access-not-allowed page rather than an invitation to
+   * upgrade or connect Nayax.
    */
   it('guards the five stored-record reports with a provider guard declared last', () => {
     for (const path of PROVIDER_RECORD_REPORT_PATHS) {
+      const guards = route(path).canActivate ?? [];
+
+      expect(guards).toHaveLength(5);
+      expect(guards[0]).toBe(MsalGuard);
+      expect(guards[1]).toBe(accountStateGuard);
+      expect(guards[4]).not.toBe(guards[3]);
+      expect(guards[4]).not.toBe(guards[2]);
+    }
+  });
+
+  /**
+   * Bookkeeping and GST carry no provider guard, but do carry `requirePlan('BookkeepingAndGstReports')`
+   * since issue #979 - the `Starter` plan feature `ReportsController`'s own `[RequirePlan]` declares
+   * for these two actions.
+   */
+  it('leaves Bookkeeping and GST with no provider guard, but a plan guard', () => {
+    for (const path of unlockedReportPaths) {
       const guards = route(path).canActivate ?? [];
 
       expect(guards).toHaveLength(4);
       expect(guards[0]).toBe(MsalGuard);
       expect(guards[1]).toBe(accountStateGuard);
       expect(guards[3]).not.toBe(guards[2]);
-    }
-  });
-
-  it('leaves Bookkeeping and GST with no provider guard at all', () => {
-    for (const path of unlockedReportPaths) {
-      expect(route(path).canActivate).toHaveLength(3);
     }
   });
 
@@ -571,6 +595,94 @@ describe('provider-locked Admin routes (issue #869)', () => {
       expect(route(path).canActivate).toHaveLength(3);
     }
   );
+});
+
+/**
+ * The plan-locked routes and the "needs a plan" page (issue #979).
+ *
+ * `requirePlan` is presentation exactly as `requireCapability` and `requireProvider` are: each
+ * endpoint behind these pages enforces the same plan itself. What the guard adds is that the URL
+ * behaves like the locked menu entry, and that it runs **after** the capability guard and
+ * **before** any `requireProvider` on the same route - role, then plan, then connection.
+ */
+describe('plan-locked routes (issue #979)', () => {
+  const SALES_PROVIDER_PATHS = ['machines/:id', 'sites', 'sites/:id/products'];
+  const PRO_REPORT_PATHS = [
+    'reports/daily',
+    'reports/transactions',
+    'reports/reconciliation',
+    'reports/machines',
+    'reports/products'
+  ];
+  const STARTER_REPORT_PATHS = ['reports/bookkeeping', 'reports/gst'];
+
+  it('serves the needs-a-plan page behind authentication alone', async () => {
+    expect(route(PLAN_LOCKED_PATH).canActivate).toEqual([MsalGuard]);
+    await expect(loadedComponent(PLAN_LOCKED_PATH)).resolves.toBe(PlanLockedComponent);
+  });
+
+  it.each(SALES_PROVIDER_PATHS)(
+    'guards /%s with a plan guard declared after its capability guard and before its provider guard',
+    (path) => {
+      const guards = route(path).canActivate ?? [];
+
+      expect(guards).toHaveLength(5);
+      // The plan guard is fourth, between the capability guard (third) and the provider guard
+      // (fifth) - driven, rather than only counted, in `access/plan-lock.guard.spec.ts`.
+      expect(guards[3]).not.toBe(guards[2]);
+      expect(guards[3]).not.toBe(guards[4]);
+    }
+  );
+
+  it.each(PRO_REPORT_PATHS)('guards /%s with the same plan-before-provider order', (path) => {
+    const guards = route(path).canActivate ?? [];
+
+    expect(guards).toHaveLength(5);
+    expect(guards[3]).not.toBe(guards[2]);
+    expect(guards[3]).not.toBe(guards[4]);
+  });
+
+  it('guards Site Commissions with its own plan feature, before the provider guard', () => {
+    const guards = route('reports/site-commissions').canActivate ?? [];
+
+    expect(guards).toHaveLength(5);
+    expect(guards[3]).not.toBe(guards[2]);
+    expect(guards[3]).not.toBe(guards[4]);
+    // Its plan guard is a different feature from the five stored-record reports' own.
+    const [, , , siteCommissionsPlanGuard] = guards;
+    const [, , , dailyPlanGuard] = route('reports/daily').canActivate ?? [];
+    expect(siteCommissionsPlanGuard).not.toBe(dailyPlanGuard);
+  });
+
+  it('guards Bookkeeping and GST with a plan guard, with no provider guard after it', () => {
+    for (const path of STARTER_REPORT_PATHS) {
+      const guards = route(path).canActivate ?? [];
+
+      expect(guards).toHaveLength(4);
+      expect(guards[3]).not.toBe(guards[2]);
+    }
+  });
+
+  it("gives the two Starter reports a different plan guard from the five Pro reports'", () => {
+    const [, , , bookkeepingPlanGuard] = route('reports/bookkeeping').canActivate ?? [];
+    const [, , , dailyPlanGuard] = route('reports/daily').canActivate ?? [];
+
+    expect(bookkeepingPlanGuard).not.toBe(dailyPlanGuard);
+  });
+
+  /**
+   * Known limitation, stated rather than silently left: the two Admin destinations of issue #869
+   * (Site Commission Agreements, AVCO Transition) are also live Nayax reads that need the `Pro`
+   * plan, but issue #979's acceptance criteria name only the reports, Site Commissions, Sites and
+   * the machine detail page - so they keep their provider guard unchanged and carry no plan guard
+   * yet. A business below Pro reaches the provider lock's "connect Nayax" wording on these two
+   * rather than the plan lock's "needs Pro" - raised as follow-up work in the pull request.
+   */
+  it('leaves the two Admin provider-locked destinations without a plan guard, by that scope decision', () => {
+    for (const path of ['admin/site-commission-agreements', 'admin/avco-transition']) {
+      expect(route(path).canActivate).toHaveLength(4);
+    }
+  });
 });
 
 /**

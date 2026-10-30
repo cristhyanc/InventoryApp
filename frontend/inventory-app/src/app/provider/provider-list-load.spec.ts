@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { Observable, firstValueFrom, of, throwError } from 'rxjs';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../services/nayax-connection.service';
-import { NAYAX_NOT_CONNECTED_REASON, PERMISSION_NOT_GRANTED_REASON } from './nayax-availability';
+import { NAYAX_NOT_CONNECTED_REASON, PERMISSION_NOT_GRANTED_REASON, PLAN_REQUIRED_REASON } from './nayax-availability';
 import { ProviderAvailabilityService } from './provider-availability.service';
 import { ProviderListOutcome, loadProviderList } from './provider-list-load';
 import { provideNayaxConnectionStatus } from './provider-availability.spec-helpers';
@@ -84,6 +84,24 @@ describe('loadProviderList (issue #728)', () => {
     const availability = await firstValueFrom(provider.load());
     expect(availability.status).toBe('NotConfigured');
     expect(availability.connection).toBe('notConnected');
+  });
+
+  /**
+   * The same `409 nayax_not_connected` code, but naming the business's plan rather than its
+   * connection (issue #967, distinguished by the frontend since issue #979). It must be told apart
+   * from the ordinary connection refusal, and it is never retained against the shared connection
+   * signal: the business's saved credentials, if it has any, are untouched.
+   */
+  it('turns a plan refusal of the shared 409 code into its own unavailable answer', async () => {
+    const body = { code: 'nayax_not_connected', nayaxUnavailableReason: 'PlanRequired', requiredPlan: 'Pro' };
+    const request = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 409, error: body })));
+    const { outcome, provider } = await load('Ready', request);
+
+    expect(outcome).toEqual({ kind: 'unavailable', unavailability: PLAN_REQUIRED_REASON });
+    // Nothing about the connection itself is touched: a usable connection stays usable.
+    const availability = await firstValueFrom(provider.load());
+    expect(availability.connection).toBe('usable');
+    expect(availability.features.machineFleet).toBe('unknown');
   });
 
   it('turns a 409 nayax_permission_not_granted into the unavailable answer', async () => {

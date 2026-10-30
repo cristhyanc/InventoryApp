@@ -62,12 +62,19 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  * `unknown` is the state before the summary has been read, and after a summary that failed: a
  * summary nobody read says nothing about the provider, so the page keeps its connected behaviour
  * rather than hiding a connected business's live sections on a transient failure.
+ *
+ * `planRequired` is issue #967's third refill reason, read since issue #979: the business's plan
+ * does not include the sales provider, so no fleet read was attempted at all - the same "nothing to
+ * show" fact as `notConnected`, and treated the same way by {@link isLiveFleetShown}, but never
+ * worded as "connect Nayax", because reconnecting would not open these sections and upgrading
+ * would.
  */
 export type DashboardProviderAvailability =
   | 'unknown'
   | 'usable'
   | 'notConnected'
   | 'permissionNotGranted'
+  | 'planRequired'
   | 'supportView';
 
 /**
@@ -530,12 +537,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /**
    * Whether the business has a sales provider this page can show provider figures for (issue
-   * #727). Only an answered `NayaxNotConnected` makes it false: `PendingPermissions` with one read
+   * #727). `NayaxNotConnected` and, since issue #979, `planRequired` are the only answers that make
+   * it false - no fleet read was attempted in either - because `PendingPermissions` with one read
    * ungranted is a usable connection with one feature missing (decision P9 of issue #329), a
    * support session keeps its existing behaviour, and an unread summary claims nothing.
    */
   get isProviderUsable(): boolean {
-    return this.providerAvailability !== 'notConnected';
+    return this.providerAvailability !== 'notConnected' && this.providerAvailability !== 'planRequired';
   }
 
   /**
@@ -952,6 +960,8 @@ function providerAvailabilityOf(summary: DashboardSummary): DashboardProviderAva
       return 'notConnected';
     case 'PermissionNotGranted':
       return 'permissionNotGranted';
+    case 'PlanRequired':
+      return 'planRequired';
     default:
       return 'unknown';
   }

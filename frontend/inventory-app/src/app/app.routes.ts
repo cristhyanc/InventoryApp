@@ -20,6 +20,8 @@ import { SIGN_IN_ROUTE } from './auth/intended-destination';
 import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
+import { PLAN_LOCKED_PATH } from './access/plan-lock';
+import { requirePlan } from './access/plan-lock.guard';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
 import { requireProvider } from './provider/provider-lock.guard';
 import { PUBLIC_HOME_ROUTE } from './public/landing/landing-routes';
@@ -79,6 +81,14 @@ export const routes: Routes = [
     path: PROVIDER_LOCKED_PATH,
     canActivate: [MsalGuard],
     loadComponent: () => import('./provider/provider-locked.component').then((m) => m.ProviderLockedComponent)
+  },
+  {
+    // The "needs a plan" page (issue #979), in the same shape as `PROVIDER_LOCKED_PATH` above: a
+    // guard *sends* a member here, so it carries no capability of its own - the destinations that
+    // redirect here each already passed their own capability guard before `requirePlan` ran.
+    path: PLAN_LOCKED_PATH,
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./access/plan-locked.component').then((m) => m.PlanLockedComponent)
   },
   {
     // Account-state routing destinations (issue #529) and the invite route it bypasses for
@@ -254,20 +264,43 @@ export const routes: Routes = [
     // the "needs a provider" page instead of a screen of refusals. It is declared last, after the
     // capability guard, so a role that does not include the page is sent to its own explanation
     // first. Giving it a local half belongs to the provider machine review (issue #742).
+    // Plan-locked since issue #979: every panel here is a Nayax read, which needs the `Pro` plan
+    // (`PlanFeature.SalesProviderIntegration`), checked before `requireProvider` so a business that
+    // has not bought the connection is told to upgrade rather than to connect one upgrading would
+    // make usable anyway.
     path: 'machines/:id',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Inventory.Operate'),
+      requirePlan('SalesProviderIntegration'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
   },
   {
     // A site is known only from the fleet read's `CustomerID` (AGENTS.md § Site commissions), so the
-    // site pages depend on the same read the machine pages do.
+    // site pages depend on the same read the machine pages do, and, since issue #979, on the same
+    // `Pro` plan feature that read needs.
     path: 'sites',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Inventory.Operate'),
+      requirePlan('SalesProviderIntegration'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () => import('./components/sites/site-list.component').then((m) => m.SiteListComponent)
   },
   {
     path: 'sites/:id/products',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Inventory.Operate'),
+      requirePlan('SalesProviderIntegration'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () => import('./components/sites/site-products.component').then((m) => m.SiteProductsComponent)
   },
   {
@@ -310,8 +343,15 @@ export const routes: Routes = [
     redirectTo: ({ queryParams }) => inject(Router).createUrlTree(['/reports/bookkeeping'], { queryParams })
   },
   {
+    // Plan-locked since issue #979 on `PlanFeature.BookkeepingAndGstReports`, the `Starter` plan
+    // feature `ReportsController`'s own `[RequirePlan]` declares for this action.
     path: 'reports/bookkeeping',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Reports.View'),
+      requirePlan('BookkeepingAndGstReports')
+    ],
     loadComponent: () => import('./components/reports/bookkeeping-report.component').then((m) => m.BookkeepingReportComponent)
   },
   {
@@ -324,35 +364,76 @@ export const routes: Routes = [
     // deleted. Bookkeeping and GST carry no provider guard at all. Like every provider guard it is
     // declared **after** `requireCapability`, so a role without `Reports.View` reaches its own
     // explanation rather than an invitation to connect a provider it still could not use.
+    //
+    // Since issue #979 each also carries `requirePlan('ProviderSalesReports')` - the `Pro` plan
+    // feature `ReportsController`'s own `[RequirePlan]` declares for these actions - declared
+    // **before** `requireProvider`, so a business that has not bought the plan is told to upgrade
+    // rather than to connect a Nayax account upgrading would make usable anyway.
     path: 'reports/daily',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Reports.View'),
+      requirePlan('ProviderSalesReports'),
+      requireProvider('providerRecords')
+    ],
     loadComponent: () => import('./components/reports/daily-report.component').then((m) => m.DailyReportComponent)
   },
   {
     path: 'reports/transactions',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Reports.View'),
+      requirePlan('ProviderSalesReports'),
+      requireProvider('providerRecords')
+    ],
     loadComponent: () =>
       import('./components/reports/transaction-sales-report.component').then((m) => m.TransactionSalesReportComponent)
   },
   {
     path: 'reports/reconciliation',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Reports.View'),
+      requirePlan('ProviderSalesReports'),
+      requireProvider('providerRecords')
+    ],
     loadComponent: () =>
       import('./components/reports/reconciliation-report.component').then((m) => m.ReconciliationReportComponent)
   },
   {
     path: 'reports/machines',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Reports.View'),
+      requirePlan('ProviderSalesReports'),
+      requireProvider('providerRecords')
+    ],
     loadComponent: () => import('./components/reports/machine-report.component').then((m) => m.MachineReportComponent)
   },
   {
     path: 'reports/products',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Reports.View'),
+      requirePlan('ProviderSalesReports'),
+      requireProvider('providerRecords')
+    ],
     loadComponent: () => import('./components/reports/product-report.component').then((m) => m.ProductReportComponent)
   },
   {
+    // Plan-locked since issue #979, on the same `Starter` feature as Bookkeeping above.
     path: 'reports/gst',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Reports.View'),
+      requirePlan('BookkeepingAndGstReports')
+    ],
     loadComponent: () => import('./components/reports/gst-report.component').then((m) => m.GstReportComponent)
   },
   {
@@ -363,12 +444,15 @@ export const routes: Routes = [
     // live fleet read, so with no usable provider it has no sites to report on and the API answers
     // `isAvailable: false` (issue #731). Issue #729 therefore locked it on the live fleet read,
     // which issue #868 left exactly as it is - it is the five reports over stored records that
-    // joined it, on the narrower `providerRecords`.
+    // joined it, on the narrower `providerRecords`. Since issue #979 it also carries
+    // `requirePlan('SiteCommissions')` - the `Pro` plan feature `SiteCommissionsController` declares
+    // for its whole controller - declared before the provider guard, for the same ordering reason.
     path: 'reports/site-commissions',
     canActivate: [
       MsalGuard,
       accountStateGuard,
       requireCapability('SiteCommissions.Manage'),
+      requirePlan('SiteCommissions'),
       requireProvider('machineFleet')
     ],
     loadComponent: () =>

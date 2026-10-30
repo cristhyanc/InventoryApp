@@ -1,4 +1,6 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { CheapestSupplierSummary, SupplierPriceBasis } from '../../../models/cheapest-supplier';
 import { CheapestSupplierService } from '../../../services/cheapest-supplier.service';
@@ -8,7 +10,8 @@ import {
   CHEAPEST_SUPPLIERS_SUPPORT_SESSION_MESSAGE,
   CheapestSuppliers,
   CheapestSuppliersComponent,
-  cheapestSupplierFor
+  cheapestSupplierFor,
+  cheapestSuppliersPlanLockedMessage
 } from './cheapest-suppliers.component';
 
 function summary(productIds: number[]): CheapestSupplierSummary {
@@ -32,6 +35,7 @@ describe('CheapestSuppliersComponent (issue #930)', () => {
     await TestBed.configureTestingModule({
       imports: [CheapestSuppliersComponent],
       providers: [
+        provideRouter([]),
         { provide: CheapestSupplierService, useValue: { getSummary } },
         { provide: SupportSessionService, useValue: { active$: of(options.sessionActive ?? false) } }
       ]
@@ -120,27 +124,52 @@ describe('CheapestSuppliersComponent (issue #930)', () => {
     expect(published[published.length - 1].state).toBe('loaded');
   });
 
-  it('keeps the rest of the page working when the business plan refuses the prices (issue #977)', async () => {
-    // The refusal a Free business now gets from the summary endpoint: 403 with the plan_required
-    // code. The column states that it could not be read and the page around it is untouched; the
-    // inline lock that names the plan instead is issue #979's work.
+  /**
+   * The refusal a Free or Starter business gets from the summary endpoint since issue #967:
+   * `403 plan_required`, naming the plan that includes `ObservedSupplierPrices`. Issue #979's own
+   * inline lock: the column names the plan rather than reporting a generic failure, and offers no
+   * Retry, because a `403` this business was already told the answer to is not a transient one.
+   */
+  it('shows an inline plan lock, naming the required plan, when the business plan refuses the prices', async () => {
     const getSummary = jest.fn(() =>
-      throwError(() => ({
-        status: 403,
-        error: { code: 'plan_required', requiredPlan: 'Starter', planFeature: 'ObservedSupplierPrices' }
-      }))
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 403,
+            error: { code: 'plan_required', requiredPlan: 'Starter', planFeature: 'ObservedSupplierPrices' }
+          })
+      )
     );
     const { host, published, show } = await render({ getSummary });
 
     show([1, 2]);
 
     const answer = published[published.length - 1];
-    expect(answer.state).toBe('failed');
-    // And never as an answer about a product: "nobody could tell us" is not "this product has no
-    // cheapest supplier".
+    expect(answer.state).toBe('planLocked');
+    // And never as an answer about a product: "this business has not bought the column" is not
+    // "this product has no cheapest supplier".
     expect(cheapestSupplierFor(answer, 1)).toBeUndefined();
     expect(cheapestSupplierFor(answer, 2)).toBeUndefined();
-    expect(host.textContent).toContain(CHEAPEST_SUPPLIERS_FAILED_MESSAGE);
+    expect(host.textContent).toContain(cheapestSuppliersPlanLockedMessage('Starter'));
+    expect(host.querySelector('a[href="/plan"]')).not.toBeNull();
+    expect(retryButton(host)).toBeUndefined();
+  });
+
+  it('reports the plan a Pro-only refusal names too', async () => {
+    const getSummary = jest.fn(() =>
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 403,
+            error: { code: 'plan_required', requiredPlan: 'Pro', planFeature: 'ObservedSupplierPrices' }
+          })
+      )
+    );
+    const { host, show } = await render({ getSummary });
+
+    show([1]);
+
+    expect(host.textContent).toContain(cheapestSuppliersPlanLockedMessage('Pro'));
   });
 
   it('asks for nothing in a read-only support session and says the column is unavailable there', async () => {

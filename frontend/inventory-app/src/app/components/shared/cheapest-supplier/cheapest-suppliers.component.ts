@@ -1,7 +1,9 @@
 import { CommonModule } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { EMPTY, Subject, merge, of } from 'rxjs';
 import { catchError, switchMap, take, takeUntil, tap } from 'rxjs/operators';
+import { planRequiredOfError } from '../../../access/plan-feature';
 import {
   CheapestSupplierProduct,
   CheapestSupplierSummary,
@@ -20,9 +22,13 @@ import { SupportSessionService } from '../../../support-session/support-session.
  *   supplier", and showing the second as the first is what AGENTS.md § Frontend rules forbids;
  * - `unavailable` - the column cannot be read at all in this context. Today that is a read-only
  *   support session, which refuses every non-`GET` request (issue #551) and so would answer `403`
- *   to a Retry for ever.
+ *   to a Retry for ever;
+ * - `planLocked` - the business's plan does not include observed supplier prices (issue #967's
+ *   `PlanFeature.ObservedSupplierPrices`, read since issue #979). Like `unavailable` this offers no
+ *   Retry: a `403 plan_required` is not a transient failure either, and retrying asks the same
+ *   question the business is already told the answer to.
  */
-export type CheapestSuppliersState = 'loading' | 'loaded' | 'failed' | 'unavailable';
+export type CheapestSuppliersState = 'loading' | 'loaded' | 'failed' | 'unavailable' | 'planLocked';
 
 /**
  * What {@link CheapestSuppliersComponent} publishes about the product set it was given: the state
@@ -45,6 +51,11 @@ export const CHEAPEST_SUPPLIERS_FAILED_MESSAGE = 'The Cheapest supplier column c
 
 export const CHEAPEST_SUPPLIERS_SUPPORT_SESSION_MESSAGE =
   'Supplier prices are not available while viewing a business in support view.';
+
+/** The inline plan lock's own sentence (issue #979), naming the plan the refusal actually named. */
+export function cheapestSuppliersPlanLockedMessage(requiredPlan: string): string {
+  return `The Cheapest supplier column needs the ${requiredPlan} plan.`;
+}
 
 /** The answer for one product, or `undefined` while the read has not established one. */
 export function cheapestSupplierFor(
@@ -71,7 +82,7 @@ export function cheapestSupplierFor(
 @Component({
   selector: 'app-cheapest-suppliers',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, RouterLink],
   template: `
     @if (state === 'failed') {
       <div class="flex flex-wrap items-center gap-3 border-b border-md-gray-200 p-4" role="alert">
@@ -80,6 +91,11 @@ export function cheapestSupplierFor(
       </div>
     } @else if (state === 'unavailable') {
       <p class="border-b border-md-gray-200 p-4 text-md-body value-muted">{{ supportSessionMessage }}</p>
+    } @else if (state === 'planLocked') {
+      <div class="flex flex-wrap items-center gap-3 border-b border-md-gray-200 p-4" role="status">
+        <p class="text-md-body value-muted">{{ planLockedMessage }}</p>
+        <a routerLink="/plan" class="btn-link">View the Plan page</a>
+      </div>
     }
   `
 })
@@ -94,6 +110,13 @@ export class CheapestSuppliersComponent implements OnChanges, OnDestroy {
   readonly supportSessionMessage = CHEAPEST_SUPPLIERS_SUPPORT_SESSION_MESSAGE;
 
   state: CheapestSuppliersState = CHEAPEST_SUPPLIERS_NOT_READ_YET.state;
+
+  /** The plan a `planLocked` state's own refusal named, for {@link planLockedMessage}. */
+  requiredPlan: string | null = null;
+
+  get planLockedMessage(): string {
+    return cheapestSuppliersPlanLockedMessage(this.requiredPlan ?? 'Starter');
+  }
 
   private readonly productIds$ = new Subject<readonly number[]>();
   private readonly retry$ = new Subject<void>();
@@ -162,8 +185,13 @@ export class CheapestSuppliersComponent implements OnChanges, OnDestroy {
 
     return this.cheapestSuppliers.getSummary(productIds).pipe(
       tap((summary) => this.publish('loaded', summary.displayBasis, index(summary))),
-      catchError(() => {
-        this.publish('failed', null, new Map());
+      catchError((error: unknown) => {
+        // A `403 plan_required` is this business's own answer, not a transient failure, and
+        // offering a Retry for it would ask the same question the response already answered
+        // (issue #967's `ObservedSupplierPrices` feature, read since issue #979).
+        const requiredPlan = planRequiredOfError(error);
+        this.requiredPlan = requiredPlan;
+        this.publish(requiredPlan === null ? 'failed' : 'planLocked', null, new Map());
         return EMPTY;
       })
     );

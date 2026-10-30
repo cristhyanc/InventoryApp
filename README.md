@@ -2993,6 +2993,49 @@ The **Machines** entry itself is never locked — a business keeps its own machi
 the next section), which is a different destination from the machine profitability **report** under
 Reports.
 
+#### The menu without an included plan
+
+Issue #979 adds a second lock beside the provider one above, over what the business's **plan**
+includes rather than over its Nayax connection (issue #966's entitlement, enforced by issue #967).
+Until enforcement is switched on, nothing here changes anything: every feature below is offered to
+every business exactly as it is today.
+
+- **The order of checks is role, then plan, then Nayax connection.** A member whose role does not
+  hold an entry never sees it at all, locked or not. Only then is the plan checked, and only once the
+  plan includes the feature is the Nayax connection consulted — so a Free or Starter business is
+  **never** told to connect Nayax for a page the plan itself withholds; it is told to upgrade, because
+  that is the one thing that would actually open it. A Pro business with no connection sees today's
+  provider lock unchanged.
+- **Route-level plan locks**, where the whole page is one higher-plan feature: every entry under
+  **Reports** (Bookkeeping and GST need the Starter plan; Daily, Transactions, Reconciliation,
+  Machines, Products and Site Commissions need Pro), **Sites**, and the machine detail page (stock,
+  revenue, latest sales and Sync Restock — all of it is Nayax). Opening one, or typing its URL, shows
+  a "needs Starter/Pro" page linking to the [Plan page](#the-plan-page-issue-970) instead of the
+  report, the site list or the machine; **no request is sent that can only be refused.** Unlike the
+  provider lock's page, it never offers a Connect action — buying a plan is not something this
+  application does for you — and it never claims anything stored has been lost: the page it stands in
+  for opens again, unchanged, the moment the business is on a plan that includes it.
+- **Inline plan locks**, where only one optional part of an otherwise usable page needs the higher
+  plan: the **Cheapest supplier** column on the Dashboard, Needs Ordering and All Products shows a
+  small "needs the Starter plan" state in place of itself, with a link to the Plan page and no Retry
+  — a `403 plan_required` is this business's own answer, not a failure that retrying could change.
+  The Dashboard's machine-fleet sections and the Pick List's calculated matrix say the same thing in
+  their own wording when the business's plan does not include the sales provider, naming the Pro
+  plan rather than claiming Nayax is not connected — which would be untrue of a business whose
+  credentials are stored and working.
+- **An unread entitlement locks nothing.** Exactly as an unread capability or provider answer does
+  not, a plan that has not been read yet, or could not be read, leaves every entry open and every
+  inline part showing its ordinary loading or unavailable state; the page's own request, once it is
+  made, is what actually answers for the business's plan.
+- **A downgrade takes effect on the next navigation or refresh, never mid-page.** Already-rendered
+  paid data is not torn out from under you while you are looking at it; open the page again, or
+  reload the part that shows it, and the lock applies from the entitlement as it now stands. Nothing
+  about a plan is cached across sessions.
+
+See
+[docs/architecture.md § Plan-locked navigation](docs/architecture.md#plan-locked-navigation-issue-979)
+for how this is implemented.
+
 ## Machines
 
 The machines a business operates are its own records, and they work with or without a sales provider

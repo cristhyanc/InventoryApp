@@ -205,6 +205,22 @@ describe('AccessService capability cache (issue #528)', () => {
   });
 
   /**
+   * `allowsPlanFeature` (issue #979): the same fail-open, wait-for-the-first-answer shape as
+   * `allows`, read from the entitlement the same response carries rather than from the capability
+   * set.
+   */
+  it('answers a plan feature from the reported entitlement, failing open for one not reported', async () => {
+    const entitlement = { enforced: true, plan: 'Starter', source: 'BillingSubscription', endsAtUtc: null };
+    const { service } = configure({ responses: [() => of({ ...OWNER_RESPONSE, entitlement })] });
+
+    await expect(firstValueFrom(service.allowsPlanFeature('BookkeepingAndGstReports'))).resolves.toBe(true);
+    await expect(firstValueFrom(service.allowsPlanFeature('SiteCommissions'))).resolves.toBe(false);
+
+    const { service: unreported } = configure({ responses: [() => of(OWNER_RESPONSE)] });
+    await expect(firstValueFrom(unreported.allowsPlanFeature('SiteCommissions'))).resolves.toBe(true);
+  });
+
+  /**
    * A protected request issued while MSAL is still handling a redirect would have
    * `MsalInterceptor` start an interactive sign-in of its own, on the public `/auth` landing
    * route, before anybody has asked for a page.

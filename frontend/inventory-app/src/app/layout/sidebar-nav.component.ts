@@ -16,20 +16,22 @@ import {
 import { AccessService, MemberAccessState } from '../access/access.service';
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CapabilitySet } from '../access/capabilities';
+import { Entitlement } from '../access/entitlement';
 import { OptionVisibility } from '../access/option-visibility';
 import { IconComponent } from '../components/shared/icon.component';
 import { ProviderAvailability, ProviderAvailabilityService } from '../provider/provider-availability.service';
-import { ProviderLock, providerLockSummary } from '../provider/provider-lock';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
 import {
   NavGroup,
   NavItem,
   NavLink,
+  NavLock,
   NavSectionHeading,
   activeNavGroup,
   activeNavRoute,
   navLockOf,
+  navLockSummary,
   navigationFor,
   optionSwitchedOff,
   superAdminNavGroup
@@ -192,6 +194,7 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
     readonly diagnosticsOffered: boolean;
     readonly businessNavigation: BusinessNavigationVisibility;
     readonly options: OptionVisibility | undefined;
+    readonly entitlement: Entitlement | undefined;
   };
 
   constructor(
@@ -235,7 +238,8 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
           capabilities: renderedCapabilities(access),
           diagnosticsOffered,
           businessNavigation,
-          options: renderedOptionVisibility(access)
+          options: renderedOptionVisibility(access),
+          entitlement: renderedEntitlement(access)
         };
         this.renderNavigation();
 
@@ -399,12 +403,12 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
    * nothing here is `aria-disabled`, a claim that would be untrue of a link that does navigate.
    */
   isLinkLocked(link: NavLink): boolean {
-    return navLockOf(link, this.provider) !== 'open';
+    return this.lockOf(link) !== 'open';
   }
 
   /** The one sentence a locked entry carries, as its accessible description and its tooltip. */
   lockSummary(link: NavLink): string {
-    return providerLockSummary(this.lockOf(link), link.label);
+    return navLockSummary(this.lockOf(link), link);
   }
 
   /**
@@ -436,8 +440,8 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
     return this.expanded ? null : link.label;
   }
 
-  private lockOf(link: NavLink): ProviderLock {
-    return navLockOf(link, this.provider);
+  private lockOf(link: NavLink): NavLock {
+    return navLockOf(link, this.menuInputs?.entitlement, this.provider);
   }
 
   /** Whether `item`'s badge is the pending-business-applications count (issue #547). */
@@ -554,6 +558,16 @@ const NO_CAPABILITIES: CapabilitySet = new Set();
  */
 export function renderedOptionVisibility(state: MemberAccessState): OptionVisibility | undefined {
   return state.status === 'granted' ? state.access.optionVisibility : undefined;
+}
+
+/**
+ * The entitlement to render the menu's plan locks from (issue #979), or `undefined` for every
+ * state but a granted read - `unread` and `unavailable` alike, and a granted read an older API
+ * answered with no entitlement at all. `undefined` fails open on {@link planLockOf}, exactly as it
+ * does for a route guard: nothing is locked until a plan is actually known not to include it.
+ */
+export function renderedEntitlement(state: MemberAccessState): Entitlement | undefined {
+  return state.status === 'granted' ? state.access.entitlement : undefined;
 }
 
 /**
