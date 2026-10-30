@@ -30,6 +30,10 @@ import { providerAvailabilityDouble } from '../../provider/provider-availability
  * Plan picks (issue #996): editable planning overrides, completion, refresh/retry, stale-response
  * protection, filters, machine focus, site grouping and the departure guard. Everything here is
  * local planning state; none of it may call anything but the read-only pick list projection.
+ *
+ * Issue #1008 replaced the pencil and its confirm/cancel with an always-visible quantity box
+ * between a minus and a plus button: every valid keystroke is the override, and text the plan
+ * cannot use is held as pending work beside the last valid quantity rather than being coerced.
  */
 
 function machine(machineID: number, machineName: string, overrides: Partial<Machine> = {}): Machine {
@@ -136,11 +140,14 @@ function row(component: PickListComponent, productId: number) {
   return component.pickListProducts.find((p) => p.productId === productId)!;
 }
 
-/** Edits one cell and commits the typed text, as the pencil, the box and Enter do. */
-function commit(component: PickListComponent, productId: number, machineId: number, value: string): void {
-  component.startEdit(row(component, productId), machineId);
-  component.onEditInput(value);
-  component.commitEdit(row(component, productId), machineId);
+/** Types text into one cell's always-visible quantity box, as the operator does (issue #1008). */
+function type(component: PickListComponent, productId: number, machineId: number, value: string): void {
+  component.onQuantityInput(row(component, productId), machineId, value);
+}
+
+/** The cell one product occupies at one machine. */
+function cellOf(component: PickListComponent, productId: number, machineId: number) {
+  return row(component, productId).machineQuantities.find((mq) => mq.machineId === machineId)!;
 }
 
 beforeEach(() => jest.useFakeTimers());
@@ -241,7 +248,7 @@ describe('Plan picks refresh and retry (issue #996)', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component, getPickList } = createHarness();
     applyMachines(component, [10]);
-    commit(component, 1, 10, '2');
+    type(component, 1, 10, '2');
     component.togglePicked(row(component, 2), 10);
     getPickList.mockClear();
 
@@ -257,7 +264,7 @@ describe('Plan picks refresh and retry (issue #996)', () => {
     jest.spyOn(window, 'confirm').mockReturnValue(true);
     const { component, getPickList } = createHarness();
     applyMachines(component, [10]);
-    commit(component, 1, 10, '2');
+    type(component, 1, 10, '2');
     component.togglePicked(row(component, 2), 10);
 
     component.refresh();
@@ -313,69 +320,40 @@ describe('Plan picks refresh and retry (issue #996)', () => {
   });
 });
 
-describe('Plan picks quantity overrides (issue #996)', () => {
-  it('commits an edited quantity as a local override and keeps the original suggestion beside it', () => {
+describe('Plan picks quantity overrides (issues #996, #1008)', () => {
+  it('a cell’s box shows its effective quantity: the suggestion, then the retained override', () => {
     const { component } = createHarness();
     applyMachines(component, [10]);
 
-    commit(component, 1, 10, '7');
+    expect(component.quantityInputValue(1, cellOf(component, 1, 10))).toBe('4');
 
-    const cell = row(component, 1).machineQuantities[0];
+    type(component, 1, 10, '7');
+
+    const cell = cellOf(component, 1, 10);
+    expect(component.quantityInputValue(1, cell)).toBe('7');
     expect(component.plannedQuantity(1, cell)).toBe(7);
+    // The original suggestion is never rewritten.
     expect(cell.quantityToPick).toBe(4);
     expect(component.isOverridden(1, 10)).toBe(true);
-    expect(component.edit).toBeNull();
   });
 
-  it('starts the box from the committed quantity and focuses and selects it', () => {
+  it('every valid keystroke is the override: no confirm step, and totals follow immediately', () => {
     const { component } = createHarness();
-    applyMachines(component, [10]);
-    const input = document.createElement('input');
-    input.id = component.editInputId(1, 10);
-    document.body.appendChild(input);
-    const select = jest.spyOn(input, 'select');
+    applyMachines(component, [10, 20]);
 
-    component.startEdit(row(component, 1), 10);
-    jest.runAllTimers();
+    type(component, 2, 20, '1');
 
-    expect(component.edit?.value).toBe('4');
-    expect(document.activeElement).toBe(input);
-    expect(select).toHaveBeenCalled();
-    input.remove();
+    expect(component.plannedQuantity(2, cellOf(component, 2, 20))).toBe(1);
+    expect(component.totalToPickUnits()).toBe(10);
+    expect(component.shortageProducts()).toEqual([]);
   });
 
-  it('cancel restores the committed quantity', () => {
+  it('typing the suggestion again drops the override and hides the Suggested label', () => {
     const { component } = createHarness();
     applyMachines(component, [10]);
-    commit(component, 1, 10, '6');
+    type(component, 1, 10, '7');
 
-    component.startEdit(row(component, 1), 10);
-    component.onEditInput('99');
-    component.cancelEdit();
-
-    expect(component.plannedQuantity(1, row(component, 1).machineQuantities[0])).toBe(6);
-    expect(component.edit).toBeNull();
-  });
-
-  it.each(['abc', '2.5', '-1', '', String(MAXIMUM_PICK_QUANTITY + 1)])('refuses %p inline and keeps the box open', (raw) => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-
-    component.startEdit(row(component, 1), 10);
-    component.onEditInput(raw);
-    component.commitEdit(row(component, 1), 10);
-
-    expect(component.edit?.error).toBeTruthy();
-    expect(component.isEditing(1, 10)).toBe(true);
-    expect(component.isOverridden(1, 10)).toBe(false);
-  });
-
-  it('committing the suggestion again drops the override', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-    commit(component, 1, 10, '7');
-
-    commit(component, 1, 10, '4');
+    type(component, 1, 10, '4');
 
     expect(component.isOverridden(1, 10)).toBe(false);
   });
@@ -383,7 +361,7 @@ describe('Plan picks quantity overrides (issue #996)', () => {
   it('Use suggested puts a cell back on its suggestion', () => {
     const { component } = createHarness();
     applyMachines(component, [10]);
-    commit(component, 1, 10, '0');
+    type(component, 1, 10, '0');
 
     component.useSuggestion(row(component, 1), 10);
 
@@ -391,28 +369,30 @@ describe('Plan picks quantity overrides (issue #996)', () => {
     expect(component.actionableCellCount()).toBe(2);
   });
 
-  it('never edits a cell with nothing suggested', () => {
+  it('never accepts a quantity for a cell with nothing suggested', () => {
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
 
-    component.startEdit(row(component, 1), 20);
+    type(component, 1, 20, '5');
 
-    expect(component.edit).toBeNull();
+    expect(component.isOverridden(1, 20)).toBe(false);
+    expect(component.hasInvalidQuantity(1, 20)).toBe(false);
+    expect(component.hasPlanningWork()).toBe(false);
   });
 
-  it('committing a changed quantity clears the cell’s completion; an unchanged commit keeps it', () => {
+  it('a changed effective quantity clears the cell’s completion; entering the same value keeps it', () => {
     const { component } = createHarness();
     applyMachines(component, [10]);
     component.togglePicked(row(component, 1), 10);
 
-    commit(component, 1, 10, '4');
+    type(component, 1, 10, '4');
     expect(component.isPicked(1, 10)).toBe(true);
 
-    commit(component, 1, 10, '3');
+    type(component, 1, 10, '3');
     expect(component.isPicked(1, 10)).toBe(false);
   });
 
-  it('totals, shortages and progress use committed overrides across the whole applied run', () => {
+  it('totals, shortages and progress use the effective quantities across the whole applied run', () => {
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
     // Coke 4, Chips 5 + 3 = 8 against 7 in storage.
@@ -420,12 +400,8 @@ describe('Plan picks quantity overrides (issue #996)', () => {
     expect(component.shortageProducts().map((p) => p.productId)).toEqual([2]);
     expect(component.productShortage(row(component, 2))).toBe(1);
 
-    commit(component, 2, 20, '1');
-
-    expect(component.totalToPickUnits()).toBe(10);
-    expect(component.shortageProducts()).toEqual([]);
-
-    commit(component, 1, 10, '9');
+    type(component, 2, 20, '1');
+    type(component, 1, 10, '9');
 
     expect(component.productShortage(row(component, 1))).toBe(3);
     expect(component.runProgressLabel()).toBe('0 of 3 picks completed');
@@ -434,12 +410,12 @@ describe('Plan picks quantity overrides (issue #996)', () => {
     expect(component.remainingPickCount()).toBe(2);
   });
 
-  it('a committed zero is a deliberate skip: not a pick, not checkable, still editable and resettable', () => {
+  it('a zero is a deliberate skip: not a pick, not checkable, still editable and resettable', () => {
     const { component } = createHarness();
     applyMachines(component, [10]);
     component.togglePicked(row(component, 1), 10);
 
-    commit(component, 1, 10, '0');
+    type(component, 1, 10, '0');
 
     expect(component.isPicked(1, 10)).toBe(false);
     expect(component.actionableCellCount()).toBe(1);
@@ -447,30 +423,21 @@ describe('Plan picks quantity overrides (issue #996)', () => {
     expect(component.isPicked(1, 10)).toBe(false);
     expect(component.totalToPickUnits()).toBe(5);
 
-    component.startEdit(row(component, 1), 10);
-    expect(component.edit?.value).toBe('0');
-    component.cancelEdit();
+    // The box stays on screen and usable at zero, which is the only way back from a skip.
+    expect(component.quantityInputValue(1, cellOf(component, 1, 10))).toBe('0');
+    type(component, 1, 10, '2');
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(2);
     component.useSuggestion(row(component, 1), 10);
     expect(component.actionableCellCount()).toBe(2);
-  });
-
-  it('touch steppers change the box by one and never go below zero', () => {
-    const { component } = createHarness();
-    applyMachines(component, [10]);
-    component.startEdit(row(component, 1), 10);
-
-    component.stepEdit(1);
-    expect(component.edit?.value).toBe('5');
-    component.onEditInput('0');
-    component.stepEdit(-1);
-    expect(component.edit?.value).toBe('0');
   });
 
   it('never calls anything but the read-only projection, whatever is planned', () => {
     jest.spyOn(window, 'confirm').mockReturnValue(true);
     const { component, getPickList } = createHarness();
     applyMachines(component, [10, 20]);
-    commit(component, 1, 10, '2');
+    type(component, 1, 10, '2');
+    type(component, 2, 20, 'oops');
+    component.stepQuantity(row(component, 1), 10, 1);
     component.togglePicked(row(component, 2), 20);
     component.refresh();
     component.resetAll();
@@ -480,85 +447,207 @@ describe('Plan picks quantity overrides (issue #996)', () => {
 });
 
 /**
- * Text typed into an open quantity editor is planning work too, until it is committed or cancelled:
- * every transition that would throw it away asks first, exactly as it does for a committed override.
- * An editor that was opened but not changed, or that was explicitly cancelled, loses nothing and
- * never asks.
+ * The minus and plus buttons beside the box (issue #1008): exactly one unit each, bounded at zero
+ * and at the largest quantity the pick list can represent, and refused entirely while the box holds
+ * text the plan cannot use.
  */
-describe('Plan picks guards an open, changed quantity editor (issue #996)', () => {
-  /** Opens the Chips cell at machine 20 (suggestion 3) and types a different, uncommitted quantity. */
-  function typeWithoutCommitting(component: PickListComponent, value = '1'): void {
-    component.startEdit(row(component, 2), 20);
-    component.onEditInput(value);
+describe('Plan picks quantity steppers (issue #1008)', () => {
+  it('adjusts by exactly one in each direction and updates the plan at once', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+
+    component.stepQuantity(row(component, 1), 10, 1);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(5);
+
+    component.stepQuantity(row(component, 1), 10, -1);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(4);
+    expect(component.isOverridden(1, 10)).toBe(false);
+  });
+
+  it('stops minus at zero and plus at the largest supported quantity', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    type(component, 1, 10, '0');
+
+    expect(component.canDecreaseQuantity(1, cellOf(component, 1, 10))).toBe(false);
+    component.stepQuantity(row(component, 1), 10, -1);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(0);
+
+    type(component, 1, 10, String(MAXIMUM_PICK_QUANTITY));
+
+    expect(component.canIncreaseQuantity(1, cellOf(component, 1, 10))).toBe(false);
+    component.stepQuantity(row(component, 1), 10, 1);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(MAXIMUM_PICK_QUANTITY);
+  });
+
+  it('stepping off a completed quantity clears that cell’s completion', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    component.togglePicked(row(component, 1), 10);
+
+    component.stepQuantity(row(component, 1), 10, 1);
+
+    expect(component.isPicked(1, 10)).toBe(false);
+  });
+
+  it('is disabled and does nothing while the box holds text the plan cannot use', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    type(component, 1, 10, '2.5');
+
+    expect(component.canDecreaseQuantity(1, cellOf(component, 1, 10))).toBe(false);
+    expect(component.canIncreaseQuantity(1, cellOf(component, 1, 10))).toBe(false);
+
+    component.stepQuantity(row(component, 1), 10, 1);
+
+    expect(component.quantityInputValue(1, cellOf(component, 1, 10))).toBe('2.5');
+    expect(component.isOverridden(1, 10)).toBe(false);
+  });
+});
+
+/**
+ * Invalid or incomplete text is validated whole and kept whole (issue #1008): it is never truncated
+ * to the digits it starts with, never read as a zero, and never left looking like a completed pick.
+ * The last valid effective quantity keeps carrying the totals until the operator corrects the box.
+ */
+describe('Plan picks refuses text the plan cannot use (issue #1008)', () => {
+  it.each(['abc', '2.5', '-1', '+3', '1e3', '12x', String(MAXIMUM_PICK_QUANTITY + 1)])(
+    'keeps %p exactly as typed, refuses it with a message and changes no quantity',
+    (raw) => {
+      const { component } = createHarness();
+      applyMachines(component, [10]);
+      type(component, 1, 10, '6');
+
+      type(component, 1, 10, raw);
+
+      expect(component.quantityInputValue(1, cellOf(component, 1, 10))).toBe(raw);
+      expect(component.quantityError(1, 10)).toBeTruthy();
+      // The last valid quantity is what the run still counts, and the cell says so.
+      expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(6);
+      expect(component.totalToPickUnits()).toBe(11);
+    }
+  );
+
+  it('treats a blank box as incomplete input rather than an implicit zero', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+
+    type(component, 1, 10, '');
+
+    expect(component.hasInvalidQuantity(1, 10)).toBe(true);
+    expect(component.quantityError(1, 10)).toBe(PICK_QUANTITY_INVALID_MESSAGE);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(4);
+    expect(component.actionableCellCount()).toBe(2);
+  });
+
+  it('refuses an overflowing quantity whole instead of clamping it to the maximum', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+
+    type(component, 1, 10, String(MAXIMUM_PICK_QUANTITY + 1));
+
+    expect(component.quantityError(1, 10)).toBe(PICK_QUANTITY_TOO_LARGE_MESSAGE);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(4);
+  });
+
+  it('clears completion as soon as the box differs from the last valid value, and refuses to mark it complete', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    component.togglePicked(row(component, 1), 10);
+
+    type(component, 1, 10, '');
+
+    expect(component.isPicked(1, 10)).toBe(false);
+    component.togglePicked(row(component, 1), 10);
+    expect(component.isPicked(1, 10)).toBe(false);
+    expect(component.canComplete(1, cellOf(component, 1, 10))).toBe(false);
+  });
+
+  it('a corrected box clears the message and takes effect at once', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    type(component, 1, 10, 'x');
+
+    type(component, 1, 10, '9');
+
+    expect(component.hasInvalidQuantity(1, 10)).toBe(false);
+    expect(component.quantityError(1, 10)).toBeNull();
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(9);
+    expect(component.canComplete(1, cellOf(component, 1, 10))).toBe(true);
+  });
+
+  it('Use suggested rescues a cell whose box holds text the plan cannot use', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    type(component, 1, 10, 'oops');
+
+    component.useSuggestion(row(component, 1), 10);
+
+    expect(component.hasInvalidQuantity(1, 10)).toBe(false);
+    expect(component.quantityInputValue(1, cellOf(component, 1, 10))).toBe('4');
+  });
+});
+
+/**
+ * Text the plan cannot use yet is planning work in its own right (issue #1008, replacing #996's
+ * open-editor rule): every transition that would throw it away asks first, exactly as it does for a
+ * valid override, and it is never silently converted to a quantity or dropped.
+ */
+describe('Plan picks guards pending invalid text (issue #1008)', () => {
+  /** Leaves the Chips box at machine 20 (suggestion 3) holding text that is not a usable quantity. */
+  function typeInvalid(component: PickListComponent, value = '1x'): void {
+    type(component, 2, 20, value);
   }
 
-  it('an editor that was opened but not changed is not planning work', () => {
+  it('a box left on its effective quantity is not planning work', () => {
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    component.startEdit(row(component, 2), 20);
 
-    expect(component.editIsDirty()).toBe(false);
+    type(component, 2, 20, '3');
+
     expect(component.hasPlanningWork()).toBe(false);
     expect(component.leaveWarning()).toBeNull();
   });
 
-  it('typing back the quantity the editor opened with is not a change', () => {
+  it('pending invalid text is planning work', () => {
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component, '7');
-    component.onEditInput(' 3 ');
-
-    expect(component.editIsDirty()).toBe(false);
-  });
-
-  it('changed, uncommitted text is planning work; an explicit Cancel discards it without any warning', () => {
-    const confirm = jest.spyOn(window, 'confirm');
-    const { component } = createHarness();
-    applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
 
     expect(component.hasPlanningWork()).toBe(true);
-
-    component.cancelEdit();
-
-    expect(component.hasPlanningWork()).toBe(false);
-    expect(component.confirmLeave()).toBe(true);
-    expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('asks before Refresh discards the typed text; Cancel keeps the editor and its text and reads nothing', () => {
+  it('asks before Refresh discards the pending text; Cancel keeps the text and reads nothing', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component, getPickList } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
     getPickList.mockClear();
 
     component.refresh();
 
     expect(confirm).toHaveBeenCalledWith(DISCARD_PLAN_ON_REFRESH_CONFIRMATION);
     expect(getPickList).not.toHaveBeenCalled();
-    expect(component.isEditing(2, 20)).toBe(true);
-    expect(component.edit?.value).toBe('1');
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
   });
 
-  it('a confirmed Refresh discards the typed text and closes the editor', () => {
+  it('a confirmed Refresh discards the pending text', () => {
     jest.spyOn(window, 'confirm').mockReturnValue(true);
     const { component, getPickList } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
 
     component.refresh();
 
     expect(getPickList).toHaveBeenCalledTimes(2);
-    expect(component.edit).toBeNull();
+    expect(component.hasInvalidQuantity(2, 20)).toBe(false);
     expect(component.isOverridden(2, 20)).toBe(false);
   });
 
-  it('Refresh with an untouched editor open asks nothing', () => {
+  it('Refresh with every box on its effective quantity asks nothing', () => {
     const confirm = jest.spyOn(window, 'confirm');
     const { component, getPickList } = createHarness();
     applyMachines(component, [10, 20]);
-    component.startEdit(row(component, 2), 20);
 
     component.refresh();
 
@@ -566,83 +655,101 @@ describe('Plan picks guards an open, changed quantity editor (issue #996)', () =
     expect(getPickList).toHaveBeenCalledTimes(2);
   });
 
-  it('asks before Reset discards the typed text; Cancel keeps it, and confirming clears it', () => {
+  it('asks before Reset discards the pending text; Cancel keeps it, and confirming clears it', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
 
     component.resetAll();
 
     expect(confirm).toHaveBeenCalledWith(DISCARD_PLAN_ON_RESET_CONFIRMATION);
-    expect(component.edit?.value).toBe('1');
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
     expect(component.appliedMachineIds).toEqual([10, 20]);
 
     confirm.mockReturnValue(true);
     component.resetAll();
 
-    expect(component.edit).toBeNull();
+    expect(component.hasInvalidQuantity(2, 20)).toBe(false);
     expect(component.appliedMachineIds).toEqual([]);
   });
 
-  it('asks before removing the machine whose cell holds typed text, by name; Cancel keeps it', () => {
+  it('asks before removing the machine whose cell holds pending text, by name; Cancel keeps it', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
 
     component.removeMachine(20);
 
     expect(confirm).toHaveBeenCalledWith(discardPlanMachineConfirmation('Snacks'));
     expect(component.appliedMachineIds).toEqual([10, 20]);
-    expect(component.edit?.value).toBe('1');
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
 
     confirm.mockReturnValue(true);
     component.removeMachine(20);
 
     expect(component.appliedMachineIds).toEqual([10]);
-    expect(component.edit).toBeNull();
+    expect(component.hasInvalidQuantity(2, 20)).toBe(false);
   });
 
-  it('removing a different machine neither asks nor touches the typed text', () => {
+  it('removing a different machine neither asks nor touches the pending text', () => {
     const confirm = jest.spyOn(window, 'confirm');
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
 
     component.removeMachine(10);
 
     expect(confirm).not.toHaveBeenCalled();
     expect(component.appliedMachineIds).toEqual([20]);
-    expect(component.edit?.value).toBe('1');
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
   });
 
   it('the same check applies when Apply removes the machine', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
 
     applyMachines(component, [10]);
 
     expect(confirm).toHaveBeenCalledWith(discardPlanMachineConfirmation('Snacks'));
     expect(component.appliedMachineIds).toEqual([10, 20]);
-    expect(component.edit?.value).toBe('1');
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
   });
 
   it('guards leaving the page and reloading or closing the tab, and a cancelled departure keeps the text', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    typeWithoutCommitting(component);
+    typeInvalid(component);
 
     expect(component.confirmLeave()).toBe(false);
     expect(confirm).toHaveBeenCalledWith(UNSAVED_WORK_LEAVE_WARNING);
-    expect(component.edit?.value).toBe('1');
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
 
     const unload = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
     component.onBeforeUnload(unload);
     expect(unload.defaultPrevented).toBe(true);
+  });
+
+  it('survives filtering, sorting, the focused machine and a trip through Record refill', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeInvalid(component);
+
+    component.search = 'zzz';
+    component.statusFilter = 'shortages';
+    component.sortBy('mdbCode');
+    component.focusMachine(10);
+    component.switchMode('manual');
+    component.switchMode('calculated');
+    component.search = '';
+    component.statusFilter = 'all';
+
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
+    expect(component.quantityError(2, 20)).toBe(PICK_QUANTITY_INVALID_MESSAGE);
   });
 });
 
@@ -676,7 +783,7 @@ describe('Plan picks filters and machine focus preserve the plan (issue #996)', 
   it('keeps overrides and checkmarks across filtering, sorting and switching the focused machine', () => {
     const { component } = createHarness();
     applyMachines(component, [10, 20]);
-    commit(component, 2, 20, '2');
+    type(component, 2, 20, '2');
     component.togglePicked(row(component, 1), 10);
 
     component.search = 'zzz';
@@ -784,7 +891,7 @@ describe('Plan picks suggestions for Record refill (issue #996)', () => {
       machines: [machine(10, 'Drinks', { localMachineId: 5 }), machine(20, 'Snacks', { localMachineId: null })]
     });
     applyMachines(component, [10, 20]);
-    commit(component, 1, 10, '9');
+    type(component, 1, 10, '9');
 
     expect(component.refillSuggestions.get(refillCellKey(1, 5))).toBe(4);
     expect(component.refillSuggestions.get(refillCellKey(2, 5))).toBe(5);
@@ -807,7 +914,7 @@ describe('Pick List departure guard (issue #996)', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component } = createHarness();
     applyMachines(component, [10]);
-    commit(component, 1, 10, '2');
+    type(component, 1, 10, '2');
 
     expect(component.confirmLeave()).toBe(false);
     expect(confirm).toHaveBeenCalledWith(UNSAVED_WORK_LEAVE_WARNING);
@@ -844,7 +951,7 @@ describe('Pick List departure guard (issue #996)', () => {
   });
 });
 
-describe('Plan picks rendered (issue #996)', () => {
+describe('Plan picks rendered (issues #996, #1008)', () => {
   async function render(compact = false) {
     jest.useRealTimers();
     window.matchMedia = jest.fn((query: string) => ({
@@ -882,42 +989,103 @@ describe('Plan picks rendered (issue #996)', () => {
     delete (window as { matchMedia?: unknown }).matchMedia;
   });
 
-  it('edits a pick from its pencil: Enter commits, and the cell shows the suggestion beside the new quantity', async () => {
-    const { fixture, host } = await render();
-    host.querySelector<HTMLButtonElement>('button[aria-label="Edit pick quantity: Coke at Drinks"]')!.click();
-    fixture.detectChanges();
+  /** The always-visible quantity box of one cell, found by the label that names its product and machine. */
+  function quantityBox(host: HTMLElement, product: string, machineName: string): HTMLInputElement {
+    return host.querySelector<HTMLInputElement>(`input[aria-label="Pick quantity: ${product} at ${machineName}"]`)!;
+  }
 
-    const input = host.querySelector<HTMLInputElement>('input[aria-label="Pick quantity: Coke at Drinks"]')!;
-    input.value = '6';
+  function typeInto(fixture: { detectChanges(): void }, input: HTMLInputElement, value: string): void {
+    input.value = value;
     input.dispatchEvent(new Event('input'));
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
     fixture.detectChanges();
+  }
 
-    const cell = host.querySelector('button[aria-label="Edit pick quantity: Coke at Drinks"]')!.closest('[data-testid="pick-cell"]')!;
-    expect(cell.querySelector('[data-testid="pick-cell-quantity"]')?.textContent?.trim()).toBe('Pick 6');
-    expect(cell.querySelector('[data-testid="pick-cell-suggested"]')?.textContent?.trim()).toBe('Suggested: 4');
-    expect(cell.textContent).toContain('Current: 6 / Target: 10');
+  it('shows minus, the quantity box, plus and the completion checkbox in that order, each labelled by product and machine', async () => {
+    const { host } = await render();
+    const cell = quantityBox(host, 'Coke', 'Drinks').closest('[data-testid="pick-cell"]')!;
+
+    const controls = Array.from(cell.querySelectorAll('button, input')).map((el) => el.getAttribute('aria-label') ?? el.getAttribute('data-testid'));
+    expect(controls).toEqual([
+      'Decrease pick quantity: Coke at Drinks',
+      'Pick quantity: Coke at Drinks',
+      'Increase pick quantity: Coke at Drinks',
+      'pick-cell-checkbox'
+    ]);
+    expect(quantityBox(host, 'Coke', 'Drinks').getAttribute('inputmode')).toBe('numeric');
+    // No pencil, confirm or cancel survives the redesign.
+    expect(host.querySelector('[data-testid="pick-cell-editor"]')).toBeNull();
+    expect(host.querySelector('button[aria-label^="Edit pick quantity"]')).toBeNull();
+    expect(host.querySelector('button[aria-label^="Confirm pick quantity"]')).toBeNull();
   });
 
-  it('Escape abandons an edit, and a malformed value is refused with an accessible inline message', async () => {
+  it('typing a quantity updates the plan with no confirm click, showing the suggestion beside it', async () => {
     const { fixture, host } = await render();
-    host.querySelector<HTMLButtonElement>('button[aria-label="Edit pick quantity: Coke at Drinks"]')!.click();
+
+    typeInto(fixture, quantityBox(host, 'Coke', 'Drinks'), '6');
+
+    const cell = quantityBox(host, 'Coke', 'Drinks').closest('[data-testid="pick-cell"]')!;
+    expect(cell.querySelector('[data-testid="pick-cell-suggested"]')?.textContent?.trim()).toBe('Suggested: 4');
+    expect(cell.textContent).toContain('Current: 6 / Target: 10');
+    expect(host.querySelector('[data-testid="pick-list-total-units"]')?.textContent).toContain('14 units');
+
+    typeInto(fixture, quantityBox(host, 'Coke', 'Drinks'), '4');
+    expect(host.querySelector('[data-testid="pick-cell-suggested"]')).toBeNull();
+  });
+
+  it('the steppers adjust by one and stop at zero', async () => {
+    const { fixture, host } = await render();
+    const minus = host.querySelector<HTMLButtonElement>('button[aria-label="Decrease pick quantity: Coke at Drinks"]')!;
+    const plus = host.querySelector<HTMLButtonElement>('button[aria-label="Increase pick quantity: Coke at Drinks"]')!;
+
+    plus.click();
     fixture.detectChanges();
-    const input = host.querySelector<HTMLInputElement>('input[aria-label="Pick quantity: Coke at Drinks"]')!;
-    input.value = '2.5';
-    input.dispatchEvent(new Event('input'));
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
-    fixture.detectChanges();
+    expect(quantityBox(host, 'Coke', 'Drinks').value).toBe('5');
+
+    for (let i = 0; i < 5; i++) {
+      minus.click();
+      fixture.detectChanges();
+    }
+    expect(quantityBox(host, 'Coke', 'Drinks').value).toBe('0');
+    expect(minus.disabled).toBe(true);
+  });
+
+  it('refuses text the plan cannot use with an accessible message, names the quantity still used, and locks the cell', async () => {
+    const { fixture, host } = await render();
+    const input = quantityBox(host, 'Coke', 'Drinks');
+
+    typeInto(fixture, input, '2.5');
 
     const error = host.querySelector('[data-testid="pick-cell-error"]')!;
     expect(error.getAttribute('role')).toBe('alert');
+    expect(error.textContent).toContain(PICK_QUANTITY_INVALID_MESSAGE);
+    expect(error.textContent).toContain('Using 4');
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(input.getAttribute('aria-describedby')).toBe(error.id);
+    expect(input.value).toBe('2.5');
+    // Neither stepper nor the completion checkbox may act on a cell the plan cannot read.
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Decrease pick quantity: Coke at Drinks"]')!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Increase pick quantity: Coke at Drinks"]')!.disabled).toBe(true);
+    const checkbox = input.closest('[data-testid="pick-cell"]')!.querySelector<HTMLInputElement>('[data-testid="pick-cell-checkbox"]')!;
+    expect(checkbox.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="pick-list-total-units"]')?.textContent).toContain('12 units');
 
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    typeInto(fixture, input, '3');
+    expect(host.querySelector('[data-testid="pick-cell-error"]')).toBeNull();
+    expect(host.querySelector('[data-testid="pick-list-total-units"]')?.textContent).toContain('11 units');
+  });
+
+  it('never leaves an invalid cell looking complete', async () => {
+    const { fixture, host } = await render();
+    const input = quantityBox(host, 'Coke', 'Drinks');
+    const checkbox = input.closest('[data-testid="pick-cell"]')!.querySelector<HTMLInputElement>('[data-testid="pick-cell-checkbox"]')!;
+    checkbox.click();
     fixture.detectChanges();
-    expect(host.querySelector('[data-testid="pick-cell-editor"]')).toBeNull();
-    expect(host.textContent).toContain('Pick 4');
+    expect(checkbox.checked).toBe(true);
+
+    typeInto(fixture, input, '');
+
+    expect(input.closest('[data-testid="pick-cell"]')!.querySelector<HTMLInputElement>('[data-testid="pick-cell-checkbox"]')!.checked).toBe(false);
+    expect(host.querySelector('[data-testid="pick-list-progress-count"]')?.textContent).toBe('0 of 3 picks completed');
   });
 
   it('shows the whole-run summary and the shortage, and Refresh is a separate action from Apply', async () => {
@@ -947,5 +1115,19 @@ describe('Plan picks rendered (issue #996)', () => {
     expect(host.querySelectorAll('[data-testid="pick-list-card"]')).toHaveLength(3);
     expect(host.querySelector('[data-testid="pick-list-mobile-summary"]')?.textContent).toContain('Whole run: 1 of 3 picks completed');
     expect(fixture.componentInstance.isPicked(1, 10)).toBe(true);
+  });
+
+  it('offers the identical minus, box, plus and checkbox on a phone card, with Current/Target beneath', async () => {
+    const { fixture, host } = await render(true);
+    const card = host.querySelector('[data-testid="pick-list-card"]')!;
+
+    expect(card.querySelector<HTMLInputElement>('input[aria-label="Pick quantity: Coke at Drinks"]')!.value).toBe('4');
+
+    card.querySelector<HTMLButtonElement>('button[aria-label="Increase pick quantity: Coke at Drinks"]')!.click();
+    fixture.detectChanges();
+
+    expect(card.querySelector<HTMLInputElement>('input[aria-label="Pick quantity: Coke at Drinks"]')!.value).toBe('5');
+    expect(card.querySelector('[data-testid="pick-cell-checkbox"]')).not.toBeNull();
+    expect(card.textContent).toContain('Current: 6 / Target: 10');
   });
 });

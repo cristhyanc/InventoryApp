@@ -2720,26 +2720,39 @@ Nayax call changed; everything below happens in the browser.
   rows stay in place while the table scrolls, the machine columns are grouped under their site's name
   when your machines have sites (two sites with the same name still get a header each), and a "Scroll sideways" hint appears once the run has more than two
   machines. The MDB code is a sortable column of its own instead of being repeated in every cell.
-- **Each suggested pick can be adjusted.** The pencil on a cell opens its quantity: type a whole number of 0
-  or more (Enter or Confirm keeps it, Escape or Cancel leaves it as it was). An adjusted cell shows
-  "Suggested: N" with **Use suggested** to go back. **0 means skip that machine** for this product;
-  a skipped cell has no checkbox. The adjustment lives only in this browser tab: it is never saved,
-  never sent to Nayax and never changes stock.
-- **Tick each pick as you take it.** Every cell with something to pick has its own checkbox,
-  separate from the pencil, and changing a quantity clears that cell's tick because it is a different
-  pick now. The summary says "12 of 20 picks completed", the units still to pick, and how many
-  products the planned run needs more of than storage holds ("Storage short by N" on the row).
+- **Each suggested pick is adjusted where it sits (issue #1008).** Every cell you can change shows
+  **− | quantity box | +** with the tick box still on its right, the same on a desktop and on a
+  phone. The box starts on the suggested quantity (or on your own adjustment if you already made
+  one); − and + move it by one and stop at 0 and at the largest quantity the list supports. You can
+  also type straight into it — phones offer the number keypad. There is no pencil, no Confirm and no
+  Cancel: as soon as the box reads a whole number of 0 or more, the totals, shortages and progress
+  follow it. An adjusted cell shows "Suggested: N" with **Use suggested** to go back, and the label
+  disappears once it matches the suggestion again. **0 means skip that machine** for this product; a
+  skipped cell has no tick box but keeps its box, so you can change your mind. The adjustment lives
+  only in this browser tab: it is never saved, never sent to Nayax and never changes stock.
+- **A quantity the list cannot use is never guessed at.** A negative, fractional, non-numeric or
+  too-large entry is refused whole — never cut down to the part that happens to be a number — and an
+  empty box means "not filled in yet", not 0. The cell keeps exactly what you typed, says what is
+  wrong and which quantity the run is still counting ("Using 4 until this is fixed."), and until you
+  fix it its − and + and its tick box are switched off, so a cell you are still correcting can never
+  look done. Fixing the box takes effect at once.
+- **Tick each pick as you take it.** Every cell with something to pick has its own tick box, separate
+  from the quantity controls, and changing the quantity clears that cell's tick because it is a
+  different pick now (a tick survives re-entering the same number). The summary says "12 of 20 picks
+  completed", the units still to pick, and how many products the planned run needs more of than
+  storage holds ("Storage short by N" on the row).
 - **Filters keep your work.** Search (by name or MDB), Category, **Only remaining** and **Only
-  shortages**, sorting and focusing on one machine never discard an adjustment or a tick. Products and
+  shortages**, sorting, switching to Record refill and back, and focusing on one machine never discard
+  an adjustment, a tick or a half-typed quantity. Products and
   Machines are applied with **Apply**; each selected machine is a chip you can remove.
 - **Discarding is always asked first.** **Refresh** (or **Retry** after a failed read) re-reads
   exactly the same selection from Nayax and **Reset** clears it; if you have adjusted or ticked
-  anything, or typed a quantity you have not yet confirmed, both ask before throwing it away, and so does removing a machine whose cells you changed.
+  anything, or left a box holding something that is not yet a usable quantity, both ask before throwing it away, and so does removing a machine whose cells you changed.
   Cancel changes nothing. The time of the snapshot you are looking at is shown beside Refresh, and an
   answer to an earlier, superseded request is ignored rather than replacing a newer one.
 - **On a phone** the matrix becomes one card per product with the machine picks inside it, a
-  machine strip to focus on one stop, larger +/− steppers in the editor, and the progress summary
-  kept above the bottom bar.
+  machine strip to focus on one stop, the same − | box | + controls and tick box, Current/Target
+  under them, and the progress summary kept above the bottom bar.
 
 **Record refill**
 
@@ -2757,8 +2770,8 @@ Nayax call changed; everything below happens in the browser.
   save** resends exactly the same refill under the same idempotency key and the entries stay locked
   until it is answered (see above).
 - **Leaving is guarded.** Navigating away from the Pick List, or closing or reloading the tab, while
-  Plan picks has adjustments or ticks, Record refill has entered quantities, or a save is outstanding
-  or unconfirmed asks you to confirm first.
+  Plan picks has adjustments, ticks or a box still being corrected, Record refill has entered
+  quantities, or a save is outstanding or unconfirmed asks you to confirm first.
 - **On a phone** Record refill also uses cards, with a machine strip, steppers and the totals and
   record button kept above the bottom bar.
 

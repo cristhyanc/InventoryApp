@@ -20,6 +20,7 @@ import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortCol
 import { ManualPickListCatalogueState, ManualPickListComponent } from './manual-pick-list.component';
 import { refillCellKey } from './pick-list-refill-errors';
 import {
+  MAXIMUM_PICK_QUANTITY,
   parsePickQuantity,
   picksCompletedLabel,
   planCellKey,
@@ -55,7 +56,6 @@ export const UNSAVED_WORK_LEAVE_WARNING = 'You have unsaved Pick List work. Leav
 export const UNRESOLVED_SAVE_LEAVE_WARNING =
   "A refill save could not be confirmed. If you leave, its retry is lost and you will not be able to safely resend it. Leave anyway?";
 
-/** The planning state of the one cell being edited: its key, the raw text in its box, and that text's error. */
 /** One run of matrix columns under a shared site header; `siteId` is the grouping key, `siteName` only its label. */
 export interface ColumnGroup {
   siteId: number | null;
@@ -63,12 +63,14 @@ export interface ColumnGroup {
   machineIds: number[];
 }
 
-interface PickEdit {
-  readonly key: string;
-  /** The committed quantity the editor opened with, as text; the edit is unsaved work only once `value` differs from it. */
-  readonly initial: string;
-  value: string;
-  error: string | null;
+/**
+ * What one cell's always-visible quantity box holds while it is not a quantity the plan can use
+ * (issue #1008): the operator's text exactly as typed, never truncated or coerced, and the message
+ * refusing it. The cell's last valid effective quantity goes on carrying every total meanwhile.
+ */
+interface InvalidPickQuantity {
+  readonly text: string;
+  readonly error: string;
 }
 
 /** Below this width the page shows product cards with machine focus instead of the matrix. */
@@ -82,11 +84,18 @@ const COMPACT_LAYOUT_QUERY = '(max-width: 767px)';
  * staged in the toolbar's dropdowns and only takes effect on "Apply"; a separate **Refresh** reads a
  * new snapshot for the machines already applied, even when nothing changed, and is also the Retry
  * after a failed read. Planning is entirely frontend, in-memory state and never calls a mutation
- * endpoint: an operator may **edit a suggested pick quantity** - an override kept beside the
+ * endpoint: an operator may **adjust a suggested pick quantity** - an override kept beside the
  * original suggestion, never a change to stock or to a target - and **check a pick off**.
- * Committing a changed quantity clears that cell's checkmark, and a committed `0` is a deliberate
+ *
+ * **Since issue #1008 every editable cell carries its own always-visible box between a minus and a
+ * plus button**, with the completion checkbox still at its right: there is no edit mode, no pencil
+ * and no confirm step. Each keystroke that reads as a nonnegative whole number the pick list can
+ * represent is the new override at once; text that does not ({@link invalidQuantities}) is kept
+ * exactly as typed as pending work, refused with an inline message, and leaves the cell's last
+ * valid quantity carrying the totals while that cell can neither be stepped nor completed. A
+ * changed effective quantity clears that cell's checkmark, and `0` is a deliberate
  * skip that no longer counts as a pick. Totals, storage shortages and progress are computed from
- * the committed quantities with the backend projection's own formulas (`total = Σ picks`,
+ * the effective quantities with the backend projection's own formulas (`total = Σ picks`,
  * `shortage = max(0, total - storage)`), so with no override they equal the backend's figures.
  * Filtering, sorting and switching the focused machine on a phone never touch that state; a new
  * snapshot (Refresh, or an Apply that adds machines), Reset and removing a machine discard it, and
@@ -171,14 +180,18 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   /** Whether the page is showing its phone layout (cards and machine focus) rather than the matrix. */
   compactLayout = false;
 
-  /** Committed planning overrides, keyed by {@link planCellKey}. A cell without one picks its suggestion. Never persisted. */
+  /** Planning overrides, keyed by {@link planCellKey}. A cell without one picks its suggestion. Never persisted. */
   private readonly overrides = new Map<string, number>();
 
   /** Checked-off picks, keyed by {@link planCellKey}. Never persisted. */
   private readonly pickedCells = new Set<string>();
 
-  /** The one cell whose quantity is being edited, if any. */
-  edit: PickEdit | null = null;
+  /**
+   * The cells whose box holds text the plan cannot use, keyed by {@link planCellKey}. Unsaved work
+   * exactly as an override is: filtering, sorting, a mode switch and a changed machine focus all
+   * leave it alone, and only the confirmed discards clear it. Never persisted.
+   */
+  private readonly invalidQuantities = new Map<string, InvalidPickQuantity>();
 
   /** Client-side only: until a header is clicked, rows stay in the backend's default order. */
   sortColumn: PickListSortColumn | null = null;
@@ -570,12 +583,12 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     return cell !== undefined && cell.quantityToPick > 0;
   }
 
-  /** The quantity the plan picks for a cell: its committed override, else the suggestion. */
+  /** The quantity the plan picks for a cell: its override, else the suggestion. */
   plannedQuantity(productId: number, cell: PickListMachineQuantity): number {
     return this.overrides.get(planCellKey(productId, cell.machineId)) ?? cell.quantityToPick;
   }
 
-  /** Whether a cell's committed quantity differs from its suggestion. */
+  /** Whether a cell's effective quantity differs from its suggestion. */
   isOverridden(productId: number, machineId: number): boolean {
     return this.overrides.has(planCellKey(productId, machineId));
   }
@@ -585,12 +598,13 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   }
 
   /**
-   * Toggles a pick's checkmark. Only a suggested cell whose committed quantity is above zero is a
-   * pick; a zero-suggestion cell and a committed skip never toggle.
+   * Toggles a pick's checkmark. Only a suggested cell whose effective quantity is above zero and
+   * whose box the plan can read is a pick; a zero-suggestion cell, a skip and a cell holding text
+   * the plan cannot use never toggle, so an unreadable cell can never be left looking complete.
    */
   togglePicked(product: PickListProduct, machineId: number): void {
     const cell = this.cellFor(product, machineId);
-    if (!this.isSuggestedPick(cell) || this.plannedQuantity(product.productId, cell) <= 0) {
+    if (!this.isSuggestedPick(cell) || !this.canComplete(product.productId, cell)) {
       return;
     }
     const key = planCellKey(product.productId, machineId);
@@ -601,84 +615,88 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     }
   }
 
-  /** Opens a suggested cell's quantity for editing, starting from its committed quantity. */
-  startEdit(product: PickListProduct, machineId: number): void {
+  /** Whether a cell may be checked off right now: it plans a positive pick and its box is readable. */
+  canComplete(productId: number, cell: PickListMachineQuantity): boolean {
+    return !this.hasInvalidQuantity(productId, cell.machineId) && this.plannedQuantity(productId, cell) > 0;
+  }
+
+  /** The text one cell's box shows: its pending unusable text, else its effective quantity. */
+  quantityInputValue(productId: number, cell: PickListMachineQuantity): string {
+    return this.invalidQuantities.get(planCellKey(productId, cell.machineId))?.text ?? String(this.plannedQuantity(productId, cell));
+  }
+
+  /** The message refusing a cell's pending text, or `null` while its box holds a usable quantity. */
+  quantityError(productId: number, machineId: number): string | null {
+    return this.invalidQuantities.get(planCellKey(productId, machineId))?.error ?? null;
+  }
+
+  hasInvalidQuantity(productId: number, machineId: number): boolean {
+    return this.invalidQuantities.has(planCellKey(productId, machineId));
+  }
+
+  /**
+   * Takes every keystroke in a cell's box. The complete text is validated rather than truncated or
+   * coerced: a nonnegative whole number the pick list can represent becomes the override
+   * immediately - no confirm click, no blur - and anything else, a blank box included, is held as
+   * typed with its message. Either way text that differs from the cell's last valid quantity
+   * clears its checkmark, because it is no longer the pick that was checked off.
+   */
+  onQuantityInput(product: PickListProduct, machineId: number, raw: string): void {
     const cell = this.cellFor(product, machineId);
     if (!this.isSuggestedPick(cell)) {
       return;
     }
     const key = planCellKey(product.productId, machineId);
-    const initial = String(this.plannedQuantity(product.productId, cell));
-    this.edit = { key, initial, value: initial, error: null };
-    setTimeout(() => {
-      const input = document.getElementById(this.editInputId(product.productId, machineId)) as HTMLInputElement | null;
-      input?.focus();
-      input?.select();
-    });
-  }
-
-  isEditing(productId: number, machineId: number): boolean {
-    return this.edit?.key === planCellKey(productId, machineId);
-  }
-
-  onEditInput(value: string): void {
-    if (this.edit) {
-      this.edit.value = value;
-      this.edit.error = null;
-    }
-  }
-
-  /** Steps the quantity being edited by one, never below zero; malformed text is left for the operator to fix. */
-  stepEdit(delta: number): void {
-    if (!this.edit) {
-      return;
-    }
-    const parsed = parsePickQuantity(this.edit.value);
+    const parsed = parsePickQuantity(raw);
     if ('error' in parsed) {
-      this.edit.error = parsed.error;
+      this.invalidQuantities.set(key, { text: raw, error: parsed.error });
+      this.pickedCells.delete(key);
       return;
     }
-    this.onEditInput(String(Math.max(0, parsed.quantity + delta)));
+    this.invalidQuantities.delete(key);
+    this.setPlannedQuantity(product.productId, cell, parsed.quantity);
   }
 
   /**
-   * Commits the quantity being edited, or keeps the box open with an inline message when it is not
-   * a nonnegative whole number the pick list can represent. A committed value equal to the
-   * suggestion drops the override; a changed quantity clears the cell's checkmark.
+   * Steps a cell's quantity by exactly one from its effective quantity, within zero and the largest
+   * quantity the pick list can represent. A cell whose box the plan cannot read is left for the
+   * operator to correct, which is also why both of its buttons are disabled.
    */
-  commitEdit(product: PickListProduct, machineId: number): void {
+  stepQuantity(product: PickListProduct, machineId: number, delta: number): void {
     const cell = this.cellFor(product, machineId);
-    if (!this.edit || !this.isEditing(product.productId, machineId) || !this.isSuggestedPick(cell)) {
+    if (!this.isSuggestedPick(cell) || this.hasInvalidQuantity(product.productId, machineId)) {
       return;
     }
-    const parsed = parsePickQuantity(this.edit.value);
-    if ('error' in parsed) {
-      this.edit.error = parsed.error;
+    const stepped = this.plannedQuantity(product.productId, cell) + delta;
+    if (stepped < 0 || stepped > MAXIMUM_PICK_QUANTITY) {
       return;
     }
-    this.setPlannedQuantity(product.productId, cell, parsed.quantity);
-    this.edit = null;
+    this.setPlannedQuantity(product.productId, cell, stepped);
   }
 
-  /** Abandons the edit; the committed quantity is exactly what it was. */
-  cancelEdit(): void {
-    this.edit = null;
+  canDecreaseQuantity(productId: number, cell: PickListMachineQuantity): boolean {
+    return !this.hasInvalidQuantity(productId, cell.machineId) && this.plannedQuantity(productId, cell) > 0;
   }
 
-  /** Puts a cell back on its suggestion. */
+  canIncreaseQuantity(productId: number, cell: PickListMachineQuantity): boolean {
+    return !this.hasInvalidQuantity(productId, cell.machineId) && this.plannedQuantity(productId, cell) < MAXIMUM_PICK_QUANTITY;
+  }
+
+  /** Puts a cell back on its suggestion, discarding any pending text its box holds. */
   useSuggestion(product: PickListProduct, machineId: number): void {
     const cell = this.cellFor(product, machineId);
     if (this.isSuggestedPick(cell)) {
+      this.invalidQuantities.delete(planCellKey(product.productId, machineId));
       this.setPlannedQuantity(product.productId, cell, cell.quantityToPick);
     }
   }
 
-  editInputId(productId: number, machineId: number): string {
-    return `plan-pick-edit-${productId}-${machineId}`;
+  quantityInputId(productId: number, machineId: number): string {
+    return `plan-pick-qty-${productId}-${machineId}`;
   }
 
-  editErrorId(productId: number, machineId: number): string {
-    return `plan-pick-edit-error-${productId}-${machineId}`;
+  quantityErrorId(productId: number, machineId: number): string {
+    return `plan-pick-qty-error-${productId}-${machineId}`;
   }
 
   /** The units the plan takes from storage for one product, across every applied machine. */
@@ -698,7 +716,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
     return this.runProducts().reduce((sum, p) => sum + this.productPlannedTotal(p), 0);
   }
 
-  /** The whole applied run's picks: suggested cells whose committed quantity is above zero. A skip is not a pick. */
+  /** The whole applied run's picks: suggested cells whose effective quantity is above zero. A skip is not a pick. */
   actionableCellCount(): number {
     return this.actionableCells(this.runProducts()).length;
   }
@@ -746,16 +764,12 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   }
 
   /**
-   * Whether the plan holds anything an operator would mind losing: an edited quantity, a checked
-   * pick, or an open quantity editor whose text was changed but not yet committed.
+   * Whether the plan holds anything an operator would mind losing: an adjusted quantity, a checked
+   * pick, or a box still holding text the plan cannot use, which is work in progress exactly as the
+   * other two are.
    */
   hasPlanningWork(): boolean {
-    return this.overrides.size > 0 || this.pickedCells.size > 0 || this.editIsDirty();
-  }
-
-  /** Whether the open quantity editor holds text other than the quantity it opened with; an untouched editor loses nothing. */
-  editIsDirty(): boolean {
-    return this.edit !== null && this.edit.value.trim() !== this.edit.initial;
+    return this.overrides.size > 0 || this.pickedCells.size > 0 || this.invalidQuantities.size > 0;
   }
 
   /** The departure warning that applies right now, or `null` when leaving loses nothing. */
@@ -843,8 +857,9 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   }
 
   private machineHasPlanningWork(machineId: number): boolean {
-    const dirtyEditKeys = this.edit && this.editIsDirty() ? [this.edit.key] : [];
-    return [...this.overrides.keys(), ...this.pickedCells, ...dirtyEditKeys].some((key) => planCellMachineId(key) === machineId);
+    return [...this.overrides.keys(), ...this.pickedCells, ...this.invalidQuantities.keys()].some(
+      (key) => planCellMachineId(key) === machineId
+    );
   }
 
   /**
@@ -863,8 +878,10 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
         this.pickedCells.delete(key);
       }
     }
-    if (this.edit && machineIds.includes(planCellMachineId(this.edit.key))) {
-      this.edit = null;
+    for (const key of this.invalidQuantities.keys()) {
+      if (machineIds.includes(planCellMachineId(key))) {
+        this.invalidQuantities.delete(key);
+      }
     }
     if (this.appliedMachineIds.length === 0) {
       this.clearSnapshot();
@@ -877,7 +894,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   private discardPlanningWork(): void {
     this.overrides.clear();
     this.pickedCells.clear();
-    this.edit = null;
+    this.invalidQuantities.clear();
   }
 
   /** Empties the plan and supersedes any read still in flight, so it cannot bring the plan back. */
