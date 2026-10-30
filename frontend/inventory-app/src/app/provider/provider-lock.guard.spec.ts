@@ -194,12 +194,15 @@ describe('requireProvider on the reports over stored provider records (issue #86
     'reports/products'
   ];
 
-  /** The provider guard the route declares, which is the fourth and last of its `canActivate`. */
+  /**
+   * The provider guard the route declares, which is the last of its `canActivate` - the fifth
+   * since issue #979 added `requirePlan` before it.
+   */
   function declaredProviderGuard(path: string): CanActivateFn {
     const declared = routes.find((candidate) => candidate.path === path)?.canActivate ?? [];
 
-    expect(declared).toHaveLength(4);
-    return declared[3] as CanActivateFn;
+    expect(declared).toHaveLength(5);
+    return declared[4] as CanActivateFn;
   }
 
   async function openReport(
@@ -284,19 +287,24 @@ describe('requireProvider on the reports over stored provider records (issue #86
 
   /**
    * Bookkeeping and GST carry no provider guard at all, which is what keeps a business with no
-   * Nayax connection with two reports it can still open.
+   * Nayax connection with two reports it can still open. They do carry `requirePlan` since issue
+   * #979 (`access/plan-lock.guard.spec.ts` drives that guard itself), so the length here is four
+   * rather than three.
    */
   it.each(['reports/bookkeeping', 'reports/gst'])('leaves /%s with no provider guard to run', (path) => {
-    expect(routes.find((candidate) => candidate.path === path)?.canActivate).toHaveLength(3);
+    expect(routes.find((candidate) => candidate.path === path)?.canActivate).toHaveLength(4);
   });
 
   /**
-   * The capability guard runs first, with both of the route's own guards in the order it declares
-   * them: a member without `Reports.View` reaches the access-not-allowed page, never an invitation
-   * to connect a provider they still could not use. The two guards are taken from the real route,
-   * so this is that route's declared order rather than an order this spec chose.
+   * The capability guard runs first, with all three of the route's own guards in the order it
+   * declares them: a member without `Reports.View` reaches the access-not-allowed page, never an
+   * invitation to upgrade or connect a provider they still could not use. The three guards are
+   * taken from the real route, so this is that route's declared order rather than an order this
+   * spec chose. `allowsPlanFeature` is stubbed to `true` so the plan guard itself refuses nothing -
+   * what is asserted is that the capability refusal decides the outcome before either of the
+   * guards after it could.
    */
-  it.each(REPORT_PATHS)('refuses /%s on the capability before the provider lock is consulted', async (path) => {
+  it.each(REPORT_PATHS)('refuses /%s on the capability before the plan or provider lock is consulted', async (path) => {
     const declared = routes.find((candidate) => candidate.path === path)?.canActivate ?? [];
 
     await TestBed.configureTestingModule({
@@ -308,7 +316,7 @@ describe('requireProvider on the reports over stored provider records (issue #86
           { path: PROVIDER_LOCKED_PATH, component: LockedPageComponent }
         ]),
         { provide: NayaxConnectionService, useValue: nayaxConnectionStatusDouble('NotConfigured') },
-        { provide: AccessService, useValue: { allowsAny: () => of(false) } }
+        { provide: AccessService, useValue: { allowsAny: () => of(false), allowsPlanFeature: () => of(true) } }
       ]
     }).compileComponents();
 

@@ -1,4 +1,5 @@
 import { capabilitySet } from '../access/capabilities';
+import { Entitlement } from '../access/entitlement';
 import { OptionVisibility } from '../access/option-visibility';
 import { routes } from '../app.routes';
 import { ProviderAvailability, providerFeatureAvailabilities, providerConnectionOf } from '../provider/provider-availability.service';
@@ -18,6 +19,7 @@ import {
   businessesNavLink,
   navLinks,
   navLockOf,
+  navLockSummary,
   navigationFor,
   optionSwitchedOff,
   platformDiagnosticsNavLink,
@@ -202,6 +204,7 @@ describe('primary navigation (issue #391)', () => {
       route: '/sites',
       icon: 'location_on',
       capability: 'Inventory.Operate',
+      planLockedWithout: 'SalesProviderIntegration',
       lockedWithout: 'machineFleet'
     });
     expect(machines.route).toBe('/machines');
@@ -757,7 +760,9 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   function lockOf(route: string, provider: ProviderAvailability | undefined): string {
     const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === route);
     expect(entry).toBeDefined();
-    return navLockOf(entry!, provider);
+    // An unread entitlement fails open (issue #979), which is what isolates this helper's provider
+    // answer as the only thing under test here; the plan lock has its own describe block below.
+    return navLockOf(entry!, undefined, provider);
   }
 
   /** The five reports over stored provider records, locked only by a missing connection (#868). */
@@ -934,7 +939,7 @@ describe('navigationFor with the provider answer (issue #729)', () => {
 
   it('never locks a destination that declares no live provider read', () => {
     for (const entry of navLinks(ownerNavigation()).filter((candidate) => candidate.lockedWithout === undefined)) {
-      expect(navLockOf(entry, availability('NotConfigured'))).toBe('open');
+      expect(navLockOf(entry, undefined, availability('NotConfigured'))).toBe('open');
     }
   });
 
@@ -959,7 +964,7 @@ describe('navigationFor with the provider answer (issue #729)', () => {
     ]);
 
     const locked = navLinks([group('Reports', noProvider)])
-      .filter((report) => navLockOf(report, availability('NotConfigured')) !== 'open')
+      .filter((report) => navLockOf(report, undefined, availability('NotConfigured')) !== 'open')
       .map((report) => report.route);
     expect(locked).toEqual([
       '/reports/daily',
@@ -1060,6 +1065,106 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   it('withholds the business menu entirely whatever the provider answer says', () => {
     expect(navigationFor(OWNER, false, 'withheld', availability('Ready'))).toEqual([]);
     expect(navigationFor(OWNER, false, 'withheld', availability('NotConfigured'))).toEqual([]);
+  });
+});
+
+/** An entitlement as `GET /api/me/access` reports it, for exactly the fields `navLockOf` reads. */
+function entitlement(plan: string | null, enforced = true): Entitlement {
+  return { enforced, plan, source: 'BillingSubscription', endsAtUtc: null };
+}
+
+/**
+ * The plan lock (issue #979): the order of checks is role, then plan, then Nayax connection, so a
+ * plan lock is decided before the provider answer is even consulted.
+ */
+describe('navigationFor with the entitlement answer (issue #979)', () => {
+  function lockOf(route: string, plan: Entitlement | undefined, provider?: ProviderAvailability): string {
+    const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === route);
+    expect(entry).toBeDefined();
+    return navLockOf(entry!, plan, provider);
+  }
+
+  const PLAN_LOCKED_ROUTES = [
+    '/reports/bookkeeping',
+    '/reports/gst',
+    '/reports/daily',
+    '/reports/transactions',
+    '/reports/reconciliation',
+    '/reports/machines',
+    '/reports/products',
+    '/reports/site-commissions',
+    '/sites'
+  ];
+
+  it.each(PLAN_LOCKED_ROUTES)('locks %s for a Free business, whatever the connection is', (route) => {
+    for (const provider of [availability('Ready'), availability('NotConfigured'), undefined]) {
+      expect(lockOf(route, entitlement('Free'), provider)).toBe('plan');
+    }
+  });
+
+  it('locks the Pro-only destinations for a Starter business', () => {
+    const starter = entitlement('Starter');
+    for (const route of ['/reports/daily', '/reports/site-commissions', '/sites']) {
+      expect(lockOf(route, starter)).toBe('plan');
+    }
+  });
+
+  it('opens the Starter-only reports for a Starter business', () => {
+    const starter = entitlement('Starter');
+    expect(lockOf('/reports/bookkeeping', starter)).toBe('open');
+    expect(lockOf('/reports/gst', starter)).toBe('open');
+  });
+
+  it('opens every plan-locked destination for a Pro business', () => {
+    const pro = entitlement('Pro');
+    for (const route of PLAN_LOCKED_ROUTES) {
+      expect(lockOf(route, pro)).toBe('open');
+    }
+  });
+
+  it('is never enforced while the business carries no entitlement at all (issue #966)', () => {
+    for (const route of PLAN_LOCKED_ROUTES) {
+      expect(lockOf(route, entitlement('Free', false))).toBe('open');
+    }
+  });
+
+  /**
+   * `undefined` is "not known" - nothing has been read, the read failed, or an older API did not
+   * report it - and it fails open exactly as an unread capability or provider answer does: nothing
+   * is locked until the entitlement is actually known not to include the feature.
+   */
+  it('locks nothing on the plan check while the entitlement is not known, falling through to the provider answer', () => {
+    for (const route of PLAN_LOCKED_ROUTES) {
+      // A usable connection with nothing refused, so what is asserted is purely that the unread
+      // entitlement itself locked nothing - a provider-locked route's own answer is covered by the
+      // provider describe block above.
+      expect(lockOf(route, undefined, availability('Ready'))).toBe('open');
+    }
+  });
+
+  /**
+   * The ordering criterion itself: a Free business sees the plan lock even on a usable connection -
+   * reconnecting Nayax would not open the page, upgrading would - and a Pro business with no
+   * connection falls through to today's provider lock, which asks for the thing that actually opens
+   * it for a business that has already bought the feature.
+   */
+  it('checks the plan before the provider, so a Free business is never told to connect Nayax', () => {
+    expect(lockOf('/sites', entitlement('Free'), availability('Ready'))).toBe('plan');
+    expect(lockOf('/sites', entitlement('Pro'), availability('NotConfigured'))).toBe('connect');
+  });
+
+  it("names the destination and the plan it needs in the lock's own sentence", () => {
+    const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === '/sites')!;
+    expect(navLockSummary('plan', entry)).toBe('Sites needs the Pro plan.');
+
+    const bookkeeping = navLinks(ownerNavigation()).find((candidate) => candidate.route === '/reports/bookkeeping')!;
+    expect(navLockSummary('plan', bookkeeping)).toBe('Bookkeeping needs the Starter plan.');
+  });
+
+  it('never locks a destination that declares no plan feature', () => {
+    for (const entry of navLinks(ownerNavigation()).filter((candidate) => candidate.planLockedWithout === undefined)) {
+      expect(navLockOf(entry, entitlement('Free'), undefined)).toBe('open');
+    }
   });
 });
 

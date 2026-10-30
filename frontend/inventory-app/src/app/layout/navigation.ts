@@ -1,9 +1,12 @@
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { Capability, CapabilitySet } from '../access/capabilities';
+import { Entitlement } from '../access/entitlement';
 import { OptionVisibility } from '../access/option-visibility';
+import { PlanFeature } from '../access/plan-feature';
+import { planLockOf, planLockSummary } from '../access/plan-lock';
 import { ProviderAvailability } from '../provider/provider-availability.service';
 import { ProviderFeature } from '../provider/provider-feature-permissions';
-import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/provider-lock';
+import { ProviderLock, providerLockOf, providerLockSummary, providerToolsOffered } from '../provider/provider-lock';
 
 /**
  * The application shell's primary navigation (issue #391, parent #383).
@@ -97,6 +100,16 @@ export interface NavLink {
    * a locked entry would offer a tool for data that does not exist.
    */
   readonly hiddenWithoutProvider?: boolean;
+
+  /**
+   * The plan feature this destination's page needs (issue #979), in the same shape
+   * {@link lockedWithout} declares a Nayax dependency. While the business's entitlement does not
+   * include it the entry is shown **locked**, exactly as a provider-locked one is, and its route
+   * redirects to the "needs a plan" page instead of the "needs a provider" one - checked **first**,
+   * because a business that has not bought the feature is told to upgrade rather than to connect a
+   * Nayax account upgrading would make usable anyway.
+   */
+  readonly planLockedWithout?: PlanFeature;
 }
 
 /**
@@ -179,12 +192,28 @@ function providerToolLink(label: string, route: string, capability: Capability):
 }
 
 /**
- * A report over sales this business recorded through Nayax (issue #868). It makes no live read, so
- * it declares `providerRecords`: it is locked only while the business has no Nayax connection at
- * all, and stays open for credentials that stopped working or a read Nayax refused.
+ * A report over sales this business recorded through Nayax (issue #868), and the `Pro` plan feature
+ * every one of them is since issue #967 (`PlanFeature.ProviderSalesReports`): each is a reading of
+ * the provider's sales, so the plan that includes the provider is the plan that includes them
+ * (issue #979). The plan is checked first - a business without the plan is told to upgrade rather
+ * than to connect a Nayax account upgrading would make usable anyway - and the provider dependency
+ * is unchanged: `providerRecords` locks the report only while the business has no Nayax connection
+ * at all, and leaves it open for credentials that stopped working or a read Nayax refused.
  */
 function providerRecordsReportLink(label: string, route: string): NavLink {
-  return { ...link(label, route, 'Reports.View'), lockedWithout: 'providerRecords' };
+  return {
+    ...link(label, route, 'Reports.View'),
+    planLockedWithout: 'ProviderSalesReports',
+    lockedWithout: 'providerRecords'
+  };
+}
+
+/**
+ * A report that needs no sales provider at all - Bookkeeping and the GST accounting aid - but does
+ * need the `Starter` plan since issue #967 (`PlanFeature.BookkeepingAndGstReports`, issue #979).
+ */
+function planOnlyReportLink(label: string, route: string): NavLink {
+  return { ...link(label, route, 'Reports.View'), planLockedWithout: 'BookkeepingAndGstReports' };
 }
 
 /**
@@ -239,12 +268,16 @@ export const primaryNavigation: readonly NavItem[] = [
     // A site is known only from the live fleet read's `CustomerID`, so the site list needs that
     // read and has nothing local to fall back on (AGENTS.md § Site commissions). Manual sites are
     // deliberately out of scope of issue #740. It sits immediately above Machines since issue #868,
-    // which removed the "Needs Nayax" section it used to be the first entry of.
+    // which removed the "Needs Nayax" section it used to be the first entry of. Since issue #979 it
+    // also needs the `Pro` plan (`PlanFeature.SalesProviderIntegration`), checked first: a business
+    // without that plan is told to upgrade rather than to connect a Nayax account upgrading would
+    // make usable anyway.
     kind: 'link',
     label: 'Sites',
     route: '/sites',
     icon: 'location_on',
     capability: 'Inventory.Operate',
+    planLockedWithout: 'SalesProviderIntegration',
     lockedWithout: 'machineFleet'
   },
   {
@@ -295,12 +328,14 @@ export const primaryNavigation: readonly NavItem[] = [
     // provider is declared on the entry: Bookkeeping and GST need nothing, the five
     // `providerRecordsReportLink` entries need a Nayax connection to exist at all, and Site
     // Commissions needs the live fleet read. Each one still reports its own availability states
-    // inside the page (#730, #731).
+    // inside the page (#730, #731). Since issue #979 every report also declares the plan feature its
+    // own endpoint requires (`[RequirePlan]` on `ReportsController`), checked before the provider
+    // dependency above: Bookkeeping and GST need `Starter`, and the rest need `Pro`.
     kind: 'group',
     label: 'Reports',
     icon: 'bar_chart',
     children: [
-      link('Bookkeeping', '/reports/bookkeeping', 'Reports.View'),
+      planOnlyReportLink('Bookkeeping', '/reports/bookkeeping'),
       providerRecordsReportLink('Daily', '/reports/daily'),
       providerRecordsReportLink('Transactions', '/reports/transactions'),
       providerRecordsReportLink('Reconciliation', '/reports/reconciliation'),
@@ -311,14 +346,16 @@ export const primaryNavigation: readonly NavItem[] = [
         // no sites to report on and the API answers `isAvailable: false` (issue #731), so it keeps
         // the live fleet read it has always declared. The API puts it on SiteCommissions.Manage
         // rather than Reports.View, because it is the surface the agreements are maintained from
-        // (issue #526); its breadcrumb has always named Reports as its parent page.
+        // (issue #526); its breadcrumb has always named Reports as its parent page. Since issue #979
+        // it also needs the `Pro` plan (`PlanFeature.SiteCommissions`), checked first.
         kind: 'link',
         label: 'Site Commissions',
         route: '/reports/site-commissions',
         capability: 'SiteCommissions.Manage',
+        planLockedWithout: 'SiteCommissions',
         lockedWithout: 'machineFleet'
       },
-      link('GST', '/reports/gst', 'Reports.View')
+      planOnlyReportLink('GST', '/reports/gst')
     ]
   },
   section('Settings'),
@@ -536,16 +573,44 @@ function isOccupied(items: readonly NavItem[], headingIndex: number): boolean {
   return next !== undefined && next.kind !== 'section';
 }
 
+/** What a destination's lock is right now: a provider lock, unchanged, or a plan lock (issue #979). */
+export type NavLock = ProviderLock | 'plan';
+
 /**
- * How one destination is rendered right now (issue #729): `open` unless it declares a live provider
- * read the shared answer refuses. A destination with no `lockedWithout`, and every destination while
- * that answer has not settled, is `open`.
+ * How one destination is rendered right now: `open` unless it declares a plan feature the
+ * business's entitlement does not include, or a live provider read the shared answer refuses.
+ *
+ * **Plan is checked first** (issue #979's criterion that the order of checks is role, then plan,
+ * then Nayax connection - the capability check already happened in `navigationFor`, before this
+ * destination was even offered): a business whose plan does not include the feature is shown the
+ * plan lock whatever the provider answer is, because upgrading is what would actually open the
+ * page - a Nayax connection it does not yet need would not. A destination with no `planLockedWithout`,
+ * and every destination while the entitlement has not settled, is unaffected by this first check.
+ *
+ * Only once the plan allows it does the provider dependency matter, exactly as it always has: a
+ * destination with no `lockedWithout`, and every destination while that answer has not settled, is
+ * `open`.
  */
-export function navLockOf(navLink: NavLink, provider: ProviderAvailability | undefined): ProviderLock {
+export function navLockOf(
+  navLink: NavLink,
+  entitlement: Entitlement | undefined,
+  provider: ProviderAvailability | undefined
+): NavLock {
+  if (navLink.planLockedWithout !== undefined && planLockOf(entitlement, navLink.planLockedWithout) === 'locked') {
+    return 'plan';
+  }
   if (navLink.lockedWithout === undefined || provider === undefined) {
     return 'open';
   }
   return providerLockOf(provider.features[navLink.lockedWithout]);
+}
+
+/** The one sentence a locked entry carries - a plan lock's own wording, or the provider lock's. */
+export function navLockSummary(lock: NavLock, navLink: NavLink): string {
+  if (lock === 'plan') {
+    return navLink.planLockedWithout === undefined ? '' : planLockSummary(navLink.planLockedWithout, navLink.label);
+  }
+  return providerLockSummary(lock, navLink.label);
 }
 
 /** Every real destination in the navigation, top-level links first, then each group's children. */

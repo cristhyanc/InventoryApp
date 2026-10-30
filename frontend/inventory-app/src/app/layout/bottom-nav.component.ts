@@ -3,11 +3,11 @@ import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { BehaviorSubject, Subject, catchError, combineLatest, distinctUntilChanged, filter, of, startWith, switchMap, takeUntil } from 'rxjs';
 import { AccessService } from '../access/access.service';
 import { BusinessNavigationVisibility } from '../access/business-navigation';
+import { Entitlement } from '../access/entitlement';
 import { IconComponent } from '../components/shared/icon.component';
 import { ProviderAvailability, ProviderAvailabilityService } from '../provider/provider-availability.service';
-import { providerLockSummary } from '../provider/provider-lock';
-import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navLockOf, navigationFor } from './navigation';
-import { renderedCapabilities, renderedOptionVisibility } from './sidebar-nav.component';
+import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navLockOf, navLockSummary, navigationFor } from './navigation';
+import { renderedCapabilities, renderedEntitlement, renderedOptionVisibility } from './sidebar-nav.component';
 
 /** One shortcut on the bottom bar: a destination the member's own menu already offers. */
 export interface BottomNavShortcut {
@@ -109,6 +109,7 @@ export class BottomNavComponent implements OnInit, OnDestroy {
 
   private navigation: readonly NavItem[] = [];
   private provider?: ProviderAvailability;
+  private entitlement?: Entitlement;
   private activeRoute?: string;
   private activeGroup?: string;
   private readonly destroying$ = new Subject<void>();
@@ -136,6 +137,7 @@ export class BottomNavComponent implements OnInit, OnDestroy {
       .pipe(takeUntil(this.destroying$))
       .subscribe(([access, visibility, provider]) => {
         this.provider = provider;
+        this.entitlement = renderedEntitlement(access);
         this.navigation = navigationFor(
           renderedCapabilities(access),
           false,
@@ -171,7 +173,7 @@ export class BottomNavComponent implements OnInit, OnDestroy {
     if (shortcut.source.kind !== 'link') {
       return '';
     }
-    return providerLockSummary(navLockOf(shortcut.source, this.provider), shortcut.label);
+    return navLockSummary(navLockOf(shortcut.source, this.entitlement, this.provider), shortcut.source);
   }
 
   private applyActiveRoute(url: string): void {

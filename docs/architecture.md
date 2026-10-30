@@ -7176,6 +7176,189 @@ hidden in the states these reports now open in.
 `layout/breadcrumbs/breadcrumb-routes.spec.ts` covers the trails that
 did not change and the one label that did.
 
+### Plan-locked navigation (issue #979)
+
+Frontend-only, after [the backend's plan enforcement](#plan-enforcement-on-reports-and-nayax-operations-issue-967)
+and in the exact shape [Provider-locked navigation](#provider-locked-navigation-issue-729) puts the
+shared provider answer in the menu: the application says which features this business's **plan**
+does not include, before a page has to ask. No endpoint, no contract and no rule of its own - every
+answer it renders is a translation of the entitlement `GET /api/me/access` already publishes
+(issue #966), over the same `PlanFeature` vocabulary [`PlanFeaturePolicy`](#plan-enforcement-on-reports-and-nayax-operations-issue-967)
+declares. **Until enforcement is switched on, nothing here locks anything**, because
+`planFeatureAllowed` is the frontend's own copy of `PlanFeaturePolicy.Allows` and answers `true` for
+an unenforced entitlement exactly as the backend rule does.
+
+**The order of checks is role, then plan, then Nayax connection** (the issue's own criterion). Role
+is unchanged - `navigationFor` filters by capability before either lock is even consulted, and a
+route's `requireCapability` runs first - so an entry the role may not see never becomes a locked
+advertisement for either reason. **Plan is checked before the provider answer**, both in the menu
+and on the route, because a business that has not bought the sales provider is told to upgrade
+rather than to connect a Nayax account upgrading would make usable anyway: reconnecting fixes
+nothing for a Free or Starter business, only the plan does. A Pro business with no connection falls
+through the plan check unchanged and sees today's provider lock.
+
+**`access/plan-feature.ts` is the frontend's mirror of the backend vocabulary, never a second
+opinion.** It declares the same six `PlanFeature` names and the same `RequiredPlan` table
+`PlanFeaturePolicy` does, and `planFeatureAllowed(entitlement, feature)` is that policy's `Allows`
+read the same way: `undefined` (not read, a failed read, or an older API that did not report one)
+fails open, `enforced: false` offers everything, and an enforced entitlement with no plan or an
+undeclared one offers nothing that is not free. A route guard or a menu entry can therefore decide a
+lock **without sending the request the backend would refuse** - the issue's own criterion - because
+the entitlement already travelled on `GET /api/me/access`, the one read every page already triggers
+through `AccessService`.
+
+**`access/plan-lock.ts` holds nothing but pure functions**, for the reason `provider/provider-lock.ts`
+does: the menu, the route guard and the "needs a plan" page must agree about one destination from
+one entitlement. `planLockOf(entitlement, feature)` is `open` or `locked` - there is one locked state
+rather than the provider lock's two, because a plan refusal always asks for the same thing (buy the
+plan) where a provider refusal asks for one of two opposite things. `planLockSummary` and
+`planLockSentence` are the one line a locked entry carries and the sentence its page shows, naming
+the destination and the plan it needs and deliberately never offering a Connect action: buying a
+plan is not something this application does for an operator, and billing is explicitly out of scope
+of this issue.
+
+**`NavLink.planLockedWithout: PlanFeature`** is declared beside `lockedWithout` on exactly the
+destinations issue #979 names and the ones the same ordering argument extends to: every entry under
+`Reports` (Bookkeeping and GST on `BookkeepingAndGstReports`; Daily, Transactions, Reconciliation,
+the machine and product profitability reports and Site Commissions, each on the feature its own
+backend endpoint declares), and `Sites`, on `SalesProviderIntegration` - the plan every ordinary
+Nayax call needs, which is also what the machine details route needs (see below). `navLockOf`
+checks it **first**: a destination whose plan feature the entitlement does not include renders
+`'plan'` whatever the provider answer is, and only once the plan allows it does the existing
+`lockedWithout` check run. `navLockSummary` is the combined sentence - `planLockSummary` for a
+`'plan'` lock, `providerLockSummary` for everything else - so the sidebar and the bottom bar changed
+one call each rather than growing a second lock-rendering path.
+
+**Route guards carry `requirePlan(feature)` immediately before any `requireProvider` on the same
+route**, after `requireCapability`: `/sites`, `/sites/:id/products` and `/machines/:id` (every panel
+on the machine details page is a Nayax read, so it needs the same `SalesProviderIntegration` plan
+`/sites` does) carry it before `requireProvider('machineFleet')`; `/reports/daily`,
+`/reports/transactions`, `/reports/reconciliation`, `/reports/machines` and `/reports/products`
+carry `requirePlan('ProviderSalesReports')` before `requireProvider('providerRecords')`;
+`/reports/site-commissions` carries `requirePlan('SiteCommissions')` before
+`requireProvider('machineFleet')`; and `/reports/bookkeeping` and `/reports/gst` carry
+`requirePlan('BookkeepingAndGstReports')` with no provider guard, exactly as they carry no
+`lockedWithout` either. `access/plan-lock.guard.ts`'s `requirePlan` is `requireCapability`'s own
+shape: it reads `AccessService.allowsPlanFeature(feature)`, which waits for the first answer and
+fails open precisely as `allows` does for a capability, and redirects to `PLAN_LOCKED_PATH` with the
+refused URL as the `from` query parameter - deciding nothing itself, because `PlanLockedComponent`
+resolves the destination from the declared navigation and re-reads the entitlement for itself, in
+the same shape `ProviderLockedComponent` does.
+
+**Known, stated limitation.** The two Admin destinations issue #869 locks on the live fleet read -
+`/admin/site-commission-agreements` and `/admin/avco-transition` - are also `SalesProviderIntegration`
+reads by the same reasoning as `/sites`, but issue #979's acceptance criteria name only the reports,
+Site Commissions, Sites and the machine details page. They keep their provider guard unchanged and
+carry no `requirePlan`, so a business below `Pro` reaches the provider lock's "connect Nayax"
+wording on them rather than the plan lock's "needs Pro" - raised as follow-up work rather than
+silently left inconsistent. `app.routes.spec.ts` asserts the omission is the current state, by name,
+rather than merely failing to test it.
+
+**`AccessService.allowsPlanFeature(feature)`** is `allows`'s own shape over the entitlement instead
+of the capability set: `planFeatureGrantedBy` mirrors `grantedBy` exactly (`unread` is `undefined`,
+`granted` reads `planFeatureAllowed(state.access.entitlement, feature)`, every other state fails
+open), and the menu reads the raw `Entitlement | undefined` itself through a new `renderedEntitlement`
+beside `renderedCapabilities` and `renderedOptionVisibility` in `sidebar-nav.component.ts` - the menu
+wants the whole entitlement object, because one member's menu checks several features from one
+answer, where a route guard asks about exactly one.
+
+**Inline locks never route anywhere; they read the same answer their page's own call already
+carries.** Two existing per-feature vocabularies gain the plan as a third reason, which is what lets
+`nayax-availability.ts`, `provider-list-load.ts`, the Dashboard, Needs Ordering and the Pick List
+keep working unchanged once that one file knows the new word:
+
+- **`provider/nayax-availability.ts`'s `NayaxUnavailability`** gains `'PlanRequired'` beside
+  `'NayaxNotConnected'` and `'PermissionNotGranted'` - the third reason issue #967 added to every
+  per-feature vocabulary that already carried the first two (`MachineNeedUnavailableReasons`,
+  `MachineLatestSalesUnavailableReasons`, `SiteCommissionUnavailableReasons`,
+  `MachineRestockSyncReminderHiddenReasons`), and the third value `nayaxUnavailableReason` on the
+  shared `409 nayax_not_connected` body. The code itself is unchanged and ambiguous on purpose
+  (issue #967's own design): `nayaxUnavailabilityOfError` now also reads the `nayaxUnavailableReason`
+  extension to tell a plan refusal from a connection one on that one shared code, and
+  `nayaxUnavailabilityOfReason` recognises the bare `PlanRequired` string the same vocabularies
+  publish in their DTO `reason` fields. `nayaxUnavailableMessage` and `storageOnlyReorderLabel` each
+  gain the matching sentence, naming the `Pro` plan directly rather than through
+  `access/plan-feature.ts` - every feature this file answers about is the sales-provider connection
+  or site commissions, and both are `Pro`. Because the Dashboard's `orderingFooterText`/
+  `orderingModeNote`, the `machinesError`/`sitesError`/`reorderAlertsError` sections, the Pick List's
+  calculated-matrix message and the Needs Ordering page's storage-only label all already compose
+  their text through these two functions, every one of them says "needs the Pro plan" correctly with
+  no change of its own - the one file this issue had to teach the new word to is the one every
+  inline Nayax message already goes through. `provider/provider-list-load.ts`'s `noteRefusal`
+  fall-through already passed an unrecognised reason through unchanged, which is what makes it carry
+  `PlanRequired` correctly without a line of its own: it is retained against **nothing** - the
+  shared connection status and every feature's permission evidence stay exactly as they were, because
+  a plan refusal states nothing about either.
+- **The Dashboard's `DashboardProviderAvailability`** gains `'planRequired'` beside `'notConnected'`
+  and `'permissionNotGranted'`, read off the same `needsRefill` section's reason; `isProviderUsable`
+  (and therefore `isLiveFleetShown`) treats it exactly as `'notConnected'` - no fleet read was
+  attempted in either case, so the Needs refill and Site/machine performance cards are withheld
+  entirely rather than shown with a message, the same "nothing to show" choice the page already made
+  for no connection at all. `GET /api/machines` itself never carries this reason - it is a read of
+  the business's own stored records and never reaches the Nayax credential gate (issue #740) - so a
+  genuine plan refusal on this page is only ever the summary's own `needsRefill`/`needsOrdering`
+  sections or a truly Nayax-gated call such as the Sites list; `dashboard.component.provider-optional.spec.ts`
+  states that distinction rather than asserting a call the component cannot actually receive it from.
+- **The Cheapest supplier column** (`ObservedSupplierPrices`, `Starter`) is the one inline lock with
+  no vocabulary to extend, because `POST /api/cheapest-suppliers/summary` refuses with the endpoint
+  shape issue #967 defined for a plan refused **outright** - `403 plan_required`, the required plan
+  and the feature - rather than the Nayax `409` shape. `access/plan-feature.ts`'s `planRequiredOfError`
+  reads that shape directly (`code === 'plan_required'` and a declared `requiredPlan`), and
+  `CheapestSuppliersComponent` gains a third state, `'planLocked'`, published instead of `'failed'`
+  when the read is refused that way: a small inline message naming the plan the refusal actually
+  named, a link to the Plan page, and **no Retry** - a `403` the business was already told the answer
+  to is not a transient failure, and offering Retry for it would ask the same question again. The
+  cell component renders `'planLocked'` exactly as it already renders `'failed'` and `'unavailable'`
+  - `cheapestSupplierDisplay` treats every non-`'loaded'` state alike - so the Dashboard, Needs
+  Ordering and All Products pages change nothing of their own: the one component Dashboard reorder
+  alerts (#939), Needs Ordering and Products (#940) all share is the one place this had to be taught.
+- **The Nayax sales import card** (`SalesFileImport`, `Pro`) is the second inline lock of that same
+  `403 plan_required` shape, and it is inline rather than route-level **because the page is mixed**:
+  `/admin/imports` also runs the pending reimbursement XML import, links to the product-catalogue
+  review's own page and downloads a CSV template that calls no API, and none of those is a
+  higher-plan feature. Locking the route would withhold three working workflows over one locked
+  card, so `admin-imports.component.ts` locks the card instead and the route keeps its
+  `requireCapability('Imports.Run')` alone - stated by name in `app.routes.spec.ts` rather than
+  merely left untested. The card reads `planLockOf(entitlement, 'SalesFileImport')` off
+  `AccessService.access$` exactly as `PlanLockedComponent` does, so it holds no plan rule of its
+  own; `locked` withholds the file input **and** the button that opens it (neither is in the DOM, so
+  there is no disabled control to tab to) and `onSalesSelected` returns early, which is what keeps
+  the refusable `POST /api/imports/nayax-sales` from being sent at all. A `403 plan_required` that
+  arrives anyway - a downgrade between reads, or an entitlement that could not be read, where the
+  fail-open rule correctly left the controls offered - is read with `planRequiredOfError` and
+  rendered in the card as the same sentence for the plan that refusal named, instead of the generic
+  failure toast it used to fall through to; the next re-read that includes the feature clears it, so
+  an upgrade made elsewhere opens the card rather than leaving it locked by what the backend said
+  about a plan the business is no longer on. Role and support session are unchanged and are both
+  checked ahead of the plan: the route's capability guard decides whether the page exists for a
+  member at all, and during a support session the control is still rendered and disabled, because
+  what withholds it there is the read-only session rather than the plan.
+
+**What proves it.** `access/plan-feature.spec.ts` pins the required-plan table against
+`PlanFeaturePolicy.RequiredPlan`, the fail-open/fail-closed rules and `planRequiredOfError`'s own
+shape; `access/plan-lock.spec.ts` covers `planLockOf`, `planLockSummary` and `planLockSentence`;
+`access/plan-lock.guard.spec.ts` drives `requirePlan` over the real `AccessService` with only its
+`GET` and MSAL's signals doubled, exactly as `capability.guard.spec.ts` drives `requireCapability`;
+`access/plan-locked.component.spec.ts` covers the destination named from the declared navigation,
+the entitlement re-read rather than taken from the guard, a URL naming no plan-locked destination,
+and the "available again" state once the entitlement allows it. `access/access.service.spec.ts`
+covers `allowsPlanFeature`'s fail-open shape. `layout/navigation.spec.ts` covers `navLockOf` and
+`navLockSummary`'s combined decision - plan checked before provider, a Free business never told to
+connect Nayax, an unread entitlement locking nothing - and `app.routes.spec.ts` covers the guard
+order and length on every route above, including the stated Admin omission.
+`provider/nayax-availability.spec.ts` and `provider/provider-list-load.spec.ts` cover the shared
+`409` code's two reasons told apart by `nayaxUnavailableReason` and the plan refusal retained against
+nothing; `components/dashboard/dashboard.component.provider-optional.spec.ts` covers the Dashboard's
+hiding and wording; `components/shared/cheapest-supplier/cheapest-suppliers.component.spec.ts` covers
+the inline plan lock naming the plan a `403` actually named, the missing Retry and the rest of the
+page working; and `components/admin/imports/admin-imports.component.spec.ts` covers the sales card's
+own lock - `Free` and `Starter` withholding the controls with **no** import call made, `Pro` importing
+normally and still refused during a support session, enforcement off and the three not-known
+entitlement answers locking nothing, a `plan_required` refusal rendered in the card instead of a
+toast and not repeatable, an ordinary failure still reported as the error it is, the re-read that
+clears the refusal and the one that keeps it, and the other three import workflows on the page
+untouched.
+
 ### Target feature boundaries
 
 Keep Angular standalone and migrate incrementally toward feature-local code:
