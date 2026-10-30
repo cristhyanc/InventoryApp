@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { Observable, of, throwError } from 'rxjs';
+import { NEVER, Observable, of, throwError } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../../access/access.service';
 import { Capability, capabilitySet } from '../../access/capabilities';
 import { Entitlement } from '../../access/entitlement';
@@ -369,5 +369,101 @@ describe('PlanComponent plan comparison (AC2, AC3)', () => {
     const rows = Array.from(host.querySelectorAll('tbody tr'));
     expect(rows[2].textContent).toContain('$15.00 AUD/mo');
     expect(rows[2].textContent).toContain('20 GB');
+  });
+});
+
+/**
+ * The current plan's own monthly price, in the Current plan card (AC1). Every case here is about
+ * one rule: the figure comes from the server catalogue row that matches the plan, or it is reported
+ * as unavailable - there is no price in Angular to fall back to.
+ */
+describe('PlanComponent current plan price (AC1)', () => {
+  it("renders the current plan's monthly price from its matching catalogue entry", async () => {
+    const { host } = await render();
+
+    expect(byTestId(host, 'plan-current')?.contains(byTestId(host, 'plan-current-price'))).toBe(true);
+    expect(byTestId(host, 'plan-current-price')?.textContent).toContain('$15.00 AUD/mo');
+    expect(byTestId(host, 'plan-current-price-unavailable')).toBeNull();
+  });
+
+  it("renders the Free plan's own catalogue price rather than a blank", async () => {
+    const entitlement: Entitlement = { ...ENFORCED_PAID, plan: 'Free', source: 'NoActiveRecord' };
+    const { host } = await render({ access: of(granted('Owner', OWNER_CAPABILITIES, entitlement)) });
+
+    expect(byTestId(host, 'plan-current-price')?.textContent).toContain('Free');
+  });
+
+  it('shows the price to a role without Dashboard.ViewFinancials (AC3)', async () => {
+    const { host } = await render({ access: of(granted('Operator', OPERATOR_CAPABILITIES)) });
+
+    expect(byTestId(host, 'plan-current-price')?.textContent).toContain('$15.00 AUD/mo');
+  });
+
+  it('reports the price as unavailable, and guesses none, when the catalogue read failed', async () => {
+    const { host } = await render({ catalogue: throwError(() => new Error('boom')) });
+
+    expect(byTestId(host, 'plan-current-price')).toBeNull();
+    expect(byTestId(host, 'plan-current-price-unavailable')?.textContent).toContain('unavailable');
+    expect(byTestId(host, 'plan-current')?.textContent).not.toContain('$');
+  });
+
+  it('reports the price as unavailable when the catalogue has no row for the current plan', async () => {
+    const entitlement: Entitlement = { ...ENFORCED_PAID, plan: 'SomeFuturePlan' };
+    const { host } = await render({ access: of(granted('Owner', OWNER_CAPABILITIES, entitlement)) });
+
+    expect(byTestId(host, 'plan-current-price')).toBeNull();
+    expect(byTestId(host, 'plan-current-price-unavailable')).not.toBeNull();
+  });
+
+  it('says the price is loading rather than unavailable while the catalogue read is in flight', async () => {
+    const { host } = await render({ catalogue: NEVER });
+
+    expect(byTestId(host, 'plan-current-price-loading')).not.toBeNull();
+    expect(byTestId(host, 'plan-current-price-unavailable')).toBeNull();
+  });
+
+  it('shows no price at all while enforcement is disabled, because there is no plan to price', async () => {
+    const { host } = await render({ access: of(granted('Owner', OWNER_CAPABILITIES, NOT_ENFORCED)) });
+
+    expect(byTestId(host, 'plan-current-price')).toBeNull();
+    expect(byTestId(host, 'plan-current-price-unavailable')).toBeNull();
+  });
+});
+
+/**
+ * The structural half of the issue's 390px and keyboard evidence. A jsdom test cannot measure a
+ * viewport, so these assert the two structural facts the mobile and keyboard behaviour rest on:
+ * the wide comparison table scrolls inside its own container rather than widening the page, and the
+ * page offers no interactive control at all in any state, so there is no focus order, focus trap or
+ * keyboard-only action to get wrong. The remaining, genuinely visual part is reported in the pull
+ * request rather than asserted here.
+ */
+describe('PlanComponent narrow-viewport and keyboard structure (issue #970 evidence)', () => {
+  const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex], [contenteditable]';
+
+  it('keeps the comparison table inside a horizontally scrollable container', async () => {
+    const { host } = await render();
+
+    const scroll = byTestId(host, 'plan-catalogue-scroll');
+    expect(Array.from(scroll!.classList)).toContain('overflow-x-auto');
+    expect(scroll!.querySelector('table')).not.toBeNull();
+  });
+
+  it('offers no interactive control in any of the page states', async () => {
+    const states: Array<{ access?: Observable<MemberAccessState>; catalogue?: Observable<readonly PlanCatalogueEntry[]> }> = [
+      {},
+      { access: of({ status: 'unread' }) },
+      { access: of({ status: 'unavailable' }) },
+      { access: of(granted('Owner', OWNER_CAPABILITIES, NOT_ENFORCED)) },
+      { access: of(granted('Operator', OPERATOR_CAPABILITIES)) },
+      { catalogue: throwError(() => new Error('boom')) }
+    ];
+
+    for (const state of states) {
+      const { host } = await render(state);
+
+      expect(host.querySelectorAll(FOCUSABLE)).toHaveLength(0);
+      TestBed.resetTestingModule();
+    }
   });
 });

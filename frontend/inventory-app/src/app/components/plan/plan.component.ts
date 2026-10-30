@@ -76,6 +76,11 @@ export function formatAdditionalMachinePrice(minorUnits: number | null, currency
  * `PlanCatalogueService`'s own one-time read of the static server catalogue, which is identical for
  * every caller and is read once rather than re-read on those triggers.
  *
+ * **The current plan's own monthly price is the one figure composed from both reads** (AC1): the
+ * catalogue row whose published plan name matches the entitlement's. When the catalogue could not
+ * be read, or carries no row for that name, the card says the price is unavailable - there is no
+ * price in this file to fall back to, which is the same rule AC2 states for the comparison table.
+ *
  * **It displays only what the server actually publishes** (AC5): `ManualGrant` is labelled "Manual
  * grant" without guessing complimentary or grandfathered, `NoActiveRecord` is labelled as having no
  * active subscription rather than cancelled or expired, and a source or unavailable-reason value
@@ -117,6 +122,19 @@ export function formatAdditionalMachinePrice(minorUnits: number | null, currency
           } @else {
             <p class="text-lg font-semibold" data-testid="plan-name">{{ entitlement.plan }}</p>
             <p class="text-sm value-muted" data-testid="plan-source">{{ sourceLabel(entitlement.source) }}</p>
+
+            @if (catalogueLoading) {
+              <p class="text-sm value-muted" data-testid="plan-current-price-loading">Loading this plan's price…</p>
+            } @else if (currentPlanEntry) {
+              <p class="text-sm" data-testid="plan-current-price">
+                <span class="font-medium">Monthly price:</span>
+                {{ formatMonthlyPrice(currentPlanEntry.monthlyPriceMinorUnits, currentPlanEntry.currencyCode) }}
+              </p>
+            } @else {
+              <p class="text-sm value-muted" data-testid="plan-current-price-unavailable">
+                Monthly price unavailable — the plan catalogue could not be read for this plan.
+              </p>
+            }
 
             @if (entitlement.attachmentStorage) {
               <div class="mt-4" data-testid="plan-storage">
@@ -209,36 +227,44 @@ export function formatAdditionalMachinePrice(minorUnits: number | null, currency
               Plans could not be loaded. Reload the page to try again.
             </p>
           } @else {
-            <table class="table">
-              <thead class="table-head">
-                <tr>
-                  <th scope="col" class="table-cell">Plan</th>
-                  <th scope="col" class="table-cell">Price</th>
-                  <th scope="col" class="table-cell">Attachment storage</th>
-                  <th scope="col" class="table-cell">Connected machines included</th>
-                  @if (hasFinancials) {
-                    <th scope="col" class="table-cell" data-testid="plan-catalogue-additional-machine-header">
-                      Additional machine
-                    </th>
-                  }
-                </tr>
-              </thead>
-              <tbody>
-                @for (entry of catalogue; track entry.plan) {
-                  <tr class="table-row">
-                    <td class="table-cell">{{ entry.plan }}</td>
-                    <td class="table-cell">{{ formatMonthlyPrice(entry.monthlyPriceMinorUnits, entry.currencyCode) }}</td>
-                    <td class="table-cell">{{ formatGigabytes(entry.attachmentStorageLimitBytes) }}</td>
-                    <td class="table-cell">{{ entry.includedConnectedMachines }}</td>
+            <!--
+              The comparison table is five columns wide for a role with Dashboard.ViewFinancials and
+              does not fit a 390px viewport; the scroll container is how every other wide table in
+              this application (the product list, the reconciliation and transaction reports) keeps
+              a narrow screen scrolling the table rather than the page.
+            -->
+            <div class="overflow-x-auto" data-testid="plan-catalogue-scroll">
+              <table class="table">
+                <thead class="table-head">
+                  <tr>
+                    <th scope="col" class="table-cell">Plan</th>
+                    <th scope="col" class="table-cell">Price</th>
+                    <th scope="col" class="table-cell">Attachment storage</th>
+                    <th scope="col" class="table-cell">Connected machines included</th>
                     @if (hasFinancials) {
-                      <td class="table-cell" data-testid="plan-catalogue-additional-machine-cell">
-                        {{ formatAdditionalMachinePrice(entry.additionalConnectedMachinePriceMinorUnits, entry.currencyCode) }}
-                      </td>
+                      <th scope="col" class="table-cell" data-testid="plan-catalogue-additional-machine-header">
+                        Additional machine
+                      </th>
                     }
                   </tr>
-                }
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  @for (entry of catalogue; track entry.plan) {
+                    <tr class="table-row">
+                      <td class="table-cell">{{ entry.plan }}</td>
+                      <td class="table-cell">{{ formatMonthlyPrice(entry.monthlyPriceMinorUnits, entry.currencyCode) }}</td>
+                      <td class="table-cell">{{ formatGigabytes(entry.attachmentStorageLimitBytes) }}</td>
+                      <td class="table-cell">{{ entry.includedConnectedMachines }}</td>
+                      @if (hasFinancials) {
+                        <td class="table-cell" data-testid="plan-catalogue-additional-machine-cell">
+                          {{ formatAdditionalMachinePrice(entry.additionalConnectedMachinePriceMinorUnits, entry.currencyCode) }}
+                        </td>
+                      }
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
           }
         </div>
       </section>
@@ -257,6 +283,15 @@ export class PlanComponent implements OnInit, OnDestroy {
   catalogue: readonly PlanCatalogueEntry[] = [];
   catalogueLoading = true;
   catalogueLoadError = false;
+
+  /**
+   * The server catalogue entry for the plan the business is actually on, which is where the current
+   * plan's own monthly price comes from (AC1). It stays `undefined` whenever that entry cannot be
+   * identified - the catalogue read failed, or the catalogue has no row for the published plan name
+   * - and the card then says the price is unavailable rather than showing a figure from anywhere
+   * else. There is no fallback price in Angular to fall back to, by design (AC2).
+   */
+  currentPlanEntry: PlanCatalogueEntry | undefined;
 
   readonly sourceLabel = planSourceLabel;
   readonly unavailableReasonLabel = unavailableReasonLabel;
@@ -286,16 +321,19 @@ export class PlanComponent implements OnInit, OnDestroy {
         this.isOwner = state.status === 'granted' && state.access.role === 'Owner';
         this.hasFinancials = state.status === 'granted' && state.access.capabilities.has('Dashboard.ViewFinancials');
         this.showAction = state.status === 'granted' && !supportSessionActive && !rolePreviewActive;
+        this.matchCurrentPlanToCatalogue();
       });
 
     this.planCatalogue.get().subscribe({
       next: (entries) => {
         this.catalogue = entries;
         this.catalogueLoading = false;
+        this.matchCurrentPlanToCatalogue();
       },
       error: () => {
         this.catalogueLoading = false;
         this.catalogueLoadError = true;
+        this.matchCurrentPlanToCatalogue();
       }
     });
   }
@@ -303,6 +341,20 @@ export class PlanComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroying$.next();
     this.destroying$.complete();
+  }
+
+  /**
+   * Re-matches the current plan against the catalogue. Both reads arrive independently and either
+   * can arrive second, so this runs after each of them rather than assuming an order.
+   *
+   * The match is on the plan's **published name**, the one identifier both answers carry; an
+   * unrecognised name - a newer deployment's plan - matches nothing and is reported as unavailable,
+   * for the same reason {@link planSourceLabel} falls back to a raw name instead of inventing one.
+   */
+  private matchCurrentPlanToCatalogue(): void {
+    const plan = this.entitlement?.enforced ? this.entitlement.plan : null;
+
+    this.currentPlanEntry = plan ? this.catalogue.find((entry) => entry.plan === plan) : undefined;
   }
 
   /** The real percentage used, never clamped - the figure the warning/full text states. */

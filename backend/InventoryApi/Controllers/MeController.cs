@@ -1,13 +1,11 @@
 using Inventory.Application.Access;
+using Inventory.Application.Subscriptions;
 using Inventory.Domain.ConnectedMachines;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
-// Aliased: this controller's own plan-catalogue action shares its name with the Domain catalogue it
-// reads, and a bare `using` for the Domain namespace would have the action hide the type.
-using DomainPlanCatalogue = Inventory.Domain.Subscriptions.PlanCatalogue;
 
 namespace InventoryApi.Controllers;
 
@@ -45,11 +43,16 @@ public sealed class MeController : ControllerBase
 {
     private readonly GetCurrentAccess _getCurrentAccess;
     private readonly GetAccountState _getAccountState;
+    private readonly GetPlanCatalogue _getPlanCatalogue;
 
-    public MeController(GetCurrentAccess getCurrentAccess, GetAccountState getAccountState)
+    public MeController(
+        GetCurrentAccess getCurrentAccess,
+        GetAccountState getAccountState,
+        GetPlanCatalogue getPlanCatalogue)
     {
         _getCurrentAccess = getCurrentAccess;
         _getAccountState = getAccountState;
+        _getPlanCatalogue = getPlanCatalogue;
     }
 
     [HttpGet("access")]
@@ -85,11 +88,12 @@ public sealed class MeController : ControllerBase
 
     /// <summary>
     /// The Free/Starter/Pro catalogue (issue #970): every plan's advertised price, storage allowance
-    /// and connected-machine terms, read directly from
-    /// <c>Inventory.Domain.Subscriptions.PlanCatalogue</c> - the one definition every plan-aware
-    /// surface reads, so this page never hard-codes a price or a limit of its own. It names no
-    /// business and carries no entitlement fact; what the business itself has bought is
-    /// <see cref="Access"/>'s own answer, read separately.
+    /// and connected-machine terms, from <see cref="GetPlanCatalogue"/> - the Application read over
+    /// the one definition every plan-aware surface shares, so this page never hard-codes a price or
+    /// a limit of its own. This action binds nothing, decides nothing and maps the use case's
+    /// result, exactly as every other action here does. It names no business and carries no
+    /// entitlement fact; what the business itself has bought is <see cref="Access"/>'s own answer,
+    /// read separately.
     ///
     /// It declares <see cref="Capability.DashboardView"/>, which every role and a support session
     /// hold, because the catalogue - like the price and storage figures the plan page shows beside
@@ -100,7 +104,7 @@ public sealed class MeController : ControllerBase
     public ActionResult<MePlanCatalogueResponse> PlanCatalogue()
     {
         return Ok(new MePlanCatalogueResponse(
-            [.. DomainPlanCatalogue.All.Select(definition => new MePlanCatalogueEntryResponse(
+            [.. _getPlanCatalogue.Handle().Select(definition => new MePlanCatalogueEntryResponse(
                 definition.Plan.ToString(),
                 definition.MonthlyPriceMinorUnits,
                 definition.CurrencyCode,
