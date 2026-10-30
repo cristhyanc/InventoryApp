@@ -1,0 +1,149 @@
+<article class="rounded-md-control border border-md-gray-300 p-4">
+  <header class="mb-3">
+    <h3 class="text-md-card-title font-semibold text-md-gray-800">
+      {{ product.searchName }} <span class="value-muted">· {{ product.unitLabel }}</span>
+    </h3>
+    <!-- A count of the businesses waiting and never which business asked: the API publishes a
+         number and no identity, so there is nothing here to show even by accident. -->
+    <p class="text-sm value-muted">
+      {{ product.businessesWaitingCount }}
+      {{ product.businessesWaitingCount === 1 ? 'business is' : 'businesses are' }} waiting · first
+      asked {{ product.firstRequestedAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}
+    </p>
+  </header>
+
+  @if (product.suggestions.length === 0) {
+    <p class="mb-3 text-sm value-muted">The collector has suggested nothing for this product yet.</p>
+  } @else {
+    <ul class="mb-3 space-y-2">
+      @for (suggestion of product.suggestions; track suggestion.id) {
+        <li class="rounded-md-control bg-md-gray-50 p-3">
+          <p class="text-sm font-medium text-md-gray-800">
+            {{ suggestionDescribes(suggestion) }}
+            @if (createsAMasterProduct(suggestion)) {
+              <span class="badge badge-neutral">New master product</span>
+            }
+          </p>
+          <p class="text-sm value-muted">
+            Confidence {{ confidencePercent(suggestion.confidence) }}% · {{ suggestion.collectorRun }}
+          </p>
+          <p class="text-sm text-md-gray-700">{{ suggestion.reason }}</p>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              [disabled]="submitting"
+              (click)="acceptSuggestion(suggestion)"
+            >
+              {{ createsAMasterProduct(suggestion) ? 'Accept and create' : 'Accept match' }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              [disabled]="submitting"
+              (click)="rejectSuggestion(suggestion)"
+            >
+              Reject suggestion
+            </button>
+          </div>
+        </li>
+      }
+    </ul>
+  }
+
+  @if (product.proposedListings.length > 0) {
+    <p class="mb-3 text-sm value-muted">
+      {{ product.proposedListings.length }} supplier
+      {{ product.proposedListings.length === 1 ? 'listing has' : 'listings have' }} been found under this
+      search. They move to the master product when this product is matched, and still need confirming.
+    </p>
+  }
+
+  <div class="mb-3">
+    <label class="mb-1 block text-sm font-medium text-md-gray-700" [attr.for]="'master-' + product.waitingKey">
+      Match to an existing master product
+    </label>
+    <div class="flex flex-wrap items-center gap-2">
+      <select
+        [attr.id]="'master-' + product.waitingKey"
+        class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+        [disabled]="submitting || masterProducts.length === 0"
+        [(ngModel)]="chosenMasterProductId"
+      >
+        <option [ngValue]="null">Choose a master product…</option>
+        @for (master of masterProducts; track master.id) {
+          <option [ngValue]="master.id">{{ describe(master) }}</option>
+        }
+      </select>
+      <button type="button" class="btn btn-secondary btn-sm" [disabled]="submitting" (click)="chooseMasterProduct()">
+        Match to this
+      </button>
+    </div>
+  </div>
+
+  @if (creating) {
+    <div class="mb-3 rounded-md-control border border-md-gray-300 p-3">
+      <h4 class="mb-2 text-sm font-semibold text-md-gray-800">New master product</h4>
+      <div class="flex flex-wrap gap-2">
+        <input
+          type="text"
+          class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+          placeholder="Brand"
+          aria-label="Brand"
+          [disabled]="submitting"
+          [(ngModel)]="newBrand"
+        />
+        <input
+          type="text"
+          class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+          placeholder="Name or variant"
+          aria-label="Name or variant"
+          [disabled]="submitting"
+          [(ngModel)]="newName"
+        />
+        <input
+          type="number"
+          class="w-24 rounded-md-control border border-md-gray-300 p-2 text-sm"
+          placeholder="Size"
+          aria-label="Size of one item"
+          step="0.001"
+          [disabled]="submitting"
+          [(ngModel)]="newSizeValue"
+        />
+        <select
+          class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+          aria-label="Size unit"
+          [disabled]="submitting"
+          [(ngModel)]="newSizeUnit"
+        >
+          @for (unit of sizeUnits; track unit.value) {
+            <option [ngValue]="unit.value">{{ unit.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <button type="button" class="btn btn-primary btn-sm" [disabled]="submitting" (click)="createMasterProduct()">
+          Create and match
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" [disabled]="submitting" (click)="cancelCreating()">
+          Cancel
+        </button>
+      </div>
+    </div>
+  }
+
+  <div class="flex flex-wrap gap-2">
+    @if (!creating) {
+      <button type="button" class="btn btn-secondary btn-sm" [disabled]="submitting" (click)="startCreating()">
+        Create a master product
+      </button>
+    }
+    <button type="button" class="btn btn-secondary btn-sm" [disabled]="submitting" (click)="markNotFound()">
+      Not found
+    </button>
+  </div>
+
+  @if (error) {
+    <p class="mt-2 text-sm text-red-600" role="alert">{{ error }}</p>
+  }
+</article>

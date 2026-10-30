@@ -1,0 +1,207 @@
+<article class="rounded-md-control border border-md-gray-300 p-4">
+  <header class="mb-3">
+    <h3 class="text-md-card-title font-semibold text-md-gray-800">
+      {{ listing.supplierName }}
+      <span class="value-muted">· {{ listing.supplierProductId }}</span>
+    </h3>
+    <p class="text-sm value-muted">
+      <span class="badge" [class.badge-warning]="listing.matchStatus === 3" [class.badge-neutral]="listing.matchStatus !== 3">
+        {{ statusLabel }}
+      </span>
+      @if (listing.strongBarcodeMatch) {
+        <!-- A barcode a confirmed listing already carries, in the same scope: strong evidence that
+             the two are the same pack, and still not a decision. -->
+        <span class="badge badge-success">Barcode match</span>
+      }
+      @if (productLabel) {
+        · {{ productLabel }}
+      } @else {
+        · awaiting a product match
+      }
+    </p>
+  </header>
+
+  <dl class="mb-3 grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+    <div>
+      <dt class="value-muted">Title as published</dt>
+      <!-- Plain text, never markup: this is the supplier's own wording. -->
+      <dd>{{ listing.title ?? '—' }}</dd>
+    </div>
+    <div>
+      <dt class="value-muted">Page</dt>
+      <dd>
+        @if (canLinkToListing) {
+          <a [href]="listing.url" target="_blank" rel="noopener noreferrer">{{ listing.url }}</a>
+        } @else if (listing.url) {
+          {{ listing.url }}
+        } @else {
+          <span class="value-muted">—</span>
+        }
+      </dd>
+    </div>
+    <div>
+      <dt class="value-muted">Variant and size as read</dt>
+      <dd>{{ listing.variant ?? '—' }} @if (sizeAsRead) { · {{ sizeAsRead }} }</dd>
+    </div>
+    <div>
+      <dt class="value-muted">Barcode as read</dt>
+      <dd>
+        @if (listing.barcode) {
+          {{ listing.barcode }}
+          @if (listing.barcodeScope) {
+            <span class="value-muted">({{ listing.barcodeScope === 1 ? 'unit' : 'carton' }})</span>
+          }
+        } @else {
+          <span class="value-muted">—</span>
+        }
+      </dd>
+    </div>
+    <div>
+      <dt class="value-muted">Pack quantity as read</dt>
+      <!-- Unknown stays unknown: no pack size means no per-unit price, which is an answer. -->
+      <dd>{{ listing.unitsPerPack ?? 'Not published' }}</dd>
+    </div>
+    <div>
+      <dt class="value-muted">First and last seen</dt>
+      <dd>
+        {{ listing.firstSeenAtUtc | date: 'dd/MM/yyyy' : 'UTC' }} ·
+        {{ listing.lastSeenAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}
+      </dd>
+    </div>
+    @if (barcodeMatchLabel) {
+      <div class="md:col-span-2">
+        <dt class="value-muted">Same barcode as a confirmed listing</dt>
+        <dd>{{ barcodeMatchLabel }}</dd>
+      </div>
+    }
+    @if (listing.lastAcceptedPackPrice !== null) {
+      <div>
+        <dt class="value-muted">Current accepted price</dt>
+        <dd>{{ listing.lastAcceptedPackPrice | currency: 'AUD' }} per pack</dd>
+      </div>
+    }
+    @if (listing.lastNotFoundAtUtc) {
+      <div>
+        <dt class="value-muted">Last complete search did not find it</dt>
+        <dd>{{ listing.lastNotFoundAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}</dd>
+      </div>
+    }
+  </dl>
+
+  @if (listing.pendingObservation) {
+    <div class="mb-3 rounded-md-control bg-md-gray-50 p-3 text-sm">
+      <h4 class="mb-1 font-semibold text-md-gray-800">Latest pending reading</h4>
+      <p>
+        {{ listing.pendingObservation.packPrice | currency: 'AUD' }} per pack
+        <span class="value-muted">
+          ({{ listing.pendingObservation.priceBasis === 2 ? 'includes GST' : 'excludes GST' }})
+        </span>
+        · read {{ listing.pendingObservation.observedAtUtc | date: 'dd/MM/yyyy HH:mm' : 'UTC' }}
+      </p>
+      <p class="value-muted">
+        Work item {{ listing.pendingObservation.priceCollectorWorkItemId }} · run
+        {{ listing.pendingObservation.priceCollectorRunId }}
+      </p>
+      <p class="text-md-gray-700">Held because: {{ listing.pendingObservation.reason }}</p>
+      @if (!listing.pendingObservation.isFresh) {
+        <p class="text-amber-700">
+          This reading is older than the supplier's freshness limit, so confirming will not price the
+          listing. It is priced on the next run.
+        </p>
+      }
+      @if (needsPriceException) {
+        <p class="text-amber-700">
+          This price is more than 50% below or 100% above the last accepted price. Without an approved
+          price exception the listing is confirmed with no current price.
+        </p>
+      }
+    </div>
+  } @else {
+    <p class="mb-3 text-sm value-muted">
+      This listing is holding no reading, so confirming it leaves it with no current price until the
+      next run.
+    </p>
+  }
+
+  <fieldset class="mb-3">
+    <legend class="mb-1 text-sm font-semibold text-md-gray-800">Confirm as reviewed</legend>
+    <div class="flex flex-wrap gap-2">
+      <input
+        type="text"
+        class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+        placeholder="Variant"
+        aria-label="Variant as reviewed"
+        [disabled]="submitting"
+        [(ngModel)]="variant"
+      />
+      <input
+        type="number"
+        class="w-24 rounded-md-control border border-md-gray-300 p-2 text-sm"
+        placeholder="Size"
+        aria-label="Individual size as reviewed"
+        step="0.001"
+        [disabled]="submitting"
+        [(ngModel)]="sizeValue"
+      />
+      <select
+        class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+        aria-label="Size unit as reviewed"
+        [disabled]="submitting"
+        [(ngModel)]="sizeUnit"
+      >
+        <option [ngValue]="null">No size</option>
+        @for (unit of sizeUnits; track unit.value) {
+          <option [ngValue]="unit.value">{{ unit.label }}</option>
+        }
+      </select>
+      <input
+        type="number"
+        class="w-28 rounded-md-control border border-md-gray-300 p-2 text-sm"
+        placeholder="Pack qty"
+        aria-label="Pack quantity as reviewed"
+        step="1"
+        [disabled]="submitting"
+        [(ngModel)]="unitsPerPack"
+      />
+      <input
+        type="text"
+        class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+        placeholder="Barcode"
+        aria-label="Barcode as reviewed"
+        [disabled]="submitting"
+        [(ngModel)]="barcode"
+      />
+      <select
+        class="rounded-md-control border border-md-gray-300 p-2 text-sm"
+        aria-label="Barcode scope as reviewed"
+        [disabled]="submitting"
+        [(ngModel)]="barcodeScope"
+      >
+        <option [ngValue]="null">No barcode</option>
+        @for (scope of barcodeScopes; track scope.value) {
+          <option [ngValue]="scope.value">{{ scope.label }}</option>
+        }
+      </select>
+    </div>
+
+    @if (needsPriceException) {
+      <label class="mt-2 flex items-center gap-2 text-sm">
+        <input type="checkbox" [disabled]="submitting" [(ngModel)]="approvePriceException" />
+        Approve this price exception and accept the price despite the band
+      </label>
+    }
+  </fieldset>
+
+  <div class="flex flex-wrap gap-2">
+    <button type="button" class="btn btn-primary btn-sm" [disabled]="submitting" (click)="confirm()">
+      Confirm listing
+    </button>
+    <button type="button" class="btn btn-danger btn-sm" [disabled]="submitting" (click)="reject()">
+      Reject listing
+    </button>
+  </div>
+
+  @if (error) {
+    <p class="mt-2 text-sm text-red-600" role="alert">{{ error }}</p>
+  }
+</article>

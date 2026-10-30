@@ -67,6 +67,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/super-admin/diagnostics',
       '/super-admin/businesses',
       '/super-admin/supplier-presets',
+      '/super-admin/price-catalogue-review',
       '/admin/nayax-settings',
       '/admin/site-commission-agreements'
     ]);
@@ -129,6 +130,13 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/super-admin/supplier-presets', null)).toEqual([
       { label: 'Super Admin', path: undefined, current: false },
       { label: 'Supplier Presets', current: true }
+    ]);
+  });
+
+  it('builds Super Admin > Supplier Price Review, with no link for the non-routable parent (issue #928)', () => {
+    expect(buildBreadcrumbTrail('/super-admin/price-catalogue-review', null)).toEqual([
+      { label: 'Super Admin', path: undefined, current: false },
+      { label: 'Supplier Price Review', current: true }
     ]);
   });
 

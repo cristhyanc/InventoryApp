@@ -496,6 +496,19 @@ export const routes: Routes = [
       )
   },
   {
+    // The Super Admin Supplier price review page (issue #928): the one place a person decides
+    // anything about the shared supplier price catalogue - which master product a search was for,
+    // whether a collector run's automatic match was right, and whether a supplier's listing is the
+    // pack it claims to be. Platform-admin authority, not a business role, decides it - the same
+    // `platformAdminGuard` as the three super-admin routes above, and for the same reason.
+    path: 'super-admin/price-catalogue-review',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/price-catalogue-review/super-admin-price-catalogue-review.component').then(
+        (m) => m.SuperAdminPriceCatalogueReviewComponent
+      )
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Integration.Manage')],
     loadComponent: () =>

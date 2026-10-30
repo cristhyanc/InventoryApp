@@ -388,7 +388,8 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
       ...navLinks(primaryNavigation).map((entry) => entry.route),
       '/super-admin/diagnostics',
       '/super-admin/businesses',
-      '/super-admin/supplier-presets'
+      '/super-admin/supplier-presets',
+      '/super-admin/price-catalogue-review'
     ]);
   });
 });

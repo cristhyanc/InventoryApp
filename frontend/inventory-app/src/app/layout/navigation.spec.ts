@@ -21,6 +21,7 @@ import {
   navigationFor,
   optionSwitchedOff,
   platformDiagnosticsNavLink,
+  priceCatalogueReviewNavLink,
   primaryNavigation,
   superAdminNavGroup,
   superAdminNavSection,
@@ -365,7 +366,7 @@ describe('primary navigation (issue #391)', () => {
 /**
  * The top-level Super Admin group (issue #546, parent #510 under #328), which took
  * `Platform Diagnostics` out of the business `Admin` group (issue #335) and added Businesses
- * (issue #547) and Supplier Presets (issue #848).
+ * (issue #547), Supplier Presets (issue #848) and Supplier Price Review (issue #928).
  *
  * The group is presentation only. `GET /api/admin/diagnostics/access` decides whether it is
  * composed in, and the API is independently authorized on every request, so a navigation without
@@ -378,11 +379,12 @@ describe('navigationFor (issue #546)', () => {
     expect(childRoutes('Admin', ownerNavigation())).toEqual(adminChildRoutes);
   });
 
-  it('adds it last, holding its three destinations, once the API confirms access', () => {
+  it('adds it last, holding its four destinations, once the API confirms access', () => {
     expect(group('Super Admin', ownerNavigation(true)).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink
     ]);
   });
 
@@ -397,7 +399,8 @@ describe('navigationFor (issue #546)', () => {
       ...navLinks(primaryNavigation).map((link) => link.route),
       platformDiagnosticsNavLink.route,
       businessesNavLink.route,
-      supplierPresetsNavLink.route
+      supplierPresetsNavLink.route,
+      priceCatalogueReviewNavLink.route
     ]);
   });
 
@@ -459,7 +462,8 @@ describe('navigationFor (issue #546)', () => {
     expect(group('Super Admin', operator).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink
     ]);
     expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       platformDiagnosticsNavLink.route
@@ -480,6 +484,18 @@ describe('navigationFor (issue #546)', () => {
     expect(superAdminNavGroup.children).toContain(supplierPresetsNavLink);
     expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       supplierPresetsNavLink.route
+    );
+  });
+
+  it('declares Supplier Price Review with no capability either, for the same reason (#928)', () => {
+    expect(priceCatalogueReviewNavLink).toEqual({
+      kind: 'link',
+      label: 'Supplier Price Review',
+      route: '/super-admin/price-catalogue-review'
+    });
+    expect(superAdminNavGroup.children).toContain(priceCatalogueReviewNavLink);
+    expect(navLinks(navigationFor(OWNER, false, 'offered')).map((link) => link.route)).not.toContain(
+      priceCatalogueReviewNavLink.route
     );
   });
 });
@@ -616,7 +632,8 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(group('Super Admin', navigationFor(undefined, true, 'offered')).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink
     ]);
   });
 
@@ -651,7 +668,8 @@ describe('navigationFor with the business navigation withheld (issue #676)', () 
     expect(navLinks(navigationFor(OWNER, true, 'withheld'))).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink
     ]);
   });
 
