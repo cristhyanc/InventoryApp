@@ -173,6 +173,154 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         new EfPriceCollectorMatchStore(Track(TestAppDbContext.Denied(_options)));
 
     /// <summary>
+    /// The Super Admin review store as a platform-admin request reaches it (issue #928): the real
+    /// adapter on a context whose caller has no business at all, which is the scope every
+    /// <c>api/super-admin/price-catalogue-review</c> request has - and the whole reason that adapter
+    /// needs the reviewed cross-business read and the narrow review write it has.
+    ///
+    /// <para>A new context each time, for the reason the collector stores get one: every call a
+    /// reviewer makes is its own request, and a reused change tracker would assert against entities
+    /// the previous call left behind rather than against what was stored.</para>
+    /// </summary>
+    public IPriceCatalogueReviewStore DeniedReviewStore() =>
+        new EfPriceCatalogueReviewStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>
+    /// The same store on a context scoped to <em>one business</em>, for the test that says a lease
+    /// cannot be taken there: a review decision is a platform decision, and a request that already
+    /// names a business must never write another business's mapping through it.
+    /// </summary>
+    public IPriceCatalogueReviewStore ReviewStoreFor(int businessId) =>
+        new EfPriceCatalogueReviewStore(Track(TestAppDbContext.For(_options, businessId)));
+
+    /// <summary>
+    /// Holds one reading against a listing, as the collector results of #937 do when a reading is not
+    /// a price: written directly, because what is under test here is what the <em>review</em> does
+    /// with a held reading.
+    /// </summary>
+    public async Task<long> SeedPendingObservationAsync(
+        long supplierListingId,
+        long priceCollectorRunId,
+        long priceCollectorWorkItemId,
+        decimal packPrice,
+        DateTime observedAtUtc,
+        string reason = PriceCollectorResultPolicy.ListingNotConfirmedReason,
+        string? variant = "Classic",
+        decimal? sizeValue = 375m,
+        MasterProductSizeUnit? sizeUnit = MasterProductSizeUnit.Millilitre,
+        string? barcode = "0012345678905",
+        BarcodeScope? barcodeScope = BarcodeScope.Unit,
+        int? unitsPerPack = 30,
+        SupplierPriceBasis priceBasis = SupplierPriceBasis.InclusiveOfGst,
+        decimal? supplierGstRate = 0.1000m)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var pending = new SupplierListingPendingObservation
+        {
+            SupplierListingId = supplierListingId,
+            PriceCollectorRunId = priceCollectorRunId,
+            PriceCollectorWorkItemId = priceCollectorWorkItemId,
+            Reason = reason,
+            PackPrice = packPrice,
+            Currency = SupplierPriceObservationPolicy.Currency,
+            PriceBasis = priceBasis,
+            SupplierGstRate = supplierGstRate,
+            StockStatus = SupplierStockStatus.InStock,
+            ObservedAtUtc = observedAtUtc,
+            Variant = variant,
+            SizeValue = sizeValue,
+            SizeUnit = sizeUnit,
+            Barcode = barcode,
+            BarcodeScope = barcodeScope,
+            UnitsPerPack = unitsPerPack,
+            Title = "Alpha Grocer cola",
+            RecordedAtUtc = observedAtUtc,
+        };
+
+        db.SupplierListingPendingObservations.Add(pending);
+        await db.SaveChangesAsync();
+
+        return pending.Id;
+    }
+
+    /// <summary>
+    /// Records which search originally found one listing, which is what an undo of an automatic match
+    /// moves it back to (#923's provenance column). Written directly, because what put it there is a
+    /// match the test has arranged rather than made.
+    /// </summary>
+    public async Task SetOriginWaitingKeyAsync(long listingId, string originWaitingKey)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var listing = await db.SupplierListings.SingleAsync(candidate => candidate.Id == listingId);
+        listing.OriginWaitingKey = originWaitingKey;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Puts one listing into a match status directly, for a test about what it may be decided from.</summary>
+    public async Task SetListingStatusAsync(long listingId, SupplierListingMatchStatus status)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var listing = await db.SupplierListings.SingleAsync(candidate => candidate.Id == listingId);
+        listing.MatchStatus = status;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>One match suggestion by its key, from outside the boundary, for verifying a decision.</summary>
+    public async Task<ProductMatchSuggestion> SuggestionAsync(long suggestionId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.ProductMatchSuggestions
+            .AsNoTracking()
+            .SingleAsync(suggestion => suggestion.Id == suggestionId);
+    }
+
+    /// <summary>
+    /// Records a match suggestion against one waiting key and answers its key, so a test can decide
+    /// that very row. The same write <see cref="SeedMatchSuggestionAsync"/> makes, with the id
+    /// returned.
+    /// </summary>
+    public async Task<long> SeedSuggestionAsync(
+        string waitingKey,
+        long? masterProductId,
+        ProductMatchSuggestionStatus status,
+        decimal confidence = 0.9m,
+        string collectorRun = "fixture",
+        string? suggestedBrand = null,
+        string? suggestedName = null,
+        decimal? suggestedSizeValue = null,
+        MasterProductSizeUnit? suggestedSizeUnit = null)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var suggestion = new ProductMatchSuggestion
+        {
+            WaitingKey = waitingKey,
+            MasterProductId = masterProductId,
+            SuggestedBrand = suggestedBrand,
+            SuggestedName = suggestedName,
+            SuggestedSizeValue = suggestedSizeValue,
+            SuggestedSizeUnit = suggestedSizeUnit,
+            Confidence = confidence,
+            Reason = "Seeded by the fixture.",
+            CollectorRun = collectorRun,
+            Status = status,
+            CreatedAtUtc = CreatedAt,
+            UpdatedAtUtc = CreatedAt,
+        };
+
+        db.ProductMatchSuggestions.Add(suggestion);
+        await db.SaveChangesAsync();
+
+        return suggestion.Id;
+    }
+
+    /// <summary>
     /// Every price-tracking mapping of both businesses, from outside the boundary, for verifying what
     /// a match did and did not change.
     /// </summary>

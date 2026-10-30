@@ -198,12 +198,13 @@ public class AppDbContext : DbContext
         }
 
         if (PriceCatalogueMatchingLeased
+            || PriceCatalogueReviewLeased
             || SupplierProvisioningBusinessId is not null
             || PlanGrantWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A price catalogue matching, supplier provisioning or plan grant write lease is "
-                    + "already open on this context.");
+                "A price catalogue matching, price catalogue review, supplier provisioning or plan "
+                    + "grant write lease is already open on this context.");
         }
 
         PriceCatalogueMatchingLeased = true;
@@ -231,6 +232,98 @@ public class AppDbContext : DbContext
             }
 
             _context.PriceCatalogueMatchingLeased = false;
+            _context = null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a <see cref="BeginPriceCatalogueReview"/> lease is currently open, which it is for one
+    /// <c>SaveChanges</c> of one Super Admin review decision and at no other moment of this context's
+    /// life (issue #928).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope, exactly as the three leases beside it are. It grants a narrow
+    /// <em>write</em> and grants no read: while one is open every tenant-owned query still matches
+    /// nothing, and the review adapter's one reviewed <c>IgnoreQueryFilters</c> statement is what reads
+    /// the mappings - visibly, in one place, over a projection that carries no business id.</para>
+    /// </summary>
+    internal bool PriceCatalogueReviewLeased { get; private set; }
+
+    /// <summary>
+    /// Opens the review window of issue #928: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>updates to the match columns of
+    /// <see cref="ProductPriceTracking"/> rows</em> on an otherwise denied scope, and nothing else.
+    ///
+    /// <para><strong>Why a fourth window exists.</strong> It is #941's window for the other decider.
+    /// A match - and an undo of one - is decided for a waiting <em>key</em>, so applying it means
+    /// writing the mappings that carry that key in every business that carries it, and the Super Admin
+    /// who decided it is a member of none of them: a platform-admin request carries a denied
+    /// <see cref="BusinessScope"/> precisely so it cannot reach a business's own data, and that is the
+    /// right rule. The window is a separate one from <see cref="BeginPriceCatalogueMatching"/> rather
+    /// than a second caller of it because each lease in this context names the one adapter that may
+    /// take it: a reader asking "who can write a mapping's match columns?" gets two answers with two
+    /// issues behind them instead of one answer that has quietly grown a caller. See
+    /// docs/architecture.md § Super Admin review of the supplier price catalogue.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and its only caller is <c>EfPriceCatalogueReviewStore</c>, which takes it around one
+    /// <c>SaveChanges</c>; a lease may be taken only while this context's own scope is
+    /// <see cref="BusinessScopeState.Denied"/>, so neither an ordinary member's request nor a support
+    /// session can open one; only one may be open at a time and never beside another lease; and the
+    /// enforcer still refuses every insert, every delete, every other entity type and every other
+    /// column while it is open - the ownership key included, so a mapping can neither be created,
+    /// withdrawn nor moved between businesses through it.</para>
+    /// </summary>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginPriceCatalogueReview()
+    {
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "Price catalogue review is only available to a request that resolved no business of "
+                    + "its own - the platform administrator deciding a shared listing or match. A "
+                    + "scope that already names a business must write through the ordinary tenant "
+                    + "path.");
+        }
+
+        if (PriceCatalogueReviewLeased
+            || PriceCatalogueMatchingLeased
+            || SupplierProvisioningBusinessId is not null
+            || PlanGrantWriteBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A price catalogue review, price catalogue matching, supplier provisioning or plan "
+                    + "grant write lease is already open on this context.");
+        }
+
+        PriceCatalogueReviewLeased = true;
+        return new PriceCatalogueReviewLease(this);
+    }
+
+    /// <summary>
+    /// Closes the review window of <see cref="BeginPriceCatalogueReview"/>, on the same terms the
+    /// three leases beside it close their own.
+    /// </summary>
+    private sealed class PriceCatalogueReviewLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public PriceCatalogueReviewLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.PriceCatalogueReviewLeased = false;
             _context = null;
         }
     }
@@ -292,11 +385,12 @@ public class AppDbContext : DbContext
 
         if (PlanGrantWriteBusinessId is not null
             || PriceCatalogueMatchingLeased
+            || PriceCatalogueReviewLeased
             || SupplierProvisioningBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A plan grant write, price catalogue matching or supplier provisioning lease is "
-                    + "already open on this context.");
+                "A plan grant write, price catalogue matching, price catalogue review or supplier "
+                    + "provisioning lease is already open on this context.");
         }
 
         PlanGrantWriteBusinessId = businessId;
