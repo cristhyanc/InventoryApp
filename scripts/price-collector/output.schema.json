@@ -1,0 +1,87 @@
+{
+  "$comment": "The collector output contract of issue #926 (parent #817): one result file per issued work item and one match file per waiting key, both written once by the collector and validated independently by submit-results.mjs before anything is posted. Lengths, vocabularies and bounds are the API's own (Inventory.Domain.PriceCatalogue and InventoryApi.DTOs, issues #937 and #941), restated here so a file that could never be accepted is refused before a request is made. Two rules cannot be expressed in this document and live in output-schema.mjs beside it: which fields require which other fields, and that a search the page cap stopped is reported as truncated.",
+  "resultFile": {
+    "$comment": "price-collector-out/<work-item-id>.json",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["runId", "workItemId", "supplierPresetId", "outcome", "rows"],
+    "properties": {
+      "runId": { "type": "integer", "minimum": 1, "description": "The run the work list issued." },
+      "workItemId": { "type": "integer", "minimum": 1, "description": "The issued work item this file answers." },
+      "supplierPresetId": { "type": "integer", "minimum": 1, "description": "The work item's own supplier." },
+      "outcome": {
+        "type": "string",
+        "enum": ["complete", "truncated", "no_matches", "failed"],
+        "description": "What happened to the search. not_searched is the run completion's answer and never a collector's."
+      },
+      "failureReason": {
+        "type": "string",
+        "enum": ["actor_error", "provider_limit", "timeout"],
+        "description": "Why it failed, for a failed search and for no other."
+      },
+      "paging": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pagesRead", "pageCap", "moreAvailable"],
+        "description": "What the search read, so a page cap cannot be reported as a complete search.",
+        "properties": {
+          "pagesRead": { "type": "integer", "minimum": 0 },
+          "pageCap": { "type": "integer", "minimum": 1 },
+          "moreAvailable": { "type": "boolean" }
+        }
+      },
+      "rows": {
+        "type": "array",
+        "description": "One row per supplier product id this search kept as a real match, any pack size.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["supplierProductId", "packPrice", "currency", "priceBasis", "stockStatus", "observedAtUtc"],
+          "properties": {
+            "workItemId": { "type": "integer", "minimum": 1, "description": "Optional, and must be the file's own." },
+            "supplierProductId": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "title": { "type": "string", "maxLength": 400 },
+            "variant": { "type": "string", "maxLength": 200 },
+            "sizeValue": { "type": "number", "exclusiveMinimum": 0, "description": "One individual item's size." },
+            "sizeUnit": { "type": "string", "enum": ["ml", "l", "g", "kg", "each"] },
+            "barcode": { "type": "string", "minLength": 1, "maxLength": 32, "description": "Text, so a leading zero survives." },
+            "barcodeScope": { "type": "string", "enum": ["unit", "carton"] },
+            "packQuantity": { "type": "integer", "minimum": 1, "description": "Left out when unknown, never sent as 0." },
+            "packPrice": { "type": "number", "exclusiveMinimum": 0 },
+            "regularPackPrice": { "type": "number", "exclusiveMinimum": 0 },
+            "currency": { "type": "string", "enum": ["AUD"] },
+            "priceBasis": { "type": "string", "enum": ["exclusive_of_gst", "inclusive_of_gst"] },
+            "supplierGstRate": { "type": "number", "minimum": 0, "maximum": 1, "description": "A proportion, when the supplier publishes one." },
+            "isPromotion": { "type": "boolean" },
+            "promotionEndsAtUtc": { "type": "string", "format": "date-time" },
+            "stockStatus": { "type": "string", "enum": ["in_stock", "out_of_stock", "unknown"] },
+            "observedAtUtc": { "type": "string", "format": "date-time" },
+            "sourceReference": { "type": "string", "maxLength": 200 },
+            "sourceUrl": { "type": "string", "maxLength": 2048, "description": "The supplier's own page the row was read from." }
+          }
+        }
+      }
+    }
+  },
+  "matchFile": {
+    "$comment": "price-collector-out/match-<waiting-key>.json. The authoritative key is the waitingKey inside the file, never the file name.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["runId", "waitingKey", "confidence", "reason"],
+    "properties": {
+      "runId": { "type": "integer", "minimum": 1 },
+      "waitingKey": { "type": "string", "minLength": 1, "maxLength": 400, "description": "Exactly as the work list published it." },
+      "masterProductId": { "type": "integer", "minimum": 1, "description": "One existing master product, or a suggested new one - never both." },
+      "suggestedBrand": { "type": "string", "minLength": 1, "maxLength": 100 },
+      "suggestedName": { "type": "string", "minLength": 1, "maxLength": 200 },
+      "suggestedSizeValue": { "type": "number", "exclusiveMinimum": 0 },
+      "suggestedSizeUnit": { "type": "string", "enum": ["ml", "l", "g", "kg", "each"] },
+      "confidence": {
+        "type": "string",
+        "enum": ["high", "medium", "low"],
+        "description": "high only when brand, variant and size clearly agree and only one master product fits."
+      },
+      "reason": { "type": "string", "minLength": 1, "maxLength": 500, "description": "The short evidence a reviewer reads." }
+    }
+  }
+}
