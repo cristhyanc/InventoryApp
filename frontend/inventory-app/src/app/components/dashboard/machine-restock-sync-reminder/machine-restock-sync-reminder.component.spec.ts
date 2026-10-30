@@ -110,7 +110,7 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
     const { host } = await render();
 
     const link = host.querySelector('[data-testid="restock-sync-reminder-link-31"]');
-    expect(link?.getAttribute('href')).toBe('/machines/31');
+    expect(link?.getAttribute('href')).toBe('/machines/31?syncRestock=open');
   });
 
   /**
@@ -173,7 +173,7 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
     });
 
     const link = host.querySelector('[data-testid="restock-sync-reminder-link-31"]');
-    expect(link?.getAttribute('href')).toBe('/machines/31?restockFrom=2026-10-14');
+    expect(link?.getAttribute('href')).toBe('/machines/31?syncRestock=open&restockFrom=2026-10-14');
 
     const note = host.querySelector('[data-testid="restock-sync-reminder-older-than-default-31"]');
     expect(note?.textContent).toContain('opens Sync Restock from');
@@ -196,7 +196,7 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
 
     expect(host.querySelector('[data-testid="restock-sync-reminder-older-than-default-31"]')).toBeNull();
     expect(host.querySelector('[data-testid="restock-sync-reminder-link-31"]')?.getAttribute('href')).toBe(
-      '/machines/31?restockFrom=2026-10-24'
+      '/machines/31?syncRestock=open&restockFrom=2026-10-24'
     );
   });
 

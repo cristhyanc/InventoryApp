@@ -11,6 +11,7 @@ import {
 } from '../../../models/models';
 import { MachineService } from '../../../services/machine.service';
 import { IconComponent } from '../../shared/icon.component';
+import { SYNC_RESTOCK_OPEN, SYNC_RESTOCK_QUERY_PARAM } from '../../machines/machine-restock-sync/sync-restock-link';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
@@ -166,13 +167,18 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
   }
 
   /**
-   * The query parameters a row's machine link carries (issue #948): the business date of the
-   * oldest counted pending event as `restockFrom`, so Sync Restock opens far enough back to show
-   * every event this row counted. `null` - a plain link - when nothing is pending.
+   * The query parameters a row's machine link carries: `syncRestock=open` (issue #1011), so the
+   * machine page opens its Sync Restock dialog by itself, and the business date of the oldest
+   * counted pending event as `restockFrom` (issue #948), so that dialog opens far enough back to
+   * show every event this row counted. `restockFrom` is left off when nothing is pending.
    */
-  restockLinkQueryParams(machine: MachineRestockSyncReminderMachine): { restockFrom: string } | null {
+  restockLinkQueryParams(machine: MachineRestockSyncReminderMachine): Record<string, string> {
+    const params: Record<string, string> = { [SYNC_RESTOCK_QUERY_PARAM]: SYNC_RESTOCK_OPEN };
     const oldest = machine.oldestKnownPendingEventBusinessDate;
-    return oldest ? { restockFrom: oldest.slice(0, 10) } : null;
+    if (oldest) {
+      params['restockFrom'] = oldest.slice(0, 10);
+    }
+    return params;
   }
 
   private ensureLoaded(): void {

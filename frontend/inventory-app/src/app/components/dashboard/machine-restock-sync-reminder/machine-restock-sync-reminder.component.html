@@ -64,9 +64,10 @@
               </span>
             }
             <!--
-              Opening the machine is all this does (issues #891 and #948): Sync Restock lives on the
-              machine's page, and following the link changes nothing until the operator applies it
-              there, so it is never described as having synced anything.
+              Opens the machine's page with its Sync Restock dialog already open (issues #891, #948
+              and #1011). Opening the dialog fetches and imports the machine's new Nayax alerts, as
+              the Sync Restock button does, but applies nothing: no inventory changes until the
+              operator applies events there, so the link is never described as having synced.
             -->
             <a
               [routerLink]="['/machines', machine.localMachineId]"

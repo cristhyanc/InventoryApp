@@ -1,10 +1,11 @@
 import { Component, ElementRef, OnDestroy, OnInit, QueryList, ViewChildren } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink, ActivatedRoute } from '@angular/router';
+import { RouterLink, ActivatedRoute, Router } from '@angular/router';
 import { BehaviorSubject, catchError, map, Observable, of, Subscription, switchMap, tap } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { MachineRestockSyncComponent } from './machine-restock-sync/machine-restock-sync.component';
+import { SYNC_RESTOCK_OPEN, SYNC_RESTOCK_QUERY_PARAM } from './machine-restock-sync/sync-restock-link';
 import { MachineLatestSalesComponent } from './machine-latest-sales/machine-latest-sales.component';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -92,6 +93,15 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
    */
   restockFrom: string | null = null;
 
+  /**
+   * The machine the Dashboard reminder's "Open Sync Restock" link asked to open Sync Restock for
+   * (`?syncRestock=open`, issue #1011), handed to `MachineRestockSyncComponent` as
+   * `openOnArrivalFor`, which decides when the dialog can open. `null` for an ordinary visit. The
+   * parameter is removed from the address as soon as it is read, so a reload or Back never asks
+   * again.
+   */
+  syncRestockOpenFor: number | null = null;
+
   private readonly sessionActiveSubscription: Subscription;
   private readonly financialsAccessSubscription: Subscription;
   private routeSubscription?: Subscription;
@@ -105,7 +115,8 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     private readonly machineService: MachineService,
     private readonly breadcrumbService: BreadcrumbService,
     supportSession: SupportSessionService,
-    access: AccessService
+    access: AccessService,
+    private readonly router: Router
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.financialsAccessSubscription = access
@@ -155,6 +166,9 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     this.routeSubscription = this.route.paramMap.subscribe((params) => {
       const machineId = Number(params.get('id'));
       this.machineId = !machineId || isNaN(machineId) ? null : machineId;
+      if (this.syncRestockOpenFor !== this.machineId) {
+        this.syncRestockOpenFor = null;
+      }
 
       // Every machine opens on Sales, and its products are not fetched until somebody opens the
       // Products tab. An in-flight read for the machine being navigated away from is cancelled and
@@ -168,6 +182,26 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
 
     this.queryParamSubscription = this.route.queryParamMap.subscribe((params) => {
       this.restockFrom = params.get('restockFrom');
+      if (params.get(SYNC_RESTOCK_QUERY_PARAM) === SYNC_RESTOCK_OPEN) {
+        this.consumeSyncRestockOpenRequest();
+      }
+    });
+  }
+
+  /**
+   * Records the reminder's open request for the machine it names and takes it out of the address
+   * (issue #1011), keeping `restockFrom`. The router updates the route snapshot before it emits a
+   * changed query, so the machine id is read from the snapshot: on a move between machines the
+   * query can be emitted before the new `paramMap`.
+   */
+  private consumeSyncRestockOpenRequest(): void {
+    const machineId = Number(this.route.snapshot.paramMap.get('id'));
+    this.syncRestockOpenFor = !machineId || isNaN(machineId) ? null : machineId;
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [SYNC_RESTOCK_QUERY_PARAM]: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true
     });
   }
 

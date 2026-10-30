@@ -47,6 +47,7 @@
     <app-machine-restock-sync
       [machineId]="machine?.localMachineId"
       [pendingFromDate]="restockFrom"
+      [openOnArrivalFor]="syncRestockOpenFor"
       (restockApplied)="refreshProducts()">
     </app-machine-restock-sync>
 
