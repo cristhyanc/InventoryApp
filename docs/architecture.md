@@ -12780,7 +12780,7 @@ machines it refills.
 | `Name` | required, and otherwise unconstrained. Deliberately **not** unique per business: two machines in one corridor may legitimately be called "Level 3", and nothing resolves a machine by its name |
 | `IsActive` | whether the machine is in service. A machine with history is deactivated rather than deleted; a machine nothing refers to can be deleted (issue #896, below) |
 | `ExternalMachineId` | the business's sales provider's own id for the machine, as **opaque text** bounded by `ExternalId.MaxLength`, or `null` when the provider names none. For Nayax it is written only through `Inventory.Domain.Providers.NayaxExternalId` |
-| `LastSuccessfulRestockSyncStartedAtUtc` | when the last fully successful **Sync Restock** for this machine *started*, or `null` for "no recorded sync" (issue #891). Integration state like `ExternalMachineId`: off the machine wire contract, never a value a request chooses, and written only by the monotonic conditional update described in [Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891) |
+| `LastSuccessfulRestockSyncStartedAtUtc` | when the last fully successful **Sync Restock** for this machine that left nothing to sync (issue #1018) *started*, or `null` for "no recorded sync" (issue #891). Integration state like `ExternalMachineId`: off the machine wire contract, never a value a request chooses, and written only by the monotonic conditional update described in [Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891) |
 | `LastSuccessfulRestockSyncCredentialRevision` | the `BusinessNayaxConnection.CredentialRevision` that fetch authenticated under, or `null` (issue #891). Coverage stamped with a superseded revision is read as no recorded sync at all |
 
 `(BusinessId, ExternalMachineId)` carries a **filtered** unique index, `WHERE "ExternalMachineId" IS
@@ -15354,9 +15354,21 @@ window, so the reminder and the dialog describe one window rather than two.
 
 **Successful coverage is recorded, never inferred.** `SyncMachineStockFromNayax` records that a run
 succeeded only after its alert read, its import and its preview construction have *all* completed.
-A run that threw, imported partially or never built a preview records nothing at all; a run that
-succeeded and found no alert records coverage exactly as one that found ten, because an empty
-answer from Nayax is an answer. Nothing else writes it: it is never derived from a
+A run that threw, imported partially or never built a preview records nothing at all. **Nor does a
+run that leaves work waiting** (issue #1018, by the owner's decision of 30 October 2026 that a
+machine is synced only "when there are no records to sync"): the coverage `UPDATE` carries a further
+condition that the machine has no pending restock event in the reminder's 14-day window, by exactly
+the predicate the reminder counts with (`EfMachineRestockSyncCoverageStore.IsPendingSince`; the
+window's start is `MachineRestockSyncPendingWindow`, shared by both use cases). Being a condition of
+the one statement rather than a read before it, an event a concurrent sync imports cannot slip
+between the check and the write. Opening Sync Restock and leaving its events unapplied therefore
+never presents a machine as synced; Apply, resolve-duplicate and "Already recorded manually" need no
+trigger of their own, because the dialog re-syncs after each of them, and the fetch after the last
+pending event is cleared is the one that records coverage. Events the reminder does not count — older
+than the window, negative or zero discrepancies, applied, or reconciled as already recorded manually
+— do not block it; one that needs review or lacks storage stock does. A run that left nothing
+pending and found no alert records coverage exactly as one that found ten, because an empty answer
+from Nayax is an answer. Nothing else writes it: it is never derived from a
 `NayaxMachineStockEvent`'s `CreatedAt`/`ProcessedAt`, from the latest-sales or catalogue sync, or
 from a machine stock count, and no migration backfills it. **It is also never a claim of complete
 historical coverage** — the Lynx contract for `GET /v1/machines/{MachineID}/lastAlerts` is "the most

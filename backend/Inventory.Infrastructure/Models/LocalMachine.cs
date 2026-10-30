@@ -80,7 +80,8 @@ public class LocalMachine : IBusinessOwned
     /// <para>The start instant rather than the completion instant, because a fetch can only have
     /// accounted for alerts that already existed when it began. It is written by
     /// <c>SyncMachineStockFromNayax</c> alone, only after that workflow's alert read, import and
-    /// preview construction have all succeeded, and only ever forwards - see
+    /// preview construction have all succeeded and only when the machine has nothing left to sync
+    /// (issue #1018), and only ever forwards - see
     /// <c>IMachineRestockSyncCoverageStore.TryRecordSuccessfulSyncAsync</c> for the monotonic
     /// conditional write.</para>
     ///

@@ -84,7 +84,8 @@ public class SyncRestockTimestampContractTests
             new EfNayaxProductLinkStore(db),
             new FakeClock(new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc)),
             new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
-            new FakeMachineRestockSyncCoverageStore());
+            new FakeMachineRestockSyncCoverageStore(),
+            new FakeBusinessCalendar(new DateTime(2026, 9, 2)));
 
         var preview = await useCase.Handle(new MachineIdentity(LocalMachineId: 31, NayaxMachineId: MachineId), CancellationToken.None);
         var evt = Assert.Single(preview.Events);
