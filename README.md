@@ -1891,8 +1891,10 @@ does not manage.
   are unaffected by this change. The **Status** column itself is shown only under **All**: under
   **Only active**, every row would say "Active" anyway, so the column (and a sort on it) is hidden
   instead, and switching back to **Only active** clears a Status sort rather than leaving it pointed
-  at a hidden column (issue #828). A **Tracked** column shows which products have supplier prices
-  tracked and where each one has got to — see
+  at a hidden column (issue #828). Which products have supplier prices tracked, and where each one
+  has got to, is shown in the **Cheapest supplier** column rather than a separate one (issue #1022);
+  the full set of statuses, including **Matched automatically** and **Paused**, stays on the
+  product's own Edit page — see
   [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
@@ -1999,9 +2001,10 @@ product you have not switched on.
 - **Nobody sees anybody else's choices.** A business cannot see which products another business
   tracks, and the shared catalogue records no business at all — a product is looked up once for
   everybody, which is the whole point of sharing it.
-- **Products → All Products** has a **Tracked** column showing which of your products are tracked and
-  where each one has got to. It is read-only: the switch itself is on each product's own page, and
-  there is no way to switch many products on at once.
+- **Products → All Products** shows which of your products are tracked and where each one has got to
+  through its **Cheapest supplier** column (issue #1022); the finer distinctions it does not carry —
+  **Matched automatically** versus **Matched**, and **Awaiting match** versus **Paused** — stay on
+  each product's own **Edit** page. There is no way to switch many products on at once.
 - **What the prices look like once a product is matched** is on **Products → Needs Ordering**,
   **Products → All Products** and the Dashboard's **Reorder priorities**, in the **Cheapest
   supplier** column — see
@@ -2011,8 +2014,8 @@ product you have not switched on.
 - **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
   permission is involved. It is unavailable while you are looking at a business in read-only support
   view, and while a Super Admin is previewing a role, like every other write in those states.
-- **It works on every plan, and the prices it leads to are a Starter feature.** The switch, its
-  status and the **Tracked** column are available whatever the business's
+- **It works on every plan, and the prices it leads to are a Starter feature.** The switch and its
+  status are available whatever the business's
   [plan](#business-plans-free-starter-and-pro) says: you can turn tracking on and off on Free, and
   the setting is kept if the plan changes — nothing clears it on a downgrade. What a plan decides is
   whether the **prices** are shown (the column below) and whether the daily collection is run for
@@ -2074,7 +2077,7 @@ same column, cell and popup — everything below applies to all three.
 - **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
   the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
   disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the
-  **Tracked** column, with one request for the page's products — the same batching, failure
+  purchase-cost columns, with one request for the page's products — the same batching, failure
   message and Retry described above, and no sort of its own.
 
 ## A supplier's website
