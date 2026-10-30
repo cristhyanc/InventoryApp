@@ -110,9 +110,10 @@
           [disabled]="submitting"
           [(ngModel)]="newSizeValue"
         />
+        <label class="sr-only" [attr.for]="'newSizeUnit:' + product.waitingKey">Size unit</label>
         <select
+          [id]="'newSizeUnit:' + product.waitingKey"
           class="rounded-md-control border border-md-gray-300 p-2 text-sm"
-          aria-label="Size unit"
           [disabled]="submitting"
           [(ngModel)]="newSizeUnit"
         >

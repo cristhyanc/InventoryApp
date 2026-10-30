@@ -755,11 +755,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
                 .ConfigureAwait(false);
 
             return await ApplyMatchAsync(
-                    waitingKey,
+                    new MatchDecisionContext(waitingKey, suggestions, awaiting),
                     existing,
                     created: false,
-                    suggestions,
-                    awaiting,
                     suggestion,
                     asOfUtc,
                     cancellationToken)
@@ -779,11 +777,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             .ConfigureAwait(false);
 
         return await ApplyMatchAsync(
-                waitingKey,
+                new MatchDecisionContext(waitingKey, suggestions, awaiting),
                 master,
                 created: true,
-                suggestions,
-                awaiting,
                 suggestion,
                 asOfUtc,
                 cancellationToken)
@@ -808,11 +804,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             .ConfigureAwait(false);
 
         return await ApplyMatchAsync(
-                waitingKey,
+                new MatchDecisionContext(waitingKey, suggestions, awaiting),
                 master,
                 created: false,
-                suggestions,
-                awaiting,
                 acceptedSuggestion: null,
                 asOfUtc,
                 cancellationToken)
@@ -838,11 +832,9 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             .ConfigureAwait(false);
 
         return await ApplyMatchAsync(
-                waitingKey,
+                new MatchDecisionContext(waitingKey, suggestions, awaiting),
                 master,
                 created: true,
-                suggestions,
-                awaiting,
                 acceptedSuggestion: null,
                 asOfUtc,
                 cancellationToken)
@@ -870,15 +862,15 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
     /// write.</para>
     /// </summary>
     private async Task<DecidedMatch> ApplyMatchAsync(
-        string waitingKey,
+        MatchDecisionContext context,
         MasterProduct master,
         bool created,
-        List<ProductMatchSuggestion> suggestions,
-        IReadOnlyList<ProductPriceTracking> awaiting,
         ProductMatchSuggestion? acceptedSuggestion,
         DateTime asOfUtc,
         CancellationToken cancellationToken)
     {
+        var (waitingKey, suggestions, awaiting) = context;
+
         foreach (var mapping in awaiting)
         {
             mapping.Status = ProductPriceTrackingStatus.Matched;
@@ -1190,6 +1182,14 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
                 candidate.Barcode,
                 candidate.BarcodeScope));
 
+        var matchedMasterProduct = match?.MasterProduct is null ? null : Describe(match.MasterProduct);
+        var barcodeMatch = match is null
+            ? null
+            : new ReviewedBarcodeMatch(
+                match.Id,
+                match.SupplierPreset?.Name ?? string.Empty,
+                matchedMasterProduct);
+
         return new ReviewedSupplierListing(
             listing.Id,
             listing.SupplierPresetId,
@@ -1212,12 +1212,7 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             listing.LastCheckedAtUtc,
             listing.LastNotFoundAtUtc,
             lastAccepted,
-            match is null
-                ? null
-                : new ReviewedBarcodeMatch(
-                    match.Id,
-                    match.SupplierPreset?.Name ?? string.Empty,
-                    match.MasterProduct is null ? null : Describe(match.MasterProduct)),
+            barcodeMatch,
             reading is null ? null : Describe(reading, lastAccepted, listing, asOfUtc));
     }
 
@@ -1315,4 +1310,14 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
         bool MasterProductCreated,
         ProductMatchSuggestion? Suggestion,
         int ListingsMoved);
+
+    /// <summary>
+    /// The one waiting key an applied match reaches: its tentative suggestions and the mappings still
+    /// awaiting it. The three travel together through every path that can apply a match, which is what
+    /// <see cref="ApplyMatchAsync"/> groups them for.
+    /// </summary>
+    private sealed record MatchDecisionContext(
+        string WaitingKey,
+        List<ProductMatchSuggestion> Suggestions,
+        IReadOnlyList<ProductPriceTracking> Awaiting);
 }

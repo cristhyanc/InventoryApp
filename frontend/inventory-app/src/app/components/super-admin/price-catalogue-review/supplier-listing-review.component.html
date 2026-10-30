@@ -143,9 +143,10 @@
         [disabled]="submitting"
         [(ngModel)]="sizeValue"
       />
+      <label class="sr-only" [attr.for]="'sizeUnitAsReviewed' + listing.id">Size unit as reviewed</label>
       <select
+        [id]="'sizeUnitAsReviewed' + listing.id"
         class="rounded-md-control border border-md-gray-300 p-2 text-sm"
-        aria-label="Size unit as reviewed"
         [disabled]="submitting"
         [(ngModel)]="sizeUnit"
       >
@@ -171,9 +172,10 @@
         [disabled]="submitting"
         [(ngModel)]="barcode"
       />
+      <label class="sr-only" [attr.for]="'barcodeScopeAsReviewed' + listing.id">Barcode scope as reviewed</label>
       <select
+        [id]="'barcodeScopeAsReviewed' + listing.id"
         class="rounded-md-control border border-md-gray-300 p-2 text-sm"
-        aria-label="Barcode scope as reviewed"
         [disabled]="submitting"
         [(ngModel)]="barcodeScope"
       >
