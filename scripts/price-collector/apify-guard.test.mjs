@@ -2,19 +2,49 @@
 // that enforces the collector's spending caps and its write-once output folder (issue #926, parent
 // #817).
 //
-// The point of the hook is that **the caps are not Claude's to obey**: an unlisted actor, a call with
-// no charge ceiling, a call past the run's own caps and a rewrite of a finished result file are all
-// refused by code, in a separate process, before the tool runs. No test makes a live call: the hook
-// never calls anything itself.
+// The point of the hook is that **the caps are not Claude's to obey**: an unlisted or unconfirmed
+// actor, a call with no charge ceiling, a call past the run's own caps and a rewrite of a finished
+// result file are all refused by code, in a separate process, before the tool runs. No test makes a
+// live call: the hook never calls anything itself.
+//
+// The accounting is tested as the spending control it is, because its failure modes are what a cap
+// is worth: an accounting that cannot be read, is corrupt, cannot be locked or cannot be written
+// refuses the paid call rather than starting the budget again, and four real node processes
+// released together may not spend one remaining reservation twice.
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
-import { GUARD_STATE_ENV, OUTPUT_DIR_ENV, decide, emptyState, loadLimits, loadMcpConfig, runGuard } from './apify-guard.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
+import {
+  GUARD_STATE_ENV,
+  OUTPUT_DIR_ENV,
+  STATE_SCHEMA_VERSION,
+  decide,
+  emptyState,
+  fileStateStorage,
+  loadLimits,
+  loadMcpConfig,
+  runGuard,
+} from './apify-guard.mjs';
 
 const limits = loadLimits();
 const VARNMILL = 'varnmill/au-supermarket-prices';
+const UNCONFIRMED = Object.freeze(['abotapi/kmart-product-scraper', 'axlymxp/bigw-product-search', 'dromb/bigw-sku-lookup']);
+
+/**
+ * The rules with one actor's configuration marked confirmed. The actors the owner has not verified
+ * yet stay `actorIdConfirmed: false` in `apify-limits.json` - nothing is marked confirmed to make a
+ * test pass - so a test about what the guard does to an *allowed* call says so here instead.
+ */
+const confirming = (actorId, rules = limits) => ({
+  ...rules,
+  actors: { ...rules.actors, [actorId]: { ...rules.actors[actorId], actorIdConfirmed: true } },
+});
 
 const apifyEvent = (toolInput, toolName = 'mcp__apify__call-actor') => ({
   hook_event_name: 'PreToolUse',
@@ -28,8 +58,8 @@ const writeEvent = (filePath, toolName = 'Write') => ({
   tool_input: { file_path: filePath, content: '{}' },
 });
 
-const decideApify = (toolInput, { state = emptyState(), toolName } = {}) =>
-  decide({ event: apifyEvent(toolInput, toolName), limits, state, outputDir: '/work/price-collector-out', exists: () => false });
+const decideApify = (toolInput, { state = emptyState(), toolName, rules = limits } = {}) =>
+  decide({ event: apifyEvent(toolInput, toolName), limits: rules, state, outputDir: '/work/price-collector-out', exists: () => false });
 
 const inputOf = (answer) => answer.updatedInput?.input ?? answer.updatedInput ?? {};
 
@@ -114,6 +144,45 @@ describe('which actor may be called', () => {
   it('reads the actor case-insensitively and ignores surrounding spaces', () => {
     assert.equal(decideApify({ actor: ` ${VARNMILL.toUpperCase()} ` }).decision, 'allow');
   });
+
+  it('refuses an actor whose id and input fields are not confirmed, without consuming any budget', () => {
+    for (const actorId of UNCONFIRMED) {
+      const answer = decideApify({ actor: actorId, input: { query: 'coca cola' } });
+
+      assert.equal(answer.decision, 'deny', actorId);
+      assert.match(answer.reason, /not confirmed/i);
+      assert.equal(answer.state.actorCalls, 0);
+      assert.equal(answer.state.chargeUsd, 0);
+    }
+  });
+
+  it('refuses an actor whose configuration says nothing about confirmation, or says it loosely', () => {
+    for (const confirmation of [undefined, false, 'true', 1, null]) {
+      const rules = {
+        ...limits,
+        actors: { ...limits.actors, [VARNMILL]: { ...limits.actors[VARNMILL], actorIdConfirmed: confirmation } },
+      };
+
+      const answer = decideApify({ actor: VARNMILL }, { rules });
+
+      assert.equal(answer.decision, 'deny', String(confirmation));
+      assert.match(answer.reason, /not confirmed/i);
+    }
+  });
+
+  it('allows the actor whose configuration the owner has confirmed', () => {
+    assert.equal(limits.actors[VARNMILL].actorIdConfirmed, true);
+    assert.equal(decideApify({ actor: VARNMILL, input: { query: 'coca cola' } }).decision, 'allow');
+  });
+
+  it('refuses a paid call when the limits file states no per-run caps at all', () => {
+    for (const perRun of [undefined, {}, { maxActorCalls: 0, maxTotalChargeUsd: 12 }, { maxActorCalls: 600, maxTotalChargeUsd: 0 }]) {
+      const answer = decideApify({ actor: VARNMILL }, { rules: { ...limits, perRun } });
+
+      assert.equal(answer.decision, 'deny', JSON.stringify(perRun));
+      assert.match(answer.reason, /caps/i);
+    }
+  });
 });
 
 describe('the limits it injects or verifies', () => {
@@ -163,10 +232,10 @@ describe('the limits it injects or verifies', () => {
     assert.equal(inputOf(answer).onlyChanged, false);
     assert.equal(inputOf(answer).fetchPaidDetails, false);
 
-    const kmart = decideApify({
-      actor: 'abotapi/kmart-product-scraper',
-      input: { includeReviews: true, includeLocalStock: true },
-    });
+    const kmart = decideApify(
+      { actor: 'abotapi/kmart-product-scraper', input: { includeReviews: true, includeLocalStock: true } },
+      { rules: confirming('abotapi/kmart-product-scraper') },
+    );
     assert.equal(kmart.decision, 'allow');
     assert.equal(inputOf(kmart).includeReviews, false);
     assert.equal(inputOf(kmart).includeLocalStock, false);
@@ -352,5 +421,227 @@ describe('the hook as the process runs it', () => {
     const answer = await runGuard({ event: null, env: {} });
 
     assert.equal(JSON.parse(answer.out).hookSpecificOutput.permissionDecision, 'deny');
+  });
+});
+
+const decisionOf = (answer) => JSON.parse(answer.out).hookSpecificOutput;
+const capped = (maxActorCalls, maxTotalChargeUsd) => ({ ...limits, perRun: { maxActorCalls, maxTotalChargeUsd } });
+const varnmillCall = () => apifyEvent({ actor: VARNMILL, input: { maxTotalChargeUsd: 0.01 } });
+const accounting = (fields) => `${JSON.stringify({ schemaVersion: STATE_SCHEMA_VERSION, actorCalls: 3, chargeUsd: 0.5, updatedAtUtc: '2026-10-30T02:00:00.000Z', ...fields }, null, 2)}\n`;
+
+describe('the accounting the caps are counted in', () => {
+  it('starts a run that has made no call from zero, and reserves the call before allowing it', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    const statePath = join(dir, 'accounting', 'state.json');
+
+    const answer = await runGuard({
+      event: varnmillCall(),
+      env: { [GUARD_STATE_ENV]: statePath },
+      limits: capped(2, 99),
+      now: () => new Date('2026-10-30T02:00:00Z'),
+    });
+
+    assert.equal(decisionOf(answer).permissionDecision, 'allow', decisionOf(answer).permissionDecisionReason);
+    assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      actorCalls: 1,
+      chargeUsd: 0.01,
+      updatedAtUtc: '2026-10-30T02:00:00.000Z',
+    });
+  });
+
+  it('refuses every paid call when the accounting can be neither read nor written', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    await writeFile(join(dir, 'occupied.txt'), 'not a folder', 'utf8');
+    const env = { [GUARD_STATE_ENV]: join(dir, 'occupied.txt', 'state.json') };
+    const call = () => runGuard({ event: varnmillCall(), env, limits: capped(1, 99) });
+
+    const first = decisionOf(await call());
+    const second = decisionOf(await call());
+
+    assert.equal(first.permissionDecision, 'deny', first.permissionDecisionReason);
+    assert.equal(second.permissionDecision, 'deny');
+    assert.match(first.permissionDecisionReason, /accounting/i);
+  });
+
+  it('refuses a paid call when the stored accounting is corrupt, and leaves the file exactly as it is', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    const statePath = join(dir, 'state.json');
+    const corruptions = [
+      'not json at all',
+      '[]',
+      JSON.stringify({ actorCalls: 3, chargeUsd: 0.5 }),
+      accounting({ schemaVersion: 2 }),
+      accounting({ actorCalls: -1 }),
+      accounting({ actorCalls: 2.5 }),
+      accounting({ chargeUsd: 'free' }),
+      accounting({ chargeUsd: Number.NaN }),
+    ];
+
+    for (const corrupt of corruptions) {
+      await writeFile(statePath, corrupt, 'utf8');
+
+      const answer = decisionOf(await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600, 12) }));
+
+      assert.equal(answer.permissionDecision, 'deny', corrupt);
+      assert.match(answer.permissionDecisionReason, /accounting/i);
+      assert.equal(await readFile(statePath, 'utf8'), corrupt, 'a corrupt accounting is never written over with an empty budget');
+    }
+  });
+
+  it('refuses a paid call it cannot reserve durably', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    const statePath = join(dir, 'state.json');
+    const storage = {
+      ...fileStateStorage,
+      writeState: () => {
+        const error = new Error('read-only file system');
+        error.code = 'EROFS';
+        throw error;
+      },
+    };
+
+    const answer = decisionOf(
+      await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600, 12), storage }),
+    );
+
+    assert.equal(answer.permissionDecision, 'deny');
+    assert.match(answer.permissionDecisionReason, /reserved/i);
+    assert.equal(existsSync(statePath), false);
+  });
+
+  it('refuses a paid call when the accounting cannot be locked, and does not read it without the lock', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    const storage = {
+      ...fileStateStorage,
+      acquireLock: () => Promise.resolve({ acquired: false, problem: 'EACCES' }),
+      readState: () => assert.fail('the accounting must not be read outside the lock'),
+      releaseLock: () => {},
+    };
+
+    const answer = decisionOf(
+      await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: join(dir, 'state.json') }, limits: capped(600, 12), storage }),
+    );
+
+    assert.equal(answer.permissionDecision, 'deny');
+    assert.match(answer.permissionDecisionReason, /locked/i);
+  });
+
+  it('releases the lock it took, so the next call is decided rather than refused', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    const statePath = join(dir, 'state.json');
+    const call = () => runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600, 12) });
+
+    const first = decisionOf(await call());
+    const second = decisionOf(await call());
+
+    assert.equal(first.permissionDecision, 'allow', first.permissionDecisionReason);
+    assert.equal(second.permissionDecision, 'allow', second.permissionDecisionReason);
+    assert.equal(existsSync(`${statePath}.lock`), false);
+    assert.equal(JSON.parse(await readFile(statePath, 'utf8')).actorCalls, 2);
+  });
+
+  it('writes nothing for a call it refuses, because a call that was never made spends nothing', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    const statePath = join(dir, 'state.json');
+    const stored = accounting({ actorCalls: 3, chargeUsd: 0.5 });
+    await writeFile(statePath, stored, 'utf8');
+
+    const answer = decisionOf(
+      await runGuard({
+        event: apifyEvent({ actor: UNCONFIRMED[1], input: { query: 'coca cola' } }),
+        env: { [GUARD_STATE_ENV]: statePath },
+        limits: capped(600, 12),
+      }),
+    );
+
+    assert.equal(answer.permissionDecision, 'deny');
+    assert.match(answer.permissionDecisionReason, /not confirmed/i);
+    assert.equal(await readFile(statePath, 'utf8'), stored);
+  });
+
+  it('still guards the output folder when the accounting is unusable, because a write costs nothing', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+    await writeFile(join(dir, '7001.json'), '{}', 'utf8');
+    const env = { [GUARD_STATE_ENV]: join(dir, 'occupied.txt', 'state.json'), [OUTPUT_DIR_ENV]: dir };
+    await writeFile(join(dir, 'occupied.txt'), 'not a folder', 'utf8');
+
+    const fresh = decisionOf(await runGuard({ event: writeEvent(join(dir, '7002.json')), env }));
+    const rewrite = decisionOf(await runGuard({ event: writeEvent(join(dir, '7001.json')), env }));
+
+    assert.equal(fresh.permissionDecision, 'allow', fresh.permissionDecisionReason);
+    assert.equal(rewrite.permissionDecision, 'deny');
+  });
+});
+
+// Two Apify calls can be in flight at once, each in its own hook process, so the reservation is
+// taken across processes or it is not taken at all. These tests are the real thing: several node
+// processes, released together by a shared start instant, against one accounting file.
+const guardUrl = pathToFileURL(fileURLToPath(new URL('./apify-guard.mjs', import.meta.url))).href;
+const execFileAsync = promisify(execFile);
+
+const runnerSource = () =>
+  [
+    `import { loadLimits, runGuard } from ${JSON.stringify(guardUrl)};`,
+    '',
+    'const [statePath, limitsPath, startAtMs] = process.argv.slice(2);',
+    'const waitMs = Number(startAtMs) - Date.now();',
+    'if (waitMs > 0) await new Promise((done) => { setTimeout(done, waitMs); });',
+    '',
+    'const answer = await runGuard({',
+    '  event: {',
+    "    hook_event_name: 'PreToolUse',",
+    "    tool_name: 'mcp__apify__call-actor',",
+    `    tool_input: { actor: ${JSON.stringify(VARNMILL)}, input: { maxTotalChargeUsd: 0.02 } },`,
+    '  },',
+    `  env: { ${JSON.stringify(GUARD_STATE_ENV)}: statePath },`,
+    '  limits: loadLimits(limitsPath),',
+    '});',
+    '',
+    "process.stdout.write(JSON.parse(answer.out).hookSpecificOutput.permissionDecision);",
+    '',
+  ].join('\n');
+
+async function race(perRun, processes) {
+  dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
+  const statePath = join(dir, 'state.json');
+  const limitsPath = join(dir, 'limits.json');
+  const runnerPath = join(dir, 'runner.mjs');
+  await writeFile(limitsPath, JSON.stringify({ ...limits, perRun }), 'utf8');
+  await writeFile(runnerPath, runnerSource(), 'utf8');
+
+  const startAt = Date.now() + 500;
+  const answers = await Promise.all(
+    Array.from({ length: processes }, () => execFileAsync(process.execPath, [runnerPath, statePath, limitsPath, String(startAt)])),
+  );
+
+  return {
+    decisions: answers.map(({ stdout }) => stdout.trim()),
+    stored: JSON.parse(await readFile(statePath, 'utf8')),
+  };
+}
+
+describe('parallel hook invocations', () => {
+  it('lets exactly one of four parallel calls take the last call reservation', async () => {
+    const { decisions, stored } = await race({ maxActorCalls: 1, maxTotalChargeUsd: 99 }, 4);
+
+    assert.equal(decisions.filter((decision) => decision === 'allow').length, 1, decisions.join(','));
+    assert.equal(decisions.filter((decision) => decision === 'deny').length, 3);
+    assert.equal(stored.actorCalls, 1);
+  });
+
+  it('lets exactly one of four parallel calls take the last charge reservation', async () => {
+    const { decisions, stored } = await race({ maxActorCalls: 600, maxTotalChargeUsd: 0.02 }, 4);
+
+    assert.equal(decisions.filter((decision) => decision === 'allow').length, 1, decisions.join(','));
+    assert.equal(stored.chargeUsd, 0.02);
+  });
+
+  it('accounts for every one of four parallel calls it allows, losing no increment', async () => {
+    const { decisions, stored } = await race({ maxActorCalls: 4, maxTotalChargeUsd: 99 }, 4);
+
+    assert.deepEqual(decisions, ['allow', 'allow', 'allow', 'allow']);
+    assert.equal(stored.actorCalls, 4);
+    assert.equal(Math.round(stored.chargeUsd * 100) / 100, 0.08);
   });
 });
