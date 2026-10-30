@@ -807,7 +807,8 @@ describe('PickListComponent rendered structure', () => {
     const rows = Array.from(host.querySelectorAll('tbody tr'));
     expect(rows.length).toBe(2);
     expect(rows[0].textContent).toContain('Coke');
-    expect(rows[0].textContent).toContain('Pick 4');
+    // The planned quantity is the always-visible box itself since issue #1008, not a line of text.
+    expect(rows[0].querySelector<HTMLInputElement>('input[aria-label="Pick quantity: Coke at Machine A"]')?.value).toBe('4');
     expect(rows[0].textContent).toContain('Current: 6 / Target: 10');
   });
 
@@ -988,7 +989,7 @@ describe('PickListComponent rendered structure', () => {
     expect(host.querySelector('table')).toBeNull();
   });
 
-  it('checks a positive-pick cell off with its own labelled checkbox, separate from the edit pencil', async () => {
+  it('checks a positive-pick cell off with its own labelled checkbox, separate from the quantity controls', async () => {
     const { openDropdown, checkOption, applyFilters, click, requireElement } = await render();
     openDropdown('Machines');
     checkOption('Machine A');
@@ -996,9 +997,11 @@ describe('PickListComponent rendered structure', () => {
 
     const checkbox = requireElement<HTMLInputElement>('input[type="checkbox"][data-testid="pick-cell-checkbox"]');
     const cell = checkbox.closest<HTMLElement>('[data-testid="pick-cell"]')!;
-    expect(cell.textContent).toContain('Pick 4');
+    expect(cell.querySelector<HTMLInputElement>('input[aria-label="Pick quantity: Coke at Machine A"]')?.value).toBe('4');
     expect(checkbox.closest('label')?.textContent).toContain('Picked: Coke at Machine A');
-    expect(cell.querySelector('button[aria-label="Edit pick quantity: Coke at Machine A"]')).not.toBeNull();
+    // Issue #1008: the quantity is adjusted in place, so the checkbox sits beside steppers, not a pencil.
+    expect(cell.querySelector('button[aria-label="Decrease pick quantity: Coke at Machine A"]')).not.toBeNull();
+    expect(cell.querySelector('button[aria-label="Increase pick quantity: Coke at Machine A"]')).not.toBeNull();
     expect(cell.className).toContain('bg-white');
 
     click(checkbox);

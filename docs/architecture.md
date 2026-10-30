@@ -11205,14 +11205,40 @@ quantity of a cell is its override when present, otherwise the projection's `qua
 total, shortage and progress figure (`productPlannedTotal`, `productShortage`, `totalToPickUnits`,
 `actionableCellCount`, `runProgressLabel`) is computed from planned quantities, never written back.
 `parsePickQuantity` is the one input rule: digits only, 0 to `MAXIMUM_PICK_QUANTITY` (int32 max),
-blank refused. Only a cell with a positive suggestion can be edited. 0 is a skip - the cell has no checkbox and counts as no pick. Committing a value
+blank refused. Only a cell with a positive suggestion is editable. 0 is a skip - the cell has no checkbox and counts as no pick. A value
 that differs from the cell's previous planned quantity removes its `pickedCells` mark, because it is
-a different pick. An open editor whose text differs from the quantity it opened with (`editIsDirty`)
-is planning work too, for every discard confirmation and the departure guard below; an untouched
-editor, or one closed with Cancel, is not. Like the rest of the page's state, none of this reaches `localStorage`, a query
+a different pick. Like the rest of the page's state, none of this reaches `localStorage`, a query
 parameter or any request.
 
-**Discarding is explicit and snapshot-scoped.** Overrides and ticks belong to the snapshot they were
+**Every editable cell is edited in place, with no edit mode (issue #1008).** The owner's decision of
+30 October 2026 replaced #996's pencil and its confirm/cancel for Plan picks only: the shared
+`#pickCell` template now renders, on desktop and on a phone alike, a minus button, an always-visible
+`inputmode="numeric"` box and a plus button, with the completion checkbox still in its existing
+right-hand position and Current/Target beneath them. There is no committed-versus-editing state and
+no `edit` object: `onQuantityInput` validates the **complete** text on every keystroke through the
+same `parsePickQuantity`, and a usable quantity is the override at once - no confirm click and no
+blur - so totals, shortage indicators and progress follow immediately. `stepQuantity` moves the
+effective quantity by exactly one and is bounded by `canDecreaseQuantity`/`canIncreaseQuantity` at 0
+and at `MAXIMUM_PICK_QUANTITY`.
+
+Text the plan cannot use is neither coerced nor discarded. It is held in
+`invalidQuantities` (`Map<string, InvalidPickQuantity>`, the same cell key) exactly as typed, with
+the message refusing it; a blank box is such an incomplete input and never an implicit 0, and an
+overflowing value is refused whole rather than clamped. While a cell is in that state its last valid
+effective quantity goes on carrying every total, the cell says so inline
+(`role="alert"`, referenced by the box's `aria-describedby`, naming the quantity still used), both
+steppers and the checkbox are disabled, and `togglePicked`/`canComplete` refuse it - and because any
+text differing from the last valid value clears that cell's `pickedCells` mark, an unreadable cell
+can never be left looking complete. `useSuggestion` also clears the pending text. A pending
+`invalidQuantities` entry is unsaved work exactly as an override is: it counts in
+`hasPlanningWork`/`machineHasPlanningWork`, survives search, category, status filtering, sorting, a
+Record refill round trip and a changed phone machine focus, and is dropped only by the confirmed
+discards below. None of this changes the planning-only boundary: Plan picks still calls nothing but
+the read-only `GET /api/pick-list` projection, and no adjustment reaches stock, a target, a refill or
+Record refill.
+
+**Discarding is explicit and snapshot-scoped.** Overrides, ticks and pending invalid text belong to
+the snapshot they were
 made against, so anything that replaces the snapshot discards them after `window.confirm`: `refresh()`
 (which re-reads the same `appliedMachineIds`, and is also the Retry of a failed read), `resetAll()`,
 and an Apply that adds machines. Removing machines (by chip or by Apply) only filters the snapshot, so
@@ -11254,11 +11280,17 @@ scroller with a left-sticky product column and top-sticky header rows (Plan pick
 offsetting the column header row with `top-9`); the `relative` keeps the scroller the containing
 block of its absolutely positioned screen-reader labels, without which they widened the page.
 Below 768px (`matchMedia`, desktop in jsdom) both views switch to product cards with a machine focus
-strip, steppers and a summary bar kept above the mobile bottom navigation.
+strip, steppers and a summary bar kept above the mobile bottom navigation. Plan picks' own steppers
+are no longer part of that breakpoint since issue #1008: its minus/box/plus row renders at every
+width, so the cards differ from the matrix only in layout, never in the interaction.
 
 **Tests.** `pick-list.component.plan-picks.spec.ts` (quantity parsing, refresh/retry and stale
 responses, every discard confirmation and what Cancel keeps, overrides, skips, totals, filters, focus,
-site grouping, suggestions, the departure guard, and the rendered editor, summary and phone cards)
+site grouping, suggestions, the departure guard, and the rendered summary and phone cards; and for
+issue #1008 the always-visible box and its steppers, their bounds at 0 and `MAXIMUM_PICK_QUANTITY`,
+every refused input kept whole with its message and the retained last valid quantity, the blank box
+as incomplete input, completion cleared and blocked while a cell is unreadable, and pending text
+surviving filters, sorting, mode switching and machine focus)
 and the issue #996 describes in `manual-pick-list.component.spec.ts` (aggregate storage checks
 including hidden rows, hidden-entry banner, Clear, the recorded summary, locked entries while
 unresolved, and Retry save despite a shortage).
