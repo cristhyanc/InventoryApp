@@ -1,6 +1,5 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
 import { Subscription, of } from 'rxjs';
 import { switchMap, tap, map, catchError } from 'rxjs/operators';
@@ -17,8 +16,7 @@ import {
 import { PurchaseItemPayload } from '../../services/purchase.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
-import { IconComponent } from '../shared/icon.component';
-import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from './gst-classification-options';
+import { isChargePresent } from './gst-classification-options';
 import {
   DEFAULT_PRICE_ENTRY_MODE,
   PriceEntryMode,
@@ -35,6 +33,8 @@ import {
 } from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { SupplierOrderCompletionDialogComponent } from './supplier-order-completion-dialog/supplier-order-completion-dialog.component';
+import { PurchaseFormLayoutComponent, missingProductErrorMessage } from './purchase-form/purchase-form-layout.component';
+import { purchaseTitleSuggestion } from './purchase-form/purchase-title-suggestion';
 
 // Draft item representation where the quantity and either price may be null
 interface DraftPurchaseItem {
@@ -61,15 +61,15 @@ interface DraftPurchaseItem {
 @Component({
   selector: 'app-purchase-upload',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, IconComponent, SupplierOrderCompletionDialogComponent],
+  imports: [CommonModule, RouterLink, PurchaseFormLayoutComponent, SupplierOrderCompletionDialogComponent],
   templateUrl: './purchase-upload.component.html'
 })
 export class PurchaseUploadComponent implements OnInit, OnDestroy {
   suppliers: Supplier[] = [];
   products: Product[] = [];
   items: DraftPurchaseItem[] = [];
+  /** The receipt chosen for this purchase, sent with the create only when the purchase is saved. */
   selectedFile: File | null = null;
-  previewUrl: string | null = null;
   saving = false;
   error = '';
 
@@ -109,8 +109,11 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
    */
   private completionChoiceSettled = false;
 
-  /** The GST picker's options, shared with the purchase edit form. */
-  readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
+  /**
+   * Whether the person has typed in the title (issue #1029). Until they do, the title follows the
+   * supplier and the purchase date; once they have, nothing replaces what they typed.
+   */
+  private titleEdited = false;
 
   form = {
     title: '',
@@ -142,7 +145,11 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
+    this.supplierService.getAll().subscribe((s) => {
+      this.suppliers = s;
+      // The supplier's name may only now be known, so the suggestion can name it.
+      this.refreshSuggestedTitle();
+    });
     this.productService.getAll().subscribe((p) => (this.products = p));
 
     // switchMap cancels any in-flight supplier order request whenever the
@@ -187,7 +194,6 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   private resetPurchaseForm(): void {
     this.items = [];
     this.selectedFile = null;
-    this.previewUrl = null;
     this.error = '';
     this.saving = false;
 
@@ -211,6 +217,20 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.completionChoice = null;
     this.completionDecision = null;
     this.completionChoiceSettled = false;
+    this.titleEdited = false;
+    this.refreshSuggestedTitle();
+  }
+
+  /** The supplier or the date changed, so a title the person has not typed follows them. */
+  refreshSuggestedTitle(): void {
+    if (this.titleEdited) return;
+    const supplier = this.suppliers.find((s) => s.id === this.form.supplierId);
+    this.form.title = purchaseTitleSuggestion(supplier?.name ?? null, this.form.purchaseDate);
+  }
+
+  /** The person typed a title of their own, which no suggestion may replace from now on. */
+  onTitleEdited(): void {
+    this.titleEdited = true;
   }
 
   private prefillFromSupplierOrder(order: SupplierOrder): void {
@@ -221,6 +241,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
     // Set purchase date to today
     this.form.purchaseDate = PurchaseUploadComponent.localDate(new Date());
+    this.refreshSuggestedTitle();
 
     // Prefill reference/notes with order information
     if (order.reference) {
@@ -253,20 +274,18 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     }));
   }
 
-  onFileSelected(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    if (input.files && input.files.length > 0) {
-      this.selectedFile = input.files[0];
-      if (!this.form.title) this.form.title = this.selectedFile.name;
+  /**
+   * A receipt was attached, replaced (`file`) or removed (`null`) in the form. Nothing is uploaded
+   * here: the file travels with the create request when the purchase is saved, so removing it before
+   * then leaves nothing behind.
+   */
+  onReceiptChange(file: File | null): void {
+    this.selectedFile = file;
+  }
 
-      if (this.selectedFile.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = () => (this.previewUrl = reader.result as string);
-        reader.readAsDataURL(this.selectedFile);
-      } else {
-        this.previewUrl = null;
-      }
-    }
+  /** Back to where this purchase was started from, saving nothing. */
+  cancel(): void {
+    this.router.navigate([this.supplierOrderId ? '/purchases/orders' : '/purchases']);
   }
 
   upload(): void {
@@ -295,6 +314,14 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     // the document can be added to the saved purchase later.
     if (!this.form.title.trim()) {
       this.error = 'Please enter a purchase title.';
+      return;
+    }
+
+    // Every line names a product (issue #1029): a new line starts with none chosen rather than
+    // silently on the first product in the list.
+    const linesWithoutProduct = this.items.filter(item => !item.productId);
+    if (linesWithoutProduct.length > 0) {
+      this.error = missingProductErrorMessage(linesWithoutProduct.length);
       return;
     }
 
@@ -450,7 +477,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
   addItem(): void {
     this.items.push({
-      productId: this.products[0]?.id ?? 0,
+      productId: 0,
       quantity: 1,
       priceEntryMode: DEFAULT_PRICE_ENTRY_MODE,
       lineTotal: null,

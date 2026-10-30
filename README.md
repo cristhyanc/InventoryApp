@@ -1630,6 +1630,43 @@ and the **Edit Purchase** page each offer a GST picker with three states — **T
 and the package charge. A charge never inherits a line's classification, and there is no single
 classification for a whole purchase.
 
+**One layout for Add and Edit** (issue #1029). Add Purchase and Edit Purchase share one compact page:
+**Purchase details** (Supplier, Purchase date and an editable Purchase title, with an optional **Attach
+receipt** button beneath), **Purchased items**, the optional **Additional costs** and **Notes**, a **Purchase
+summary**, and a bar along the bottom with **Cancel** on the left and **Save purchase** on the right that stays
+in view while you scroll. The longer explanations of prices and GST sit behind small **i** help buttons beside
+the column headings; tap, click or press Enter on one to read it, and Escape or a tap elsewhere closes it.
+Screenshots: [Add, filled, 1440px](docs/screenshots/issue-1029/add-filled-1440px.png),
+[Add, 390px](docs/screenshots/issue-1029/add-filled-390px.png) and
+[Edit, expanded, 1440px](docs/screenshots/issue-1029/edit-expanded-1440px.png).
+
+- **Title.** A new purchase opens on today's date with a suggested title made from the supplier and the date
+  (for example "Sample Wholesale — 24 Oct 2026"), which follows the supplier and date until you type a title of
+  your own. Nothing ever replaces a title you typed, or the title of a purchase you are editing.
+- **Products.** Each line's product is a search box over your own products: type part of the name and pick it
+  from the list, which shows the product's size or unit where it has one. A new line starts with no product
+  chosen, and a line cannot be saved until it has one. **Quantity** is always individual units, never cartons.
+- **Validation.** A line you have not touched yet shows no errors; a missing product, quantity or price is
+  pointed out once you have worked on that line or pressed Save purchase. If the server refuses a save,
+  everything you entered stays on the page.
+- **Additional costs and Notes** start collapsed while they are empty. Expanding Additional costs shows
+  separate **Delivery** and **Packaging** amounts, each with its own GST picker once it has a value; Edit opens
+  either section automatically when it holds something. Collapsing a section only hides it: its values are
+  kept and saved.
+- **Receipt.** Attach receipt takes a PDF or an image. Before you save, the attached file can be previewed,
+  replaced or removed, and nothing is uploaded until the purchase is saved. On Edit, a purchase that already
+  has a receipt shows it with **Preview** only: a saved receipt cannot be replaced or removed from this page,
+  and opening or cancelling Edit never deletes it. A receipt attached while editing a purchase that has none is
+  added after your changes are saved; if the receipt is refused, your changes stay saved and you are told, and
+  the Purchases list still offers **Add document**.
+- **Purchase summary.** Items subtotal, Delivery and Packaging (when there are any), **Included GST** and the
+  **Purchase total**. On Add, Included GST says it is calculated when saved, because GST is worked out by the
+  server; on Edit it shows the GST as last saved, with any part still not classified. The **Receipt total
+  (optional)** is the purchase's existing total amount, stored exactly as before; when you enter one, the
+  summary says **Matches receipt** or **Difference: $X**, compared the same way the Purchases list's mismatch
+  warning compares it. It is information only: a difference never blocks a save and never changes what is
+  saved, and a blank receipt total means none was entered, not $0.
+
 **Edit** on a purchase row opens the Edit Purchase page at `/purchases/<id>/edit`; nothing expands inside the
 Purchases table. That address is bookmarkable and survives a page refresh, **Save** stores the changes and
 returns to the Purchases list, and **Cancel** returns without saving. Leaving the page by Cancel, by the
@@ -1637,10 +1674,10 @@ browser's Back button or by any other link discards unsaved edits without asking
 other form page in the application behaves.
 
 **Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line shows
-both of its prices side by side — **Unit price ($)** and **Total price ($)** — and you can type into either
-one. The other is calculated from that line's purchased unit quantity, so you can check both before saving:
-type $32.50 into Total price for 20 units and the Unit price fills in as $1.6250; type $1.50 into Unit price
-for 28 units and the Total price fills in as $42.00. The figure you typed **last** is the one the other
+both of its prices side by side — **Unit price ($)** and **Line total ($)** (called Total price before issue
+#1029) — and you can type into either one. The other is calculated from that line's purchased unit quantity, so you can check both before saving:
+type $32.50 into Line total for 20 units and the Unit price fills in as $1.6250; type $1.50 into Unit price
+for 28 units and the Line total fills in as $42.00. The figure you typed **last** is the one the other
 follows, so if you change the quantity afterwards, a total you typed is spread over the new quantity while a
 unit price you typed is multiplied by it. A line is still saved as its quantity and unit cost, and a total
 that does not divide evenly — $100.00 over 300 units, for example — is saved so the line still comes to
@@ -1648,7 +1685,7 @@ exactly the $100.00 you entered, even though the Unit price field shows the roun
 starts each line on the total paid; a line already on a purchase you are editing starts on its recorded unit
 price, so correcting only its quantity keeps the cost it was recorded at, and neither receiving a supplier
 order nor opening the edit page changes a line's unit cost until you type a price yourself. The purchase's own
-**Total Amount**, **Delivery Cost** and **Package Cost** are unaffected and are still entered as plain
+**Receipt total**, **Delivery** and **Packaging** amounts are unaffected and are still entered as plain
 amounts.
 
 - Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
@@ -1678,10 +1715,10 @@ cost, costing quantity or inventory value.
 
 ## A purchase without a receipt
 
-A purchase is the record of what you bought; the receipt is paperwork about it. So the **Supporting Document**
-field on Add Purchase is optional: leave it empty and the purchase is saved exactly as it would be with a
+A purchase is the record of what you bought; the receipt is paperwork about it. So the **Attach receipt**
+button on Add Purchase is optional: leave it unused and the purchase is saved exactly as it would be with a
 receipt attached - the same stock, the same cost, the same GST, the same supplier-order handling. A purchase
-still needs a **Purchase Title**, because with no file there is no file name for it to fall back to.
+still needs a **Purchase title**; Add Purchase suggests one from the supplier and the date.
 
 The Purchases list says **No document** for a purchase that has none, and offers **Add document** on that row.
 Pick the receipt when it turns up and it is added to the purchase that was already recorded; it then opens and

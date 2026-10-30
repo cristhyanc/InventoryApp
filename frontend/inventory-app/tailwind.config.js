@@ -49,7 +49,7 @@ module.exports = {
         // The public Restockroo landing page (issue #954), from the owner-approved Stitch export
         // ("Field & Ledger"). `public/landing/` uses this scale and, since issue #972, so do the
         // Dashboard and the authenticated shell's navigation (sidebar, mobile bottom bar and More
-        // sheet), and since issue #996 the Pick List; no other authenticated page does. The text pairs it is used in are asserted in
+        // sheet), since issue #996 the Pick List, and since issue #1029 the Add and Edit Purchase pages; no other authenticated page does. The text pairs it is used in are asserted in
         // `design-tokens.contrast.spec.ts`.
         rr: {
           navy: '#0F172A', // headings, values

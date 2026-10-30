@@ -558,7 +558,7 @@ describe('PurchaseUploadComponent write controls during a support session (issue
     expect(upload).toHaveBeenCalledTimes(1);
   });
 
-  it('disables the Add Purchase button while a session is active, and leaves it enabled while none is', async () => {
+  it('disables the Save purchase button while a session is active', async () => {
     const route = { queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
     const sessionActive$ = of(true);
 
@@ -580,7 +580,7 @@ describe('PurchaseUploadComponent write controls during a support session (issue
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
 
-    const submit = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Add Purchase') as HTMLButtonElement;
+    const submit = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Save purchase') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
   });
 });
@@ -787,5 +787,113 @@ describe('PurchaseUploadComponent saving without a document (issue #976)', () =>
 
     expect(harness.component.completionChoice).not.toBeNull();
     expect(harness.upload).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The redesigned Add Purchase (issue #1029): a suggested title the person's own typing always wins
+ * over, the compact receipt control, and a line that must name a product.
+ */
+describe('PurchaseUploadComponent redesigned form (issue #1029)', () => {
+  function todayLabel(): string {
+    const now = new Date();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
+  }
+
+  it('opens on today, with a title suggested from the date', () => {
+    const { component } = createHarness(null);
+
+    expect(component.form.title).toBe(`Purchase — ${todayLabel()}`);
+  });
+
+  it('follows the supplier and the date while the person has not typed a title', () => {
+    const { component } = createHarness(null);
+    component.suppliers = [{ id: 3, name: 'Costco Wholesale' }];
+
+    component.form.supplierId = 3;
+    component.form.purchaseDate = '2026-10-24';
+    component.refreshSuggestedTitle();
+
+    expect(component.form.title).toBe('Costco Wholesale — 24 Oct 2026');
+  });
+
+  it('never overwrites a title the person typed', () => {
+    const { component } = createHarness(null);
+    component.suppliers = [{ id: 3, name: 'Costco Wholesale' }];
+
+    component.form.title = 'Snacks for the gym';
+    component.onTitleEdited();
+    component.form.supplierId = 3;
+    component.refreshSuggestedTitle();
+
+    expect(component.form.title).toBe('Snacks for the gym');
+  });
+
+  it('names the supplier of the order it is receiving', () => {
+    const { component } = createHarness('9');
+    component.suppliers = [{ id: 1, name: 'Acme Supplies' }];
+    component.refreshSuggestedTitle();
+
+    expect(component.form.title).toBe(`Acme Supplies — ${todayLabel()}`);
+  });
+
+  it('starts a new line with no product chosen and refuses to save it until one is', () => {
+    const { component, upload } = createHarness(null);
+    component.addItem();
+    component.onLineQuantityChange(component.items[0], 3);
+    component.onLineTotalChange(component.items[0], 6);
+
+    expect(component.items[0].productId).toBe(0);
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.error).toBe('Choose a product for every item. 1 item(s) have no product.');
+
+    component.items[0].productId = 5;
+    component.upload();
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the attached receipt with the create, and nothing once it was removed again', () => {
+    const { component, upload } = readyToUpload();
+    const receipt = new File(['scan'], 'receipt.jpg', { type: 'image/jpeg' });
+
+    component.onReceiptChange(receipt);
+    component.onReceiptChange(null);
+    component.upload();
+
+    expect(uploadedPayload(upload).file).toBeNull();
+  });
+
+  it('sends a replaced receipt rather than the first one chosen', () => {
+    const { component, upload } = readyToUpload();
+    const replacement = new File(['scan 2'], 'receipt-2.pdf', { type: 'application/pdf' });
+
+    component.onReceiptChange(new File(['scan 1'], 'receipt-1.pdf', { type: 'application/pdf' }));
+    component.onReceiptChange(replacement);
+    component.upload();
+
+    expect(uploadedPayload(upload).file).toBe(replacement);
+  });
+
+  it('keeps an entered receipt total exactly as typed, whether or not it matches', () => {
+    const { component, upload } = readyToUpload();
+    component.form.totalAmount = 6.5;
+
+    component.upload();
+
+    expect(uploadedPayload(upload).totalAmount).toBe(6.5);
+  });
+
+  it('cancels back to where the purchase was started, saving nothing', () => {
+    const manual = createHarness(null);
+    manual.component.cancel();
+    expect(manual.navigate).toHaveBeenCalledWith(['/purchases']);
+    expect(manual.upload).not.toHaveBeenCalled();
+
+    const fromOrder = createHarness('9');
+    fromOrder.component.cancel();
+    expect(fromOrder.navigate).toHaveBeenCalledWith(['/purchases/orders']);
   });
 });
