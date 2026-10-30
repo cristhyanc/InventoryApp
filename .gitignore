@@ -10,6 +10,10 @@ out/
 .angular/cache/
 node_modules/
 
+# Price collector run output (issue #926): one file per issued work item, written by a scheduled
+# collector run and submitted by the workflow. Never part of the repository.
+price-collector-out/
+
 # Test output and coverage
 TestResults/
 **/TestResults/
