@@ -3022,7 +3022,13 @@ every business exactly as it is today.
   The Dashboard's machine-fleet sections and the Pick List's calculated matrix say the same thing in
   their own wording when the business's plan does not include the sales provider, naming the Pro
   plan rather than claiming Nayax is not connected — which would be untrue of a business whose
-  credentials are stored and working.
+  credentials are stored and working. **Importing a Nayax sales file** is the same kind of lock on
+  **Admin → Imports**: that one card says it needs the Pro plan and withholds the file
+  controls, so nothing is uploaded that could only be refused, while the pending reimbursement XML
+  import, the product-catalogue import link and the CSV template download on the same page keep
+  working exactly as they do now. A refusal that arrives anyway — the plan changed between reads, or
+  it could not be read at all — is shown in that card too, naming the plan the refusal itself named,
+  rather than as a failed-import message with a retry that would be refused again.
 - **An unread entitlement locks nothing.** Exactly as an unread capability or provider answer does
   not, a plan that has not been read yet, or could not be read, leaves every entry open and every
   inline part showing its ordinary loading or unavailable state; the page's own request, once it is

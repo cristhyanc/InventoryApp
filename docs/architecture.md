@@ -7312,6 +7312,27 @@ keep working unchanged once that one file knows the new word:
   - `cheapestSupplierDisplay` treats every non-`'loaded'` state alike - so the Dashboard, Needs
   Ordering and All Products pages change nothing of their own: the one component Dashboard reorder
   alerts (#939), Needs Ordering and Products (#940) all share is the one place this had to be taught.
+- **The Nayax sales import card** (`SalesFileImport`, `Pro`) is the second inline lock of that same
+  `403 plan_required` shape, and it is inline rather than route-level **because the page is mixed**:
+  `/admin/imports` also runs the pending reimbursement XML import, links to the product-catalogue
+  review's own page and downloads a CSV template that calls no API, and none of those is a
+  higher-plan feature. Locking the route would withhold three working workflows over one locked
+  card, so `admin-imports.component.ts` locks the card instead and the route keeps its
+  `requireCapability('Imports.Run')` alone - stated by name in `app.routes.spec.ts` rather than
+  merely left untested. The card reads `planLockOf(entitlement, 'SalesFileImport')` off
+  `AccessService.access$` exactly as `PlanLockedComponent` does, so it holds no plan rule of its
+  own; `locked` withholds the file input **and** the button that opens it (neither is in the DOM, so
+  there is no disabled control to tab to) and `onSalesSelected` returns early, which is what keeps
+  the refusable `POST /api/imports/nayax-sales` from being sent at all. A `403 plan_required` that
+  arrives anyway - a downgrade between reads, or an entitlement that could not be read, where the
+  fail-open rule correctly left the controls offered - is read with `planRequiredOfError` and
+  rendered in the card as the same sentence for the plan that refusal named, instead of the generic
+  failure toast it used to fall through to; the next re-read that includes the feature clears it, so
+  an upgrade made elsewhere opens the card rather than leaving it locked by what the backend said
+  about a plan the business is no longer on. Role and support session are unchanged and are both
+  checked ahead of the plan: the route's capability guard decides whether the page exists for a
+  member at all, and during a support session the control is still rendered and disabled, because
+  what withholds it there is the read-only session rather than the plan.
 
 **What proves it.** `access/plan-feature.spec.ts` pins the required-plan table against
 `PlanFeaturePolicy.RequiredPlan`, the fail-open/fail-closed rules and `planRequiredOfError`'s own
@@ -7330,7 +7351,13 @@ order and length on every route above, including the stated Admin omission.
 nothing; `components/dashboard/dashboard.component.provider-optional.spec.ts` covers the Dashboard's
 hiding and wording; `components/shared/cheapest-supplier/cheapest-suppliers.component.spec.ts` covers
 the inline plan lock naming the plan a `403` actually named, the missing Retry and the rest of the
-page working.
+page working; and `components/admin/imports/admin-imports.component.spec.ts` covers the sales card's
+own lock - `Free` and `Starter` withholding the controls with **no** import call made, `Pro` importing
+normally and still refused during a support session, enforcement off and the three not-known
+entitlement answers locking nothing, a `plan_required` refusal rendered in the card instead of a
+toast and not repeatable, an ordinary failure still reported as the error it is, the re-read that
+clears the refusal and the one that keeps it, and the other three import workflows on the page
+untouched.
 
 ### Target feature boundaries
 

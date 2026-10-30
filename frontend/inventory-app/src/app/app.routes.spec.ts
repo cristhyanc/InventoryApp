@@ -683,6 +683,17 @@ describe('plan-locked routes (issue #979)', () => {
       expect(route(path).canActivate).toHaveLength(4);
     }
   });
+
+  /**
+   * The Imports page is deliberately **not** plan-locked as a route: only its Nayax sales card is a
+   * higher-plan feature, and the pending reimbursement XML import, the product-catalogue link and
+   * the client-side template download on the same page are not. Locking the route would withhold
+   * three working workflows over one locked card, so that card carries the inline lock instead -
+   * `components/admin/imports/admin-imports.component.spec.ts` covers it.
+   */
+  it('leaves the mixed Imports page on its capability guard alone, because only one card is plan-locked', () => {
+    expect(route('admin/imports').canActivate).toHaveLength(3);
+  });
 });
 
 /**
