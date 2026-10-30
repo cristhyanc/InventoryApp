@@ -63,6 +63,21 @@ public enum PlanFeature
     /// requirement of its own.
     /// </summary>
     SalesFileImport = 50,
+
+    /// <summary>
+    /// The observed supplier prices a business reads: the cheapest-supplier summary of issue #930
+    /// (<c>POST /api/cheapest-suppliers/summary</c>) and the <strong>Cheapest supplier</strong>
+    /// column on Needs Ordering, All Products and the Dashboard that it serves - and, since issue
+    /// #977, the shared collection that produces them (see
+    /// <c>Inventory.Domain.PriceCatalogue.PriceCollectionEligibilityPolicy</c>).
+    ///
+    /// <para>It is deliberately not the <em>tracking</em> switch beside it: saying which of a
+    /// business's own products it wants priced is the business's own record, it is kept through a
+    /// downgrade, and it takes effect the moment the plan includes this feature again (issue #977's
+    /// fourth criterion). Nor is it the purchase-history comparison of issue #63, which is about
+    /// what the business actually paid and is on every plan.</para>
+    /// </summary>
+    ObservedSupplierPrices = 60,
 }
 
 /// <summary>
@@ -83,6 +98,7 @@ public static class PlanFeatures
         PlanFeature.ProviderSalesReports,
         PlanFeature.SiteCommissions,
         PlanFeature.SalesFileImport,
+        PlanFeature.ObservedSupplierPrices,
     ];
 
     /// <summary>Whether <paramref name="feature"/> is one this code declares.</summary>
@@ -102,6 +118,7 @@ public static class PlanFeatures
         PlanFeature.ProviderSalesReports => "ProviderSalesReports",
         PlanFeature.SiteCommissions => "SiteCommissions",
         PlanFeature.SalesFileImport => "SalesFileImport",
+        PlanFeature.ObservedSupplierPrices => "ObservedSupplierPrices",
         _ => throw new ArgumentOutOfRangeException(
             nameof(feature), feature, "Only a declared plan feature has a published name."),
     };
@@ -146,6 +163,7 @@ public static class PlanFeaturePolicy
         PlanFeature.ProviderSalesReports => SubscriptionPlan.Pro,
         PlanFeature.SiteCommissions => SubscriptionPlan.Pro,
         PlanFeature.SalesFileImport => SubscriptionPlan.Pro,
+        PlanFeature.ObservedSupplierPrices => SubscriptionPlan.Starter,
         _ => throw new ArgumentOutOfRangeException(
             nameof(feature), feature, "Only a declared plan feature has a required plan."),
     };

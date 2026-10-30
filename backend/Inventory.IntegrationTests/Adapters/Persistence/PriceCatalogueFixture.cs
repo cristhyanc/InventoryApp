@@ -1,11 +1,14 @@
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Domain.PriceCatalogue;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Subscriptions;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -31,6 +34,13 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 internal sealed class PriceCatalogueFixture : IAsyncDisposable
 {
     public static readonly DateTime CreatedAt = new(2026, 10, 27, 5, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// The instant the plan records this fixture writes apply from, before everything else here, so
+    /// a grant covers <see cref="CreatedAt"/> - the instant the work-list stores are built with
+    /// unless a test chooses another one (issue #977).
+    /// </summary>
+    public static readonly DateTime GrantedFrom = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
     private readonly SqliteConnection _connection;
     private readonly DbContextOptions<AppDbContext> _options;
@@ -118,7 +128,7 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
 
     /// <summary>The work-list store on a context scoped to one business.</summary>
     public IPriceCatalogueWorkListStore WorkListStoreFor(int businessId) =>
-        new EfPriceCatalogueWorkListStore(Track(TestAppDbContext.For(_options, businessId)));
+        WorkListStore(TestAppDbContext.For(_options, businessId), enforcePlans: false, nowUtc: null);
 
     /// <summary>
     /// The work-list store as a <strong>collector request</strong> reaches it: the real adapter on a
@@ -131,9 +141,17 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     /// deduplication <em>across</em> businesses, which is what issue #923's third and seventh criteria
     /// are about, is therefore asserted here over the scope the one endpoint that reaches this adapter
     /// actually has.</para>
+    ///
+    /// <para>Plan enforcement is <strong>off</strong> unless a test asks for it, which is the
+    /// shipped state and issue #977's last criterion: until a deployment switches the rollout
+    /// setting on, the work list is exactly what it was. <paramref name="enforcePlans"/> is that
+    /// deployment setting and <paramref name="nowUtc"/> the instant the business's plan records are
+    /// judged at.</para>
     /// </summary>
-    public IPriceCatalogueWorkListStore DeniedWorkListStore() =>
-        new EfPriceCatalogueWorkListStore(Track(TestAppDbContext.Denied(_options)));
+    public IPriceCatalogueWorkListStore DeniedWorkListStore(
+        bool enforcePlans = false,
+        DateTime? nowUtc = null) =>
+        WorkListStore(TestAppDbContext.Denied(_options), enforcePlans, nowUtc);
 
     /// <summary>
     /// The work-list store over a context that sees every business's rows without any filter at all.
@@ -142,7 +160,28 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     /// authorization, not by the context it is given.
     /// </summary>
     public IPriceCatalogueWorkListStore UnscopedWorkListStore() =>
-        new EfPriceCatalogueWorkListStore(Track(TestAppDbContext.Unrestricted(_options)));
+        WorkListStore(TestAppDbContext.Unrestricted(_options), enforcePlans: false, nowUtc: null);
+
+    /// <summary>
+    /// The work-list store as the composition root builds it: the real adapter, the deployment's
+    /// rollout setting, the real grandfathering record on the same context, and the clock
+    /// (issue #977). Every business is collected for while that setting is off.
+    /// </summary>
+    private IPriceCatalogueWorkListStore WorkListStore(
+        AppDbContext context,
+        bool enforcePlans,
+        DateTime? nowUtc)
+    {
+        var db = Track(context);
+
+        return new EfPriceCatalogueWorkListStore(
+            db,
+            enforcePlans
+                ? FakeSubscriptionEnforcementFlag.Enabled
+                : FakeSubscriptionEnforcementFlag.Disabled,
+            new EfSubscriptionGrandfatheringStore(db),
+            new FakeClock(nowUtc ?? CreatedAt));
+    }
 
     /// <summary>The collector run store as a collector request reaches it: a denied scope.</summary>
     public IPriceCollectorRunStore DeniedRunStore() =>
@@ -426,6 +465,87 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
 
         return System.Text.Json.JsonSerializer.Serialize(
             new { products, purchases, purchaseItems, suppliers, adjustments, trackings });
+    }
+
+    /// <summary>
+    /// Records the grandfathering step as completed (issue #966), which is the second thing plan
+    /// enforcement waits for: with the rollout setting on and no completion marker, every business
+    /// is still unrestricted.
+    /// </summary>
+    public Task CompleteGrandfatheringAsync() => WriteGrandfatheringAsync(completed: true);
+
+    /// <summary>The interrupted rollout: a cutoff is recorded and the step never finished.</summary>
+    public Task StartGrandfatheringAsync() => WriteGrandfatheringAsync(completed: false);
+
+    /// <summary>
+    /// Puts one business on <paramref name="plan"/> through a manual grant (issue #966), which is
+    /// how the grandfathered and complimentary plans a business holds are recorded.
+    ///
+    /// <para>Free is deliberately not written as a grant: it is the <em>absence</em> of an active
+    /// record, which is how a business really arrives there, so a test puts a business on Free by
+    /// giving it no grant at all or by letting the one it has end.</para>
+    /// </summary>
+    public async Task GrantPlanAsync(
+        int businessId,
+        SubscriptionPlan plan,
+        DateTime? startsAtUtc = null,
+        DateTime? endsAtUtc = null)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        db.BusinessPlanGrants.Add(new BusinessPlanGrant
+        {
+            BusinessId = businessId,
+            Plan = plan,
+            Source = ManualPlanGrantSource.Complimentary,
+            StartsAtUtc = startsAtUtc ?? GrantedFrom,
+            EndsAtUtc = endsAtUtc,
+            Reason = "Fixture",
+            GrantedAtUtc = startsAtUtc ?? GrantedFrom,
+            Revision = 1,
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Puts one business on <paramref name="plan"/> through a paid subscription instead, so the
+    /// collector's eligibility can be shown to read the same entitlement rule as everything else
+    /// rather than only the grants.
+    /// </summary>
+    public async Task SubscribeAsync(
+        int businessId,
+        SubscriptionPlan plan,
+        BillingSubscriptionStatus status = BillingSubscriptionStatus.Active)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        db.BusinessBillingSubscriptions.Add(new BusinessBillingSubscription
+        {
+            BusinessId = businessId,
+            Plan = plan,
+            Status = status,
+            CurrentPeriodStartUtc = GrantedFrom,
+            CurrentPeriodEndUtc = null,
+            UpdatedAtUtc = GrantedFrom,
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    private async Task WriteGrandfatheringAsync(bool completed)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        db.SubscriptionGrandfatherings.Add(new SubscriptionGrandfathering
+        {
+            Id = SubscriptionGrandfathering.SingletonId,
+            CutoffUtc = GrantedFrom,
+            CompletedAtUtc = completed ? GrantedFrom.AddMinutes(5) : null,
+            GrantedBusinessCount = completed ? 1 : 0,
+        });
+
+        await db.SaveChangesAsync();
     }
 
     public async Task<int> SeedBusinessAsync(string name)

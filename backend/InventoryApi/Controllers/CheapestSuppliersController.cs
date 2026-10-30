@@ -1,5 +1,6 @@
 using Inventory.Application.Access;
 using Inventory.Application.PriceCatalogue;
+using Inventory.Domain.Subscriptions;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -33,6 +34,23 @@ namespace InventoryApi.Controllers;
 /// rule (issue #551), so this column reads as unavailable in a support view rather than being
 /// specially permitted here.</para>
 ///
+/// <para><strong>It is the one endpoint that serves supplier price data, and since issue #977 it
+/// needs the <see cref="PlanFeature.ObservedSupplierPrices"/> feature - the Starter plan.</strong>
+/// The plan is asked after the capability and before the action, so a business whose effective plan
+/// is Free is refused with the one <c>plan_required</c> shape and nothing is read; the page around
+/// the call keeps working, because the column has always had a state for "this could not be read"
+/// (the lock that names the plan is issue #979's). The requirement is on the controller rather than
+/// the action because every action here serves that data, and the shared collection that produces it
+/// is gated on the same feature through
+/// <c>Inventory.Domain.PriceCatalogue.PriceCollectionEligibilityPolicy</c> - so nothing is searched
+/// for at a supplier on behalf of a business that would be refused the answer.</para>
+///
+/// <para>The <em>tracking</em> switch beside it is deliberately not behind this: saying which of its
+/// own products a business wants priced is its own record, is kept through a downgrade and takes
+/// effect again on an upgrade (issue #977's fourth criterion), so
+/// <c>PUT /api/products/{id}/price-tracking</c> and the two reads beside it carry no plan
+/// requirement at all.</para>
+///
 /// <para>The controller is thin: it binds the ids, invokes the use case and maps its answer. Every
 /// comparison, GST conversion and tie is <c>Inventory.Domain.PriceCatalogue.CheapestUnitOfferPolicy</c>'s
 /// (issue #925); nothing here divides, converts, rounds or chooses a cheapest.</para>
@@ -42,6 +60,7 @@ namespace InventoryApi.Controllers;
 [Authorize]
 [RequiredScope("access_as_user")]
 [RequireCapability(Capability.DashboardView)]
+[RequirePlan(PlanFeature.ObservedSupplierPrices)]
 public sealed class CheapestSuppliersController : ControllerBase
 {
     private readonly GetCheapestSupplierSummary _getSummary;
@@ -63,8 +82,10 @@ public sealed class CheapestSuppliersController : ControllerBase
     /// No product ids at all, or more than the accepted maximum. Nothing is read.
     /// </response>
     /// <response code="403">
-    /// The caller's role does not grant <c>Dashboard.View</c>, or the request is in a read-only
-    /// support session, which refuses every non-<c>GET</c> request.
+    /// The caller's role does not grant <c>Dashboard.View</c>; the business's plan does not include
+    /// the observed supplier prices, with the <c>plan_required</c> code and the plan it would need
+    /// (issue #977); or the request is in a read-only support session, which refuses every
+    /// non-<c>GET</c> request.
     /// </response>
     [HttpPost("summary")]
     [ProducesResponseType(StatusCodes.Status200OK)]

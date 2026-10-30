@@ -1,5 +1,8 @@
 using Inventory.Application.PriceCatalogue;
+using Inventory.Application.Subscriptions;
+using Inventory.Application.Time;
 using Inventory.Domain.PriceCatalogue;
+using Inventory.Domain.Subscriptions;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -46,14 +49,61 @@ namespace Inventory.Infrastructure.Persistence;
 /// count the read would be the unbounded one the response bound exists to prevent: a single product
 /// with ten thousand listings would be materialised in full before anything could decide not to
 /// publish it.</para>
+///
+/// <para><strong>Since issue #977 the two mapping reads also only reach the mappings of the
+/// businesses whose plan includes the observed supplier prices</strong>
+/// (<see cref="PriceCollectionEligibilityPolicy"/> - the Starter plan). The eligibility is decided
+/// <em>here</em>, inside the one adapter that already reads the mappings across businesses, and that
+/// is the design rather than a convenience: the only thing that could decide it anywhere else is a
+/// <em>set of business ids</em>, and the whole of what makes this read safe is that no business id,
+/// not even a count of businesses, crosses the port boundary. So this adapter reads the plan records
+/// of the businesses that hold one - the ownership key, the plan and the half-open period, and
+/// nothing else about any of them - asks the Domain's own entitlement rule
+/// (<see cref="EffectiveEntitlementPolicy"/>, exactly as <c>GET /api/me/access</c> does) which of
+/// them are entitled, and restricts the two mapping statements to those businesses. What leaves the
+/// adapter is unchanged: a product description. <strong>It is a read and never a write</strong> - no
+/// mapping, listing, observation or master product is touched by a business ceasing to be eligible,
+/// so a downgrade withholds collection and deletes nothing, and the business's own tracking setting
+/// is kept and takes effect again the moment the plan includes the prices.</para>
+///
+/// <para><strong>"At least one entitled business" needs nothing added for it.</strong> Both reads
+/// already deduplicate - one entry per master product and one per waiting key - so a product an
+/// entitled business and a Free business both track is reached through the entitled business's
+/// mapping and published once, and a product only Free businesses track is reached through no
+/// mapping at all and is absent. The plan read is three statements per issued run - the
+/// grandfathering marker, the grants and the subscriptions - and each is sized by the number of
+/// businesses that hold a plan record rather than by the catalogue, a mapping or a product.</para>
+///
+/// <para><strong>And it withholds nothing until a deployment switches enforcement on.</strong> With
+/// the rollout setting off, or with the grandfathering step not completed, no plan record is read at
+/// all and both statements are exactly what they were before issue #977 - which is the shipped state
+/// (see <c>Inventory.Application.Subscriptions.ISubscriptionEnforcementFlag</c> and issue #966).</para>
 /// </summary>
 public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
 {
     private readonly AppDbContext _db;
+    private readonly ISubscriptionEnforcementFlag _enforcement;
+    private readonly ISubscriptionGrandfatheringStore _grandfathering;
+    private readonly IClock _clock;
 
-    public EfPriceCatalogueWorkListStore(AppDbContext db)
+    /// <summary>
+    /// The eligibility this request has already decided, so one issued work list judges both of its
+    /// mapping reads against one answer rather than against two instants. The adapter is registered
+    /// scoped and the work list is issued by one sequential use case, so there is nothing here to
+    /// synchronise - the memoisation is about agreement between the two reads, not about contention.
+    /// </summary>
+    private CollectedBusinesses? _eligibility;
+
+    public EfPriceCatalogueWorkListStore(
+        AppDbContext db,
+        ISubscriptionEnforcementFlag enforcement,
+        ISubscriptionGrandfatheringStore grandfathering,
+        IClock clock)
     {
         _db = db;
+        _enforcement = enforcement;
+        _grandfathering = grandfathering;
+        _clock = clock;
     }
 
     /// <inheritdoc />
@@ -66,12 +116,12 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
         // what keeps its stored text - the size the product no longer has - out of the collector.
         //
         // DISTINCT in SQL over the three columns, so rows that agree exactly - the common case, five
-        // businesses holding the same product name - collapse before they are materialised.
-        var waiting = await _db.ProductPriceTrackings
-            .AsNoTracking()
-            // The reviewed cross-business read of issue #924; see the class remarks for what it may
-            // project and why that is what makes it safe.
-            .IgnoreQueryFilters()
+        // businesses holding the same product name - collapse before they are materialised. A key
+        // several businesses' products fold to therefore survives while any one of those businesses
+        // is entitled, which is issue #977's rule with nothing written for it.
+        var eligibility = await EligibilityAsync(cancellationToken).ConfigureAwait(false);
+
+        var waiting = await CollectableMappings(eligibility)
             .Where(tracking => tracking.Status == ProductPriceTrackingStatus.Requested)
             .Select(tracking => new WaitingSearchText(
                 tracking.WaitingKey,
@@ -220,20 +270,159 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
     }
 
     /// <summary>
-    /// The distinct master products at least one mapping names, as ids.
+    /// The distinct master products at least one <em>collectable</em> mapping names, as ids.
     ///
     /// <para>The second half of the same reviewed cross-business read: the projection is one id and
-    /// the <c>DISTINCT</c> is what makes five businesses' five mappings one product.</para>
+    /// the <c>DISTINCT</c> is what makes five businesses' five mappings one product - and, since
+    /// issue #977, what makes a product tracked by one entitled business and four Free ones a
+    /// product that is still collected, once.</para>
     /// </summary>
-    private async Task<List<long>> TrackedMasterProductIdsAsync(CancellationToken cancellationToken) =>
-        await _db.ProductPriceTrackings
-            .AsNoTracking()
-            .IgnoreQueryFilters()
+    private async Task<List<long>> TrackedMasterProductIdsAsync(CancellationToken cancellationToken)
+    {
+        var eligibility = await EligibilityAsync(cancellationToken).ConfigureAwait(false);
+
+        return await CollectableMappings(eligibility)
             .Where(tracking => tracking.MasterProductId != null)
             .Select(tracking => tracking.MasterProductId!.Value)
             .Distinct()
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The mappings this run may be issued work for: issue #924's reviewed cross-business read of
+    /// <c>ProductPriceTrackings</c>, restricted since issue #977 to the businesses whose plan
+    /// includes the observed supplier prices.
+    ///
+    /// <para>The filter is a set of this application's own business keys rather than anything a
+    /// caller supplied - a collector request carries a denied scope and no input at all - and it only
+    /// ever <em>narrows</em> what the statement reaches. While nothing is enforced it is not applied
+    /// and the statement is exactly the one issue #923 shipped.</para>
+    /// </summary>
+    private IQueryable<Models.ProductPriceTracking> CollectableMappings(
+        CollectedBusinesses eligibility)
+    {
+        var mappings = _db.ProductPriceTrackings
+            .AsNoTracking()
+            // The reviewed cross-business read of issue #924; see the class remarks for what it may
+            // project and why that is what makes it safe.
+            .IgnoreQueryFilters();
+
+        if (!eligibility.Applies)
+        {
+            return mappings;
+        }
+
+        var entitled = eligibility.BusinessIds;
+
+        return mappings.Where(tracking => entitled.Contains(tracking.BusinessId));
+    }
+
+    /// <summary>
+    /// Which businesses this request collects for (issue #977), read at most once.
+    ///
+    /// <para>The order of the two gates is issue #966's and is why a deployment that has switched
+    /// nothing on makes no extra query: the rollout setting first, then the grandfathering
+    /// completion marker, and only then the businesses' own plan records. What is projected from
+    /// those records is the ownership key, the plan and the half-open period - no reason text, no
+    /// revision, no instant a decision was made at, and nothing about any other table - and the
+    /// decision itself is the Domain's single entitlement rule rather than a second reading of the
+    /// periods in SQL.</para>
+    ///
+    /// <para>A business that holds neither record is on Free and is simply absent, which is why
+    /// nothing here reads the <c>Businesses</c> table at all.</para>
+    /// </summary>
+    private async Task<CollectedBusinesses> EligibilityAsync(CancellationToken cancellationToken)
+    {
+        if (_eligibility is { } decided)
+        {
+            return decided;
+        }
+
+        if (!_enforcement.IsEnabled)
+        {
+            return _eligibility = CollectedBusinesses.EveryBusiness;
+        }
+
+        var grandfathering = await _grandfathering
+            .FindAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (grandfathering is not { IsComplete: true })
+        {
+            // Enforcement cannot start before the businesses that were already trading hold their
+            // grant: withholding collection now would stop collecting for every one of them at once.
+            return _eligibility = CollectedBusinesses.EveryBusiness;
+        }
+
+        var grants = await _db.BusinessPlanGrants
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .Select(row => new
+            {
+                row.BusinessId,
+                row.Plan,
+                row.Source,
+                row.StartsAtUtc,
+                row.EndsAtUtc,
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var subscriptions = await _db.BusinessBillingSubscriptions
+            .AsNoTracking()
+            .IgnoreQueryFilters()
+            .Select(row => new
+            {
+                row.BusinessId,
+                row.Plan,
+                row.Status,
+                row.CurrentPeriodStartUtc,
+                row.CurrentPeriodEndUtc,
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var nowUtc = _clock.UtcNow;
+
+        var grantsByBusiness = grants
+            .GroupBy(row => row.BusinessId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<ManualPlanGrantState>)[.. group.Select(row =>
+                    new ManualPlanGrantState(
+                        row.Plan,
+                        row.Source,
+                        new EntitlementPeriod(row.StartsAtUtc, row.EndsAtUtc)))]);
+
+        var subscriptionsByBusiness = subscriptions.ToDictionary(
+            row => row.BusinessId,
+            row => new BillingSubscriptionState(
+                row.Plan,
+                row.Status,
+                new EntitlementPeriod(row.CurrentPeriodStartUtc, row.CurrentPeriodEndUtc)));
+
+        List<int> entitled = [];
+
+        foreach (var businessId in grantsByBusiness.Keys
+            .Union(subscriptionsByBusiness.Keys)
+            .Order())
+        {
+            var entitlement = EffectiveEntitlementPolicy.Decide(
+                enforcementEnabled: true,
+                grandfatheringCompleted: true,
+                grantsByBusiness.TryGetValue(businessId, out var own) ? own : [],
+                subscriptionsByBusiness.TryGetValue(businessId, out var paid) ? paid : null,
+                nowUtc);
+
+            if (PriceCollectionEligibilityPolicy.CollectsFor(entitlement))
+            {
+                entitled.Add(businessId);
+            }
+        }
+
+        return _eligibility = new CollectedBusinesses(Applies: true, entitled);
+    }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<CollectableSupplier>> ListCollectableSuppliersAsync(
@@ -476,4 +665,27 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
     /// the Domain's fold has grouped it.
     /// </summary>
     private sealed record WaitingSearchText(string WaitingKey, string SearchName, string UnitLabel);
+
+    /// <summary>
+    /// Whose mappings this request may be issued work for (issue #977): whether the restriction
+    /// applies at all, and the business keys it admits when it does.
+    ///
+    /// <para>It never leaves this class. The two statements it narrows publish a product
+    /// description, exactly as they did before.</para>
+    /// </summary>
+    /// <param name="Applies">
+    /// <see langword="false"/> while nothing is enforced, which is the shipped state and means every
+    /// business is collected for - deliberately not "an empty set of businesses", which would be the
+    /// opposite answer.
+    /// </param>
+    /// <param name="BusinessIds">
+    /// The businesses whose plan includes the observed supplier prices, in key order. A
+    /// <see cref="List{T}"/> because that is what EF Core translates a <c>Contains</c> over into one
+    /// parameterised predicate.
+    /// </param>
+    private sealed record CollectedBusinesses(bool Applies, List<int> BusinessIds)
+    {
+        /// <summary>The answer while plan entitlement is not being enforced at all.</summary>
+        public static CollectedBusinesses EveryBusiness { get; } = new(Applies: false, []);
+    }
 }

@@ -213,8 +213,9 @@ public sealed record BoundedRefusedMasterProducts(
 /// is still waiting for a match, and what is already matched and has listings.
 ///
 /// <para><strong>Two reads, no caller-supplied anything.</strong> Neither method takes a business, a
-/// predicate, a column list, a page, a sort or a statement, and neither answer carries a business id,
-/// a product id or anything else that could say whose products these are. What crosses this boundary
+/// predicate, a column list, a page, a sort or a statement - which issue #977 deliberately did not
+/// change - and neither answer carries a business id, a product id or anything else that could say
+/// whose products these are. What crosses this boundary
 /// is a product description and a supplier's listing of it. The context reads below take the keys the
 /// run was issued for and a bound on how much may travel under each of them - which is a size limit
 /// rather than a filter: nothing a caller passes can widen what is read or reach a row of a different
@@ -224,6 +225,19 @@ public sealed record BoundedRefusedMasterProducts(
 /// awaiting a match are returned as distinct <c>(search name, unit label)</c> pairs by waiting key -
 /// so case and spacing cannot make two searches of one product - and tracked master products are
 /// returned once each however many mappings point at them.</para>
+///
+/// <para><strong>And so is the plan eligibility of issue #977</strong>, for the same reason: the two
+/// reads answer only for the businesses whose plan includes the observed supplier prices
+/// (<c>Inventory.Domain.PriceCatalogue.PriceCollectionEligibilityPolicy</c>), so a matched product is
+/// issued while at least one entitled business tracks it and a waiting key while at least one
+/// entitled business's product folds to it - which the deduplication above turns into one entry
+/// either way, with a product a Free and an entitled business both track still collected once.
+/// Deciding it <em>behind</em> this port is deliberate: the only thing that could decide it in front
+/// of one is a set of business ids, and no business id - nor a count of businesses - may cross this
+/// boundary. Nothing is written and nothing is removed by a business ceasing to be eligible, and
+/// while plan entitlement is not being enforced, which is the shipped state, both reads answer
+/// exactly what they did before. See <c>EfPriceCatalogueWorkListStore</c> and docs/architecture.md
+/// § Collector work list.</para>
 ///
 /// <para><strong>This is the one cross-business read of the collector surface, and issue #924 is the
 /// reviewed decision that made it one.</strong> Issue #923 left the adapter reading the mappings
