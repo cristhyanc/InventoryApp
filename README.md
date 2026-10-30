@@ -1147,6 +1147,48 @@ POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
   somebody else decided the same row first. See
   [docs/architecture.md § Super Admin review of the supplier price catalogue](docs/architecture.md#super-admin-review-of-the-supplier-price-catalogue-issue-928).
 
+## Super Admin master products
+
+The review above is a **queue**: products awaiting a match, automatic matches to check, listings
+awaiting a decision. This page is the catalogue **itself** — every master product in the shared
+supplier price catalogue, searchable, with the supplier listings that hang from each one (issue #1023,
+the eighth task of #817). It exists because a product nothing was waiting on could not be found,
+searched for or inspected at all.
+
+**It is read only.** Creating, editing and deleting a master product are separate tasks that follow
+this one, and the Supplier Price Review stays the only place a master product is created or corrected.
+
+```text
+GET /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
+GET /api/super-admin/master-products/{id}                      one product and its supplier listings
+```
+
+- **Who may use it.** Exactly the same answer as every Super Admin route above: the configured Entra
+  `(tid, oid)` pair alone. An Owner, a Manager and an Operator are refused, and a member who presents
+  a support-session id is still an ordinary member. The request resolves no business at all.
+- **Nothing about any business is in either response** — no business id, no business name, no
+  business's product id, and **no count of who is tracking a product**. That count is the review's, and
+  it is deliberately not here: this page is master-catalogue management only.
+- **Searching and paging happen on the server.** `search` matches the brand or the name, ignoring case
+  and treating a typed `%` literally; `page` and `pageSize` are bounded (50 by default, 200 at most)
+  and the response reports the page and size it actually served, with the total number of products the
+  search matched.
+- **Each product carries its supplier-listing counts** by what the catalogue thinks of each listing —
+  proposed, confirmed, needs review and refused, with the total. Refused listings are counted, because
+  a refusal is kept rather than deleted.
+- **Each listing shows what a supplier publishes**: the supplier's name, its own product id, its
+  wording, the individual size, the pack quantity, the match status, when it was last checked, the
+  listing's own page, and the pack price of the reading it currently points at — with that reading's
+  currency, whether it includes GST, and when it was observed. A listing nobody has priced says
+  **Never checked** rather than showing a zero, and an unpublished pack quantity stays **Unknown**.
+  Nothing here is a per-unit price: that comparison is the Cheapest supplier column's.
+- **The page.** The Angular app offers it at `/super-admin/master-products`, shown as **Master
+  Products** in the sidebar's **Super Admin** group beside Supplier Price Review and only while
+  `GET /api/admin/diagnostics/access` confirms the signed-in actor; entering the URL directly works
+  identically, because the policy decides access on every request. It has no Add, Edit or Delete
+  control. See
+  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issue-1023).
+
 ## Super Admin option visibility
 
 The Super Admin also decides whether **one** Admin option is offered to anybody else: **Historical
