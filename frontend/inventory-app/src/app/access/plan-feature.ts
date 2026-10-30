@@ -76,7 +76,7 @@ export function isDeclaredPlan(plan: string): plan is SubscriptionPlanName {
  * feature nobody bought.
  */
 export function planFeatureAllowed(entitlement: Entitlement | undefined, feature: PlanFeature): boolean {
-  if (entitlement === undefined || !entitlement.enforced) {
+  if (!entitlement?.enforced) {
     return true;
   }
 
