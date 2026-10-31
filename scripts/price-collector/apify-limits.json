@@ -1,9 +1,18 @@
 {
-  "$comment": "The collector's Apify rules (issue #926, parent #817): which actors a run may call, what each call may spend and return, which enrichments are forced off, and what one run may spend in total. apify-guard.mjs enforces every value here as a Claude Code PreToolUse hook, so the caps are code rather than Claude's obedience. An actor may be called only while its own actorIdConfirmed is true: an id and input field names nobody has verified against the real actor are a guess, and the guard refuses to spend money on a guess, so confirming an actor after the dry run is a deliberate one-line change in this file. Costs are unknown until the owner's bounded dry run (the issue's own open decision): the figures below are the pre-dry-run defaults, and the guard enforces whatever the owner puts here afterwards. Reaching a cap stops the run - the searches it did not reach are recorded as not_searched by the run completion (#937) - which is deliberately the failure mode rather than overspending. Monthly limits are account settings (Apify maxMonthlyUsageUsd and the Claude Console spend limit) and are not this file's business.",
+  "$comment": "The collector's Apify rules (issue #926, parent #817): which actors a run may call, what each call may spend and return, which enrichments are forced off, and what one run may spend in total. apify-guard.mjs enforces every value here as a Claude Code PreToolUse hook, so the caps are code rather than Claude's obedience. An actor may be called only while its own actorIdConfirmed is true: an id and input field names nobody has verified against the real actor are a guess, and the guard refuses to spend money on a guess, so confirming an actor after the dry run is a deliberate one-line change in this file. Costs are unknown until the owner's bounded dry run (the issue's own open decision): the figures below are the pre-dry-run defaults, and the guard enforces whatever the owner puts here afterwards. Reaching a cap stops the run - the searches it did not reach are recorded as not_searched by the run completion (#937) - which is deliberately the failure mode rather than overspending. Monthly limits are account settings (Apify maxMonthlyUsageUsd and the Claude Console spend limit) and are not this file's business. The three retailer schemas were verified on 31 October 2026; identity verification alone does not enable paid calls. maxPages is the search page cap, while pageSize/maxItems bounds total returned products for internally paginated actors.",
   "schemaVersion": 1,
-  "toolNamePatterns": ["^mcp__apify__"],
-  "actorInputFields": ["actor", "actorId", "actorName"],
-  "inputContainerFields": ["input", "runInput"],
+  "toolNamePatterns": [
+    "^mcp__apify__"
+  ],
+  "actorInputFields": [
+    "actor",
+    "actorId",
+    "actorName"
+  ],
+  "inputContainerFields": [
+    "input",
+    "runInput"
+  ],
   "chargeField": "maxTotalChargeUsd",
   "perRun": {
     "$comment": "One collector run. 71 tracked products across the four Apify routes is roughly 350-400 calls with pagination, so 600 calls is a ceiling a normal run does not reach and a loop cannot pass. The charge cap counts the ceiling each call commits to rather than what Apify actually billed - the only figure a PreToolUse hook can know - so it is the worst case, never an estimate.",
@@ -15,49 +24,100 @@
       "$comment": "Coles, Woolworths and ALDI. Keyword search is noisy ('kinder bueno' returned eggs in the owner's testing) and Claude filters it; products mode with prefixed ids (coles:5216969, woolworths:66527) is precise and is the fallback for a known listing missing from a day's search. onlyChanged is forced off because every listing must get a positive check (#925), and paid details are forced off because they are billed and nothing reads them.",
       "actorIdConfirmed": true,
       "serves": [
-        { "priceConnector": "varnmill", "priceConnectorKey": "coles" },
-        { "priceConnector": "varnmill", "priceConnectorKey": "woolworths" },
-        { "priceConnector": "varnmill", "priceConnectorKey": "aldi" }
+        {
+          "priceConnector": "varnmill",
+          "priceConnectorKey": "coles"
+        },
+        {
+          "priceConnector": "varnmill",
+          "priceConnectorKey": "woolworths"
+        },
+        {
+          "priceConnector": "varnmill",
+          "priceConnectorKey": "aldi"
+        }
       ],
       "role": "name_search_and_id_lookup",
       "itemLimitField": "maxItems",
       "pageSize": 50,
       "maxPages": 3,
       "maxTotalChargeUsd": 0.02,
-      "forcedInput": { "onlyChanged": false, "fetchPaidDetails": false }
+      "forcedInput": {
+        "onlyChanged": false,
+        "fetchPaidDetails": false
+      }
     },
-    "abotapi/kmart-product-scraper": {
-      "$comment": "Kmart. Its keyword search is to be confirmed in the dry run (the issue says so). Reviews and local-stock enrichment are forced off: both are billed and neither is a price.",
+    "abotapi/kmart-au-scraper": {
+      "$comment": "Kmart. Its keyword search is to be confirmed in the dry run (the issue says so). Reviews and local-stock enrichment are forced off: both are billed and neither is a price. Exact actor identity and input schema verified read-only on 31 October 2026. actorIdConfirmed remains false until paid dry-run and transport charge-limit verification; existing spending ceilings are unchanged.",
       "actorIdConfirmed": false,
-      "serves": [{ "priceConnector": "kmart", "priceConnectorKey": null }],
+      "serves": [
+        {
+          "priceConnector": "kmart",
+          "priceConnectorKey": null
+        }
+      ],
       "role": "name_search",
       "itemLimitField": "maxItems",
       "pageSize": 50,
       "maxPages": 3,
       "maxTotalChargeUsd": 0.02,
-      "forcedInput": { "includeReviews": false, "includeLocalStock": false }
+      "forcedInput": {
+        "mode": "search",
+        "fetchReviews": false,
+        "maxReviews": 0,
+        "storePostcodes": [],
+        "storeNames": [],
+        "includeClickAndCollect": false,
+        "verifyOnlineDelivery": false,
+        "incrementalMode": false,
+        "resumeFromRunId": "",
+        "mcpConnectors": [],
+        "maxPages": 3
+      },
+      "schemaVerifiedAt": "2026-10-31"
     },
-    "axlymxp/bigw-product-search": {
-      "$comment": "BIG W by name. Dromb's keyword search timed out in the owner's testing, so the name search is this actor's.",
+    "axlymxp/bigw-product-scraper": {
+      "$comment": "BIG W by name. Dromb's keyword search timed out in the owner's testing, so the name search is this actor's. Exact actor identity and input schema verified read-only on 31 October 2026. actorIdConfirmed remains false until paid dry-run and transport charge-limit verification; existing spending ceilings are unchanged.",
       "actorIdConfirmed": false,
-      "serves": [{ "priceConnector": "big_w", "priceConnectorKey": null }],
+      "serves": [
+        {
+          "priceConnector": "big_w",
+          "priceConnectorKey": null
+        }
+      ],
       "role": "name_search",
       "itemLimitField": "maxItems",
-      "pageSize": 50,
+      "pageSize": 48,
       "maxPages": 3,
       "maxTotalChargeUsd": 0.02,
-      "forcedInput": {}
+      "forcedInput": {
+        "includePricing": true,
+        "includeReviews": false,
+        "includeReviewStats": false,
+        "maxReviewsPerProduct": 0,
+        "maxPagesPerQuery": 3
+      },
+      "schemaVerifiedAt": "2026-10-31"
     },
-    "dromb/bigw-sku-lookup": {
-      "$comment": "BIG W by SKU, billed per start, and the fallback for a known listing missing from that day's name search - never the way a run searches by name. One page: a SKU lookup answers for the ids it was given.",
+    "dromb/big-w-au-product-scraper": {
+      "$comment": "BIG W by SKU, billed per start, and the fallback for a known listing missing from that day's name search - never the way a run searches by name. One page: a SKU lookup answers for the ids it was given. Exact actor identity and input schema verified read-only on 31 October 2026. actorIdConfirmed remains false until paid dry-run and transport charge-limit verification; existing spending ceilings are unchanged.",
       "actorIdConfirmed": false,
-      "serves": [{ "priceConnector": "big_w", "priceConnectorKey": null }],
+      "serves": [
+        {
+          "priceConnector": "big_w",
+          "priceConnectorKey": null
+        }
+      ],
       "role": "listing_lookup",
-      "itemLimitField": "maxItems",
-      "pageSize": 20,
+      "itemLimitField": "limit",
+      "pageSize": 1,
       "maxPages": 1,
       "maxTotalChargeUsd": 0.03,
-      "forcedInput": {}
+      "forcedInput": {
+        "operation": "item",
+        "includeRaw": false
+      },
+      "schemaVerifiedAt": "2026-10-31"
     }
   }
 }

@@ -902,6 +902,17 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 
 **How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
 
+### Verified Apify retailer configuration
+
+The owner-confirmed actor identities are `abotapi/kmart-au-scraper`,
+`axlymxp/bigw-product-scraper` and `dromb/big-w-au-product-scraper` (schemas inspected
+31 October 2026). Their exact search/fallback inputs are in `scripts/price-collector/prompt.md`.
+The guard forces reviews and unnecessary enrichment off and bounds internal search pages.
+The three actors remain `actorIdConfirmed: false`: metadata verification is not the paid dry run
+required by #926. Do not raise the existing charge caps or enable calls until transport-level
+charge enforcement and a bounded live sample are verified. In particular, the current Axlymxp
+$0.02 ceiling can be consumed by its start charge before any product is returned.
+
 ### Running the collector scripts locally
 
 The collector side lives in `scripts/price-collector/` and is plain Node with no dependencies: the run's instructions (`prompt.md`), the Apify MCP configuration and per-actor rules (`apify-mcp.json`, `apify-limits.json`), the `PreToolUse` guard that enforces them (`apify-guard.mjs`), and the two scripts that talk to this API. The complete design is [docs/architecture.md § The collector prompt, the Apify limits and the helper scripts](docs/architecture.md#the-collector-prompt-the-apify-limits-and-the-helper-scripts-issue-926).

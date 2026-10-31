@@ -16638,3 +16638,23 @@ For frontend structure, ask the corresponding questions:
 4. Does the API already own this business calculation?
 
 Prefer a complete vertical change over disconnected backend and frontend abstractions. A feature is complete only when its contract, UI states, validation, tests, and any report/export implications agree.
+
+
+### Retailer actor input verification (issue #926, 31 October 2026)
+
+The Apify limits, MCP allowlist and collector prompt use the owner-confirmed identifiers
+`abotapi/kmart-au-scraper`, `axlymxp/bigw-product-scraper` and
+`dromb/big-w-au-product-scraper`. Their schemas were inspected read-only; no paid run was made.
+Kmart accepts `searchTerms`, `maxItems` and an internal `maxPages`; reviews use `fetchReviews`
+and `maxReviews`, and store enrichment is disabled by clearing `storePostcodes` and `storeNames`
+and disabling Click & Collect and delivery checks. Incremental/delta results and connectors are off.
+Axlymxp accepts `searchQueries`, `maxItems` and `maxPagesPerQuery` (48 results per internal
+page); live pricing stays on and reviews/rating requests are off. Dromb is restricted to
+`operation: item` with a known `item_id` or published URL, `limit: 1` and no raw output.
+The two name-search actors expose internal page caps, not a starting-page cursor. Repeating a
+first-page request is not pagination; a limit that prevents proving completeness is reported as
+truncated. Existing spending ceilings remain unchanged, and all three remain blocked by
+`actorIdConfirmed: false` until the bounded dry run and transport charge-limit verification.
+The existing generic guard puts the charge field in actor input; Dromb's closed input schema does
+not declare that field, so #926 must verify the MCP transport budget option before enabling it.
+A schema check alone is not proof of output correctness, pagination completeness or billed cost.
