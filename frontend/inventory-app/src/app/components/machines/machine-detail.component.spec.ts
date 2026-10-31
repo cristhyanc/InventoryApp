@@ -882,7 +882,7 @@ describe('MachineDetailComponent Open Sync Restock from the Dashboard (issue #10
     expect(flushSyncRequests(rendered, 8)).toHaveLength(0);
   });
 
-  it('drops a preview that arrives after the page moved to another machine', async () => {
+  it('cancels the previous machine\'s sync request when the page moves to another machine', async () => {
     const rendered = await renderPage({ syncRestock: 'open' });
     const inFlight = rendered.httpMock.match((request) => request.url === syncRestockUrl(7));
     expect(inFlight).toHaveLength(1);
@@ -890,11 +890,11 @@ describe('MachineDetailComponent Open Sync Restock from the Dashboard (issue #10
     rendered.queryParamMap$.next(convertToParamMap({}));
     rendered.paramMap$.next(convertToParamMap({ id: '8' }));
     answerPageReads(rendered, 8);
-    inFlight[0].flush({ machineId: 7, newEventCount: 0, events: [], productImpacts: [], hiddenReconciledCount: 0, message: 'Machine 7' });
-    rendered.fixture.detectChanges();
 
+    expect(inFlight[0].cancelled).toBe(true);
     expect(dialog(rendered)).toBeNull();
-    expect(rendered.host.textContent).not.toContain('Machine 7');
+    expect(rendered.host.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')?.textContent?.trim())
+      .toBe('Sync Restock');
   });
 
   it('moves focus into the dialog and returns it to Sync Restock on close', async () => {

@@ -15457,8 +15457,11 @@ machine the route names and immediately removes it from the address with `replac
 `MachineRestockSyncComponent` as `openOnArrivalFor`. That component opens the dialog through its
 ordinary `syncRestock()`, at most once per request, only once its `machineId` is the requested
 machine and the business time zone is known, and never during a support session. A move to another
-machine closes the previous machine's dialog and drops a preview still in flight for it, and
-ordinary visits leave the dialog closed. The reminder also publishes `pendingLookbackDays`
+machine closes the previous machine's dialog and cancels its request still in flight. Every preview
+request carries a generation that a newer request, a machine change or the component's destruction
+supersedes, and a superseded response changes nothing - not the loading state, the preview, an
+error, the selection or a toast - even after the page has moved back to the machine it was for.
+Ordinary visits leave the dialog closed. The reminder also publishes `pendingLookbackDays`
 and `pendingFromBusinessDate` so the banner never restates the window. The counts describe **persisted** facts only: a zero says nothing about alerts
 Nayax holds that nobody has fetched, which is why an overdue fetch and pending events are reported as
 two separate conditions and either one alone puts a machine on the banner.

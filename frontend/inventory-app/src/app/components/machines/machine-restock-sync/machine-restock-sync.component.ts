@@ -207,6 +207,17 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
   /** The `openOnArrivalFor` request already acted on (issue #1011), so it is acted on only once. */
   private openOnArrivalHandledFor: number | null = null;
 
+  /**
+   * The current preview request (issue #1011). Every new request, a move to another machine and
+   * the component's destruction supersede the one before - cancelling it and bumping
+   * `previewGeneration` - and a response is applied only while its own generation is still the
+   * current one. So a superseded response can never clear a newer request's loading state or show
+   * a preview, error, selection or toast, even after the page has moved back to the machine it was
+   * asked for.
+   */
+  private previewSubscription?: Subscription;
+  private previewGeneration = 0;
+
   modalOpen$ = new BehaviorSubject(false);
   syncPreview$ = new BehaviorSubject<NayaxMachineStockSyncPreview | null>(null);
   syncing$ = new BehaviorSubject(false);
@@ -265,6 +276,7 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
     if (machineChange && !machineChange.firstChange && machineChange.previousValue !== machineChange.currentValue) {
       // The page is reused when the route moves to another machine, so the previous machine's
       // dialog and preview are dropped here rather than shown under the new machine (issue #1011).
+      this.supersedePreviewRequest();
       this.resetDialog();
     }
     if (changes['openOnArrivalFor']) {
@@ -276,6 +288,15 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
     this.timeZoneSubscription.unsubscribe();
+    this.supersedePreviewRequest();
+  }
+
+  /** Cancels the preview request in flight, if any, so nothing it answers is applied (issue #1011). */
+  private supersedePreviewRequest(): void {
+    this.previewGeneration++;
+    this.previewSubscription?.unsubscribe();
+    this.previewSubscription = undefined;
+    this.syncing$.next(false);
   }
 
   /**
@@ -449,15 +470,19 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
       this.fromDate$.next(this.defaultFromDate());
     }
 
+    this.supersedePreviewRequest();
+    const generation = this.previewGeneration;
+    const isCurrent = () => generation === this.previewGeneration;
+
     this.syncing$.next(true);
     const fromDateIso = this.toUtcInstant(this.fromDate$.value);
-    this.machineService.syncRestock(machineId, fromDateIso, this.showReconciled$.value).subscribe({
+    const request$ = this.machineService.syncRestock(machineId, fromDateIso, this.showReconciled$.value);
+    this.previewSubscription = request$.subscribe({
       next: (preview) => {
-        this.syncing$.next(false);
-        if (this.machineId !== machineId) {
-          // The page moved to another machine while this preview was in flight (issue #1011).
+        if (!isCurrent()) {
           return;
         }
+        this.syncing$.next(false);
         this.syncPreview$.next(preview);
         this.selectedEventIds = new Set(
           preview.events.filter((e) => this.isReadyToApply(e)).map((e) => e.id)
@@ -469,10 +494,10 @@ export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
         }
       },
       error: () => {
-        this.syncing$.next(false);
-        if (this.machineId !== machineId) {
+        if (!isCurrent()) {
           return;
         }
+        this.syncing$.next(false);
         this.syncError$.next('Failed to sync Nayax stock-adjustment alerts.');
         this.toastService.error('Failed to sync Nayax stock-adjustment alerts.');
       }
