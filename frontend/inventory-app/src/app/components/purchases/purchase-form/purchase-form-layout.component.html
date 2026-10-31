@@ -88,21 +88,21 @@
       <span class="flex items-center gap-1">
         Product
         @if (mode === 'edit') {
-          <app-help-toggletip label="changing a saved line's product" text="A line already on this purchase keeps its product. To record a different product, remove the line and add the new product as its own line." />
+          <app-help-toggletip label="About changing a saved line's product">A line already on this purchase keeps its product. To record a different product, remove the line and add the new product as its own line.</app-help-toggletip>
         }
       </span>
       <span>Quantity</span>
       <span class="flex items-center gap-1">
         Unit price ($)
-        <app-help-toggletip label="unit price" text="The price of one unit. Type either the unit price or the line total; the one you typed last sets the other, using the line's quantity." />
+        <app-help-toggletip label="About unit price">The price of one unit. Type either the unit price or the line total; the one you typed last sets the other, using the line's quantity.</app-help-toggletip>
       </span>
       <span class="flex items-center gap-1">
         Line total ($)
-        <app-help-toggletip label="line total" text="What you paid for the whole line, such as a box price. Quantity is always individual units, never cartons." />
+        <app-help-toggletip label="About line total">What you paid for the whole line, such as a box price. Quantity is always individual units, never cartons.</app-help-toggletip>
       </span>
       <span class="flex items-center gap-1">
         GST
-        <app-help-toggletip label="GST" text="Prices include GST. Choose Taxable or GST-free for each line. Not classified stays unresolved and adds no GST until you choose. GST amounts are worked out when you save." />
+        <app-help-toggletip label="About GST">Prices include GST. Choose Taxable or GST-free for each line. Not classified stays unresolved and adds no GST until you choose. GST amounts are worked out when you save.</app-help-toggletip>
       </span>
       <span class="sr-only">Remove</span>
     </div>
@@ -343,9 +343,9 @@
           <dt class="flex items-center gap-1 text-rr-muted">
             Included GST
             @if (gstSummary) {
-              <app-help-toggletip label="included GST" text="The GST the purchase held when it was last saved, worked out from each line's and charge's classification. Save to update it after changes." />
+              <app-help-toggletip label="About included GST">The GST the purchase held when it was last saved, worked out from each line's and charge's classification. Save to update it after changes.</app-help-toggletip>
             } @else {
-              <app-help-toggletip label="included GST" text="GST is worked out from each line's and charge's classification when the purchase is saved." />
+              <app-help-toggletip label="About included GST">GST is worked out from each line's and charge's classification when the purchase is saved.</app-help-toggletip>
             }
           </dt>
           <dd class="m-0 text-right" [attr.data-testid]="testId('purchase-summary-gst')">
@@ -371,7 +371,7 @@
       <div class="flex flex-col gap-2 border-t border-rr-line px-4 py-3">
         <div class="flex items-center gap-1">
           <label class="field-label" [for]="fieldId('totalAmount')">Receipt total (optional)</label>
-          <app-help-toggletip label="receipt total" text="The total printed on the receipt, if you want to compare it with this purchase. Leave it blank if you don't have one. It never changes what the purchase costs." />
+          <app-help-toggletip label="About receipt total">The total printed on the receipt, if you want to compare it with this purchase. Leave it blank if you don't have one. It never changes what the purchase costs.</app-help-toggletip>
         </div>
         <input
           [id]="fieldId('totalAmount')"

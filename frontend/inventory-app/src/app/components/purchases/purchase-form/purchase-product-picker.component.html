@@ -20,7 +20,7 @@
     (focus)="openPanel()"
     (click)="openPanel()"
     (keydown)="onKeydown($event)"
-    (blur)="onBlur()"
+    (blur)="onBlur($event)"
   />
   <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-rr-caption">
     <app-icon name="search" [size]="18" />

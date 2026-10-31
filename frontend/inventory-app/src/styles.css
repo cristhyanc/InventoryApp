@@ -2094,6 +2094,10 @@ video {
   cursor: pointer;
 }
 
+.resize {
+  resize: both;
+}
+
 .scroll-mt-20 {
   scroll-margin-top: 5rem;
 }
@@ -2589,6 +2593,10 @@ video {
   background-color: rgb(180 83 9 / var(--tw-bg-opacity, 1));
 }
 
+.bg-transparent {
+  background-color: transparent;
+}
+
 .bg-white {
   --tw-bg-opacity: 1;
   background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
@@ -2939,10 +2947,6 @@ video {
 
 .leading-relaxed {
   line-height: 1.625;
-}
-
-.leading-snug {
-  line-height: 1.375;
 }
 
 .leading-tight {
@@ -3422,10 +3426,6 @@ img {
 
 .focus-visible\:outline-2:focus-visible {
   outline-width: 2px;
-}
-
-.focus-visible\:outline-offset-1:focus-visible {
-  outline-offset: 1px;
 }
 
 .focus-visible\:outline-rr-teal:focus-visible {

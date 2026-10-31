@@ -109,6 +109,20 @@ describe('PurchaseProductPickerComponent (issue #1029)', () => {
     expect(chosen).toEqual([]);
   });
 
+  it('closes when focus moves outside the box, such as onto a help button', () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    type('red');
+    expect(options().length).toBe(2);
+
+    input.dispatchEvent(new FocusEvent('blur', { relatedTarget: outside }));
+    fixture.detectChanges();
+
+    expect(options().length).toBe(0);
+    expect(input.getAttribute('aria-expanded')).toBe('false');
+    outside.remove();
+  });
+
   it('points at the active option while the list is open', () => {
     type('red');
     key('ArrowDown');
