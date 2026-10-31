@@ -27,10 +27,13 @@ public sealed class EfSiteFactsStore : ISiteFactsStore
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyList<SiteCompletedSaleFact>> GetRecentCompletedSalesAsync(
-        IReadOnlyCollection<long> machineIds, DateTime since, CancellationToken cancellationToken)
+        IReadOnlyCollection<long> machineIds, DateTime fromUtc, CancellationToken cancellationToken)
     {
+        // Inclusive at the lower bound (issue #1012): the caller derives it from the first instant
+        // of the earliest period it publishes, and a sale authorized at exactly a period's start is
+        // inside that period.
         var sales = await _db.NayaxSales.AsNoTracking()
-            .Where(sale => machineIds.Contains(sale.MachineID) && sale.MachineAuthorizationTime > since)
+            .Where(sale => machineIds.Contains(sale.MachineID) && sale.MachineAuthorizationTime >= fromUtc)
             .ToListAsync(cancellationToken);
 
         return sales

@@ -98,7 +98,8 @@ public class MachineStockSyncNayaxLinkTests
             new EfNayaxProductLinkStore(db),
             new FakeClock(EventTime),
             new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
-            new FakeMachineRestockSyncCoverageStore());
+            new FakeMachineRestockSyncCoverageStore(),
+            new FakeBusinessCalendar(EventTime));
     }
 
     [Fact]

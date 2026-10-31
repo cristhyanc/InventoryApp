@@ -94,7 +94,9 @@ const sites = [
     emptyProductCount: 1,
     todayRevenue: 57.6,
     currentWeekRevenue: 123.9,
-    previousComparableWeekRevenue: 75.9
+    previousComparableWeekRevenue: 75.9,
+    lastWeekRevenue: 318.4,
+    monthToDateRevenue: 1042.7
   },
   {
     siteId: 2,
@@ -105,7 +107,9 @@ const sites = [
     emptyProductCount: 3,
     todayRevenue: 171.6,
     currentWeekRevenue: 463.4,
-    previousComparableWeekRevenue: 392.0
+    previousComparableWeekRevenue: 392.0,
+    lastWeekRevenue: 1187.25,
+    monthToDateRevenue: 3904.8
   },
   // A site the fleet read returned no machine for: issue #987 keeps it visible with its own empty
   // state rather than hiding a site the business has.
@@ -118,7 +122,9 @@ const sites = [
     emptyProductCount: 0,
     todayRevenue: 0,
     currentWeekRevenue: 0,
-    previousComparableWeekRevenue: 0
+    previousComparableWeekRevenue: 0,
+    lastWeekRevenue: 0,
+    monthToDateRevenue: 0
   }
 ];
 
@@ -379,9 +385,11 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       await control.getByRole('button', { name: 'Last week' }).click();
 
       await expect(control.getByRole('button', { name: 'Last week' })).toHaveAttribute('aria-pressed', 'true');
-      // The machines keep every period; a site publishes none for this one and says so. The other
-      // layout's copy of the same text is in the document but hidden, so only a visible one counts.
-      await expect(page.getByText('Not published for sites').filter({ visible: true }).first()).toBeVisible();
+      // Sites publish this period too since issue #1012, so a site row shows its own figure for it
+      // instead of saying the period is unavailable for sites. The other layout's copy of the same
+      // text is in the document but hidden, so only a visible one counts.
+      await expect(page.getByText('$318.40').filter({ visible: true }).first()).toBeVisible();
+      await expect(page.getByText('Not published for sites')).toHaveCount(0);
       await expectNoHorizontalOverflow(page);
 
       const height = await page.evaluate(() => document.documentElement.scrollHeight);

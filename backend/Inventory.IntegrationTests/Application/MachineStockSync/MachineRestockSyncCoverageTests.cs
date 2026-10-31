@@ -79,6 +79,13 @@ public class MachineRestockSyncCoverageTests
     private static readonly DateTime AllTime = new(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime SyncStartedAt = new(2026, 9, 2, 8, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>
+    /// A pending window that starts after every event these tests import, for the direct store
+    /// calls whose subject is the monotonic and credential conditions rather than the "nothing left
+    /// to sync" one (issue #1018).
+    /// </summary>
+    private static readonly DateTime AfterEveryEvent = new(2100, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
     #region Recording a successful fetch
 
     [Fact]
@@ -96,7 +103,9 @@ public class MachineRestockSyncCoverageTests
             SeedCostedProduct(db);
             await db.SaveChangesAsync();
 
-            await Sync(db, AlertsReturning(StockAlert(1, $"Adjusted Stock, Product MDB: {Mdb} | {ProductName} | 2")),
+            // A negative discrepancy is imported but is never restock work (issue #948), so this run
+            // leaves nothing to sync and its claim is recorded (issue #1018).
+            await Sync(db, AlertsReturning(StockAlert(1, $"Adjusted Stock, Product MDB: {Mdb} | {ProductName} | -2")),
                     startedAtUtc: SyncStartedAt, credentialRevision: 4)
                 .Handle(Machine, CancellationToken.None);
         }
@@ -190,6 +199,203 @@ public class MachineRestockSyncCoverageTests
 
     #endregion
 
+    #region Nothing left to sync (issue #1018)
+
+    /// <summary>
+    /// The owner's rule: a machine is synced when nothing is left to sync. A fetch that imports a
+    /// refill nobody has applied yet leaves work waiting, so it claims nothing - and still hands
+    /// the operator the preview and imports the alert.
+    /// </summary>
+    [Fact]
+    public async Task A_sync_that_leaves_pending_work_records_no_coverage()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var db = Scoped(options))
+        {
+            SeedCostedProduct(db);
+            await db.SaveChangesAsync();
+
+            var preview = await Sync(db, AlertsReturning(StockAlert(1, $"Adjusted Stock, Product MDB: {Mdb} | {ProductName} | 2")),
+                    startedAtUtc: SyncStartedAt, credentialRevision: 1)
+                .Handle(Machine, CancellationToken.None);
+
+            Assert.Equal(1, preview.NewEventCount);
+            Assert.Single(preview.Events);
+        }
+
+        await using var verify = Scoped(options);
+        Assert.Single(await verify.NayaxMachineStockEvents.AsNoTracking().ToListAsync());
+        Assert.Null(
+            (await verify.Machines.AsNoTracking().SingleAsync(machine => machine.Id == LocalMachineId))
+                .LastSuccessfulRestockSyncStartedAtUtc);
+    }
+
+    /// <summary>
+    /// An event that needs review (here unparsed) is work the operator still has to do, so it
+    /// blocks the claim exactly as an unapplied refill does.
+    /// </summary>
+    [Fact]
+    public async Task An_event_needing_review_inside_the_window_records_no_coverage()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var seed = Scoped(options))
+        {
+            seed.NayaxMachineStockEvents.Add(Event(1, SyncStartedAt.AddDays(-2), NayaxStockEventProcessingStatus.Unprocessed));
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var db = Scoped(options))
+        {
+            await Sync(db, AlertsReturning(), startedAtUtc: SyncStartedAt, credentialRevision: 1)
+                .Handle(Machine, CancellationToken.None);
+        }
+
+        await using var verify = Scoped(options);
+        Assert.Null(
+            (await verify.Machines.AsNoTracking().SingleAsync(machine => machine.Id == LocalMachineId))
+                .LastSuccessfulRestockSyncStartedAtUtc);
+    }
+
+    /// <summary>
+    /// The same bounds the reminder counts with: an event older than the 14-day window, a negative
+    /// or zero discrepancy, an applied event and one reconciled as already recorded manually are
+    /// not work left to sync, so none of them blocks the claim.
+    /// </summary>
+    [Fact]
+    public async Task Events_the_reminder_does_not_count_do_not_block_coverage()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        // FakeBusinessCalendar dates in UTC, so the window starts at midnight 14 days before.
+        var windowStart = SyncStartedAt.Date.AddDays(-14);
+
+        await using (var seed = Scoped(options))
+        {
+            seed.NayaxMachineStockEvents.AddRange(
+                Event(1, windowStart.AddSeconds(-1), NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 6),
+                Event(2, SyncStartedAt.AddDays(-1), NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: -2),
+                Event(3, SyncStartedAt.AddDays(-1), NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 0),
+                Event(4, SyncStartedAt.AddDays(-1), NayaxStockEventProcessingStatus.Applied, parsedQuantity: 4),
+                Event(5, SyncStartedAt.AddDays(-1), NayaxStockEventProcessingStatus.Unprocessed,
+                    NayaxDuplicateResolution.ReconciledManually, parsedQuantity: 4));
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var db = Scoped(options))
+        {
+            await Sync(db, AlertsReturning(), startedAtUtc: SyncStartedAt, credentialRevision: 1)
+                .Handle(Machine, CancellationToken.None);
+        }
+
+        Assert.Equal(SyncStartedAt, (await CoverageOfAsync(options, LocalMachineId)).StartedAtUtc);
+    }
+
+    /// <summary>
+    /// Clearing the last pending event and then fetching again - which the Sync Restock dialog does
+    /// by itself after every apply and resolve - is what records the machine as synced.
+    /// </summary>
+    [Fact]
+    public async Task The_sync_after_the_last_pending_event_is_cleared_records_coverage()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var seed = Scoped(options))
+        {
+            seed.NayaxMachineStockEvents.Add(
+                Event(1, SyncStartedAt.AddDays(-1), NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 3));
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var db = Scoped(options))
+        {
+            await Sync(db, AlertsReturning(), startedAtUtc: SyncStartedAt, credentialRevision: 1)
+                .Handle(Machine, CancellationToken.None);
+        }
+
+        await using (var verify = Scoped(options))
+        {
+            Assert.Null(
+                (await verify.Machines.AsNoTracking().SingleAsync(machine => machine.Id == LocalMachineId))
+                    .LastSuccessfulRestockSyncStartedAtUtc);
+        }
+
+        await using (var resolve = Scoped(options))
+        {
+            var pending = await resolve.NayaxMachineStockEvents.SingleAsync();
+            pending.DuplicateResolution = NayaxDuplicateResolution.ReconciledManually;
+            await resolve.SaveChangesAsync();
+        }
+
+        var resyncedAt = SyncStartedAt.AddMinutes(5);
+        await using (var db = Scoped(options))
+        {
+            await Sync(db, AlertsReturning(), startedAtUtc: resyncedAt, credentialRevision: 1)
+                .Handle(Machine, CancellationToken.None);
+        }
+
+        Assert.Equal(resyncedAt, (await CoverageOfAsync(options, LocalMachineId)).StartedAtUtc);
+    }
+
+    /// <summary>
+    /// The pending check is the caller's own business's: another business's pending events on a
+    /// machine that shares provider number 900 neither block this business's claim nor let it
+    /// through.
+    /// </summary>
+    [Fact]
+    public async Task Another_businesss_pending_events_do_not_block_coverage()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var other = TestAppDbContext.For(options, OtherBusinessId))
+        {
+            other.NayaxMachineStockEvents.Add(
+                Event(11, SyncStartedAt.AddDays(-1), NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 3));
+            await other.SaveChangesAsync();
+        }
+
+        await using (var db = Scoped(options))
+        {
+            await Sync(db, AlertsReturning(), startedAtUtc: SyncStartedAt, credentialRevision: 1)
+                .Handle(Machine, CancellationToken.None);
+        }
+
+        Assert.Equal(SyncStartedAt, (await CoverageOfAsync(options, LocalMachineId)).StartedAtUtc);
+    }
+
+    /// <summary>
+    /// The pending check is a condition of the coverage <c>UPDATE</c> itself, not a read before
+    /// it, so an event imported by a concurrent sync cannot land between the two.
+    /// </summary>
+    [Fact]
+    public async Task A_pending_event_makes_the_conditional_write_refuse()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var seed = Scoped(options))
+        {
+            seed.NayaxMachineStockEvents.Add(
+                Event(1, SyncStartedAt.AddDays(-1), NayaxStockEventProcessingStatus.Unprocessed, parsedQuantity: 3));
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = Scoped(options);
+        var store = new EfMachineRestockSyncCoverageStore(db);
+
+        Assert.False(await store.TryRecordSuccessfulSyncAsync(
+            LocalMachineId, SyncStartedAt, 1, NayaxMachineId, SyncStartedAt.AddDays(-14), default));
+        Assert.True(await store.TryRecordSuccessfulSyncAsync(
+            LocalMachineId, SyncStartedAt, 1, NayaxMachineId, SyncStartedAt, default));
+    }
+
+    #endregion
+
     #region The monotonic conditional write
 
     [Fact]
@@ -201,9 +407,9 @@ public class MachineRestockSyncCoverageTests
         await using var db = Scoped(options);
         var store = new EfMachineRestockSyncCoverageStore(db);
 
-        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, default));
+        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, NayaxMachineId, AfterEveryEvent, default));
         Assert.True(
-            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddMinutes(10), 3, default));
+            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddMinutes(10), 3, NayaxMachineId, AfterEveryEvent, default));
 
         Assert.Equal(SyncStartedAt.AddMinutes(10), (await CoverageOfAsync(options, LocalMachineId)).StartedAtUtc);
     }
@@ -221,11 +427,11 @@ public class MachineRestockSyncCoverageTests
         await using var db = Scoped(options);
         var store = new EfMachineRestockSyncCoverageStore(db);
 
-        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, default));
+        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, NayaxMachineId, AfterEveryEvent, default));
 
         Assert.False(
-            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddMinutes(-10), 3, default));
-        Assert.False(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, default));
+            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddMinutes(-10), 3, NayaxMachineId, AfterEveryEvent, default));
+        Assert.False(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, NayaxMachineId, AfterEveryEvent, default));
 
         Assert.Equal(SyncStartedAt, (await CoverageOfAsync(options, LocalMachineId)).StartedAtUtc);
     }
@@ -243,12 +449,12 @@ public class MachineRestockSyncCoverageTests
         await using var db = Scoped(options);
         var store = new EfMachineRestockSyncCoverageStore(db);
 
-        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, default));
+        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 3, NayaxMachineId, AfterEveryEvent, default));
 
         // The Owner stores a new token, and a run under it succeeds.
         await AtCredentialRevisionAsync(options, SellerBusinessId, 4);
         Assert.True(
-            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddMinutes(-30), 4, default));
+            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddMinutes(-30), 4, NayaxMachineId, AfterEveryEvent, default));
 
         var coverage = await CoverageOfAsync(options, LocalMachineId);
         Assert.Equal(SyncStartedAt.AddMinutes(-30), coverage.StartedAtUtc);
@@ -274,10 +480,10 @@ public class MachineRestockSyncCoverageTests
         await using var db = Scoped(options);
         var store = new EfMachineRestockSyncCoverageStore(db);
 
-        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 4, default));
+        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 4, NayaxMachineId, AfterEveryEvent, default));
 
         Assert.False(
-            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddHours(1), 3, default));
+            await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt.AddHours(1), 3, NayaxMachineId, AfterEveryEvent, default));
 
         var coverage = await CoverageOfAsync(options, LocalMachineId);
         Assert.Equal(SyncStartedAt, coverage.StartedAtUtc);
@@ -301,7 +507,7 @@ public class MachineRestockSyncCoverageTests
 
         Assert.True(
             await new EfMachineRestockSyncCoverageStore(db)
-                .TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, default));
+                .TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, NayaxMachineId, AfterEveryEvent, default));
 
         var statement = Assert.Single(commands);
         Assert.Contains("UPDATE \"Machines\"", statement, StringComparison.Ordinal);
@@ -328,14 +534,14 @@ public class MachineRestockSyncCoverageTests
         await using var db = Scoped(options);
         var store = new EfMachineRestockSyncCoverageStore(db);
 
-        Assert.False(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 4, default));
+        Assert.False(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 4, NayaxMachineId, AfterEveryEvent, default));
 
         var refused = await CoverageOfAsync(options, LocalMachineId);
         Assert.Null(refused.StartedAtUtc);
         Assert.Null(refused.CredentialRevision);
         Assert.False(MachineRestockSyncReminderPolicy.IsCoverageCurrent(refused.CredentialRevision, 5));
 
-        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 5, default));
+        Assert.True(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 5, NayaxMachineId, AfterEveryEvent, default));
 
         var recorded = await CoverageOfAsync(options, LocalMachineId);
         Assert.Equal(SyncStartedAt, recorded.StartedAtUtc);
@@ -545,7 +751,7 @@ public class MachineRestockSyncCoverageTests
             // refusal is the central tenant filter - which is the thing under test here.
             Assert.False(
                 await new EfMachineRestockSyncCoverageStore(db)
-                    .TryRecordSuccessfulSyncAsync(OtherLocalMachineId, SyncStartedAt, 1, default));
+                    .TryRecordSuccessfulSyncAsync(OtherLocalMachineId, SyncStartedAt, 1, NayaxMachineId, AfterEveryEvent, default));
         }
 
         await using var verify = TestAppDbContext.Unrestricted(options);
@@ -678,7 +884,7 @@ public class MachineRestockSyncCoverageTests
 
             Assert.True(
                 await new EfMachineRestockSyncCoverageStore(other)
-                    .TryRecordSuccessfulSyncAsync(OtherLocalMachineId, SyncStartedAt, 9, default));
+                    .TryRecordSuccessfulSyncAsync(OtherLocalMachineId, SyncStartedAt, 9, NayaxMachineId, AfterEveryEvent, default));
         }
 
         await using var db = Scoped(options);
@@ -715,7 +921,7 @@ public class MachineRestockSyncCoverageTests
         var store = new EfMachineRestockSyncCoverageStore(denied);
 
         Assert.Empty(await store.GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
-        Assert.False(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, default));
+        Assert.False(await store.TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, NayaxMachineId, AfterEveryEvent, default));
     }
 
     #endregion
@@ -908,7 +1114,8 @@ public class MachineRestockSyncCoverageTests
             new EfNayaxProductLinkStore(db),
             new FakeClock(startedAtUtc),
             connections,
-            coverage ?? new EfMachineRestockSyncCoverageStore(db));
+            coverage ?? new EfMachineRestockSyncCoverageStore(db),
+            new FakeBusinessCalendar(startedAtUtc));
 
     /// <summary>
     /// A successful - and deliberately empty - alert read that runs <paramref name="atTheRequest"/>

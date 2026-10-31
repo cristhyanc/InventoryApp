@@ -49,20 +49,21 @@ public sealed class RecordingSiteFactsStore : ISiteFactsStore
     public int MaxConcurrentCalls { get; private set; }
 
     /// <summary>The machine id set and lookback bound each completed-sales read was asked for.</summary>
-    public List<(IReadOnlyCollection<long> MachineIds, DateTime Since)> CompletedSalesRequests { get; } = [];
+    public List<(IReadOnlyCollection<long> MachineIds, DateTime FromUtc)> CompletedSalesRequests { get; } = [];
 
     public Task<IReadOnlyList<SiteProductActivityFact>> GetProductActivityAsync(CancellationToken cancellationToken) =>
         RecordAsync("activity", _productActivity);
 
     public Task<IReadOnlyList<SiteCompletedSaleFact>> GetRecentCompletedSalesAsync(
-        IReadOnlyCollection<long> machineIds, DateTime since, CancellationToken cancellationToken)
+        IReadOnlyCollection<long> machineIds, DateTime fromUtc, CancellationToken cancellationToken)
     {
-        CompletedSalesRequests.Add((machineIds.ToList(), since));
+        CompletedSalesRequests.Add((machineIds.ToList(), fromUtc));
 
-        // Filters exactly as the EF adapter does, so a use case that forgets a site's machines sees
-        // that site's sales missing rather than an unconditional fixture.
+        // Filters exactly as the EF adapter does - machine set and the inclusive lower bound of
+        // issue #1012 - so a use case that forgets a site's machines, or asks for a bound that does
+        // not reach a period it publishes, sees sales missing rather than an unconditional fixture.
         IReadOnlyList<SiteCompletedSaleFact> sales = _sales
-            .Where(sale => machineIds.Contains(sale.MachineId) && sale.MachineAuthorizationTime > since)
+            .Where(sale => machineIds.Contains(sale.MachineId) && sale.MachineAuthorizationTime >= fromUtc)
             .ToList();
 
         return _completedSalesFailure is null

@@ -106,7 +106,7 @@ public sealed class GetMachineRestockSyncReminder
         var nowUtc = _clock.UtcNow;
         var businessToday = _businessCalendar.ToBusinessDate(nowUtc);
         var pendingFromBusinessDate = MachineRestockSyncReminderPolicy.PendingFromBusinessDate(businessToday);
-        var pendingFromUtc = _businessCalendar.StartOfBusinessDayUtc(pendingFromBusinessDate);
+        var pendingFromUtc = MachineRestockSyncPendingWindow.StartUtc(_businessCalendar, nowUtc);
 
         var machines = await _coverage.GetProviderMachineCoverageAsync(pendingFromUtc, cancellationToken)
             .ConfigureAwait(false);
