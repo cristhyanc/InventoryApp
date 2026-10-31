@@ -3,6 +3,7 @@ import { Router, provideRouter } from '@angular/router';
 import { Machine, Site } from '../../../models/models';
 import {
   MACHINE_FIGURE_UNAVAILABLE,
+  MACHINE_NO_CAPACITY,
   NO_PERIOD_COMPARISON,
   OTHER_MACHINES_LABEL,
   SiteMachinePerformanceComponent,
@@ -56,8 +57,21 @@ function site(siteId: number, siteName: string, overrides: Partial<Site> = {}): 
   };
 }
 
-const HARBOUR = site(1, 'Harbour Point Plaza');
-const PAVILLION = site(2, 'Pavillion Shopping Centre', { machineCount: 2, totalStockPercentage: 27 });
+const HARBOUR = site(1, 'Harbour Point Plaza', { machineStocks: [{ machineId: 2, stockPercentage: 86 }] });
+
+/**
+ * Two machines with figures of their own that are nothing like the site's 27% (issue #1013), and one
+ * of them reporting no capacity at all - so a row that copied the site figure, or turned "no
+ * capacity" into a number, is visible rather than plausible.
+ */
+const PAVILLION = site(2, 'Pavillion Shopping Centre', {
+  machineCount: 2,
+  totalStockPercentage: 27,
+  machineStocks: [
+    { machineId: 1, stockPercentage: 12 },
+    { machineId: 4, stockPercentage: null }
+  ]
+});
 
 const FLEET: Machine[] = [
   machine(1, 'Pavillion Left', 2),
@@ -116,6 +130,18 @@ function expander(host: HTMLElement, key: string): HTMLButtonElement {
 /** The desktop row group holding one site's machines; the expander's `aria-controls` names it. */
 function machineRegion(host: HTMLElement, key: string): HTMLElement {
   return host.querySelector(`#site-machines-${key}`) as HTMLElement;
+}
+
+/** One machine's row inside a group's desktop row region. */
+function machineRow(host: HTMLElement, key: string, machineID: number): HTMLElement {
+  return machineRegion(host, key)
+    .querySelector(`[data-testid="machine-stock-${machineID}"]`)
+    ?.closest('tr') as HTMLElement;
+}
+
+/** One machine's Stock cell in the desktop table (issue #1013). */
+function machineStockCell(host: HTMLElement, key: string, machineID: number): HTMLElement {
+  return machineRegion(host, key).querySelector(`[data-testid="machine-stock-${machineID}"]`) as HTMLElement;
 }
 
 /** The machine names rendered in the desktop table under each site, in rendered order. */
@@ -401,17 +427,123 @@ describe('Site and machine performance totals (issue #987)', () => {
   });
 });
 
-describe('Site and machine performance unsupported machine stock (issue #987)', () => {
+describe('Site and machine performance machine stock (issue #1013)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('never reuses the site percentage for a machine and says why the machine figure is absent', async () => {
+  it("shows each machine's own percentage, bar and status, never the site's figure", async () => {
     const { host } = await render();
-    const machineRow = machineRegion(host, 'site-2').querySelector('tr') as HTMLElement;
+    const cell = machineStockCell(host, 'site-2', 1);
 
-    expect(machineRow.querySelector('[data-testid="machine-stock"]')?.textContent?.trim()).toBe(MACHINE_FIGURE_UNAVAILABLE);
-    expect(machineRow.querySelector('[data-testid="machine-low-empty"]')?.textContent?.trim()).toBe(MACHINE_FIGURE_UNAVAILABLE);
-    expect(machineRow.textContent).not.toContain('27%');
-    expect(host.querySelector('[data-testid="machine-stock-note"]')?.textContent).toContain('per site');
+    expect(cell.textContent).toContain('12%');
+    expect(cell.textContent).toContain('Critically low');
+    expect(cell.querySelector('.badge')?.className).toContain('badge-danger');
+    expect(cell.querySelector<HTMLElement>('[data-testid="machine-stock-bar-1"]')?.style.width).toBe('12%');
+
+    // The site above it is at 27% and well into the warning band; neither figure has leaked.
+    expect(cell.textContent).not.toContain('27%');
+    expect(cell.querySelector('.badge')?.className).not.toContain('badge-warning');
+  });
+
+  it('shows a machine with no capacity as such, never as 0% or 100%', async () => {
+    const { host } = await render();
+    const cell = machineStockCell(host, 'site-2', 4);
+
+    expect(cell.textContent?.trim()).toBe(MACHINE_NO_CAPACITY);
+    expect(cell.textContent).not.toContain('%');
+    expect(cell.querySelector('[data-testid="machine-stock-bar-4"]')).toBeNull();
+  });
+
+  it('leaves a machine under Other machines unavailable, because the sites read does not cover it', async () => {
+    const { host } = await render();
+
+    expect(machineStockCell(host, 'other', 3).textContent?.trim()).toBe(MACHINE_FIGURE_UNAVAILABLE);
+    expect(machineStockCell(host, 'other', 5).textContent?.trim()).toBe(MACHINE_FIGURE_UNAVAILABLE);
+    // No percentage of any kind in those cells - not a site's, and not one of their own.
+    expect(machineStockCell(host, 'other', 3).textContent).not.toContain('%');
+    expect(machineStockCell(host, 'other', 5).textContent).not.toContain('%');
+  });
+
+  it('leaves a machine its own site published no figure for unavailable', async () => {
+    const { host } = await render({
+      sites: [HARBOUR, { ...PAVILLION, machineStocks: [{ machineId: 1, stockPercentage: 12 }] }]
+    });
+
+    expect(machineStockCell(host, 'site-2', 4).textContent?.trim()).toBe(MACHINE_FIGURE_UNAVAILABLE);
+    expect(machineStockCell(host, 'site-2', 1).textContent).toContain('12%');
+  });
+
+  it('fails together with the sites read: no machine figure, no 0% and no stale one', async () => {
+    const { host } = await render({ sites: [], sitesError: 'Sites could not be loaded.' });
+
+    expect(host.querySelector('[data-testid="sites-unavailable"]')?.textContent).toContain(
+      'Sites could not be loaded.'
+    );
+    for (const machineID of [1, 2, 3, 4, 5]) {
+      const cell = machineStockCell(host, 'other', machineID);
+      expect(cell.textContent?.trim()).toBe(MACHINE_FIGURE_UNAVAILABLE);
+      // Neither a fabricated 0% nor a figure left over from a read that succeeded earlier.
+      expect(cell.textContent).not.toContain('%');
+    }
+  });
+
+  it('keeps the Low / empty column unavailable for a machine', async () => {
+    const { host } = await render();
+    const row = machineRow(host, 'site-2', 1);
+
+    expect(row.querySelector('[data-testid="machine-low-empty-1"]')?.textContent?.trim()).toBe(
+      MACHINE_FIGURE_UNAVAILABLE
+    );
+  });
+
+  it('does not change a machine figure when the period changes', async () => {
+    const { fixture, host } = await render();
+    const before = machineStockCell(host, 'site-2', 1).textContent;
+
+    periodButton(host, 'Month to date').click();
+    fixture.detectChanges();
+
+    expect(machineStockCell(host, 'site-2', 1).textContent).toBe(before);
+  });
+
+  it('holds the bar inside its track without changing the figure it states', async () => {
+    const { host } = await render({
+      sites: [
+        HARBOUR,
+        {
+          ...PAVILLION,
+          machineStocks: [
+            { machineId: 1, stockPercentage: -50 },
+            { machineId: 4, stockPercentage: 140 }
+          ]
+        }
+      ]
+    });
+
+    expect(machineStockCell(host, 'site-2', 1).textContent).toContain('-50%');
+    expect(machineStockCell(host, 'site-2', 1).querySelector<HTMLElement>('[data-testid="machine-stock-bar-1"]')?.style.width).toBe('0%');
+    expect(machineStockCell(host, 'site-2', 4).textContent).toContain('140%');
+    expect(machineStockCell(host, 'site-2', 4).querySelector<HTMLElement>('[data-testid="machine-stock-bar-4"]')?.style.width).toBe('100%');
+  });
+
+  it("describes the machine figure and the Other machines exception in the card's note", async () => {
+    const { host } = await render();
+    const note = host.querySelector('[data-testid="machine-stock-note"]')?.textContent ?? '';
+
+    expect(note).toContain('own stock');
+    expect(note).toContain(OTHER_MACHINES_LABEL);
+    // The low/empty half of the note is still true and still said.
+    expect(note).toContain('per site');
+  });
+
+  it('shows the machine figure on the narrow layout too', async () => {
+    const { host } = await render();
+    const card = host.querySelector('[data-testid="performance-machine-card-1"]') as HTMLElement;
+    const noCapacityCard = host.querySelector('[data-testid="performance-machine-card-4"]') as HTMLElement;
+
+    expect(card.textContent).toContain('12%');
+    expect(card.textContent).toContain('Critically low');
+    expect(card.querySelector('[data-testid="machine-card-stock-bar-1"]')).not.toBeNull();
+    expect(noCapacityCard.textContent).toContain(MACHINE_NO_CAPACITY);
   });
 
   it('states a site stock level in words as well as in colour', async () => {

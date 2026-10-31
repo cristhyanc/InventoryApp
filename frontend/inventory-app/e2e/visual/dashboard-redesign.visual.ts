@@ -6,8 +6,8 @@ import { join, resolve } from 'node:path';
  * The visual evidence for issue #972: the Restockroo Dashboard and authenticated navigation at
  * 360, 390, 768 and 1440px, plus the narrow layout's More sheet opened and scrolled to its end. The
  * dashboard captures also show issue #987's combined **Site and machine performance** card - each
- * site expanding to the machines standing at it - and issue #981's Cheapest supplier column in
- * Reorder priorities.
+ * site expanding to the machines standing at it, with issue #1013's own stock level on every machine
+ * row - and issue #981's Cheapest supplier column in Reorder priorities.
  *
  * Like the other visual runs this starts no API and no database. Every `/api/` request is answered
  * in the browser with neutral synthetic figures - an Owner's capabilities, a connected business,
@@ -96,7 +96,11 @@ const sites = [
     currentWeekRevenue: 123.9,
     previousComparableWeekRevenue: 75.9,
     lastWeekRevenue: 318.4,
-    monthToDateRevenue: 1042.7
+    monthToDateRevenue: 1042.7,
+    // Each machine's own stock level (issue #1013), keyed by the provider machine id the machine
+    // read uses. The figures are deliberately not the site's, so a capture shows a machine row's
+    // own percentage rather than a repeated one.
+    machineStocks: [{ machineId: 1, stockPercentage: 80 }]
   },
   {
     siteId: 2,
@@ -109,7 +113,13 @@ const sites = [
     currentWeekRevenue: 463.4,
     previousComparableWeekRevenue: 392.0,
     lastWeekRevenue: 1187.25,
-    monthToDateRevenue: 3904.8
+    monthToDateRevenue: 3904.8,
+    // Two machines in different stock bands under one site in the warning band, so a capture shows
+    // the per-machine colours and words differing from the site's and from each other.
+    machineStocks: [
+      { machineId: 2, stockPercentage: 12 },
+      { machineId: 3, stockPercentage: 41 }
+    ]
   },
   // A site the fleet read returned no machine for: issue #987 keeps it visible with its own empty
   // state rather than hiding a site the business has.
@@ -124,7 +134,9 @@ const sites = [
     currentWeekRevenue: 0,
     previousComparableWeekRevenue: 0,
     lastWeekRevenue: 0,
-    monthToDateRevenue: 0
+    monthToDateRevenue: 0,
+    // No machine stood at it, so there is no machine figure either.
+    machineStocks: []
   }
 ];
 

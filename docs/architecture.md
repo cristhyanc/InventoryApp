@@ -1765,7 +1765,7 @@ Both shapes gained a third section state later, and neither is a role decision: 
 
 Issue #527 above is the pattern; issue #697 is the same decision applied to the second surface that sent every member a financial figure. `SitesController` is gated by `Inventory.Operate`, which an Operator holds — stocking and pricing a site is day-to-day inventory work, and the page is how a person stocking machines reads what is in them — so `GET /api/sites` sent every member each site's `todayRevenue`, `currentWeekRevenue` and `previousComparableWeekRevenue`, and `GET /api/sites/{id}/products` sent them each product's `estimatedCardProfit`. The frontend-only hide of [issue #699](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) kept those figures off the page but left them in the raw response, which is not a boundary; this slice is the boundary.
 
-**What is withheld, and what deliberately is not.** The recorded decision (Cristhyan, 15 October 2026) is that `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure — and that **unit cost and selling price are not among them**. So `averageUnitCost` and `sitePrice` stay visible to every role, together with stock, `maxStock`, the MDB codes, the machine count and the low/empty alert counts, and only the amounts below change. A later period added to a site row is governed by this rule without amending it, which is what issue #1012's `lastWeekRevenue`/`monthToDateRevenue` are: two more sums over the one completed-sales read this decision already says is not made at all for such a caller.
+**What is withheld, and what deliberately is not.** The recorded decision (Cristhyan, 15 October 2026) is that `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure — and that **unit cost and selling price are not among them**. So `averageUnitCost` and `sitePrice` stay visible to every role, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — `maxStock`, the MDB codes, the machine count and the low/empty alert counts, and only the amounts below change. A later period added to a site row is governed by this rule without amending it, which is what issue #1012's `lastWeekRevenue`/`monthToDateRevenue` are: two more sums over the one completed-sales read this decision already says is not made at all for such a caller.
 
 | Caller | `GET /api/sites` per row | `GET /api/sites/{id}/products` per row |
 | --- | --- | --- |
@@ -9243,7 +9243,11 @@ renders it as five parts:
    described in [its own section](#site-and-machine-performance-issue-987) below. It replaced the
    separate **Site performance** and **Machine performance** cards this issue shipped, and the
    machines-under-their-sites grouping of issue #980 that followed them, on the owner's decision of
-   29 October 2026.
+   29 October 2026. Its data is the two existing reads: `GET api/sites` for the site rows, which
+   since issue #1012 publishes all four sales periods and since issue #1013 also publishes each site
+   machine's own stock percentage (see
+   [Per-machine stock levels on the site read](#per-machine-stock-levels-on-the-site-read-issue-1013)),
+   and `GET api/machines` for the machine rows and the fleet totals.
 4. **Reorder priorities**: `reorderPriorities` is the first `REORDER_PRIORITY_LIMIT` (5) rows of the
    authoritative low-stock list in its own order, and `reorderViewAllLabel` names the list's real
    length. The purchase-cost read (#788/#789) is requested only for those rows and still only with
@@ -9341,12 +9345,25 @@ shows its own figure for whichever one is selected — `$0.00` for a period with
 site is silent for. `siteSales` returns a figure or `null`, with no third "not published" answer, and
 nothing in the component sums or derives a site figure.
 
-**Stock stays a site figure.** The stock percentage, the bar and the low/empty counts come from the
-sites read, which is the only authoritative source for them. A machine row reports them as
-unavailable and the card says why: a site's percentage is never repeated down its machines and
-nothing derives a machine stock level in Angular, which is the boundary issue #987 names. The
-badge's level is also written in words (Critically low / Low / Well stocked, read from the existing
-`siteStockClass` thresholds), so the state is not carried by colour alone.
+**Stock comes from the sites read, and since issue #1013 each machine row carries its own.** The
+sites read is still the only authoritative source for a stock figure, and nothing derives one in
+Angular - the boundary issue #987 named - but it now publishes the per-machine split as well as the
+site total, so a machine row states its own percentage instead of reporting it unavailable. Every
+figure in the column is the server's: `machineStock(group, machine)` looks the machine up in **its
+own group's site** by the provider machine id `GET api/sites` keyed it by, and answers one of three
+things - a percentage, `noCapacity` for a `null` the response published, or `unavailable` for a
+machine that read does not cover. That lookup is also what makes the column fail together with the
+sites read: a failed read leaves `DashboardComponent` passing `sites: []`, so there is no site to
+look a machine up in and every row reports it unavailable rather than 0% or a stale figure. A
+machine under **Other machines** is the same case by construction, which is the issue's exception.
+The **low/empty** counts are unchanged and remain a site figure: they exist per site only, so a
+machine row still reports them unavailable, and `machineStockNote` - in its existing place; moving
+it into a tooltip is issue #1015 - says both halves of that. Site and machine badges read one set of
+thresholds, `stockPercentageClass` (which `siteStockClass` now delegates to), and both write the
+level in words beside the number (Critically low / Low / Well stocked), so the state is never
+carried by colour alone and a machine row's colours cannot drift from the site row's above it. The
+bar's *width* is clamped to 0-100 for both, because a track cannot render more; the stated
+percentage is never clamped, so a provider-data contradiction stays visible as the figure it is.
 
 **Actions and totals.** The Actions column holds the existing destinations only: a site's
 `['/sites', siteId, 'products']` and a machine's `['/machines', localMachineId]`. A machine with no
@@ -9424,6 +9441,62 @@ re-decides nothing and `site-machine-performance` calculates nothing. The card's
 `SITE_PERIOD_NOT_PUBLISHED` placeholder and its "Sites publish sales for Today and This week only…"
 note are removed, because there is no longer a period a site is silent about. No schema change, no
 migration and no new Nayax call: the data was already persisted and already read.
+
+#### Per-machine stock levels on the site read (issue #1013)
+
+<a id="per-machine-stock-levels-on-the-site-read-issue-1013"></a>
+
+Issue #987's card reported every machine row's Stock column as unavailable, because the sites read
+published a site percentage and nothing per machine. The data was never missing, only discarded:
+`GetSiteSummaries` already fetches **every site machine's selections** — one cached
+`INayaxLynxClient.GetMachineProductsAsync` per machine — to work the site percentage out, and then
+flattened them. Issue #1013 publishes that split. It is a server change for the same reason #1012
+was: a stock percentage is a business figure, and the rule behind it belongs in the Domain.
+
+**One rule, two groupings.** `Inventory.Domain.Sites.SiteStockPolicy.CalculateMachineStockPercentage`
+is the machine figure, and it is the site rule over a narrower group: the same sum of
+(`PAR` − `MissingStockByMDB`) over the same sum of `PAR`, with a missing `PAR` counting as no
+capacity and a missing `MissingStockByMDB` as nothing missing, and with unmapped and inactive
+selections still counting toward physical capacity exactly as the site figure counts them. The two
+methods share one `Totals`/`Percentage` pair, so the arithmetic cannot drift apart, and
+`CalculateStockPercentage` is otherwise untouched. **The one deliberate difference is the no-capacity
+answer**: a *site* with no capacity still reports `100`, long-standing published behaviour that this
+issue does not change, while a *machine* with no capacity reports `null`, because nothing is known
+about how full it is and both `0` and `100` would be statements about a machine the provider gave no
+capacity for. More missing than was ever stocked for stays the negative figure the arithmetic gives,
+in both methods: it is a contradiction in the provider's own data, and clamping it in the Domain
+would hide it from the only place that can notice.
+
+**One additive field, and no additional provider request.** `SiteSummary` and `SiteSummaryDto` gain
+`MachineStocks`, appended after the revenue figures, as a list of
+`SiteMachineStock(MachineId, StockPercentage)` — one entry per machine standing at the site, in the
+order the one fleet read returned them. `MachineId` is the **provider's** machine id (the same
+`MachineID` `GET api/machines` publishes), not a local machine key: this row identifies a machine in
+the provider's own data and the sites read holds no local id, which is the rule under
+[Local machines and external machine ids](#local-machines-and-external-machine-ids-issue-740).
+`GetSiteSummaries` keeps the per-machine selection lists it used to flatten and builds the site facts
+by concatenating them in machine order — the exact sequence the site figures were always built from —
+so the stock percentage, the alert counts and every other field are unchanged for the same provider
+data. Each machine's figure is attributed to the machine whose request wrote that slot, never to the
+`MachineID` a selection echoes back, so an inconsistent or absent echoed id cannot move stock onto
+another machine's row. The request volume, the `MaxConcurrentMachineRequests` bound and the
+60-second `NayaxMachineProductsCache` freshness are the site figure's own and are untouched; the
+Nayax contract was verified against the Lynx `GET machineProducts` reference (`MachineID`, `PAR` and
+`MissingStockByMDB` are the documented nullable fields these figures read) and no field was added,
+changed or invented.
+
+**Access, redaction and failure are unchanged.** A stock percentage is not a financial figure, so
+[site financial redaction](#site-financial-redaction-issue-697) does not touch it: the machine
+figures are identical for every role that reaches `GET api/sites`, and
+`SiteFinancialRedactionTests`/`SiteFinancialRedactionApiTests` assert that alongside the site
+percentage. The endpoint's capability, tenant resolution, plan rules, provider-connection states and
+support-session behaviour are untouched, because nothing new is read. Machine stock therefore fails
+exactly with the sites read it comes from: a failed read is the existing sites error, and the card
+has no site to look a machine up in, so no row shows 0% or a stale figure (see
+[Site and machine performance](#site-and-machine-performance-issue-987) for the three answers a
+machine row can give and the "Other machines" exception). No schema change, no migration, and the
+machine **Low / empty** column stays unavailable: those counts exist per site only and giving a
+machine its own is a separate decision.
 
 #### Home dashboard coordinated Sites/Machines sales sync (issue #187)
 
@@ -16452,7 +16525,7 @@ files" as the historical record of that slice, not as a test to look for today.
      - **Not in that slice.** The non-reporting adapters under `InventoryApi/Adapters/Persistence` stayed put - they were Persistence 8/8, done by issue #309 - and so did the tests of the relocated adapters, which keep their `InventoryApi.Tests/Adapters/Persistence` location for the same reason `MigrationRelocationTests` did after issue #307.
 
 9. **Sites and Machines dashboard slice done** (issue #241, a child of the #147 umbrella; #240 migrates Products separately). `SiteService.GetAll`/`GetProducts` and `MachineService.GetById`/`GetAll` are the migrated endpoints; `MachineService.GetMachineProducts` was left to the sibling Products migration because it returned the EF `Product` entity directly, and issue #240 has since migrated it in full to `Inventory.Application.Machines.ListMachineProducts` - see item 6 above.
-   - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
+   - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage, one machine's own stock percentage (issue #1013 — the same arithmetic over one machine's selections, answering `null` rather than the site rule's `100` for no capacity) and its low/empty product alert counts, all from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same per-site/per-machine fan-out over `GetMachineProductsAsync` the former services used (a `Task.WhenAll` over every machine at once at the time; issue #845 has since capped the two Sites use cases at `CalculateReorderNeeds.MaxConcurrentMachineRequests` requests in flight, the limit the reorder-alert and Pick List fan-outs already used, leaving their results, their per-machine attribution and their failure/cancellation propagation unchanged). `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
    - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used (a lookback issue #1012 has since replaced with one derived from the dashboard window — see [Site sales for all four dashboard periods](#site-sales-for-all-four-dashboard-periods-issue-1012)), and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales). Issue #667 later moved that one batched read to after the machine-product fan-out completes, because a Nayax call resolves its credentials through the same context since issue #520; the fan-out itself is still concurrent.
    - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules. Issue #154 closed this item's remaining architectural debt rather than relocating anything further: the commission, fee, payment-method and transaction-status rules issue #150 moved into `Inventory.Domain` are now asserted to be declared there and nowhere else, no file under `InventoryApi` names one, `Inventory.Domain`/`Inventory.Application` are asserted to declare no `IQueryable` or expression tree at all, and `EfNayaxSalesQueries` is `internal` so the completed-sale predicate cannot be called from outside `Inventory.Infrastructure` - see [InventoryApi](#inventoryapi).

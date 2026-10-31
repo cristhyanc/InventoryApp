@@ -33,6 +33,20 @@ namespace Inventory.Application.Sites;
 /// from the window too (see <see cref="EarliestPublishedPeriodStartUtc"/>) rather than from a fixed
 /// day count, so every published period is read in full from its own first instant.</para>
 ///
+/// <para><b>Each machine's own stock percentage</b> (issue #1013). The per-machine selections this
+/// use case already fetches for the site percentage were previously flattened and the split
+/// discarded; they are now also published per machine, as
+/// <see cref="SiteSummary.MachineStocks"/>, through
+/// <see cref="SiteStockPolicy.CalculateMachineStockPercentage"/> - the site rule over one machine's
+/// selections, with <see langword="null"/> for a machine that reports no capacity at all. No
+/// additional Nayax request is made for them: they come from the same one cached
+/// <see cref="INayaxLynxClient.GetMachineProductsAsync"/> call per machine the fan-out above already
+/// makes, so the request volume and the 60-second cache freshness are the site figure's own. Each
+/// machine's figure is attributed to the machine its request was made <em>for</em>, not to the
+/// <c>MachineID</c> a selection echoes back, and the site percentage and alert counts are built from
+/// the same facts concatenated in machine order, so they are unchanged for the same provider
+/// data.</para>
+///
 /// <para>A mapping's <c>NayaxProductID</c> is resolved to a local product through
 /// <see cref="INayaxProductLinkStore"/> (issue #733) before the stock facts are built, instead of
 /// being looked up in the local catalogue's activity as if it were a local id. A mapping this
@@ -149,11 +163,16 @@ public sealed class GetSiteSummaries
                     await _nayax.GetMachineProductsAsync(request.MachineID, machineCancellationToken);
             });
 
+        // The per-machine lists are kept rather than flattened here (issue #1013): each machine's own
+        // stock percentage is that machine's selections alone, and the slot a request wrote to is the
+        // machine it was made *for*, so an echoed-back MachineID cannot attribute a selection to
+        // another machine's row. The site figures are built from the same lists concatenated in that
+        // order below, which is exactly the sequence this step used to hand over.
         var sitesWithProducts = sites
             .Select((site, siteIndex) => (
                 site.SiteId,
                 site.Machines,
-                Products: productsByMachine[siteIndex].SelectMany(products => products).ToList()))
+                ProductsByMachine: productsByMachine[siteIndex]))
             .ToList();
 
         // One link read for the whole fleet, awaited after the fan-out and before the completed-sales
@@ -161,7 +180,8 @@ public sealed class GetSiteSummaries
         // operation at a time.
         var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
             sitesWithProducts
-                .SelectMany(site => site.Products)
+                .SelectMany(site => site.ProductsByMachine)
+                .SelectMany(products => products)
                 .Where(mp => mp.NayaxProductID.HasValue)
                 .Select(mp => mp.NayaxProductID!.Value)
                 .Distinct()
@@ -195,7 +215,7 @@ public sealed class GetSiteSummaries
             .Select(site => BuildSummary(
                 site.SiteId,
                 site.Machines,
-                site.Products,
+                site.ProductsByMachine,
                 SalesFor(site.Machines, salesByMachine),
                 localProductIdByNayaxId,
                 productActivity,
@@ -239,32 +259,50 @@ public sealed class GetSiteSummaries
                 .SelectMany(machineId => salesByMachine.GetValueOrDefault(machineId, []))
                 .ToList();
 
+    /// <summary>
+    /// One site's row. <paramref name="productsByMachine"/> holds the selections of each machine in
+    /// <paramref name="machines"/>, in the same order and by the same index, which is what lets each
+    /// machine's own percentage be attributed to the machine its request was made for (issue #1013).
+    /// </summary>
     private SiteSummary BuildSummary(
         long siteId,
         List<NayaxMachine> machines,
-        IReadOnlyList<NayaxMachineProduct> machineProducts,
+        IReadOnlyList<List<NayaxMachineProduct>> productsByMachine,
         IReadOnlyList<SiteCompletedSaleFact>? sales,
         IReadOnlyDictionary<long, long> localProductIdByNayaxId,
         IReadOnlyDictionary<long, bool> productActivity,
         MachineDashboardWindow window)
     {
-        var stockFacts = machineProducts
-            .Select(mp =>
-            {
-                var productId = mp.NayaxProductID is long nayaxProductId
-                    && localProductIdByNayaxId.TryGetValue(nayaxProductId, out var localProductId)
-                        ? localProductId
-                        : (long?)null;
+        var stockFactsByMachine = productsByMachine
+            .Select(products => products
+                .Select(mp =>
+                {
+                    var productId = mp.NayaxProductID is long nayaxProductId
+                        && localProductIdByNayaxId.TryGetValue(nayaxProductId, out var localProductId)
+                            ? localProductId
+                            : (long?)null;
 
-                return new SiteMachineProductStockFact(
-                    productId,
-                    productId.HasValue && productActivity.GetValueOrDefault(productId.Value),
-                    mp.PAR ?? 0,
-                    mp.MissingStockByMDB ?? 0,
-                    mp.VendOutAlertThreshold ?? 0);
-            })
+                    return new SiteMachineProductStockFact(
+                        productId,
+                        productId.HasValue && productActivity.GetValueOrDefault(productId.Value),
+                        mp.PAR ?? 0,
+                        mp.MissingStockByMDB ?? 0,
+                        mp.VendOutAlertThreshold ?? 0);
+                })
+                .ToList())
             .ToList();
+
+        // The site's facts are its machines' facts concatenated in machine order, which is the
+        // sequence the site figures were always built from: the split below is published beside them
+        // rather than instead of them, so no site figure changes for the same provider data.
+        var stockFacts = stockFactsByMachine.SelectMany(facts => facts).ToList();
         var (lowProductCount, emptyProductCount) = SiteStockPolicy.CalculateAlertCounts(stockFacts);
+
+        var machineStocks = machines
+            .Select((machine, index) => new SiteMachineStock(
+                machine.MachineID,
+                SiteStockPolicy.CalculateMachineStockPercentage(stockFactsByMachine[index])))
+            .ToList();
 
         return new SiteSummary(
             siteId,
@@ -277,7 +315,8 @@ public sealed class GetSiteSummaries
             RevenueIn(sales, window.CurrentWeek),
             RevenueIn(sales, window.PreviousComparableWeek),
             RevenueIn(sales, window.LastWeek),
-            RevenueIn(sales, window.MonthToDate));
+            RevenueIn(sales, window.MonthToDate),
+            machineStocks);
     }
 
     /// <summary>

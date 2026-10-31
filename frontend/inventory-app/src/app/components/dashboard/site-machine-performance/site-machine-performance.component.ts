@@ -3,7 +3,7 @@ import { Component, Input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { plural } from '../../../formatting/plural';
 import { trendClass, trendLabel } from '../../../formatting/revenue-trend';
-import { siteStockClass } from '../../../formatting/site-stock-status';
+import { siteStockClass, stockPercentageClass } from '../../../formatting/site-stock-status';
 import { Machine, Site } from '../../../models/models';
 import { money } from '../../reports/report-formatting';
 import { IconComponent } from '../../shared/icon.component';
@@ -31,12 +31,35 @@ export interface SiteMachineGroup {
 export const OTHER_MACHINES_LABEL = 'Other machines';
 
 /**
- * What a machine row says in the stock and low/empty columns. Those two figures are published per
- * **site** and the machine read publishes nothing with the same meaning, so the row says the figure
- * is unavailable and {@link SiteMachinePerformanceComponent.machineStockNote} says why. A site's own
+ * What a machine row says for a figure the two responses do not publish for it: the low/empty
+ * counts, which exist per **site** only, and - for a machine the sites read does not cover - its
+ * stock percentage. {@link SiteMachinePerformanceComponent.machineStockNote} says why. A site's own
  * percentage is never repeated down its machines, and nothing here derives a machine's stock level.
  */
 export const MACHINE_FIGURE_UNAVAILABLE = 'Unavailable';
+
+/**
+ * What a machine row says instead of a percentage when its selections report no capacity at all
+ * (issue #1013): nothing is known about how full it is, which is neither 0% nor the 100% the site
+ * rule answers for a site with no capacity.
+ */
+export const MACHINE_NO_CAPACITY = 'No capacity set';
+
+/**
+ * What one machine row can say in the Stock column (issue #1013).
+ *
+ * - `percentage` - the server's own figure for that machine, shown as a number, a bar and a status
+ *   in words.
+ * - `noCapacity` - the figure was published as `null`, meaning the machine reports no capacity at
+ *   all. Deliberately distinct from a percentage of `0`, which means the machine is empty.
+ * - `unavailable` - the sites read does not cover this machine, so no figure exists for it: a
+ *   machine under "Other machines", or one its own site published no entry for. Never a `0`, and
+ *   never the site's percentage.
+ */
+export type MachineStockFigure =
+  | { readonly kind: 'percentage'; readonly percentage: number }
+  | { readonly kind: 'noCapacity' }
+  | { readonly kind: 'unavailable' };
 
 /** What a row says for a period no comparison is published for; see {@link comparisonHeader}. */
 export const NO_PERIOD_COMPARISON = 'No comparison for this period';
@@ -93,6 +116,13 @@ export function groupSitesAndMachines(
  * week" belongs to This week and no other period borrows it - and the fleet totals are still taken
  * over the machine rows alone.
  *
+ * Since issue #1013 the same response also publishes each site machine's own stock percentage, so a
+ * machine row shows its own figure instead of reporting it unavailable. That is still the server's
+ * figure: {@link SiteMachinePerformanceComponent.machineStock} looks a machine up in **its own
+ * group's site** by the provider machine id and reports what it finds, a site's percentage is never
+ * repeated down its machines, and the only thing done to a number here is holding a progress bar's
+ * *width* inside the 0-100 its track can render - never the percentage the row states.
+ *
  * It is a dedicated feature component rather than more markup on the page (the page-composition
  * rule, `docs/architecture.md` § Page composition boundary): it owns substantial UI plus its own
  * state - the shared period selection and one expansion state per site - while the page keeps
@@ -139,12 +169,16 @@ export class SiteMachinePerformanceComponent {
   ];
 
   /**
-   * Said once in the card: the two stock columns are site figures, so a machine row leaves them
-   * unavailable rather than repeating its site's percentage or deriving one of its own.
+   * Said once in the card, in the same place it has always been said (moving it into a tooltip is
+   * issue #1015). Since issue #1013 a machine row carries its **own** stock percentage, so the
+   * stock half of the note describes that figure and names the one case it is missing for -
+   * "Other machines", which the sites read does not cover. The low/empty half is unchanged and
+   * still true: those counts exist per site only.
    */
   readonly machineStockNote =
-    'Stock levels and low or empty selection counts are published per site. The machine read publishes no ' +
-    'equivalent figure, so machine rows show them as unavailable rather than repeating a site figure.';
+    `Each machine row shows its own stock level, from the same site read as the site's. Machines under ` +
+    `"${OTHER_MACHINES_LABEL}" are not covered by that read, so their stock shows as unavailable. Low or ` +
+    'empty selection counts are published per site only, so machine rows show those as unavailable.';
 
   /**
    * The sites whose machines the reader has collapsed, by group key. Collapsed rather than expanded
@@ -276,14 +310,7 @@ export class SiteMachinePerformanceComponent {
 
   /** The stock bar's fill, on the same thresholds as {@link siteStockClass}'s badge beside it. */
   siteStockBarClass(site: Site): string {
-    switch (siteStockClass(site)) {
-      case 'badge-danger':
-        return 'bg-rr-danger-text';
-      case 'badge-warning':
-        return 'bg-rr-warn-text';
-      default:
-        return 'bg-rr-ok-text';
-    }
+    return barClassFor(siteStockClass(site));
   }
 
   /**
@@ -291,19 +318,82 @@ export class SiteMachinePerformanceComponent {
    * alone. It reads the shared {@link siteStockClass} thresholds rather than restating them.
    */
   siteStockStatusLabel(site: Site): string {
-    switch (siteStockClass(site)) {
-      case 'badge-danger':
-        return 'Critically low';
-      case 'badge-warning':
-        return 'Low';
-      default:
-        return 'Well stocked';
-    }
+    return stockStatusLabelFor(siteStockClass(site));
   }
 
   /** The bar's width, held to 0-100 so a stray figure can never overflow its track. */
   stockBarWidth(site: Site): number {
-    return Math.min(100, Math.max(0, site.totalStockPercentage));
+    return barWidth(site.totalStockPercentage);
+  }
+
+  /**
+   * What one machine row says in the Stock column (issue #1013). The figure is looked up in the
+   * machine's **own** group's site - by the provider machine id the sites read keyed it by - so a
+   * site's percentage can never be read as a machine's, and a machine the read does not cover
+   * ("Other machines", or a site that published no entry for it) has no figure rather than a `0`.
+   *
+   * This is also what makes the stock column fail together with the sites read: a failed read
+   * leaves the component no site to look a machine up in, so every row reports it unavailable
+   * instead of a stale or invented figure.
+   */
+  machineStock(group: SiteMachineGroup, machine: Machine): MachineStockFigure {
+    const published = group.site?.machineStocks?.find((stock) => stock.machineId === machine.machineID);
+    if (published === undefined) return { kind: 'unavailable' };
+    if (published.stockPercentage == null) return { kind: 'noCapacity' };
+    return { kind: 'percentage', percentage: published.stockPercentage };
+  }
+
+  /** Whether this machine has a percentage to draw a bar and a badge for at all. */
+  hasMachineStockPercentage(group: SiteMachineGroup, machine: Machine): boolean {
+    return this.machineStock(group, machine).kind === 'percentage';
+  }
+
+  /**
+   * The machine's percentage as text, the status in words, or the reason there is no figure. The
+   * percentage is always stated in words or digits, so the badge's colour carries nothing alone.
+   */
+  machineStockText(group: SiteMachineGroup, machine: Machine): string {
+    const figure = this.machineStock(group, machine);
+    switch (figure.kind) {
+      case 'percentage':
+        return `${figure.percentage.toFixed(0)}%`;
+      case 'noCapacity':
+        return MACHINE_NO_CAPACITY;
+      case 'unavailable':
+        return MACHINE_FIGURE_UNAVAILABLE;
+    }
+  }
+
+  /** The badge class, read from the same shared thresholds the site badge above it reads. */
+  machineStockClass(group: SiteMachineGroup, machine: Machine): string {
+    const figure = this.machineStock(group, machine);
+    return figure.kind === 'percentage' ? stockPercentageClass(figure.percentage) : 'value-muted';
+  }
+
+  /**
+   * The machine bar's fill, on the same thresholds as its badge; see {@link siteStockBarClass}. It
+   * reads the figure rather than the badge class, so a row with no percentage cannot be handed a
+   * fill colour for a band it is not in.
+   */
+  machineStockBarClass(group: SiteMachineGroup, machine: Machine): string {
+    const figure = this.machineStock(group, machine);
+    return figure.kind === 'percentage' ? barClassFor(stockPercentageClass(figure.percentage)) : '';
+  }
+
+  /**
+   * The machine bar's width, held to 0-100 exactly as the site bar's is. The *stated* percentage is
+   * never changed: a figure outside the usual range is published as it is, and only the bar - which
+   * cannot render it - is constrained.
+   */
+  machineStockBarWidth(group: SiteMachineGroup, machine: Machine): number {
+    const figure = this.machineStock(group, machine);
+    return figure.kind === 'percentage' ? barWidth(figure.percentage) : 0;
+  }
+
+  /** The machine's level in words, on the shared thresholds; blank when there is no percentage. */
+  machineStockStatusLabel(group: SiteMachineGroup, machine: Machine): string {
+    const figure = this.machineStock(group, machine);
+    return figure.kind === 'percentage' ? stockStatusLabelFor(stockPercentageClass(figure.percentage)) : '';
   }
 
   /** One site's sales for the selected period, exactly as `GET api/sites` published them. */
@@ -481,4 +571,39 @@ function machinePeriodFigures(
 /** The direct margin the machine rows and the totals row already displayed, unchanged. */
 function margin(profit: number, sales: number): number {
   return sales === 0 ? 0 : (profit / sales) * 100;
+}
+
+/**
+ * A stock bar's fill for a badge class. One mapping for the site bar and, since issue #1013, the
+ * machine bar, so the two cannot come to disagree about which hue a band is.
+ */
+function barClassFor(badgeClass: string): string {
+  switch (badgeClass) {
+    case 'badge-danger':
+      return 'bg-rr-danger-text';
+    case 'badge-warning':
+      return 'bg-rr-warn-text';
+    default:
+      return 'bg-rr-ok-text';
+  }
+}
+
+/** The same band in words, for the same two bars, so colour never carries the level alone. */
+function stockStatusLabelFor(badgeClass: string): string {
+  switch (badgeClass) {
+    case 'badge-danger':
+      return 'Critically low';
+    case 'badge-warning':
+      return 'Low';
+    default:
+      return 'Well stocked';
+  }
+}
+
+/**
+ * A bar's rendered width. The percentage itself is never changed - an out-of-range figure is still
+ * published and still stated - but the track it is drawn in has only 0-100 to render.
+ */
+function barWidth(percentage: number): number {
+  return Math.min(100, Math.max(0, percentage));
 }
