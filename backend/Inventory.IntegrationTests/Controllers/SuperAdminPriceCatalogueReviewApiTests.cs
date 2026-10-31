@@ -26,7 +26,9 @@ public class SuperAdminPriceCatalogueReviewApiTests
 {
     private const string ReviewUrl = "/api/super-admin/price-catalogue-review";
 
-    private static readonly DateTime Observed = new(2026, 10, 30, 6, 0, 0, DateTimeKind.Utc);
+    // Relative to now: the review only accepts a reading inside the supplier's freshness window
+    // (30 hours), so a fixed date made these tests fail from 31 October 2026 12:00 UTC.
+    private static readonly DateTime Observed = DateTime.UtcNow.AddHours(-1);
 
     private readonly SuperAdminBusinessesApiFactory _factory;
 

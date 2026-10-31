@@ -67,8 +67,8 @@ In GitHub → Actions → **Price collector (manual test)** → Run workflow:
 
 The sample allows at most **12 Apify calls**, at most **5 returned items** per call (Dromb still 1),
 and **1 internal page**. Claude runs with at most **40 turns**, a **US$1 Claude budget**, and a
-**14-minute internal deadline** (16-minute workflow step). The job has 45 minutes, and finalisation
-has its own 15-minute step. Supplier calls can cost money even if no matching product is found.
+**14-minute internal deadline**. The Claude step's 100-minute timeout is only a backstop; the job has
+130 minutes, and finalisation has its own 15-minute step. Supplier calls can cost money even if no matching product is found.
 Incomplete searches remain `truncated`; a successful actor run alone is not proof of completeness.
 
 The summary also says how many turns Claude took and its result subtype, and one line per tool
@@ -79,6 +79,27 @@ run that writes nothing shows where it stopped without publishing its output.
 Review the counts/statuses in the Actions summary, then inspect proposed listings, pending prices
 and match decisions through the test API's Super Admin pages. Confirm pack size, variant, tax basis
 and currency there. No observed supplier price changes purchases, GST accounting or inventory.
+
+## Full (production-sized) run
+
+Tick **full_run** to see what a real run costs before any schedule is enabled. It is still manual
+and still refuses the production API. It ignores **sample_size**, keeps the production limits in
+`apify-limits.json` (up to 600 actor calls, full page sizes and up to 3 pages per search) and gives
+Claude every issued search, at most 90, in batches of about 6. Each batch is a fresh Claude session
+with 60 turns and a US$1 budget, so no session's context grows with the whole catalogue and Claude
+can spend at most US$15 in one run. One product's searches always stay in the same batch, because its
+match file can be written only once. The whole Claude phase has 90 minutes; the run stops at the
+first batch that does not complete, and every search no batch reached becomes `not_searched`.
+Tick **include_verified_retailers** too, or Kmart and BIG W searches become `not_searched`.
+
+The summary adds `Claude batches: N of M`, and Claude's cost and turns are totals across batches
+(unknown if any batch did not report them). Apify spend is limited only by the Apify account usage
+limit, so check it is set before a full run.
+
+When a result file fails validation, the summary shows `skipped <work item>.json: field <path>`
+(for example `field file.rows[2].packQuantity`), or `a file-level rule`, never the value or the
+validator's message. One skipped file marks the submission failed, but every other file is still
+submitted and the run is still completed.
 
 ## Interruption run and cost evidence
 
