@@ -14989,9 +14989,11 @@ The workflow's `always()` finalizer obtains a fresh short-lived API token, filte
 to the issued sample, and calls the existing independent file validator/batch/outcome/run-complete
 submission path. Finished results survive an interrupted model step; unselected or unanswered
 work is `not_searched`. Job cancellation/hard timeout can still skip finalisation, so backend
-expiry remains the backstop. Only allowlisted numeric counts/statuses, Claude's turn count and result
-subtype, per-tool allow/deny counts with fixed reason codes, and reported Claude cost
-reach the public logs; transcripts, prices, names, raw errors and output files are not published.
+expiry remains the backstop. Since 31 October 2026 (owner decision) the run is logged in full: the
+job summary lists every search with its rows and the API's decision and reason for each, the
+finalise step prints every tool call with its input and answer, and a 7-day `price-collector-logs`
+artifact keeps the trace, Claude's session transcripts and the result files. `trace.mjs` masks every
+credential the step holds, by value and by format, before any line is written.
 Cleanup removes private temporary data and the per-job CLI installation; reset/ephemeral isolation
 is still mandatory for credentialed self-hosted jobs.
 

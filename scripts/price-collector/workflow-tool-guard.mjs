@@ -5,6 +5,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runGuard } from './apify-guard.mjs';
 import { recordRun, reserveRead } from './workflow-run-ledger.mjs';
+import { textOf, trace } from './trace.mjs';
 
 export function permittedCommand(command) {
   if (typeof command !== 'string' || /[\x00-\x1f$`;&|<>\\!*?()[\]{}#]/.test(command)) return false;
@@ -14,7 +15,7 @@ export function permittedCommand(command) {
 }
 
 // `code` is a fixed, non-enumerable diagnostic label: it never reaches Claude Code's JSON, and it is
-// what the public summary counts instead of the reason text.
+// what the summary counts per tool; the full reason is in the run's trace (trace.mjs).
 const decision = (permissionDecision, permissionDecisionReason, updatedInput, code = 'ok') => Object.defineProperty(
   { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason, ...(updatedInput ? { updatedInput } : {}) } },
   'code', { value: code });
@@ -206,14 +207,20 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     let raw = '';
     for await (const chunk of process.stdin) raw += chunk;
     event = JSON.parse(raw);
+    const stateDir = process.env.PRICE_COLLECTOR_STATE_DIR;
     if (event.hook_event_name === 'PostToolUse') {
+      trace(stateDir, { event: 'answer', tool: event.tool_name, toolUseId: event.tool_use_id, response: textOf(event.tool_response) }, process.env);
       process.stdout.write(JSON.stringify(await recordDecision(event, process.env)));
     } else if (event.hook_event_name === 'PostToolUseFailure') {
+      trace(stateDir, { event: 'failed', tool: event.tool_name, toolUseId: event.tool_use_id, code: failureCode(event), error: textOf(event.error) }, process.env);
       process.stdout.write(JSON.stringify(failureDecision(event, process.env)));
     } else {
       const answer = await toolDecision(event, process.env);
-      noteToolUse(process.env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: 'before',
+      noteToolUse(stateDir, { tool: toolLabel(event), event: 'before',
         decision: answer.hookSpecificOutput?.permissionDecision, code: answer.code ?? 'ok' });
+      const output = answer.hookSpecificOutput ?? {};
+      trace(stateDir, { event: 'call', tool: event.tool_name, toolUseId: event.tool_use_id, decision: output.permissionDecision,
+        code: answer.code ?? 'ok', reason: output.permissionDecisionReason, input: textOf(output.updatedInput ?? event.tool_input) }, process.env);
       process.stdout.write(JSON.stringify(answer));
     }
   } catch {

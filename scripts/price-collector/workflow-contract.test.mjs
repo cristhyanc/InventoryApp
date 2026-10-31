@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { verifyCollectorWorkflow } from './workflow-contract.mjs';
+import { RUN_LOG_STEP, verifyCollectorWorkflow } from './workflow-contract.mjs';
 
 const workflow = readFileSync(new URL('../../.github/workflows/price-collector.yml', import.meta.url), 'utf8');
 
@@ -9,12 +9,16 @@ test('the repository workflow satisfies the manual-only credential and finalisat
   assert.doesNotThrow(() => verifyCollectorWorkflow(workflow));
 });
 
-test('a cron, a write token, artifact publication or a non-always finalizer breaks the contract', () => {
+test('a cron, a write token, a second or unpinned artifact, a missing run log or a non-always finalizer breaks the contract', () => {
   for (const changed of [
     workflow.replace('  workflow_dispatch:', "  schedule:\n    - cron: '0 0 * * *'\n  workflow_dispatch:"),
     workflow.replace('      contents: read', '      contents: write'),
     workflow.replace('        if: always()', '        if: success()'),
     workflow + '\n# uses: actions/upload-artifact@v4\n',
+    workflow.replace(RUN_LOG_STEP, ''),
+    workflow.replace('          retention-days: 7', '          retention-days: 90'),
+    // Uploaded after cleanup, the log folder would already be gone.
+    workflow.replace(RUN_LOG_STEP, '') + `\n${RUN_LOG_STEP}`,
     workflow.replace("(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')", "github.ref != ''"),
     workflow.replace("(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')", "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/'))"),
     workflow.replace('            refs/heads/main|refs/heads/develop) ;;', '            refs/heads/*) ;;'),

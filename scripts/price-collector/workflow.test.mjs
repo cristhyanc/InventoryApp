@@ -4,11 +4,12 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, publicSkipLine, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, publicReasonLines, PUBLIC_ROW_REASONS, finaliseSample, launchClaude, toolUseReport } from './workflow.mjs';
+import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, finaliseSample, launchClaude, toolUseReport, searchDetails, toolTimeline, claudeResult } from './workflow.mjs';
 import { JB_METRO_CAPS, failureCode, jbMetroFlags, permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { LEDGER_FILE, MAX_POLLS_PER_RUN, leadingJsonObject, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
+import { clip, redact, secretsOf, trace } from './trace.mjs';
 
 const work = { runId: 41, searches: [
   { workItemId: 1, product: { kind: 'waiting', waitingKey: 'a' } },
@@ -74,42 +75,60 @@ test('tool policy refuses arbitrary shell, command substitution, redirects, extr
   assert.equal((await toolDecision({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/read-work.mjs', run_in_background: true } }, {})).hookSpecificOutput.permissionDecision, 'deny');
 });
 
-test('public report permits only numeric counters, not supplier text, error bodies or filenames', () => {
-  const raw = 'rows: accepted 1, sent to review 2, pending 0, rejected 0\n  rejected: private product\nfailed requests: 1\nrun 41: completed; complete 1, truncated 0, no_matches 0, failed 0, not_searched 7\nsecret token';
-  const safe = publicSubmissionReport(raw);
-  assert.ok(safe.includes('not_searched 7'));
-  assert.ok(safe.includes('accepted 1'));
-  assert.ok(!safe.includes('private'));
-  assert.ok(!safe.includes('secret'));
+test('the run report shows the submission output, its errors and every search in full', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-details-'));
+  try {
+    const issued = { runId: 41, searches: [
+      { workItemId: 1, supplierPresetId: 3, supplierName: 'ALDI', priceConnector: 'varnmill', priceConnectorKey: 'aldi',
+        product: { kind: 'master', masterProductId: 7, brand: 'Coca-Cola', name: 'Zero Sugar', sizeValue: 375, sizeUnit: 'ml' } },
+      { workItemId: 2, supplierPresetId: 4, supplierName: 'Coles', priceConnector: 'varnmill', product: { kind: 'waiting', searchName: 'CCs Tasty Cheese', unitLabel: '45g' } },
+    ], matching: { waitingProducts: [], masterProducts: [] } };
+    writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(issued));
+    writeFileSync(join(dir, 'collector-status.json'), JSON.stringify({ status: 'completed', costUsd: 0.2, turns: 5, subtype: 'success' }));
+    const outputDir = join(dir, 'out');
+    mkdirSync(outputDir);
+    writeFileSync(join(outputDir, '1.json'), JSON.stringify({ runId: 41, workItemId: 1, outcome: 'complete', rows: [
+      { supplierProductId: 'aldi-1', title: 'Coke Zero 18x375ml', packPrice: 20.99, packQuantity: 18, stockStatus: 'in_stock', sourceUrl: 'https://www.aldi.com.au/p/1' }] }));
+    const decisions = [{ outcome: 'rejected', workItemId: 1, supplierProductId: 'aldi-1', reason: "price basis differs from the supplier's published basis" }];
+    const { report, details } = await finaliseSample({ stateDir: dir, outputDir, env: {}, token: 't',
+      submit: async () => ({ exitCode: 1, out: 'rows: accepted 0, sent to review 0, pending 0, rejected 1\n', err: 'HTTP 500 on /results\n', decisions }) });
+    assert.match(report, /^rows: accepted 0, sent to review 0, pending 0, rejected 1$/m);
+    assert.match(report, /^Submission errors:\nHTTP 500 on \/results$/m);
+    assert.match(details, /1\. \*\*Coca-Cola Zero Sugar 375ml \(master product 7\)\*\* at \*\*ALDI\*\* \(varnmill:aldi\), work item 1/);
+    assert.match(details, /Coke Zero 18x375ml \[aldi-1\]: \$20\.99 for 18, in_stock, https:\/\/www\.aldi\.com\.au\/p\/1 -> \*\*rejected - price basis differs/);
+    assert.match(details, /CCs Tasty Cheese - 45g \(waiting product\)\*\* at \*\*Coles\*\*/);
+    assert.match(details, /no result file written \(not_searched\)/);
+    const saved = readFileSync(join(dir, 'logs', 'summary.md'), 'utf8');
+    assert.ok(saved.includes('Coke Zero 18x375ml'));
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'logs', 'submission.json'), 'utf8')).decisions, decisions);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('the summary shows the API\'s fixed row reasons with counts and folds any other reason', () => {
-  const raw = [
-    'rows: accepted 0, sent to review 1, pending 2, rejected 4',
-    "  rejected: source link is not on the supplier's own site × 2",
-    '  rejected: Pack price for "Coke Zero $20.99" must be above zero. × 1',
-    '  rejected: https://private.example/link × 1',
-    '  pending: listing is not confirmed, so the reading is held as a pending observation × 2',
-    '  sent to review: variant, individual size, barcode or pack quantity changed × 1',
-    '  match rejected: some private key × 1',
-    '  rejected: no count given',
-  ].join('\n');
-  const safe = publicSubmissionReport(raw);
-  assert.equal(safe, [
-    'rows: accepted 0, sent to review 1, pending 2, rejected 4',
-    '  sent to review: variant, individual size, barcode or pack quantity changed × 1',
-    '  pending: listing is not confirmed, so the reading is held as a pending observation × 2',
-    "  rejected: source link is not on the supplier's own site × 2",
-    '  rejected: other reason × 2',
-  ].join('\n'));
-  assert.deepEqual(publicReasonLines('no reasons here'), []);
+test('the tool timeline shows each call, its answer or failure, and each session, with secrets masked', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-timeline-'));
+  try {
+    const env = { APIFY_TOKEN: 'apify_api_SECRETSECRET123' };
+    trace(dir, { event: 'batch', session: 1, of: 2, workItemIds: [1, 2] });
+    trace(dir, { event: 'call', tool: 'mcp__apify__call-actor', decision: 'allow', code: 'ok', input: '{"queries":["coke zero"],"token":"apify_api_SECRETSECRET123"}' }, env);
+    trace(dir, { event: 'answer', tool: 'mcp__apify__call-actor', response: '{"runId":"abc"}' }, env);
+    trace(dir, { event: 'failed', tool: 'mcp__apify__axlymxp--bigw-product-scraper', code: 'failed-input', error: 'Input is not valid' }, env);
+    trace(dir, { event: 'session', session: 1, subtype: 'success', turns: 4, costUsd: 0.1, result: 'Wrote 2 files' }, env);
+    const timeline = toolTimeline(dir);
+    assert.match(timeline, /SESSION 1 of 2: work items 1, 2/);
+    assert.match(timeline, /CALL mcp__apify__call-actor allow \{"queries":\["coke zero"\]/);
+    assert.match(timeline, /-> mcp__apify__call-actor answered: \{"runId":"abc"\}/);
+    assert.match(timeline, /FAILED \(failed-input\): Input is not valid/);
+    assert.match(timeline, /SESSION 1 ended: success, 4 turns, \$0\.1; Claude said: Wrote 2 files/);
+    assert.ok(!timeline.includes('SECRETSECRET'));
+    assert.equal(toolTimeline(join(dir, 'none')), 'No tool calls were traced.\n');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('the public row reasons are exactly the Domain\'s fixed row reasons', () => {
-  const domain = readFileSync(new URL('../../backend/Inventory.Domain/PriceCatalogue/PriceCollectorResultPolicy.cs', import.meta.url), 'utf8');
-  const constants = [...domain.matchAll(/public const string \w+Reason =\s*"([^"]+)";/g)].map(match => match[1]);
-  assert.ok(constants.length >= 10);
-  assert.deepEqual([...PUBLIC_ROW_REASONS].sort(), constants.sort());
+test('the session result is read from the last result message of a stream-json transcript', () => {
+  const stream = '{"type":"system","subtype":"init"}\n{"type":"assistant"}\n{"type":"result","subtype":"success","num_turns":3}\n';
+  assert.equal(claudeResult(stream).num_turns, 3);
+  assert.equal(claudeResult('{"type":"result","subtype":"error_max_turns"}').subtype, 'error_max_turns');
+  assert.deepEqual(claudeResult('not json'), {});
 });
 
 test('OIDC exchange uses the API application scope, never a stored API password, and does not retry refusal', async () => {
@@ -129,7 +148,7 @@ test('OIDC exchange uses the API application scope, never a stored API password,
   assert.equal(calls, 1);
 });
 
-test('finalisation runs after a collector timeout even with no result files and hides submission errors', async () => {
+test('finalisation runs after a collector timeout even with no result files and shows submission errors', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-test-'));
   try {
     writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(work));
@@ -141,9 +160,11 @@ test('finalisation runs after a collector timeout even with no result files and 
     } });
     assert.equal(calls.length, 1);
     assert.ok(calls[0].includes('41'));
-    assert.ok(answer.includes('timeout'));
-    assert.ok(answer.includes('not_searched 2'));
-    assert.ok(!answer.includes('private'));
+    assert.ok(answer.report.includes('timeout'));
+    assert.ok(answer.report.includes('not_searched 2'));
+    // Submission errors are shown in full; the API token never is.
+    assert.ok(answer.report.includes('Submission errors:\nprivate'));
+    assert.ok(!answer.report.includes('private-token'));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -166,19 +187,20 @@ test('a real interrupted child leaves finished files for independent submission 
 fs.writeFileSync('price-collector-out/1.json', JSON.stringify({runId:41,workItemId:1,supplierPresetId:3,outcome:'no_matches',rows:[]}));
 console.error('secret transcript, product, price and token');
 setInterval(() => {}, 1000);\n`, { mode: 0o700 });
-    const status = await launchClaude({ executable: fake, sandbox, env: { PATH: process.env.PATH }, timeoutMs: 500 });
+    const status = await launchClaude({ executable: fake, sandbox, env: { PATH: process.env.PATH, PRICE_COLLECTOR_STATE_DIR: dir }, timeoutMs: 500 });
     assert.equal(status.status, 'timeout');
     saveTestWork(dir, status);
     // A malformed file, another work item, and a stale-run file cannot stop the valid one.
     writeFileSync(join(outputDir, '2.json'), '{');
     writeFileSync(join(outputDir, '99.json'), JSON.stringify({ runId: 41, workItemId: 99 }));
     writeFileSync(join(outputDir, 'match-a.json'), JSON.stringify({ runId: 40, waitingKey: 'a' }));
-    const report = await finaliseSample({ stateDir: dir, outputDir, env: { PRICE_COLLECTOR_TEST_API_URL: server.baseUrl }, token: 'test-token' });
+    const { report } = await finaliseSample({ stateDir: dir, outputDir, env: { PRICE_COLLECTOR_TEST_API_URL: server.baseUrl }, token: 'test-token' });
     assert.deepEqual(server.requests.map(r => r.path), ['/api/price-collector/work-items/1/outcome', '/api/price-collector/runs/41/complete']);
     assert.ok(server.requests.every(r => r.authorization === 'Bearer test-token'));
     assert.ok(report.includes('not_searched 1'));
     assert.ok(report.includes('Files refused before submission: 3'));
-    assert.ok(!report.includes('secret'));
+    // The session's stderr is kept in the run's log folder for the artifact.
+    assert.ok(readFileSync(join(dir, 'logs', 'claude-session-1.stderr.txt'), 'utf8').includes('secret transcript'));
   } finally { await server.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -398,13 +420,13 @@ test('the summary carries Claude turns and result subtype, and says when no tool
   const dir = mkdtempSync(join(tmpdir(), 'collector-turns-'));
   try {
     saveTestWork(dir, { status: 'completed', costUsd: 0.12, turns: 9, subtype: 'success' });
-    const report = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
+    const { report } = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
       submit: async () => ({ exitCode: 0, out: '' }) });
     assert.match(report, /^Claude turns: 9; result: success$/m);
     assert.match(report, /^Tool calls: none$/m);
     rmSync(join(dir, 'submission'), { recursive: true, force: true });
     saveTestWork(dir, { status: 'completed', costUsd: null, turns: 'many', subtype: 'Error: secret' });
-    const unsafe = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
+    const { report: unsafe } = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
       submit: async () => ({ exitCode: 0, out: '' }) });
     assert.match(unsafe, /^Claude turns: unknown; result: unknown$/m);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -511,26 +533,17 @@ test('a sample run is still one session with the sample caps and no batch line',
     const status = await collectBatches({ stateDir: dir, issued: { ...work, fullRun: false }, deadlineMs: 14 * 60 * 1000,
       launch: async options => { calls.push(options); return { status: 'timeout', costUsd: null, turns: null, subtype: null }; } });
     assert.equal(calls.length, 1);
-    assert.deepEqual(Object.keys(calls[0]), ['timeoutMs']);
+    assert.deepEqual(Object.keys(calls[0]), ['timeoutMs', 'session']);
     assert.deepEqual(status, { status: 'timeout', costUsd: null, turns: null, subtype: null });
     assert.deepEqual(JSON.parse(readFileSync(join(dir, 'work.json'), 'utf8')).searches, work.searches);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('the summary names a skipped file\'s work item and field, never the validator\'s text', async () => {
-  assert.equal(publicSkipLine('  skipped 12.json: file.rows[2].packQuantity must be 1 or more.'), 'skipped 12.json: field file.rows[2].packQuantity');
-  assert.equal(publicSkipLine('  skipped 12.json: file.rows[1] reports supplier product id "SKU-secret", which another row already reports.'), 'skipped 12.json: field file.rows[1]');
-  assert.equal(publicSkipLine('  skipped match-coke-zero.json: a match file proposes exactly one thing.'), 'skipped a match file: a file-level rule');
-  assert.equal(publicSkipLine('  skipped notes.txt: it is not a result file'), 'skipped a match file: a file-level rule');
-  assert.equal(publicSkipLine('  skipped 3.json: a search the page cap stopped must be reported as truncated, not complete.'), 'skipped 3.json: a file-level rule');
-  assert.equal(publicSkipLine('run 7: completed'), null);
-  const report = publicSubmissionReport('files: results 9, matches 0, skipped 1\n  skipped 4.json: file.rows[0].unitPrice must be above 0 "Coke $4".\nfailed requests: 0\n');
-  assert.equal(report, 'files: results 9, matches 0, skipped 1\nskipped 4.json: field file.rows[0].unitPrice\nfailed requests: 0');
-
+test('the summary counts the batches that ran and the searches given to Claude', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-batch-report-'));
   try {
     saveTestWork(dir, { status: 'completed', costUsd: 1.5, turns: 90, subtype: 'success', batchesRun: 3, batchCount: 5 });
-    const answer = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't', submit: async () => ({ exitCode: 0, out: '' }) });
+    const { report: answer } = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't', submit: async () => ({ exitCode: 0, out: '' }) });
     assert.match(answer, /^Claude batches: 3 of 5$/m);
     assert.match(answer, /^Searches given to Claude: 2$/m);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -557,4 +570,15 @@ test('JB Metro calls get the run\'s own page caps, appended last, and the sample
     assert.equal(answer.hookSpecificOutput.permissionDecision, 'allow');
     assert.match(answer.hookSpecificOutput.updatedInput.command, /--max-pages 99 --page-size 20 --max-pages 5 --batch-size 20 --attempts 2 --timeout-ms 15000$/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the run log masks every credential and keeps long answers to their head and tail', () => {
+  const secrets = secretsOf({ APIFY_TOKEN: 'abcdefgh12345678', ANTHROPIC_API_KEY: 'short', PRICE_COLLECTOR_API_TOKEN: 'api-token-value-1' });
+  assert.deepEqual(secrets, ['api-token-value-1', 'abcdefgh12345678']);
+  const masked = redact('token abcdefgh12345678 and api-token-value-1; Authorization: Bearer xyz123456789 apify_api_ABCDEFGHIJ sk-ant-api03-ABCDEFGHIJ eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz', secrets);
+  for (const leaked of ['abcdefgh12345678', 'api-token-value-1', 'xyz123456789', 'ABCDEFGHIJ', 'eyJhbGciOiJIUzI1']) assert.ok(!masked.includes(leaked), leaked);
+  assert.match(masked, /Bearer \*\*\*/);
+  assert.equal(clip('short', 10), 'short');
+  const long = clip('a'.repeat(30) + 'b'.repeat(30), 20);
+  assert.match(long, /^a{10} … \[40 characters left out\] … b{10}$/);
 });

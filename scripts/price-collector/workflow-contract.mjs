@@ -5,6 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { runnerPlacementViolations, workflowJobs } from '../validate-runner-placement.mjs';
 
 export const workflowPath = '.github/workflows/price-collector.yml';
+const UPLOAD_ARTIFACT = 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2';
+export const RUN_LOG_STEP = `      - name: Upload the run log
+        if: always()
+        uses: ${UPLOAD_ARTIFACT}
+        with:
+          name: price-collector-logs
+          path: \${{ runner.temp }}/price-collector-\${{ github.run_id }}-\${{ github.run_attempt }}/logs
+          retention-days: 7
+          if-no-files-found: ignore
+`;
 export function verifyCollectorWorkflow(text) {
   const problems = runnerPlacementViolations(text, workflowPath);
   const requireText = (part, reason) => { if (!text.includes(part)) problems.push(reason); };
@@ -23,7 +33,13 @@ export function verifyCollectorWorkflow(text) {
   const collect = jobs.collect ?? '';
   if (!collect.includes('    permissions:\n      contents: read\n      id-token: write\n')) problems.push('Collector permissions must be read-only plus OIDC.');
   if (/(?:contents|actions|issues|pull-requests|deployments): write|permissions: write-all/.test(text)) problems.push('The collector cannot write GitHub resources.');
-  if (/upload-artifact|azure\/login|webapps-deploy|--dangerously-skip-permissions|PRICE_COLLECTOR_API_TOKEN:/.test(text)) problems.push('No transcripts/artifacts, deployments, permission bypass or stored API token.');
+  if (/azure\/login|webapps-deploy|--dangerously-skip-permissions|PRICE_COLLECTOR_API_TOKEN:/.test(text)) problems.push('No deployments, permission bypass or stored API token.');
+  // The one artifact is the run's masked log folder (owner decision, 31 October 2026), pinned and
+  // kept for 7 days. It must be uploaded before the cleanup step removes the state directory.
+  const artifact = text.match(/uses: actions\/upload-artifact@[^\n]*/g) ?? [];
+  if (artifact.length > 1 || (artifact.length === 1 && artifact[0] !== `uses: ${UPLOAD_ARTIFACT}`)) problems.push('Only the pinned run-log artifact may be uploaded.');
+  requireText(RUN_LOG_STEP, 'The run log must be uploaded, masked, for 7 days, after failure too.');
+  if (text.indexOf(RUN_LOG_STEP) > text.indexOf('      - name: Remove private work, files and CLI installation')) problems.push('The run log must be uploaded before cleanup.');
   requireText('      - name: Submit finished files and complete the issued run\n        if: always()\n        timeout-minutes: 15', 'Partial-result finalisation must run after failure with its own time budget.');
   requireText('      - name: Remove private work, files and CLI installation\n        if: always()', 'Private files must be cleaned after failure too.');
   if (!collect.includes('    timeout-minutes: 130\n') || !collect.includes('        timeout-minutes: 100\n')) problems.push('The job must leave at least 15 minutes after Claude stops.');
