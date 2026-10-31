@@ -28,8 +28,14 @@ namespace Inventory.Application.MachineStockSync;
 /// instant the operation <em>started</em> - a fetch can only have accounted for alerts that already
 /// existed when it began - and it is bound to the Nayax credential revision the operation
 /// authenticated under. A fetch that threw, imported partially or never built a preview records
-/// nothing at all, and a successful fetch that found no alert records coverage exactly as one that
-/// found ten does: an empty answer from Nayax is an answer.</para>
+/// nothing at all. <strong>Nor does a fetch that leaves work waiting</strong> (issue #1018): a
+/// machine counts as synced only when nothing is left to sync, so coverage is recorded only while
+/// the machine has no pending restock event in the reminder's window
+/// (<see cref="MachineRestockSyncPendingWindow"/>). Opening Sync Restock and leaving its events
+/// unapplied therefore never presents the machine as synced; the dialog re-syncs after every apply
+/// and resolve, and the fetch after the last pending event is cleared is the one that records it.
+/// A fetch that found no alert and left nothing pending records coverage exactly as one that found
+/// ten and left nothing pending does: an empty answer from Nayax is an answer.</para>
 ///
 /// <para>The binding to the credentials is <em>verified</em> rather than assumed. This use case
 /// does not resolve the credentials its Nayax calls authenticate with - the
@@ -56,6 +62,7 @@ public sealed class SyncMachineStockFromNayax
     private readonly IClock _clock;
     private readonly INayaxConnectionStore _connections;
     private readonly IMachineRestockSyncCoverageStore _coverage;
+    private readonly IBusinessCalendar _businessCalendar;
 
     public SyncMachineStockFromNayax(
         INayaxLynxClient nayax,
@@ -63,7 +70,8 @@ public sealed class SyncMachineStockFromNayax
         INayaxProductLinkStore productLinks,
         IClock clock,
         INayaxConnectionStore connections,
-        IMachineRestockSyncCoverageStore coverage)
+        IMachineRestockSyncCoverageStore coverage,
+        IBusinessCalendar businessCalendar)
     {
         _nayax = nayax;
         _store = store;
@@ -71,6 +79,7 @@ public sealed class SyncMachineStockFromNayax
         _clock = clock;
         _connections = connections;
         _coverage = coverage;
+        _businessCalendar = businessCalendar;
     }
 
     /// <summary>
@@ -151,7 +160,7 @@ public sealed class SyncMachineStockFromNayax
             machine, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
 
         await RecordSuccessfulFetchAsync(
-            machine.LocalMachineId, startedAtUtc, candidateCredentialRevision, cancellationToken);
+            machine.LocalMachineId, machineId, startedAtUtc, candidateCredentialRevision, cancellationToken);
 
         return preview;
     }
@@ -171,12 +180,14 @@ public sealed class SyncMachineStockFromNayax
     /// no credentials to bind a claim to and nothing is recorded.</para>
     ///
     /// <para>The write itself decides whether the claim is really this operation's to make: it is
-    /// fenced on <paramref name="candidateCredentialRevision"/> still being the stored one, and a
-    /// refusal is reported as <see langword="false"/> rather than as a failure, because coverage
-    /// that is left unrecorded is the safe answer.</para>
+    /// fenced on <paramref name="candidateCredentialRevision"/> still being the stored one and on
+    /// the machine having nothing left to sync (issue #1018), and a refusal is reported as
+    /// <see langword="false"/> rather than as a failure, because coverage that is left unrecorded is
+    /// the safe answer.</para>
     /// </summary>
     private async Task RecordSuccessfulFetchAsync(
         long localMachineId,
+        long nayaxMachineId,
         DateTime startedAtUtc,
         int? candidateCredentialRevision,
         CancellationToken cancellationToken)
@@ -188,8 +199,10 @@ public sealed class SyncMachineStockFromNayax
 
         try
         {
+            // Measured from the run's own start, the same "today" the reminder would use for it.
+            var pendingFromUtc = MachineRestockSyncPendingWindow.StartUtc(_businessCalendar, startedAtUtc);
             await _coverage.TryRecordSuccessfulSyncAsync(
-                localMachineId, startedAtUtc, revision, cancellationToken);
+                localMachineId, startedAtUtc, revision, nayaxMachineId, pendingFromUtc, cancellationToken);
         }
         catch (OperationCanceledException)
         {

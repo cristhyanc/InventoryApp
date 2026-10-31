@@ -1,4 +1,5 @@
 using Inventory.Application.Categories;
+using Inventory.Domain.Categories;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
@@ -307,6 +308,92 @@ public class EfCategoryStoreTests
         Assert.Contains("2 products use", attempt.Refusal!, StringComparison.Ordinal);
         Assert.True(await db.Categories.AnyAsync(category => category.Id == categoryId));
         Assert.Equal(2, await db.Products.CountAsync(product => product.CategoryId == categoryId));
+    }
+
+    /// <summary>
+    /// A category the business's sales provider names is never deleted here either (issue #1026),
+    /// the same way its rename is refused: deleting the local row would let the catalogue drift
+    /// from the provider's on the next import.
+    /// </summary>
+    [Fact]
+    public async Task A_provider_managed_category_may_not_be_deleted()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        long categoryId;
+        await using (var seed = TestAppDbContext.Unrestricted(options))
+        {
+            seed.Businesses.Add(new Business
+            {
+                Id = BusinessA,
+                Name = "Vending A",
+                Status = BusinessStatus.Active,
+                SalesProvider = ExternalProvider.Nayax,
+                CreatedAtUtc = DateTime.UtcNow,
+            });
+            var category = new Category
+            {
+                BusinessId = BusinessA,
+                Name = "Nayax Drinks",
+                ExternalCategoryId = "42",
+            };
+            seed.Categories.Add(category);
+            await seed.SaveChangesAsync();
+            categoryId = category.Id;
+        }
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        var attempt = await new EfCategoryStore(db).DeleteAsync(categoryId, CancellationToken.None);
+
+        Assert.Equal(CategoryWriteOutcome.Refused, attempt.Outcome);
+        Assert.Equal(
+            CategoryCataloguePolicy.ProviderCategoryDeletionRefusal(ExternalProvider.Nayax),
+            attempt.Refusal);
+        Assert.True(await db.Categories.AnyAsync(category => category.Id == categoryId));
+    }
+
+    /// <summary>
+    /// The provider refusal wins over the "used by products" one when both apply (issue #1026):
+    /// naming the provider is the actionable answer, and it is true whatever the product count is.
+    /// </summary>
+    [Fact]
+    public async Task A_provider_managed_category_with_products_is_refused_as_a_provider_category()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        long categoryId;
+        await using (var seed = TestAppDbContext.Unrestricted(options))
+        {
+            seed.Businesses.Add(new Business
+            {
+                Id = BusinessA,
+                Name = "Vending A",
+                Status = BusinessStatus.Active,
+                SalesProvider = ExternalProvider.Nayax,
+                CreatedAtUtc = DateTime.UtcNow,
+            });
+            var category = new Category
+            {
+                BusinessId = BusinessA,
+                Name = "Nayax Drinks",
+                ExternalCategoryId = "42",
+            };
+            seed.Categories.Add(category);
+            await seed.SaveChangesAsync();
+            categoryId = category.Id;
+            seed.Products.Add(new Product { BusinessId = BusinessA, Name = "Coke", CategoryId = categoryId });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        var attempt = await new EfCategoryStore(db).DeleteAsync(categoryId, CancellationToken.None);
+
+        Assert.Equal(CategoryWriteOutcome.Refused, attempt.Outcome);
+        Assert.Equal(
+            CategoryCataloguePolicy.ProviderCategoryDeletionRefusal(ExternalProvider.Nayax),
+            attempt.Refusal);
+        Assert.True(await db.Categories.AnyAsync(category => category.Id == categoryId));
+        Assert.Equal(1, await db.Products.CountAsync(product => product.CategoryId == categoryId));
     }
 
     [Fact]

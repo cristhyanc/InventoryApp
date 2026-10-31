@@ -1,5 +1,7 @@
 using System.Globalization;
 
+using Inventory.Domain.Providers;
+
 namespace Inventory.Domain.Categories;
 
 /// <summary>
@@ -11,6 +13,13 @@ namespace Inventory.Domain.Categories;
 /// person or another system supplies (AGENTS.md § Tenant ownership and data isolation): two
 /// businesses may legitimately both have a "Drinks" category. It is compared without case, because
 /// "Drinks" and "drinks" are the same category to the operator typing the second one.</para>
+///
+/// <para><strong>A category the provider names is never deleted here either</strong> (issue #1026),
+/// for the same reason its rename is refused (<see cref="Inventory.Domain.Providers.ProviderManagedCatalogueFields.CategoryNameRefusal"/>):
+/// it is managed at the provider, so deleting the local row would let the catalogue drift from the
+/// provider's on the next import. <see cref="ProviderCategoryDeletionRefusal"/> wins over the
+/// "used by products" refusal when both apply, the pattern <c>MachineCataloguePolicy</c> and
+/// <c>MachineDeletionPolicy</c> established for a provider-named machine (PR #889).</para>
 ///
 /// <para>Deterministic: the answers are functions of their arguments, so the use case, the adapter
 /// that looks for a clash and a test all decide identically.</para>
@@ -55,4 +64,20 @@ public static class CategoryCataloguePolicy
         productCount == 1
             ? "1 product uses"
             : $"{productCount.ToString(CultureInfo.InvariantCulture)} products use";
+
+    /// <summary>
+    /// Why a category the business's sales provider names may not be deleted here (issue #1026). It
+    /// names the provider, so the operator knows where the category is managed, on the same terms
+    /// as <c>MachineCataloguePolicy.ProviderMachineDeletionRefusal</c>.
+    /// </summary>
+    public static string ProviderCategoryDeletionRefusal(ExternalProvider? provider) =>
+        $"This category comes from {ProviderName(provider)} and cannot be deleted here. Nothing was deleted.";
+
+    /// <summary>
+    /// The provider to name in a refusal. A row carrying an external id always belongs to a business
+    /// whose <c>SalesProvider</c> is set, so the fallback describes a state this application cannot
+    /// reach rather than guessing a name.
+    /// </summary>
+    private static string ProviderName(ExternalProvider? provider) =>
+        provider?.ToString() ?? "this business's sales provider";
 }

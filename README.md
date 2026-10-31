@@ -584,8 +584,11 @@ changed, and every "Unavailable" still means unavailable, never zero.
     date buttons above the table choose the period for every row, and the sales column names it. The
     comparison column shows the published "vs same time last week" figure while This week is
     selected and says there is no comparison for the other periods, because that is the only
-    comparison these reads publish. Sites publish sales for Today and This week only; for the other
-    two a site row says so instead of showing a figure.
+    comparison these reads publish. Sites and machines both publish all four periods, so a site row
+    shows its own sales figure for whichever one you choose, on a wide screen and on a phone; a
+    period with no completed sale shows `$0.00`, and a figure your role may not see shows as
+    Unavailable. A site's figure is the sum of the machines standing at it, worked out on the server
+    for exactly the period and business days the column names.
   - **Stock is a site figure.** The stock level and the low/empty counts come from the sites read,
     which is the only place they exist. A machine row shows them as unavailable - never the site's
     percentage repeated, and never a percentage worked out in the browser - and the card says why.
@@ -645,7 +648,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
-  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue` and `previousComparableWeekRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock, MDB codes, machine counts and the alert counts, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
+  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue` and `monthToDateRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock, MDB codes, machine counts and the alert counts, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
   - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. The catalogue `unitPrice` that decision also named is no longer a question: the field was removed, so no response carries it (see [A product carries no selling price](#a-product-carries-no-selling-price)). A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
   - **Every remaining Operator-readable endpoint has been audited, and the last two leaks are closed** (issue #700). Issue #700 walked every endpoint a role without `Dashboard.ViewFinancials` can reach — taken from the capability policies themselves — and classified each restricted figure on each one; the endpoint-by-endpoint table is in [docs/architecture.md § Operator-readable financial disclosure](docs/architecture.md#operator-readable-financial-disclosure-issue-700). Two figures were still being sent. A **stock movement's `inventoryValueAfter`** — the business's inventory value at cost after that movement, so the latest one reports the current valuation — is now `null` for a caller without the capability on `GET`/`POST api/products/{id}/stock`, on `GET api/stock-history`, and nested in a product's `stockAdjustments`. The **catalogue product nested in a purchase line or a supplier-order line** now withholds its `inventoryValue` on the `api/purchases` and `api/supplierorders` responses, the same way `api/products` has since #698 — otherwise listing purchases was a way around that. Never `0`: both fields already mean "no cost" or "no valuation yet" when they are `null`, and a withheld amount arriving as zero would be a false statement about the business. **Nothing else is withheld.** A movement's own `unitCost`, `totalCost` and `averageUnitCostAfter`, a purchase's `totalAmount`, delivery and package charges, each line's `unitCost` and `lineTotal` and its input-GST block, and a supplier order's quantities, `unitPrice` and `outstandingQuantity` all stay visible to every role, because they are purchasing and unit-cost data an Operator enters and has to be able to read back. Every other Operator-readable endpoint — the pick list, categories, take inventory, the price history and restock-cost suggestion, Sync Restock, the machine stock ledger, suppliers and the stored purchase document — carries no restricted figure at all. A Manager's and an Owner's responses are unchanged, and a new revenue, profit, margin, sales or inventory-value property on any of these responses now fails the build until somebody decides what happens to it.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Integrations or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
@@ -1891,8 +1894,10 @@ does not manage.
   are unaffected by this change. The **Status** column itself is shown only under **All**: under
   **Only active**, every row would say "Active" anyway, so the column (and a sort on it) is hidden
   instead, and switching back to **Only active** clears a Status sort rather than leaving it pointed
-  at a hidden column (issue #828). A **Tracked** column shows which products have supplier prices
-  tracked and where each one has got to — see
+  at a hidden column (issue #828). Which products have supplier prices tracked, and where each one
+  has got to, is shown in the **Cheapest supplier** column rather than a separate one (issue #1022);
+  the full set of statuses, including **Matched automatically** and **Paused**, stays on the
+  product's own Edit page — see
   [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
@@ -1922,6 +1927,11 @@ does not manage.
   "cola", "COLA" and "Cola" all find a product named "Coca Cola".
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
+- **A category that comes from Nayax cannot be deleted either** (issue #1026), the same way its name
+  cannot be edited: the local catalogue would otherwise drift from the provider's. The Categories
+  page shows no **Delete** button for such a category, and the API refuses the delete outright if
+  it is attempted anyway — before the "used by products" check, so this refusal wins when both
+  apply.
 - **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739), **and it
   has its own page: Products → Import products** (`/products/import`, issue #888). The sidebar's
   **Inventory → Import products** entry goes there, for every business that may run imports with a
@@ -1999,9 +2009,10 @@ product you have not switched on.
 - **Nobody sees anybody else's choices.** A business cannot see which products another business
   tracks, and the shared catalogue records no business at all — a product is looked up once for
   everybody, which is the whole point of sharing it.
-- **Products → All Products** has a **Tracked** column showing which of your products are tracked and
-  where each one has got to. It is read-only: the switch itself is on each product's own page, and
-  there is no way to switch many products on at once.
+- **Products → All Products** shows which of your products are tracked and where each one has got to
+  through its **Cheapest supplier** column (issue #1022); the finer distinctions it does not carry —
+  **Matched automatically** versus **Matched**, and **Awaiting match** versus **Paused** — stay on
+  each product's own **Edit** page. There is no way to switch many products on at once.
 - **What the prices look like once a product is matched** is on **Products → Needs Ordering**,
   **Products → All Products** and the Dashboard's **Reorder priorities**, in the **Cheapest
   supplier** column — see
@@ -2011,8 +2022,8 @@ product you have not switched on.
 - **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
   permission is involved. It is unavailable while you are looking at a business in read-only support
   view, and while a Super Admin is previewing a role, like every other write in those states.
-- **It works on every plan, and the prices it leads to are a Starter feature.** The switch, its
-  status and the **Tracked** column are available whatever the business's
+- **It works on every plan, and the prices it leads to are a Starter feature.** The switch and its
+  status are available whatever the business's
   [plan](#business-plans-free-starter-and-pro) says: you can turn tracking on and off on Free, and
   the setting is kept if the plan changes — nothing clears it on a downgrade. What a plan decides is
   whether the **prices** are shown (the column below) and whether the daily collection is run for
@@ -2074,7 +2085,7 @@ same column, cell and popup — everything below applies to all three.
 - **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
   the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
   disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the
-  **Tracked** column, with one request for the page's products — the same batching, failure
+  purchase-cost columns, with one request for the page's products — the same batching, failure
   message and Retry described above, and no sort of its own.
 
 ## A supplier's website

@@ -1,4 +1,5 @@
 using Inventory.Domain.Categories;
+using Inventory.Domain.Providers;
 using Xunit;
 
 namespace InventoryApi.Tests.Domain.Categories;
@@ -48,4 +49,26 @@ public class CategoryCataloguePolicyTests
         Assert.Contains(expected, refusal, StringComparison.Ordinal);
         Assert.Contains("Nothing was deleted.", refusal, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// A category the business's sales provider names is refused with a message naming the
+    /// provider (issue #1026), the same wording rule <c>MachineCataloguePolicy.ProviderMachineDeletionRefusal</c>
+    /// follows for a machine.
+    /// </summary>
+    [Fact]
+    public void A_provider_named_categorys_deletion_refusal_names_the_provider() =>
+        Assert.Equal(
+            "This category comes from Nayax and cannot be deleted here. Nothing was deleted.",
+            CategoryCataloguePolicy.ProviderCategoryDeletionRefusal(ExternalProvider.Nayax));
+
+    /// <summary>
+    /// A row carrying a provider id always belongs to a business whose <c>SalesProvider</c> is set,
+    /// so the fallback describes a state this application cannot reach rather than guessing a name.
+    /// </summary>
+    [Fact]
+    public void A_provider_named_categorys_deletion_refusal_falls_back_with_no_named_provider() =>
+        Assert.Contains(
+            "this business's sales provider",
+            CategoryCataloguePolicy.ProviderCategoryDeletionRefusal(null),
+            StringComparison.Ordinal);
 }

@@ -6,7 +6,7 @@ import { ProductListComponent } from './product-list.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { ToastService } from '../../services/toast.service';
-import { Product, ProductPriceTrackingStatus, TrackedProduct } from '../../models/models';
+import { Product, TrackedProduct } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { AccessService } from '../../access/access.service';
 import { Capability } from '../../access/capabilities';
@@ -892,13 +892,13 @@ describe('ProductListComponent Status filter (issue #791)', () => {
    *
    * The Price column and its sort went the same way in issue #792 (A2): a product carries no
    * selling price either. Issue #791 (E of #786) then added the Average cost, Last purchase and
-   * Cheapest purchase columns, so the header row is exactly these seven columns and the Actions
-   * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it. Issue #938
-   * then added Tracked, which is present because the tracked-products read answered - with an empty
-   * list, which is what the empty cells below say. Issue #940 then added Cheapest supplier, the
-   * same shared column Needs Ordering already carries (issue #930) - it is unrelated to the
-   * supplier filter/column this test is otherwise about, and is never hidden by a capability or a
-   * filter the way the two purchase-cost columns are.
+   * Cheapest purchase columns, so the header row is exactly these six columns and the Actions
+   * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it. Issue #940
+   * then added Cheapest supplier, the same shared column Needs Ordering already carries (issue
+   * #930) - it is unrelated to the supplier filter/column this test is otherwise about, and is
+   * never hidden by a capability or a filter the way the two purchase-cost columns are. Issue #938
+   * had added a Tracked column alongside it; issue #1022 removed it because it repeated what
+   * Cheapest supplier already states.
    */
   it('offers no supplier or price filter, column or sort', async () => {
     const { fixture, host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
@@ -914,7 +914,6 @@ describe('ProductListComponent Status filter (issue #791)', () => {
       'Average cost',
       'Last purchase',
       'Cheapest purchase',
-      'Tracked',
       'Cheapest supplier',
       ''
     ]);
@@ -933,7 +932,6 @@ describe('ProductListComponent Status filter (issue #791)', () => {
       'Average cost',
       'Last purchase',
       'Cheapest purchase',
-      'Tracked',
       'Cheapest supplier',
       ''
     ]);
@@ -2047,26 +2045,32 @@ describe('ProductListComponent Import products in the toolbar (issue #875)', () 
 });
 
 /**
- * The Tracked column (issue #938, fifth criterion): which of the business's products have supplier
- * prices tracked, and where each one has got to. It is a read-only projection of one request - the
- * switch itself is on each product's Edit page - so the column has no action, no retry and no error
- * text of its own.
+ * The Tracked column (issue #938) repeated what the Cheapest supplier column (issue #940) already
+ * states, so issue #1022 removed it. These tests guard the removal: the column never renders, in
+ * any filter, access or support-session state, and the page's load no longer reads
+ * `GET api/products/price-tracking` at all - that endpoint and `ProductService.getTrackedProducts()`
+ * stay for other callers (issue #1022's exclusion), just unused by this page now.
  */
-describe('ProductListComponent Tracked column (issue #938)', () => {
+describe('ProductListComponent has no Tracked column (issue #1022)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   async function render(
     products: Product[],
-    getTrackedProducts: jest.Mock = jest.fn(() => of([] as TrackedProduct[]))
+    options: { sessionActive?: boolean; financialsAllowed?: boolean } = {}
   ) {
+    const getTrackedProducts = jest.fn(() => of([] as TrackedProduct[]));
+
     await TestBed.configureTestingModule({
       imports: [ProductListComponent],
       providers: [
         { provide: ProductService, useValue: { getAll: () => of(products), getTrackedProducts } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
-        { provide: SupportSessionService, useValue: { active$: of(false) } },
-        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: SupportSessionService, useValue: { active$: of(options.sessionActive ?? false) } },
+        {
+          provide: AccessService,
+          useValue: accessServiceStubPerCapability({ 'Dashboard.ViewFinancials': options.financialsAllowed ?? true })
+        },
         NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
         { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() },
@@ -2079,10 +2083,7 @@ describe('ProductListComponent Tracked column (issue #938)', () => {
     const host = fixture.nativeElement as HTMLElement;
 
     const header = () => host.querySelector('[data-testid="tracked-column-header"]');
-    const cells = () =>
-      Array.from(host.querySelectorAll<HTMLElement>('[data-testid="tracked-cell"]')).map(
-        (cell) => cell.textContent?.trim() ?? ''
-      );
+    const cells = () => host.querySelectorAll('[data-testid="tracked-cell"]');
 
     return { fixture, host, header, cells, getTrackedProducts };
   }
@@ -2092,54 +2093,41 @@ describe('ProductListComponent Tracked column (issue #938)', () => {
     product({ id: 2, name: 'Untracked Bar' })
   ];
 
-  it('reads the tracked products once, with no filter', async () => {
+  it('never calls ProductService.getTrackedProducts on load', async () => {
     const { getTrackedProducts } = await render(twoProducts);
 
-    expect(getTrackedProducts).toHaveBeenCalledTimes(1);
-    expect(getTrackedProducts).toHaveBeenCalledWith();
+    expect(getTrackedProducts).not.toHaveBeenCalled();
   });
 
-  it('shows each status for a tracked product and nothing for one that is not tracked', async () => {
-    const { header, cells } = await render(
-      twoProducts,
-      jest.fn(() => of([{ productId: 1, status: ProductPriceTrackingStatus.Requested }]))
-    );
-
-    expect(header()?.textContent?.trim()).toBe('Tracked');
-    expect(cells()).toEqual(['Awaiting match', '']);
-  });
-
-  it.each([
-    [ProductPriceTrackingStatus.Requested, 'Awaiting match'],
-    [ProductPriceTrackingStatus.AutoMatched, 'Matched automatically'],
-    [ProductPriceTrackingStatus.Matched, 'Matched'],
-    [ProductPriceTrackingStatus.NotFound, 'Not found'],
-    // A mapping paused because its product's name or unit label can no longer be searched for
-    // (issue #938, repaired on review). It reads as paused rather than as "awaiting match", which
-    // would look like a search still in progress.
-    [ProductPriceTrackingStatus.AwaitingProductDetails, 'Paused']
-  ])('reads status %s as "%s"', async (status, label) => {
-    const { cells } = await render(
-      [product({ id: 1, name: 'Tracked Cola' })],
-      jest.fn(() => of([{ productId: 1, status }]))
-    );
-
-    expect(cells()).toEqual([label]);
-  });
-
-  /**
-   * A failed read leaves the column out entirely rather than rendering every product as untracked:
-   * "we could not read it" must never present as "this product is not tracked". The catalogue itself
-   * still loads, because the column is not what the page is for.
-   */
-  it('leaves the column out when the read fails, and still lists the products', async () => {
-    const { header, cells, host } = await render(
-      twoProducts,
-      jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })))
-    );
+  it('renders no Tracked header or cell under the default "Only active" filter', async () => {
+    const { header, cells } = await render(twoProducts);
 
     expect(header()).toBeNull();
-    expect(cells()).toEqual([]);
-    expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(cells()).toHaveLength(0);
+  });
+
+  it('renders no Tracked header or cell under the "All" status filter', async () => {
+    const { fixture, host, header, cells } = await render(twoProducts);
+
+    (host.querySelector('select[name="statusFilter"]') as HTMLSelectElement).value = 'all';
+    host.querySelector('select[name="statusFilter"]')!.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(header()).toBeNull();
+    expect(cells()).toHaveLength(0);
+  });
+
+  it('renders no Tracked header or cell when the viewer cannot view financials', async () => {
+    const { header, cells } = await render(twoProducts, { financialsAllowed: false });
+
+    expect(header()).toBeNull();
+    expect(cells()).toHaveLength(0);
+  });
+
+  it('renders no Tracked header or cell during a support session', async () => {
+    const { header, cells } = await render(twoProducts, { sessionActive: true });
+
+    expect(header()).toBeNull();
+    expect(cells()).toHaveLength(0);
   });
 });

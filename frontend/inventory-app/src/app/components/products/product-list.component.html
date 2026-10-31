@@ -109,12 +109,6 @@
                   <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchase')">{{ sortLabel('Cheapest purchase', 'cheapestPurchase') }}</button>
                 </th>
               }
-              <!-- Which products have supplier prices tracked (issue #938). Present only once the
-                   one read behind it has answered, so the header never sits above a column of empty
-                   cells; the switch itself is on each product's Edit page. -->
-              @if (trackingRead) {
-                <th scope="col" class="table-cell" data-testid="tracked-column-header">Tracked</th>
-              }
               <!--
                 Observed supplier prices (issue #940, parent #817). Not sortable: sorting by price is
                 explicitly out of this issue's scope, and a sort over a column whose values are still
@@ -164,13 +158,6 @@
                     <div>{{ purchaseCostDisplay(p, 'cheapestPurchase') }}</div>
                     @if (purchaseCostSupplierDisplay(p, 'cheapestPurchase'); as supplier) {
                       <div class="mt-1 value-muted">{{ supplier }}</div>
-                    }
-                  </td>
-                }
-                @if (trackingRead) {
-                  <td class="table-cell" data-testid="tracked-cell">
-                    @if (trackingLabel(p); as tracking) {
-                      <span class="badge badge-neutral">{{ tracking }}</span>
                     }
                   </td>
                 }

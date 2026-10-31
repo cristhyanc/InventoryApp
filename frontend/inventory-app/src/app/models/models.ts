@@ -560,6 +560,15 @@ export interface Site {
   todayRevenue?: number | null;
   currentWeekRevenue?: number | null;
   previousComparableWeekRevenue?: number | null;
+  /**
+   * The remaining two of the four sales periods a site row shows (issue #1012), published on the
+   * same terms as the three above: the server's own sums over the same dashboard window, `null` for
+   * a member without `Dashboard.ViewFinancials`, and an honest `0` for a period with no completed
+   * sale. `previousComparableWeekRevenue` stays the baseline of the one comparison the response
+   * carries, which belongs to the current week.
+   */
+  lastWeekRevenue?: number | null;
+  monthToDateRevenue?: number | null;
 }
 
 /**
