@@ -206,6 +206,10 @@ export class PurchaseProductPickerComponent implements OnChanges, OnDestroy {
       this.activeIndex = -1;
       return;
     }
-    this.activeIndex = this.activeIndex < 0 ? (step > 0 ? 0 : count - 1) : (this.activeIndex + step + count) % count;
+    if (this.activeIndex >= 0) {
+      this.activeIndex = (this.activeIndex + step + count) % count;
+      return;
+    }
+    this.activeIndex = step > 0 ? 0 : count - 1;
   }
 }

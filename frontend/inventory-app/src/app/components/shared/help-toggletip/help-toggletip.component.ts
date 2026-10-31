@@ -63,7 +63,7 @@ export class HelpToggletipComponent implements OnDestroy {
   /** The explanation itself. */
   @Input({ required: true }) text = '';
 
-  @ViewChild('trigger', { static: true }) private trigger!: ElementRef<HTMLButtonElement>;
+  @ViewChild('trigger', { static: true }) private readonly trigger!: ElementRef<HTMLButtonElement>;
 
   open = false;
   top = 0;

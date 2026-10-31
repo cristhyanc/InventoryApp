@@ -42,7 +42,7 @@ export class PurchaseReceiptFieldComponent implements OnDestroy {
   /** The person asked to see the saved receipt; the page fetches it through the authorized API. */
   @Output() readonly previewStored = new EventEmitter<void>();
 
-  @ViewChild('fileInput', { static: true }) private fileInput!: ElementRef<HTMLInputElement>;
+  @ViewChild('fileInput', { static: true }) private readonly fileInput!: ElementRef<HTMLInputElement>;
 
   private readonly objectUrls = new ObjectUrlCache();
 
