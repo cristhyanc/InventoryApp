@@ -303,12 +303,12 @@ public class PurchaseUseCaseTests
 
     private static PurchaseUseCases CreateUseCases(AppDbContext db, IDocumentStorage documents, IRebuildProductCost? rebuild = null)
     {
-        var store = new EfPurchaseStore(db, rebuild ?? TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, rebuild ?? TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
         return new PurchaseUseCases(
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, documents),
-            new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
+            TestPurchaseUseCases.Upload(store, documents, new FakeClock(DateTime.UtcNow)),
             new UpdatePurchase(store),
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation());

@@ -2,12 +2,14 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable, Subject, map } from 'rxjs';
 import { ConfigService } from './config.service';
+import type { NayaxConnectionStatusName } from './nayax-connection.service';
 
 /**
  * One business as `GET /api/super-admin/businesses` reports it (issue #544), consumed by the
- * Super Admin Businesses page (issue #547). These ten fields are the whole contract: no sale,
+ * Super Admin Businesses page (issue #547). These twelve fields are the whole contract: no sale,
  * stock, cost, purchase, product, machine, site or report value, and no member's display name,
- * email address or Entra identifier.
+ * email address or Entra identifier. `state` is the Australian state or territory the business
+ * recorded, and `null` for one that has not recorded any (issue #933).
  */
 export interface SuperAdminBusiness {
   readonly businessId: number;
@@ -18,8 +20,18 @@ export interface SuperAdminBusiness {
   readonly decidedAtUtc: string | null;
   readonly contactEmail: string | null;
   readonly abn: string | null;
+  readonly state: string | null;
   readonly activeMemberCount: number;
   readonly nayaxConfigured: boolean;
+
+  /**
+   * How usable the business's stored Nayax credentials were at its own last permission test (issue
+   * #983), as the published status name - `NotConfigured` for a business with nothing stored. It is
+   * the *stored* result: loading this list makes no Nayax call. The type is the one
+   * `NayaxConnectionStatusName` the business-facing connection service already publishes, so the
+   * four names cannot drift apart between the two surfaces that read them.
+   */
+  readonly nayaxConnectionStatus: NayaxConnectionStatusName;
 }
 
 /** A recorded approval or rejection, as those two endpoints answer (issue #544). */

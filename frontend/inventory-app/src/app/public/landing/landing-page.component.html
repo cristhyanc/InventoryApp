@@ -1,0 +1,324 @@
+<div class="flex min-h-screen flex-col bg-rr-canvas font-rr text-rr-navy">
+  <a
+    href="#main-content"
+    class="sr-only z-50 rounded-lg bg-white px-4 py-3 font-semibold text-rr-teal focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+    data-testid="landing-skip-link"
+    (click)="skipToMain($event)"
+  >Skip to main content</a>
+
+  <app-landing-header
+    [isSignedIn]="isSignedIn"
+    (sectionRequested)="scrollToSection($event)"
+    (signInRequested)="signIn()"
+    (getStartedRequested)="getStarted()"
+  />
+
+  <main id="main-content" tabindex="-1" class="flex-1 outline-none">
+    <!-- Hero -->
+    <section class="px-4 pb-12 pt-12 sm:px-8 sm:pt-20" aria-labelledby="landing-title">
+      <div class="mx-auto flex max-w-3xl flex-col items-start gap-6 sm:items-center sm:text-center">
+        <p class="m-0 inline-flex items-center gap-2 rounded-full border border-rr-teal-border bg-rr-teal-tint px-3 py-1 text-xs font-semibold uppercase tracking-wider text-rr-teal">
+          <span class="h-1.5 w-1.5 rounded-full bg-rr-teal" aria-hidden="true"></span>
+          Practical inventory management
+        </p>
+        <h1 id="landing-title" class="m-0 text-4xl font-bold leading-tight tracking-tight text-rr-navy sm:text-5xl">
+          Know your stock. <br class="hidden sm:inline" />Understand your costs.
+        </h1>
+        <p class="m-0 max-w-2xl text-base leading-relaxed text-rr-muted sm:text-lg">
+          Purpose-built inventory management for products, purchases and vending machines. Track stock movements,
+          organise suppliers and review costs without messy spreadsheets.
+        </p>
+        <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+          <ng-container *ngTemplateOutlet="primaryAction" />
+          <a href="#features" class="rr-button-secondary" (click)="scrollToSection('features', $event)">Explore features</a>
+        </div>
+        <p class="m-0 flex items-start gap-2 text-sm text-rr-muted sm:items-center">
+          <span class="shrink-0 text-rr-teal"><app-icon name="check_circle" [size]="16" /></span>
+          <span>Standalone inventory management · Optional Nayax sales sync</span>
+        </p>
+      </div>
+    </section>
+
+    <!-- Example dashboard -->
+    <section class="px-4 pb-16 sm:px-8 sm:pb-24" aria-labelledby="landing-dashboard-heading">
+      <div class="mx-auto max-w-6xl">
+        <h2 id="landing-dashboard-heading" class="sr-only">Example dashboard</h2>
+        <app-landing-dashboard-preview />
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" tabindex="-1" class="scroll-mt-20 bg-white px-4 py-16 outline-none sm:px-8 sm:py-24" aria-labelledby="landing-features-title">
+      <div class="mx-auto max-w-6xl">
+        <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-teal">Features</p>
+        <h2 id="landing-features-title" class="mb-3 mt-2 text-2xl font-semibold tracking-tight text-rr-navy sm:text-3xl">
+          Practical tools for everyday inventory
+        </h2>
+        <p class="m-0 max-w-2xl text-base text-rr-muted">
+          Built to keep your products organised, stock accurate and costs transparent.
+        </p>
+        <ul class="m-0 mt-10 grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3" data-testid="landing-features">
+          @for (feature of features; track feature.title) {
+            <li class="flex flex-col gap-3 rounded-2xl border border-rr-line bg-white p-6">
+              <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-rr-teal-tint text-rr-teal">
+                <app-icon [name]="feature.icon" [size]="22" />
+              </span>
+              <h3 class="m-0 text-base font-semibold text-rr-navy">{{ feature.title }}</h3>
+              <p class="m-0 text-sm leading-relaxed text-rr-muted">{{ feature.description }}</p>
+            </li>
+          }
+        </ul>
+      </div>
+    </section>
+
+    <!-- Optional Nayax integration -->
+    <section id="nayax" tabindex="-1" class="scroll-mt-20 px-4 py-16 outline-none sm:px-8 sm:py-24" aria-labelledby="landing-nayax-title">
+      <div class="mx-auto max-w-6xl rounded-3xl border border-rr-line bg-rr-surface p-6 sm:p-10">
+        <p class="m-0 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-rr-teal">
+          <app-icon name="sync_alt" [size]="16" />
+          Optional integration
+        </p>
+        <h2 id="landing-nayax-title" class="mb-3 mt-2 max-w-3xl text-2xl font-semibold tracking-tight text-rr-navy sm:text-3xl">
+          Core inventory works on its own. Connect Nayax when you need it.
+        </h2>
+        <p class="m-0 max-w-3xl text-base text-rr-muted">
+          Manage products, purchases and stock movements without a sales provider. Connect Nayax to access supported
+          vending sales data and related reports.
+        </p>
+
+        <div class="mt-8 grid items-center gap-4 md:grid-cols-[1fr_auto_1fr]">
+          <div class="rounded-2xl border border-rr-line bg-white p-5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h3 class="m-0 text-base font-semibold text-rr-navy">Restockroo core inventory</h3>
+              <span class="rounded-full border border-rr-teal-border bg-rr-teal-tint px-2 py-0.5 text-xs font-semibold text-rr-teal">Always active</span>
+            </div>
+            <ul class="m-0 mt-4 flex list-none flex-col gap-2 p-0 text-sm text-rr-muted">
+              @for (point of corePoints; track point) {
+                <li class="flex items-start gap-2">
+                  <span class="text-rr-teal"><app-icon name="check" [size]="18" /></span>
+                  {{ point }}
+                </li>
+              }
+            </ul>
+          </div>
+
+          <p class="m-0 flex flex-col items-center gap-1 text-xs font-semibold text-rr-teal" aria-hidden="true">
+            <app-icon name="sync_alt" [size]="22" />
+            Optional sync
+          </p>
+
+          <div class="rounded-2xl border border-rr-line bg-white p-5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h3 class="m-0 text-base font-semibold text-rr-navy">Nayax integration</h3>
+              <span class="rounded-full border border-rr-line bg-rr-canvas px-2 py-0.5 text-xs font-semibold text-rr-muted">Optional</span>
+            </div>
+            <ul class="m-0 mt-4 flex list-none flex-col gap-2 p-0 text-sm text-rr-muted">
+              @for (point of nayaxPoints; track point) {
+                <li class="flex items-start gap-2">
+                  <span class="text-rr-teal"><app-icon name="add" [size]="18" /></span>
+                  {{ point }}
+                </li>
+              }
+            </ul>
+          </div>
+        </div>
+
+        <ul class="m-0 mt-8 grid list-none gap-4 border-t border-rr-line p-0 pt-6 md:grid-cols-3">
+          @for (fact of integrationFacts; track fact.title) {
+            <li class="flex items-start gap-3">
+              <span class="text-rr-teal"><app-icon name="check_circle" [size]="20" /></span>
+              <span class="text-sm text-rr-muted">
+                <strong class="block font-semibold text-rr-navy">{{ fact.title }}</strong>
+                {{ fact.description }}
+              </span>
+            </li>
+          }
+        </ul>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how-it-works" tabindex="-1" class="scroll-mt-20 bg-white px-4 py-16 outline-none sm:px-8 sm:py-24" aria-labelledby="landing-steps-title">
+      <div class="mx-auto max-w-6xl">
+        <div class="sm:text-center">
+          <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-teal">How it works</p>
+          <h2 id="landing-steps-title" class="mb-3 mt-2 text-2xl font-semibold tracking-tight text-rr-navy sm:text-3xl">
+            Simple three-step routine
+          </h2>
+          <p class="m-0 text-base text-rr-muted">Designed around the realistic routine of stocking, driving and ordering.</p>
+        </div>
+        <ol class="m-0 mt-10 grid list-none gap-4 p-0 md:grid-cols-3" data-testid="landing-steps">
+          @for (step of steps; track step.number) {
+            <li class="flex flex-col justify-between gap-6 rounded-2xl border border-rr-line bg-white p-6">
+              <div class="flex flex-col gap-3">
+                <span class="font-mono text-2xl font-semibold text-rr-teal" aria-hidden="true">{{ step.number }}</span>
+                <h3 class="m-0 text-base font-semibold text-rr-navy">
+                  <span class="sr-only">Step {{ step.number }}: </span>{{ step.title }}
+                </h3>
+                <p class="m-0 text-sm leading-relaxed text-rr-muted">{{ step.description }}</p>
+              </div>
+              <p class="m-0 flex items-center gap-2 border-t border-rr-line pt-4 font-mono text-xs text-rr-muted">
+                <span class="text-rr-teal"><app-icon [name]="step.icon" [size]="16" /></span>
+                {{ step.tag }}
+              </p>
+            </li>
+          }
+        </ol>
+        <p class="m-0 mt-6 flex items-start gap-2 rounded-xl border border-rr-line bg-rr-canvas px-4 py-3 text-sm text-rr-muted sm:items-center sm:justify-center">
+          <span class="text-rr-teal"><app-icon name="info" [size]="18" /></span>
+          Running vending machines? Connect Nayax for supported sales and reporting features.
+        </p>
+      </div>
+    </section>
+
+    <!-- Pricing -->
+    <section id="pricing" tabindex="-1" class="scroll-mt-20 bg-white px-4 py-16 outline-none sm:px-8 sm:py-24" aria-labelledby="landing-pricing-title">
+      <div class="mx-auto max-w-6xl">
+        <div class="sm:text-center">
+          <p class="m-0 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-rr-teal sm:justify-center">
+            <app-icon name="attach_money" [size]="16" />
+            Pricing
+          </p>
+          <h2 id="landing-pricing-title" class="mb-3 mt-2 text-2xl font-semibold tracking-tight text-rr-navy sm:text-3xl">
+            Plans that grow from manual tracking to a connected Nayax fleet
+          </h2>
+          <p class="m-0 max-w-2xl text-base text-rr-muted sm:mx-auto">
+            Prices are in Australian dollars (AUD), per business. Starter and Pro are coming soon; Free is available today. The
+            storage allowances and the connected-machine charge start when the paid plans launch - nothing is limited today.
+          </p>
+        </div>
+
+        <ul class="m-0 mt-10 grid list-none gap-6 p-0 md:grid-cols-3" data-testid="landing-plans">
+          @for (plan of plans; track plan.id) {
+            <li class="flex flex-col gap-5 rounded-2xl border border-rr-line bg-rr-surface p-6" [attr.data-testid]="'landing-plan-' + plan.id">
+              <div class="flex items-start justify-between gap-2">
+                <h3 class="m-0 text-lg font-semibold text-rr-navy">{{ plan.name }}</h3>
+                @if (plan.badge) {
+                  <span class="rounded-full border border-rr-line bg-white px-2 py-0.5 text-xs font-semibold text-rr-muted">{{ plan.badge }}</span>
+                }
+              </div>
+              <div>
+                <p class="m-0 text-3xl font-bold tracking-tight text-rr-navy">{{ plan.price }}</p>
+                <p class="m-0 text-sm text-rr-muted">{{ plan.billingNote }}</p>
+              </div>
+              <p class="m-0 text-sm text-rr-muted">{{ plan.description }}</p>
+              <ul class="m-0 flex grow list-none flex-col gap-2 p-0 text-sm text-rr-muted">
+                @for (feature of plan.features; track feature) {
+                  <li class="flex items-start gap-2">
+                    <span class="shrink-0 text-rr-teal"><app-icon name="check" [size]="18" /></span>
+                    {{ feature }}
+                  </li>
+                }
+              </ul>
+              @if (plan.note) {
+                <p class="m-0 rounded-xl border border-rr-line bg-white px-3 py-2 text-xs text-rr-muted">{{ plan.note }}</p>
+              }
+              @if (isSignedIn) {
+                <a [routerLink]="appEntry" class="rr-button-secondary justify-center" [attr.data-testid]="'landing-plan-cta-' + plan.id">
+                  Open app
+                </a>
+              } @else {
+                <button
+                  type="button"
+                  class="rr-button-secondary justify-center"
+                  [attr.data-testid]="'landing-plan-cta-' + plan.id"
+                  (click)="getStarted()"
+                >Get started</button>
+              }
+            </li>
+          }
+        </ul>
+      </div>
+    </section>
+
+    <!-- FAQs -->
+    <section id="faqs" tabindex="-1" class="scroll-mt-20 px-4 py-16 outline-none sm:px-8 sm:py-24" aria-labelledby="landing-faqs-title">
+      <div class="mx-auto max-w-3xl">
+        <div class="sm:text-center">
+          <p class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-teal">Frequently asked questions</p>
+          <h2 id="landing-faqs-title" class="mb-0 mt-2 text-2xl font-semibold tracking-tight text-rr-navy sm:text-3xl">
+            Questions &amp; answers
+          </h2>
+        </div>
+        <ul class="m-0 mt-10 flex list-none flex-col gap-4 p-0" data-testid="landing-faqs">
+          @for (faq of faqs; track faq.question) {
+            <li class="rounded-2xl border border-rr-line bg-white p-6">
+              <h3 class="m-0 text-base font-semibold text-rr-navy">{{ faq.question }}</h3>
+              <p class="m-0 mt-2 text-sm leading-relaxed text-rr-muted">{{ faq.answer }}</p>
+            </li>
+          }
+        </ul>
+      </div>
+    </section>
+
+    <!-- Final call to action -->
+    <section class="px-4 pb-16 sm:px-8 sm:pb-24" aria-labelledby="landing-final-cta-title">
+      <div class="mx-auto flex max-w-3xl flex-col items-center gap-5 rounded-3xl border border-rr-line bg-white px-6 py-12 text-center shadow-md-lg">
+        <span class="flex h-12 w-12 items-center justify-center rounded-xl bg-rr-teal-tint text-rr-teal">
+          <app-icon name="inventory_2" [size]="24" />
+        </span>
+        <h2 id="landing-final-cta-title" class="m-0 text-2xl font-semibold tracking-tight text-rr-navy sm:text-3xl">
+          Ready to get your inventory organised?
+        </h2>
+        <p class="m-0 max-w-xl text-base text-rr-muted">
+          Track stock on hand, record purchases and keep your machine inventory under control.
+        </p>
+        <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+          <ng-container *ngTemplateOutlet="primaryAction" />
+          <a href="#features" class="rr-button-secondary" (click)="scrollToSection('features', $event)">Explore features</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="border-t border-rr-line bg-white px-4 py-10 sm:px-8">
+    <div class="mx-auto flex max-w-6xl flex-col gap-8 md:flex-row md:justify-between">
+      <div class="max-w-sm">
+        <p class="m-0 flex items-center gap-2 text-lg font-bold text-rr-navy">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rr-teal text-white" aria-hidden="true">
+            <app-icon name="inventory_2" [size]="18" />
+          </span>
+          Restockroo
+        </p>
+        <p class="m-0 mt-3 text-sm text-rr-muted">
+          Practical inventory and stock tracking for small businesses and vending operators.
+        </p>
+      </div>
+      <nav aria-labelledby="landing-footer-nav-title">
+        <h2 id="landing-footer-nav-title" class="m-0 text-xs font-semibold uppercase tracking-wider text-rr-navy">Navigation</h2>
+        <ul class="m-0 mt-2 flex list-none flex-col p-0">
+          @for (section of sections; track section.id) {
+            <li>
+              <a
+                [href]="'#' + section.id"
+                class="flex min-h-11 items-center text-sm text-rr-muted no-underline hover:text-rr-teal"
+                (click)="scrollToSection(section.id, $event)"
+              >{{ section.label }}</a>
+            </li>
+          }
+        </ul>
+      </nav>
+    </div>
+    <p class="mx-auto mb-0 mt-8 max-w-6xl border-t border-rr-line pt-6 text-sm text-rr-muted">
+      © {{ year }} Restockroo. All rights reserved.
+    </p>
+  </footer>
+</div>
+
+<!--
+  The primary action of the hero and of the closing call to action: Get started for a signed-out
+  visitor, Open app (the application's entry route) for a signed-in person.
+-->
+<ng-template #primaryAction>
+  @if (isSignedIn) {
+    <a [routerLink]="appEntry" class="rr-button-primary" data-testid="landing-primary-open-app">
+      Open app
+      <app-icon name="arrow_forward" [size]="18" />
+    </a>
+  } @else {
+    <button type="button" class="rr-button-primary" data-testid="landing-primary-get-started" (click)="getStarted()">
+      Get started
+      <app-icon name="arrow_forward" [size]="18" />
+    </button>
+  }
+</ng-template>

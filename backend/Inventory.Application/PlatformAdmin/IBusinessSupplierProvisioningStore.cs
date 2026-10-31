@@ -29,9 +29,18 @@ namespace Inventory.Application.PlatformAdmin;
 public interface IBusinessSupplierProvisioningStore
 {
     /// <summary>
-    /// Copies every <em>enabled</em> supplier preset into <paramref name="businessId"/> as that
-    /// business's own supplier, once, and records <paramref name="copiedAtUtc"/> as the instant it
-    /// happened.
+    /// Copies every <em>enabled</em> supplier preset that <em>serves</em>
+    /// <paramref name="businessId"/> into it as that business's own supplier, once, and records
+    /// <paramref name="copiedAtUtc"/> as the instant it happened.
+    ///
+    /// <para><strong>Which records serve it is the state rule of issue #935</strong>, applied by the
+    /// adapter with the business's own recorded state read from the row the caller's transaction
+    /// already holds: the nationwide records and the ones naming that state, and the nationwide ones
+    /// alone for a business with no recorded state. The rule itself is
+    /// <c>Inventory.Domain.Suppliers.SupplierPresetMarketPolicy</c>, shared with the state-change
+    /// top-up and the "Available to add" list so the three cannot disagree about what a business is
+    /// entitled to. Nothing about the limits of this write changes with it, and no caller passes a
+    /// state in: there is still nothing here a request supplies.</para>
     ///
     /// <para><strong>The marker is the whole of the idempotency rule.</strong> It copies only while
     /// the business's recorded copy instant is <c>null</c>, and it sets that instant in the same
@@ -40,8 +49,9 @@ public interface IBusinessSupplierProvisioningStore
     /// rename, add and delete its own suppliers freely the moment it starts trading, so a name is
     /// not evidence about whether a copy was made.</para>
     ///
-    /// <para><strong>Zero enabled presets is a normal outcome</strong>, not a failure and not a
-    /// reason to leave the marker unset: the copy was made, and what it contained was nothing.</para>
+    /// <para><strong>Zero enabled presets - or none that serves this business</strong> - is a normal
+    /// outcome, not a failure and not a reason to leave the marker unset: the copy was made, and
+    /// what it contained was nothing.</para>
     ///
     /// <para>It must be called inside the approval's own write transaction, and it saves its own
     /// change before returning, exactly as the approval's status write does - so a failure anywhere

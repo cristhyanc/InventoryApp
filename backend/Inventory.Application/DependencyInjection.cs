@@ -1,9 +1,11 @@
 using Inventory.Application.Access;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
+using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Costing;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Expenses;
@@ -22,6 +24,8 @@ using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PlatformPlans;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -38,6 +42,7 @@ using Inventory.Application.SalesSync;
 using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.SupportSessions;
@@ -166,6 +171,82 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetOptionVisibility>();
         services.AddScoped<SetHistoricalGstClassificationVisibility>();
 
+        // What the business this request acts in has bought (issue #966). Scoped for the reason the
+        // capability set is: the answer belongs to one request's resolved business - the viewed one
+        // inside a support session - and is computed per request with no server cache, so a grant
+        // that ends or a subscription that is cancelled applies on the next request rather than when
+        // something expires a cache.
+        services.AddScoped<GetEffectiveEntitlement>();
+
+        // And what each plan costs and includes (issue #970), which the plan page's comparison
+        // table reads. Deliberately a singleton rather than scoped, unlike the entitlement above:
+        // it holds no state, reads no request value and touches no AppDbContext - the catalogue is
+        // a compiled table that is identical for every caller and every request - so a per-request
+        // instance would claim a scope it has no use for.
+        services.AddSingleton<GetPlanCatalogue>();
+
+        // And how many connected machines it has (issue #978): the one writer of a connected-machine
+        // snapshot, reached from the fleet-read decorator on a page load and from the daily job.
+        // Scoped like every use case here, so it records through the request's or the job's own
+        // AppDbContext and under the business that scope resolved - a snapshot can never belong to a
+        // business a caller named.
+        services.AddScoped<IConnectedMachineSnapshotRecorder, RecordConnectedMachineSnapshot>();
+
+        // And the Super Admin's manual grant on one business (issue #982). Scoped like the
+        // platform-admin surfaces above and for the same reasons: the business read, the revision
+        // comparison and the grant and audit write all run on the request's own AppDbContext, inside
+        // one BEGIN IMMEDIATE transaction on that same context, and the business it decides about is
+        // named by the route - the subject of the decision rather than a tenancy scope.
+        services.AddScoped<ManageBusinessPlanGrant>();
+
+        // The attachment storage quota of issue #968, which reads the entitlement above for its
+        // allowance. Scoped for the same reason: both the guard every upload path reserves through
+        // and the figures the access read reports belong to one request's resolved business.
+        services.AddScoped<AttachmentQuotaGuard>();
+        services.AddScoped<GetAttachmentStorageStatus>();
+
+        // The one place every enforcement point asks whether the request's business includes a
+        // feature (issue #967). Scoped and memoising that one entitlement read, so a bounded Nayax
+        // fan-out that resolves credentials once per machine still reads the plan once per request.
+        services.AddScoped<CurrentPlan>();
+
+        // Issuing the price collector's work list (issue #924, parent #817). Scoped like the
+        // platform-admin surfaces above, and for the same reason: it reads and writes through the
+        // request's own AppDbContext, which for a collector request carries a denied business scope
+        // because the collector is not an actor and has no business at all.
+        services.AddScoped<IssuePriceCollectorWorkList>();
+
+        // And accepting what that run collected (issue #937), on exactly the same terms: three use
+        // cases over one narrow transactional port, reading and writing the shared catalogue under
+        // the collector request's denied business scope and nothing a business owns.
+        services.AddScoped<RecordPriceCollectorResults>();
+        services.AddScoped<AnswerPriceCollectorSearch>();
+        services.AddScoped<CompletePriceCollectorRun>();
+
+        // And what that run thinks the products it searched for are (issue #941), on the same terms
+        // again: one use case over one narrow transactional port, which decides the obvious matches
+        // itself and leaves everything else to the Super Admin.
+        services.AddScoped<RecordCollectorProductMatches>();
+
+        // And the Super Admin's review of what all of that proposed (issue #928): the queue and the
+        // four decisions - a listing, a waiting product's match, and confirming or undoing an
+        // automatic one. Scoped like the platform-admin surfaces above and for the same reason: each
+        // decision reads and writes through the request's own AppDbContext, which carries a denied
+        // business scope because the reviewer is a member of no business, and inside one
+        // BEGIN IMMEDIATE transaction on that same context.
+        services.AddScoped<GetPriceCatalogueReviewQueue>();
+        services.AddScoped<DecideSupplierListingReview>();
+        services.AddScoped<DecideProductMatchReview>();
+        services.AddScoped<DecideAutomaticProductMatchReview>();
+
+        // And the Super Admin's read-only view of the master products themselves (issue #1023): one
+        // bounded, searchable page of the shared catalogue and one product with its supplier
+        // listings. Scoped like the surfaces above and for the same reason, and read-only - creating,
+        // editing and deleting a master product are separate issues, and the review of #928 remains
+        // the only writer of one.
+        services.AddScoped<ListMasterProducts>();
+        services.AddScoped<GetMasterProduct>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed
@@ -226,6 +307,16 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateSupplier>();
         services.AddScoped<UpdateSupplier>();
         services.AddScoped<DeleteSupplier>();
+        services.AddScoped<SetSupplierNotUsed>();
+
+        // The "Available to add" suppliers of issue #935: the platform records that serve this
+        // business's state and that it holds no copy of, and the one-click add that copies one.
+        services.AddScoped<ListAvailableSupplierPresets>();
+        services.AddScoped<AddSupplierFromPreset>();
+
+        // The same records as the top-up a business state change makes, which UpdateBusinessSettings
+        // runs inside its own write transaction.
+        services.AddScoped<AddMatchingSupplierPresets>();
         services.AddScoped<GetSupplierGstDefaults>();
         services.AddScoped<SetSupplierGstDefaults>();
         services.AddScoped<ListOperatingExpenses>();
@@ -293,12 +384,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetPurchase>();
         services.AddScoped<GetPurchaseFile>();
         services.AddScoped<UploadPurchase>();
+        services.AddScoped<AttachPurchaseDocument>();
         services.AddScoped<UpdatePurchase>();
         services.AddScoped<DeletePurchase>();
         services.AddScoped<ListActiveSupplierOrders>();
         services.AddScoped<GetSupplierOrder>();
         services.AddScoped<CreateSupplierOrder>();
         services.AddScoped<CancelSupplierOrder>();
+        services.AddScoped<PreviewSupplierOrderCompletion>();
         services.AddScoped<CalculateReorderNeeds>();
         services.AddScoped<ListProducts>();
         services.AddScoped<GetProduct>();
@@ -308,6 +401,15 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<DeleteProduct>();
         services.AddScoped<GetProductGstRule>();
         services.AddScoped<SetProductGstRule>();
+        // The "Track supplier prices" switch (issue #938, fourth task of #817). Scoped like every
+        // other tenant-scoped use case: each answer belongs to one caller's resolved business.
+        services.AddScoped<GetProductPriceTracking>();
+        services.AddScoped<SetProductPriceTracking>();
+        services.AddScoped<ListTrackedProducts>();
+        // The cheapest-supplier summary the three product screens share (issue #930, fifth task of
+        // #817). One use case, called with a page's product ids, so the Dashboard's Reorder Alerts,
+        // Needs Ordering and Products cannot answer "which supplier is cheapest" differently.
+        services.AddScoped<GetCheapestSupplierSummary>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
         // The pick list's batch refill (issue #743): one request, one write-locked transaction, all

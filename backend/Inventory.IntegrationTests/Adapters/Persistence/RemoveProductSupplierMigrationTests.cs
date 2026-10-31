@@ -131,11 +131,17 @@ public class RemoveProductSupplierMigrationTests
         var item = Assert.Single(purchase.Items);
         Assert.Equal((7L, 12m, 1.10m), (item.ProductId, item.Quantity, item.UnitCost));
 
-        var order = await after.SupplierOrders.Include(o => o.Lines).SingleAsync();
-        Assert.Equal((2, "PO-1"), (order.SupplierId, order.Reference));
-        var line = Assert.Single(order.Lines);
-        Assert.Equal((7L, 24m, 6m, 1.25m), (line.ProductId, line.QuantityOrdered,
-            line.QuantityReceived, line.UnitPrice));
+        // The supplier order is read with SQL rather than through the EF model: this test stops at
+        // an older schema, and the model this project compiles against has moved on since (issue
+        // #974 added three nullable columns to SupplierOrders). What matters here is that the
+        // Products rebuild left the order and its agreed line price alone.
+        Assert.Equal(
+            "2|PO-1|7|24|6|1.25",
+            await ScalarTextAsync(connection, """
+                SELECT o.SupplierId || '|' || o.Reference || '|' || l.ProductId || '|' ||
+                       l.QuantityOrdered || '|' || l.QuantityReceived || '|' || l.UnitPrice
+                FROM SupplierOrders o JOIN SupplierOrderLines l ON l.SupplierOrderId = o.Id;
+                """));
 
         // The table rebuild left no dangling reference anywhere in the database.
         Assert.Empty(await ForeignKeyViolationsAsync(connection));
@@ -170,8 +176,19 @@ public class RemoveProductSupplierMigrationTests
         var product = await after.Products.SingleAsync();
         Assert.Equal((7L, "Chips", 1.10m, 3L), (product.Id, product.Name, product.AverageUnitCost, product.CategoryId));
         Assert.Equal(2, (await after.Receipts.SingleAsync()).SupplierId);
-        Assert.Equal(2, (await after.SupplierOrders.SingleAsync()).SupplierId);
+        Assert.Equal("2", await ScalarTextAsync(connection, "SELECT SupplierId FROM SupplierOrders;"));
         Assert.Empty(await ForeignKeyViolationsAsync(connection));
+    }
+
+    /// <summary>
+    /// One scalar as text, for the rows this test reads straight out of the older schema instead of
+    /// through the current EF model.
+    /// </summary>
+    private static async Task<string?> ScalarTextAsync(SqliteConnection connection, string sql)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return (await command.ExecuteScalarAsync())?.ToString();
     }
 
     /// <summary>

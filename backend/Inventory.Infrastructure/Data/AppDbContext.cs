@@ -2,8 +2,10 @@ using System.Linq.Expressions;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Stock;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
@@ -78,7 +80,7 @@ public class AppDbContext : DbContext
     /// the platform administrator, who is a member of no business, so the request carries a denied
     /// <see cref="BusinessScope"/> and the enforcer refuses every tenant-owned write - which is what
     /// makes the platform-admin surface unable to touch a business's own data. The new business's own
-    /// copies of the enabled supplier presets are nevertheless tenant-owned rows that have to be
+    /// copies of the supplier presets that serve it are nevertheless tenant-owned rows that have to be
     /// written in that same transaction, because a business that was approved but did not get them
     /// would be a half-finished tenant. This is the narrow, reviewed exception rather than a
     /// relaxation of the rule: see docs/architecture.md § Supplier presets copied into an approved
@@ -141,6 +143,282 @@ public class AppDbContext : DbContext
             }
 
             _context.SupplierProvisioningBusinessId = null;
+            _context = null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a <see cref="BeginPriceCatalogueMatching"/> lease is currently open, which it is for
+    /// one <c>SaveChanges</c> of one collector request and at no other moment of this context's life
+    /// (issue #941).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope. It is deliberately not read by <see cref="CurrentBusinessId"/> or
+    /// <see cref="TenantFilteringEnabled"/>, exactly as the provisioning lease above is not: a lease
+    /// grants a narrow <em>write</em> and grants no read at all, so while one is open every tenant-owned
+    /// query still matches nothing and the adapter's one reviewed <c>IgnoreQueryFilters</c> statement
+    /// is what reads the mappings - visibly, in one place, over a business-free projection.</para>
+    /// </summary>
+    internal bool PriceCatalogueMatchingLeased { get; private set; }
+
+    /// <summary>
+    /// Opens the matching window of issue #941: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>updates to the match columns of
+    /// <see cref="ProductPriceTracking"/> rows</em> on an otherwise denied scope, and nothing else.
+    ///
+    /// <para><strong>Why a window exists at all.</strong> An automatic match is decided for a waiting
+    /// <em>key</em> - the folded search name and unit label several businesses' products share, which is
+    /// what makes one product one search - and applying it means writing the mappings that carry that
+    /// key, in every business that carries it. The collector is not a member of any of them: its
+    /// request carries a denied <see cref="BusinessScope"/> precisely so it cannot reach a business's
+    /// own data, and that is the right rule. This is the narrow, reviewed exception to its write half
+    /// rather than a relaxation of it: see docs/architecture.md § Collector product matching.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and its only caller is <c>EfPriceCollectorMatchStore</c>, which takes it around one
+    /// <c>SaveChanges</c>; a lease may be taken only while this context's own scope is
+    /// <see cref="BusinessScopeState.Denied"/>, so neither an ordinary member's request nor a support
+    /// session can open one; only one may be open at a time and never beside a provisioning or plan
+    /// grant lease; and the enforcer still refuses every insert, every delete, every other entity
+    /// type and every other column while it is open - including the ownership key itself, so a mapping cannot be moved
+    /// between businesses through this window any more than through any other.</para>
+    /// </summary>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginPriceCatalogueMatching()
+    {
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "Price catalogue matching is only available to a request that resolved no business of "
+                    + "its own - the price collector reporting its matches. A scope that already names "
+                    + "a business must write through the ordinary tenant path.");
+        }
+
+        if (PriceCatalogueMatchingLeased
+            || PriceCatalogueReviewLeased
+            || SupplierProvisioningBusinessId is not null
+            || PlanGrantWriteBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A price catalogue matching, price catalogue review, supplier provisioning or plan "
+                    + "grant write lease is already open on this context.");
+        }
+
+        PriceCatalogueMatchingLeased = true;
+        return new PriceCatalogueMatchingLease(this);
+    }
+
+    /// <summary>
+    /// Closes the matching window of <see cref="BeginPriceCatalogueMatching"/>, on the same terms the
+    /// provisioning lease above closes its own.
+    /// </summary>
+    private sealed class PriceCatalogueMatchingLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public PriceCatalogueMatchingLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.PriceCatalogueMatchingLeased = false;
+            _context = null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a <see cref="BeginPriceCatalogueReview"/> lease is currently open, which it is for one
+    /// <c>SaveChanges</c> of one Super Admin review decision and at no other moment of this context's
+    /// life (issue #928).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope, exactly as the three leases beside it are. It grants a narrow
+    /// <em>write</em> and grants no read: while one is open every tenant-owned query still matches
+    /// nothing, and the review adapter's one reviewed <c>IgnoreQueryFilters</c> statement is what reads
+    /// the mappings - visibly, in one place, over a projection that carries no business id.</para>
+    /// </summary>
+    internal bool PriceCatalogueReviewLeased { get; private set; }
+
+    /// <summary>
+    /// Opens the review window of issue #928: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>updates to the match columns of
+    /// <see cref="ProductPriceTracking"/> rows</em> on an otherwise denied scope, and nothing else.
+    ///
+    /// <para><strong>Why a fourth window exists.</strong> It is #941's window for the other decider.
+    /// A match - and an undo of one - is decided for a waiting <em>key</em>, so applying it means
+    /// writing the mappings that carry that key in every business that carries it, and the Super Admin
+    /// who decided it is a member of none of them: a platform-admin request carries a denied
+    /// <see cref="BusinessScope"/> precisely so it cannot reach a business's own data, and that is the
+    /// right rule. The window is a separate one from <see cref="BeginPriceCatalogueMatching"/> rather
+    /// than a second caller of it because each lease in this context names the one adapter that may
+    /// take it: a reader asking "who can write a mapping's match columns?" gets two answers with two
+    /// issues behind them instead of one answer that has quietly grown a caller. See
+    /// docs/architecture.md § Super Admin review of the supplier price catalogue.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and its only caller is <c>EfPriceCatalogueReviewStore</c>, which takes it around one
+    /// <c>SaveChanges</c>; a lease may be taken only while this context's own scope is
+    /// <see cref="BusinessScopeState.Denied"/>, so neither an ordinary member's request nor a support
+    /// session can open one; only one may be open at a time and never beside another lease; and the
+    /// enforcer still refuses every insert, every delete, every other entity type and every other
+    /// column while it is open - the ownership key included, so a mapping can neither be created,
+    /// withdrawn nor moved between businesses through it.</para>
+    /// </summary>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginPriceCatalogueReview()
+    {
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "Price catalogue review is only available to a request that resolved no business of "
+                    + "its own - the platform administrator deciding a shared listing or match. A "
+                    + "scope that already names a business must write through the ordinary tenant "
+                    + "path.");
+        }
+
+        if (PriceCatalogueReviewLeased
+            || PriceCatalogueMatchingLeased
+            || SupplierProvisioningBusinessId is not null
+            || PlanGrantWriteBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A price catalogue review, price catalogue matching, supplier provisioning or plan "
+                    + "grant write lease is already open on this context.");
+        }
+
+        PriceCatalogueReviewLeased = true;
+        return new PriceCatalogueReviewLease(this);
+    }
+
+    /// <summary>
+    /// Closes the review window of <see cref="BeginPriceCatalogueReview"/>, on the same terms the
+    /// three leases beside it close their own.
+    /// </summary>
+    private sealed class PriceCatalogueReviewLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public PriceCatalogueReviewLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.PriceCatalogueReviewLeased = false;
+            _context = null;
+        }
+    }
+
+    /// <summary>
+    /// The business a <see cref="BeginPlanGrantWrite"/> lease is currently open for, and <c>null</c> -
+    /// which is every other moment of this context's life - when none is (issue #982).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope. Like the provisioning lease above it is deliberately not read by
+    /// <see cref="CurrentBusinessId"/> or <see cref="TenantFilteringEnabled"/>: a lease grants a
+    /// write and never a read, so while one is open every tenant-owned query still matches nothing
+    /// and the one adapter that reads these two tables under a denied scope does so through an
+    /// explicit, business-pinned <c>IgnoreQueryFilters</c> statement that a reviewer can see.</para>
+    /// </summary>
+    internal int? PlanGrantWriteBusinessId { get; private set; }
+
+    /// <summary>
+    /// Opens the manual plan grant window: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>that one business's
+    /// <see cref="BusinessPlanGrant"/> row and the <see cref="BusinessPlanGrantAudit"/> row beside
+    /// it, and nothing else</em> on an otherwise denied scope (issue #982, the owner-approved
+    /// amendment of 29 October 2026).
+    ///
+    /// <para><strong>Why a window exists at all.</strong> A manual grant is the Super Admin's
+    /// decision about a business they are not a member of, so the request carries a denied
+    /// <see cref="BusinessScope"/> and the enforcer refuses every tenant-owned write - which is what
+    /// makes the platform-admin surface unable to touch a business's own data. A plan grant is
+    /// nevertheless a tenant-owned row of issue #966, and the platform owner has to be able to
+    /// grandfather, trial and comp a business without billing it. This is the narrow, reviewed
+    /// exception rather than a relaxation of the rule: see docs/architecture.md § Super Admin sets a
+    /// business's plan.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and the only caller is <c>EfPlatformPlanGrantStore</c>, which takes it around one
+    /// <c>SaveChanges</c>; two entity types and no other, inserts and - for the grant row alone -
+    /// updates, never a delete; the business id is the key of the row the decision's own write
+    /// transaction read, never a value a request supplied; a lease may be taken only while this
+    /// context's own scope is <see cref="BusinessScopeState.Denied"/>, so neither an ordinary
+    /// member's request nor a support session can open one; and only one may be open at a time,
+    /// never beside a matching or provisioning lease.</para>
+    /// </summary>
+    /// <param name="businessId">The business whose grant and audit rows may be written.</param>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginPlanGrantWrite(int businessId)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(businessId, 0);
+
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "A manual plan grant is only written by a request that resolved no business of its "
+                    + "own - the platform administrator deciding it. A scope that already names a "
+                    + "business must not write another business's grant at all.");
+        }
+
+        if (PlanGrantWriteBusinessId is not null
+            || PriceCatalogueMatchingLeased
+            || PriceCatalogueReviewLeased
+            || SupplierProvisioningBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A plan grant write, price catalogue matching, price catalogue review or supplier "
+                    + "provisioning lease is already open on this context.");
+        }
+
+        PlanGrantWriteBusinessId = businessId;
+        return new PlanGrantWriteLease(this);
+    }
+
+    /// <summary>
+    /// Closes the window of <see cref="BeginPlanGrantWrite"/>. A sealed class with one field, for the
+    /// reason <see cref="SupplierProvisioningLease"/> is one: a struct would be copied by the
+    /// <c>using</c> statement.
+    /// </summary>
+    private sealed class PlanGrantWriteLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public PlanGrantWriteLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.PlanGrantWriteBusinessId = null;
             _context = null;
         }
     }
@@ -315,6 +593,130 @@ public class AppDbContext : DbContext
         Set<Models.PlatformOptionVisibility>();
 
     /// <summary>
+    /// The shared catalogue's products (issue #923, parent #817): one row per product that is looked
+    /// up at a supplier, however many businesses want its price. The third <em>platform</em> table,
+    /// on the terms <see cref="SupplierPresets"/> states - about no business, so no business key, no
+    /// index on one and no query filter. See <see cref="MasterProduct"/>.
+    /// </summary>
+    public DbSet<MasterProduct> MasterProducts => Set<MasterProduct>();
+
+    /// <summary>
+    /// One product as one supplier publishes it (issue #923). The fourth platform table; see
+    /// <see cref="SupplierListing"/>.
+    /// </summary>
+    public DbSet<SupplierListing> SupplierListings => Set<SupplierListing>();
+
+    /// <summary>
+    /// The suggested matches, per waiting key, that the automatic matcher of #941 produces and the
+    /// review of #928 decides (issue #923). The fifth platform table, and the one nothing ever
+    /// deletes from; see <see cref="ProductMatchSuggestion"/>.
+    /// </summary>
+    public DbSet<ProductMatchSuggestion> ProductMatchSuggestions => Set<ProductMatchSuggestion>();
+
+    /// <summary>
+    /// Each business's own statement that it wants one of its products priced, and which master
+    /// product that product is (issue #923). Ordinary tenant-owned data - stamped, filtered and
+    /// enforced centrally like every other owned table - and the only place a business appears in the
+    /// shared catalogue at all; see <see cref="ProductPriceTracking"/>.
+    /// </summary>
+    public DbSet<ProductPriceTracking> ProductPriceTrackings => Set<ProductPriceTracking>();
+
+    /// <summary>
+    /// One run of the supplier price collector (issue #925, parent #817): when it started, when it
+    /// finished, how it finished and how much it accounted for. The sixth platform table, on the
+    /// terms <see cref="SupplierPresets"/> states - a run reads suppliers' shelves for every business
+    /// at once, so it is about none of them. See <see cref="PriceCollectorRun"/>.
+    /// </summary>
+    public DbSet<PriceCollectorRun> PriceCollectorRuns => Set<PriceCollectorRun>();
+
+    /// <summary>
+    /// One price one supplier published for one listing at one instant (issue #925). The seventh
+    /// platform table, append-only, and read by no purchase, cost, inventory, GST-accounting or
+    /// reporting code at all; see <see cref="SupplierPriceObservation"/>.
+    /// </summary>
+    public DbSet<SupplierPriceObservation> SupplierPriceObservations =>
+        Set<SupplierPriceObservation>();
+
+    /// <summary>
+    /// One product and one supplier a collector run was asked to search (issue #924, parent #817).
+    /// The eighth platform table, on the terms <see cref="SupplierPresets"/> states - a piece of work
+    /// is a product description and a supplier's shelf, so it is about no business - and the thing
+    /// every result of #937 is attributed to. See <see cref="PriceCollectorWorkItem"/>.
+    /// </summary>
+    public DbSet<PriceCollectorWorkItem> PriceCollectorWorkItems => Set<PriceCollectorWorkItem>();
+
+    /// <summary>
+    /// One result row a collector submitted and what was done with it (issue #937, parent #817). The
+    /// ninth platform table, on the terms <see cref="SupplierPresets"/> states, and the store of the
+    /// idempotency key the results endpoint answers a repeat from. See
+    /// <see cref="PriceCollectorResultRow"/>.
+    /// </summary>
+    public DbSet<PriceCollectorResultRow> PriceCollectorResultRows => Set<PriceCollectorResultRow>();
+
+    /// <summary>
+    /// The latest reading of one listing that was not accepted as its price (issue #937). The tenth
+    /// platform table, one row per listing, kept apart from <see cref="SupplierPriceObservations"/>
+    /// so every row of <em>that</em> table stays an accepted price. See
+    /// <see cref="SupplierListingPendingObservation"/>.
+    /// </summary>
+    public DbSet<SupplierListingPendingObservation> SupplierListingPendingObservations =>
+        Set<SupplierListingPendingObservation>();
+
+    /// <summary>
+    /// Each business's paid subscription (issue #966), written only by a verified billing event
+    /// (#969). Ordinary tenant-owned data - one row per business, filtered and stamped centrally -
+    /// and deliberately a different table from <see cref="BusinessPlanGrants"/>, because neither
+    /// record may ever write the other. See <see cref="BusinessBillingSubscription"/>.
+    /// </summary>
+    public DbSet<BusinessBillingSubscription> BusinessBillingSubscriptions =>
+        Set<BusinessBillingSubscription>();
+
+    /// <summary>
+    /// The plans granted to a business by a person rather than a payment (issue #966): the
+    /// grandfathered Pro grant, and the complimentary grants a Super Admin decides (#982). Ordinary
+    /// tenant-owned data, with at most one grandfathered grant per business. See
+    /// <see cref="BusinessPlanGrant"/>.
+    /// </summary>
+    public DbSet<BusinessPlanGrant> BusinessPlanGrants => Set<BusinessPlanGrant>();
+
+    /// <summary>
+    /// Every decision a Super Admin has made about a business's manual grant (issue #982): who
+    /// granted, changed or ended what, and why. Ordinary tenant-owned data, append-only, and written
+    /// in the same <c>SaveChanges</c> as the grant it is about - so the grant and the record of who
+    /// gave it commit together or not at all. See <see cref="BusinessPlanGrantAudit"/>.
+    /// </summary>
+    public DbSet<BusinessPlanGrantAudit> BusinessPlanGrantAudits => Set<BusinessPlanGrantAudit>();
+
+    /// <summary>
+    /// The single shared row holding the grandfathering step's fixed cutoff and its completion marker
+    /// (issue #966). The eleventh <em>platform</em> table, on the terms
+    /// <see cref="SupplierPresets"/> states: about no business, so no business key, no index on one
+    /// and no query filter. No row at all means the step has never run, which means nothing is
+    /// enforced; see <see cref="SubscriptionGrandfathering"/>.
+    /// </summary>
+    public DbSet<SubscriptionGrandfathering> SubscriptionGrandfatherings =>
+        Set<SubscriptionGrandfathering>();
+
+    /// <summary>
+    /// Each business's recorded connected-machine counts (issue #978): one row per business per UTC
+    /// day per Nayax account series, append-only. Ordinary tenant-owned data - filtered and stamped
+    /// centrally - and the evidence the extra-machine billing of #969 is charged from, which is why
+    /// <see cref="ConnectedMachineSnapshotEnforcer"/> refuses every change and removal of a stored
+    /// row. See <see cref="BusinessConnectedMachineSnapshot"/>.
+    /// </summary>
+    public DbSet<BusinessConnectedMachineSnapshot> BusinessConnectedMachineSnapshots =>
+        Set<BusinessConnectedMachineSnapshot>();
+
+    /// <summary>
+    /// The room uploads in progress have reserved in their business's attachment storage allowance
+    /// (issue #968): ordinary tenant-owned data, so the business key, the index, the query filter
+    /// and the ownership stamp are the central mechanism's with nothing added. See
+    /// <see cref="AttachmentStorageReservation"/>.
+    /// </summary>
+    public DbSet<AttachmentStorageReservation> AttachmentStorageReservations =>
+        Set<AttachmentStorageReservation>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -336,14 +738,24 @@ public class AppDbContext : DbContext
     /// business's sales provider is the issuer of every external id its products and categories
     /// hold, so a change to it - which would reinterpret those ids as another system's - is refused
     /// centrally rather than trusted not to be written.
+    ///
+    /// <see cref="BusinessStateEnforcer"/> joins them on the same terms as the ABN (issue #933): the
+    /// business's state or territory decides which supplier records it is offered, so a value
+    /// outside the eight is refused centrally rather than per write path.
+    ///
+    /// <see cref="ConnectedMachineSnapshotEnforcer"/> joins them for a different reason (issue #978):
+    /// a connected-machine snapshot is append-only billing evidence, so a change or a removal of a
+    /// stored row is refused here rather than merely absent from today's code paths.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStateEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
         BusinessSalesProviderEnforcer.Enforce(this);
+        ConnectedMachineSnapshotEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -354,8 +766,10 @@ public class AppDbContext : DbContext
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStateEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
         BusinessSalesProviderEnforcer.Enforce(this);
+        ConnectedMachineSnapshotEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
@@ -366,6 +780,9 @@ public class AppDbContext : DbContext
         ConfigureSupportSessions(modelBuilder);
         ConfigureSupplierPresets(modelBuilder);
         ConfigurePlatformOptionVisibility(modelBuilder);
+        ConfigureSubscriptions(modelBuilder);
+        ConfigureAttachmentStorageReservations(modelBuilder);
+        ConfigurePriceCatalogue(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
@@ -501,6 +918,18 @@ public class AppDbContext : DbContext
             .HasConversion(
                 toProvider => toProvider,
                 fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        // The account series (issue #978) starts at 1 for the first stored account; the additive
+        // migration adds the column with a database default of 1, so a connection that already
+        // existed is series 1 and every snapshot taken for it belongs to the account it is already
+        // on. The instant beside it is when the series last changed - null on a row written before
+        // this column existed, which is "not recorded" and never "never changed".
+        modelBuilder.Entity<BusinessNayaxConnection>()
+            .Property(x => x.AccountSeriesChangedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => fromProvider.HasValue
+                    ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                    : fromProvider);
 
         // One connection-test draft per business (issue #536), for the same reason the connection
         // above has one row per business: "a new test replaces the previous draft" is then a schema
@@ -533,7 +962,20 @@ public class AppDbContext : DbContext
 
         // Purchase/PurchaseItem are the Purchase-language CLR types; explicitly mapped to
         // their legacy "Receipt"/"ReceiptItem" tables so the rename does not change the schema.
-        modelBuilder.Entity<Purchase>().ToTable("Receipts");
+        //
+        // The check constraint is issue #976's half of "a purchase may have no document": the four
+        // document columns are nullable, and they are all present or all absent. It is in the
+        // database rather than only in code because a half-recorded document is not recoverable -
+        // it would be a row claiming bytes nothing can open, or bytes nothing names - and the
+        // "has no document" answer every read and the attach-only-if-empty write depend on would
+        // then be ambiguous. Inventory.Domain.Purchases.PurchaseDocumentPolicy.IsMetadataConsistent
+        // is the same rule stated once for the application.
+        modelBuilder.Entity<Purchase>().ToTable("Receipts", table => table.HasCheckConstraint(
+            "CK_Receipts_DocumentMetadataAllOrNothing",
+            @"(""StoredFileName"" IS NULL AND ""ContentType"" IS NULL "
+                + @"AND ""FileName"" IS NULL AND ""FileSizeBytes"" IS NULL) "
+                + @"OR (""StoredFileName"" IS NOT NULL AND ""ContentType"" IS NOT NULL "
+                + @"AND ""FileName"" IS NOT NULL AND ""FileSizeBytes"" IS NOT NULL)"));
         modelBuilder.Entity<PurchaseItem>().ToTable("ReceiptItems");
 
         modelBuilder.Entity<Purchase>()
@@ -852,6 +1294,7 @@ public class AppDbContext : DbContext
         // [MaxLength] attribute on the entity, which Swashbuckle would publish as a maxLength
         // keyword on the legacy Supplier component the API pins.
         modelBuilder.Entity<Supplier>().Property(s => s.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
+        ConfigureSupplierPresetLink(modelBuilder);
         modelBuilder.Entity<Product>().HasIndex(p => p.Sku);
         modelBuilder.Entity<SupplierOrder>().HasIndex(order => new { order.SupplierId, order.Status, order.OrderDate });
         modelBuilder.Entity<SupplierOrderLine>().HasIndex(line => new { line.ProductId, line.SupplierOrderId });
@@ -1214,6 +1657,47 @@ public class AppDbContext : DbContext
         // column constraint cannot express.
         preset.Property(x => x.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
 
+        // The supplier-master fields of issue #931. The market is two columns because the two claims
+        // are different: ServesNationwide is "everywhere", and ServedStates is the closed, ordered,
+        // comma-separated code list SupplierPresetMasterPolicy writes - bounded at the longest value
+        // that policy's own vocabulary can produce, computed from it rather than guessed, so a ninth
+        // code could not leave the column too narrow for it. The list is one column and not a child
+        // table because the vocabulary is closed, a market is read and written whole, and nothing
+        // joins to a state.
+        preset.Property(x => x.ServesNationwide);
+        preset.Property(x => x.ServedStates)
+            .IsRequired()
+            .HasMaxLength(SupplierPresetMasterPolicy.MaxStoredServedStatesLength);
+
+        // Whether the published prices include GST. A stored fact, never inferred, and never a
+        // calculated amount: nothing in this mapping or this table holds money.
+        preset.Property(x => x.PricesIncludeGst);
+
+        // No HasConversion and no default on the connector, exactly as Business.SalesProvider is
+        // mapped (issue #759): a nullable enum maps to a nullable INTEGER, and null - "nothing
+        // collects this supplier's prices" - is the value a preset keeps unless somebody chose a
+        // route. SupplierPriceConnector is numbered from 1, so no stored number means Varnmill by
+        // accident.
+        preset.Property(x => x.PriceConnector);
+        preset.Property(x => x.PriceConnectorKey)
+            .HasMaxLength(SupplierPresetMasterPolicy.MaxConnectorKeyLength);
+
+        // How old an observed price of this supplier may be and still be compared (issue #925). It is
+        // stored here, on the supplier master record, precisely so that no code names a supplier: the
+        // owner's 30 hours for a daily supplier and 102 for a twice-weekly one are two values of one
+        // column, and a supplier whose schedule changes is an edit rather than a release. The column
+        // default is the daily limit, because daily is what the collector does unless somebody
+        // records otherwise, and the range is checked here as well as in
+        // SupplierPriceFreshnessPolicy - a limit of zero would read as "never stale" or "always
+        // stale" depending on who resolved it.
+        preset.Property(x => x.PriceCheckFreshnessHours)
+            .IsRequired()
+            .HasDefaultValue(SupplierPriceFreshnessPolicy.DailyCheckLimitHours);
+        preset.ToTable(table => table.HasCheckConstraint(
+            "CK_SupplierPresets_PriceCheckFreshnessHoursInRange",
+            $@"""PriceCheckFreshnessHours"" > 0 "
+                + $@"AND ""PriceCheckFreshnessHours"" <= {SupplierPriceFreshnessPolicy.MaxLimitHours}"));
+
         // Both instants are persisted UTC and both are reported by this feature's API, so each is
         // marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why the
         // SQLite provider makes that necessary.
@@ -1223,6 +1707,49 @@ public class AppDbContext : DbContext
         preset.Property(x => x.UpdatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the link from a business's supplier to the platform supplier preset it was copied from
+    /// (issue #934, second task of #817).
+    ///
+    /// <para><strong>A tenant-owned table referencing a platform table, which is new here.</strong>
+    /// It does not make <see cref="Supplier"/> any less owned or <see cref="SupplierPreset"/> any
+    /// more so: the copy is still the business's own row, the master is still about no business, and
+    /// the only thing crossing between them is which suggestion this row came from.
+    /// <c>BusinessOwnershipCoverageTests</c> accepts this one key by name rather than by exception,
+    /// so a second tenant-to-platform key is a decision somebody has to make there.</para>
+    ///
+    /// <para><strong>No navigation, and <c>Restrict</c>.</strong> Nothing about a business's supplier
+    /// reads the master's row, so there is no navigation property in either direction - a copy is
+    /// complete in itself, and a navigation would put a platform entity into a tenant-owned entity's
+    /// object graph where a careless <c>Include</c> could publish it. The delete behaviour is
+    /// <c>Restrict</c> because the alternatives are both wrong: cascading would delete a business's
+    /// supplier (and its purchase history's counterparty) when the platform tidied its list, and
+    /// setting null would silently unlink a copy and let the business rename it. It costs nothing in
+    /// practice - a preset is disabled, never deleted (see <see cref="ConfigureSupplierPresets"/>).
+    /// </para>
+    ///
+    /// <para><strong>One copy per preset per business.</strong> The unique index is filtered to the
+    /// rows that carry a link, because "no preset" is the normal case and every unlinked supplier
+    /// would otherwise collide with every other. It leads with <c>BusinessId</c>, as every unique
+    /// index on tenant-owned data must: two businesses hold a copy of the same preset, and a global
+    /// index would let whichever was approved first deny the other.</para>
+    /// </summary>
+    private static void ConfigureSupplierPresetLink(ModelBuilder modelBuilder)
+    {
+        var supplier = modelBuilder.Entity<Supplier>();
+
+        supplier
+            .HasOne<SupplierPreset>()
+            .WithMany()
+            .HasForeignKey(s => s.SupplierPresetId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        supplier
+            .HasIndex(s => new { s.BusinessId, s.SupplierPresetId })
+            .IsUnique()
+            .HasFilter(@"""SupplierPresetId"" IS NOT NULL");
     }
 
     /// <summary>
@@ -1252,6 +1779,905 @@ public class AppDbContext : DbContext
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
+
+    /// <summary>
+    /// Maps the business subscription state of issue #966: two tenant-owned tables about one
+    /// business's plan, and one platform table about the grandfathering step itself.
+    ///
+    /// <para><strong>The classification is the design, again.</strong>
+    /// <see cref="BusinessBillingSubscription"/> and <see cref="BusinessPlanGrant"/> are facts about
+    /// one business, so they are ordinary <see cref="IBusinessOwned"/> rows and
+    /// <see cref="ConfigureBusinessOwnership"/> gives each of them the business key, the index, the
+    /// query filter and the ownership stamp with nothing added here.
+    /// <see cref="SubscriptionGrandfathering"/> is the opposite: one cutoff and one completion marker
+    /// for the whole application, so it carries no business key, no index on one and no query filter,
+    /// exactly as <see cref="ConfigurePlatformOptionVisibility"/> states for the option-visibility
+    /// row.</para>
+    ///
+    /// <para><strong>Two uniqueness rules, and both are the database's.</strong> A business has at
+    /// most one billing subscription, and at most one <em>grandfathered</em> grant - the second
+    /// through a filtered unique index, because a business may legitimately hold several
+    /// complimentary grants. The grandfathering command's "grant it unless one exists" is written as
+    /// one transaction, and this index is what makes that true even if two commands ran at once:
+    /// the loser's insert is refused rather than leaving a business with two grandfathered
+    /// grants.</para>
+    ///
+    /// <para>Every instant here is persisted UTC and marked UTC on the way out, for the reason the
+    /// support session's are: the SQLite provider returns an unspecified kind otherwise, and the
+    /// grant's end instant is reported through <c>GET /api/me/access</c>.</para>
+    /// </summary>
+    private static void ConfigureSubscriptions(ModelBuilder modelBuilder)
+    {
+        var subscription = modelBuilder.Entity<BusinessBillingSubscription>();
+
+        // One subscription per business, led by the business key like every other per-business
+        // uniqueness rule in this schema (AGENTS.md § Tenant ownership and data isolation).
+        subscription.HasIndex(x => x.BusinessId).IsUnique();
+        subscription.Property(x => x.CurrentPeriodStartUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        subscription.Property(x => x.CurrentPeriodEndUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        subscription.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        var grant = modelBuilder.Entity<BusinessPlanGrant>();
+
+        // At most one grandfathered grant per business. Filtered to that one source, because the
+        // complimentary grants of #982 are a list rather than a single row. The filter is SQL, so the
+        // source's numeric value appears as the literal the index is created with; the model test
+        // `The_grandfathered_grant_index_filter_matches_the_declared_source` pins the two together,
+        // so renumbering the enum fails a test rather than silently disabling this index.
+        grant.HasIndex(x => new { x.BusinessId, x.Source })
+            .IsUnique()
+            .HasFilter(@"""Source"" = 10");
+        grant.Property(x => x.Reason).HasMaxLength(500);
+        grant.Property(x => x.StartsAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        grant.Property(x => x.EndsAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        grant.Property(x => x.GrantedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        // The Super Admin surface's optimistic concurrency counter (issue #982). It defaults to 0,
+        // which is what every row written before that surface existed - and the grandfathered grant,
+        // which it never writes - holds, and it is an ordinary column rather than a provider row
+        // version because the value is compared by the use case, reported to the client and logged.
+        grant.Property(x => x.Revision).HasDefaultValue(0);
+
+        // The decisions that produced those grants (issue #982): one append-only row per committed
+        // create, change or end, written in the same SaveChanges as the grant it is about. Tenant-
+        // owned with nothing added, exactly as the grant is; the reason column matches the grant's
+        // length, and the actor's Entra pair is sized like every other stored (tid, oid).
+        var grantAudit = modelBuilder.Entity<BusinessPlanGrantAudit>();
+
+        // The one index this table needs: a business's decisions in the order they happened, which is
+        // how the trail is read. The business key alone is already indexed centrally.
+        grantAudit.HasIndex(x => new { x.BusinessId, x.OccurredAtUtc });
+        grantAudit.Property(x => x.Reason).HasMaxLength(ManualPlanGrantPolicy.MaxReasonLength);
+        grantAudit.Property(x => x.ActorDirectoryTenantId).HasMaxLength(100);
+        grantAudit.Property(x => x.ActorObjectId).HasMaxLength(100);
+        grantAudit.Property(x => x.EndsAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        grantAudit.Property(x => x.OccurredAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        var grandfathering = modelBuilder.Entity<SubscriptionGrandfathering>();
+
+        // The key is not generated: the step is one answer for the whole application, so two
+        // concurrent first runs collide on the primary key instead of recording two cutoffs, and the
+        // adapter resolves that collision into reading the cutoff the other run fixed.
+        grandfathering.Property(x => x.Id).ValueGeneratedNever();
+        grandfathering.Property(x => x.CutoffUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        grandfathering.Property(x => x.CompletedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+
+        ConfigureConnectedMachineSnapshots(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps the connected-machine snapshots of issue #978: one tenant-owned table of append-only
+    /// billing evidence.
+    ///
+    /// <para><strong>The uniqueness rule is the whole mechanism.</strong> The unique index on
+    /// (business, UTC date, account series) is what makes "at most one snapshot per business per day
+    /// per series" true when a page load and the daily job read the same fleet at the same moment:
+    /// both record through one insert-if-absent operation, the first to commit wins, and the other's
+    /// insert is refused by the database rather than by a check it could have passed a moment
+    /// earlier. The index is led by the business key like every other per-business uniqueness rule in
+    /// this schema (AGENTS.md § Tenant ownership and data isolation), and the series is part of it
+    /// because an account change may legitimately add a second snapshot to the same day - one per
+    /// account, with the later series being that day's count.</para>
+    ///
+    /// <para>It is ordinary tenant-owned data: <see cref="ConfigureBusinessOwnership"/> gives it the
+    /// business key, its index, the query filter and the ownership stamp with nothing added here, and
+    /// nothing in this table is a credential or derived from one. Append-only is enforced on
+    /// <c>SaveChanges</c> by <see cref="ConnectedMachineSnapshotEnforcer"/>; a schema constraint
+    /// cannot express "insert only".</para>
+    ///
+    /// <para>Both instants are persisted UTC and marked UTC on the way out, for the reason the
+    /// subscription records' are: the SQLite provider returns an unspecified kind otherwise, and the
+    /// snapshot's date is reported through <c>GET /api/me/access</c>.</para>
+    /// </summary>
+    private static void ConfigureConnectedMachineSnapshots(ModelBuilder modelBuilder)
+    {
+        var snapshot = modelBuilder.Entity<BusinessConnectedMachineSnapshot>();
+
+        snapshot
+            .HasIndex(x => new { x.BusinessId, x.SnapshotDateUtc, x.AccountSeries })
+            .IsUnique();
+        snapshot.Property(x => x.ProviderMachineIds).IsRequired();
+        snapshot.Property(x => x.SnapshotDateUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        snapshot.Property(x => x.TakenAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the attachment storage reservations of issue #968: one tenant-owned table recording
+    /// the room uploads in progress have taken in their business's allowance.
+    ///
+    /// <para><strong>Tenant-owned with nothing added</strong>, exactly as the two subscription
+    /// tables above are: <see cref="ConfigureBusinessOwnership"/> gives it the business key, the
+    /// index, the query filter and the ownership stamp, so no adapter writes a business id of its
+    /// own and no reservation can be read or released across businesses.</para>
+    ///
+    /// <para><strong>The index is the one the quota read uses.</strong> Every statement over this
+    /// table asks the same question - what has this business reserved that has not expired - so the
+    /// index is <c>(BusinessId, ExpiresAtUtc)</c>, which serves both the sum and the cleanup of
+    /// expired rows.</para>
+    ///
+    /// <para>Both instants are persisted UTC and marked UTC on the way out, for the reason the
+    /// subscription periods are: the SQLite provider returns an unspecified kind otherwise, and an
+    /// expiry compared against the application clock must not depend on how it was read.</para>
+    ///
+    /// <para><see cref="AttachmentStorageReservation.RecordId"/> is deliberately <strong>not</strong>
+    /// a foreign key. The purchase or expense it names may not exist yet, and one that is deleted
+    /// while an upload is in progress must be deletable: the reservation then expires on its own,
+    /// and the commit that would have used it finds no record and writes nothing.</para>
+    /// </summary>
+    private static void ConfigureAttachmentStorageReservations(ModelBuilder modelBuilder)
+    {
+        var reservation = modelBuilder.Entity<AttachmentStorageReservation>();
+
+        reservation.HasIndex(x => new { x.BusinessId, x.ExpiresAtUtc });
+        reservation.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        reservation.Property(x => x.ExpiresAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the shared supplier price catalogue of issue #923 (parent #817): three platform tables
+    /// about products, and one tenant-owned table about a business's decision.
+    ///
+    /// <para><strong>The classification is the design.</strong> <see cref="MasterProduct"/>,
+    /// <see cref="SupplierListing"/> and <see cref="ProductMatchSuggestion"/> are about no business -
+    /// a brand, a size, a supplier's shelf and a matcher's opinion are facts about products - so each
+    /// carries no business key, no index on one and no query filter, exactly as
+    /// <see cref="ConfigureSupplierPresets"/> states for the presets. <see cref="ProductPriceTracking"/>
+    /// is the opposite: it is a business saying it wants one of its own products priced, which is
+    /// ordinary tenant-owned data and gets the ordinary central treatment from
+    /// <see cref="ConfigureBusinessOwnership"/> with nothing added here.</para>
+    ///
+    /// <para><strong>Every key in this catalogue is a stored normalised value under a unique
+    /// index</strong>, for the reason <see cref="SupplierPreset.NormalisedName"/> is one: "one
+    /// description is one master product" has to be the database's rule rather than a <c>WHERE</c>
+    /// clause two concurrent inserts can both pass, and two master products for one product is what
+    /// the parent issue exists to prevent.</para>
+    ///
+    /// <para><strong>Every reference restricts, except the mapping's product.</strong> A supplier
+    /// master record, a master product and a proposed master product are all things other rows depend
+    /// on, so none of them can be deleted from under those rows. The one cascade is a mapping's own
+    /// product: a mapping is a statement <em>about</em> a product and has no meaning without it, and
+    /// restricting there would change what deleting a product does - which issue #923's last criterion
+    /// forbids.</para>
+    /// </summary>
+    private static void ConfigurePriceCatalogue(ModelBuilder modelBuilder)
+    {
+        ConfigureMasterProducts(modelBuilder);
+        ConfigureSupplierListings(modelBuilder);
+        ConfigureProductMatchSuggestions(modelBuilder);
+        ConfigureProductPriceTracking(modelBuilder);
+        ConfigurePriceCollectorRuns(modelBuilder);
+        ConfigurePriceCollectorWorkItems(modelBuilder);
+        ConfigureSupplierPriceObservations(modelBuilder);
+        ConfigurePriceCollectorResultRows(modelBuilder);
+        ConfigureSupplierListingPendingObservations(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps one submitted collector result row (issue #937, parent #817).
+    ///
+    /// <para>A platform table like the six beside it: no business key, no index on one and no query
+    /// filter. Every reference restricts, because a row is the record of a decision and a decision
+    /// whose run, work item, listing or observation had been deleted from under it would be
+    /// unreadable.</para>
+    ///
+    /// <para><strong>The unique index is the idempotency key, and it is the database's.</strong>
+    /// <c>(run, work item, supplier product id)</c> is what the issue states, and it is an index
+    /// rather than a <c>WHERE</c> clause because two concurrent submissions of the same key would
+    /// both pass the clause and store one reading twice. The supplier product id is <em>in</em> the
+    /// key on purpose: one search legitimately returns a 24-pack and a 30-pack, so accepting one
+    /// must not suppress the other. The outcome vocabulary stays the Domain's, for the reason the
+    /// work item's does.</para>
+    /// </summary>
+    private static void ConfigurePriceCollectorResultRows(ModelBuilder modelBuilder)
+    {
+        var row = modelBuilder.Entity<PriceCollectorResultRow>();
+
+        row.Property(x => x.SupplierProductId)
+            .IsRequired()
+            .HasMaxLength(SupplierListingPolicy.MaxSupplierProductIdLength);
+        row.Property(x => x.Outcome).IsRequired();
+        row.Property(x => x.Reason).HasMaxLength(MaxResultReasonLength);
+
+        row
+            .HasIndex(x => new
+            {
+                x.PriceCollectorRunId,
+                x.PriceCollectorWorkItemId,
+                x.SupplierProductId,
+            })
+            .IsUnique();
+
+        // "How many distinct supplier product ids has this work item received?" - the count the
+        // outcome call of #937 refuses a wrong total against.
+        row.HasIndex(x => x.PriceCollectorWorkItemId);
+
+        row
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        row
+            .HasOne(x => x.PriceCollectorWorkItem)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorWorkItemId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        row
+            .HasOne(x => x.SupplierListing)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierListingId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        row
+            .HasOne(x => x.SupplierPriceObservation)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierPriceObservationId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(row.Property(x => x.SubmittedAtUtc));
+    }
+
+    /// <summary>
+    /// Maps the latest reading of one listing that was not accepted as its price (issue #937).
+    ///
+    /// <para><strong>The listing is unique</strong>, which is the "replacing the previous pending
+    /// one" rule expressed as an index: one listing holds at most one pending reading, enforced
+    /// rather than left to a delete-then-insert nothing checks. The reference to the listing
+    /// cascades - deleting a listing deletes the reading that was waiting on it, which has no
+    /// meaning without it - and the run and work item restrict, because they are its
+    /// provenance.</para>
+    ///
+    /// <para>The amount, currency, GST-rate and promotion checks are the ones an accepted
+    /// observation carries, for the same reasons: a held reading is reviewed and may then become a
+    /// price, so storing one this application would refuse as a price would only move the refusal to
+    /// the moment somebody approved it.</para>
+    /// </summary>
+    private static void ConfigureSupplierListingPendingObservations(ModelBuilder modelBuilder)
+    {
+        var pending = modelBuilder.Entity<SupplierListingPendingObservation>();
+
+        pending.Property(x => x.PackPrice).HasColumnType(MoneyColumnType);
+        pending.Property(x => x.RegularPackPrice).HasColumnType(MoneyColumnType);
+        pending.Property(x => x.SupplierGstRate).HasColumnType("decimal(5,4)");
+        pending.Property(x => x.SizeValue).HasColumnType(SizeColumnType);
+
+        pending.Property(x => x.Currency)
+            .IsRequired()
+            .HasMaxLength(SupplierPriceObservationPolicy.Currency.Length);
+        pending.Property(x => x.PriceBasis).IsRequired();
+        pending.Property(x => x.StockStatus).IsRequired();
+        pending.Property(x => x.Reason).IsRequired().HasMaxLength(MaxResultReasonLength);
+        pending.Property(x => x.SourceReference)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceReferenceLength);
+        pending.Property(x => x.SourceUrl)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceUrlLength);
+        pending.Property(x => x.Title).HasMaxLength(SupplierListingPolicy.MaxTitleLength);
+        pending.Property(x => x.Variant).HasMaxLength(SupplierListingPolicy.MaxVariantLength);
+        pending.Property(x => x.Barcode).HasMaxLength(SupplierListingPolicy.MaxBarcodeLength);
+
+        pending.HasIndex(x => x.SupplierListingId).IsUnique();
+        pending.HasIndex(x => x.PriceCollectorRunId);
+        pending.HasIndex(x => x.PriceCollectorWorkItemId);
+
+        pending.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_PackPricePositive",
+                @"""PackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_RegularPackPricePositive",
+                @"""RegularPackPrice"" IS NULL OR ""RegularPackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_GstRateIsAProportion",
+                @"""SupplierGstRate"" IS NULL "
+                    + @"OR (""SupplierGstRate"" >= 0 AND ""SupplierGstRate"" <= 1)");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_PromotionEndNeedsPromotion",
+                @"""PromotionEndsAtUtc"" IS NULL OR ""IsPromotion"" = 1");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_CurrencyIsAud",
+                $@"""Currency"" = '{SupplierPriceObservationPolicy.Currency}'");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_UnitsPerPackPositive",
+                @"""UnitsPerPack"" IS NULL OR ""UnitsPerPack"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_SizeAndUnitTogether",
+                @"(""SizeValue"" IS NULL AND ""SizeUnit"" IS NULL) "
+                    + @"OR (""SizeValue"" IS NOT NULL AND ""SizeUnit"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_SupplierListingPendingObservations_BarcodeAndScopeTogether",
+                @"(""Barcode"" IS NULL AND ""BarcodeScope"" IS NULL) "
+                    + @"OR (""Barcode"" IS NOT NULL AND ""BarcodeScope"" IS NOT NULL)");
+        });
+
+        pending
+            .HasOne(x => x.SupplierListing)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierListingId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        pending
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        pending
+            .HasOne(x => x.PriceCollectorWorkItem)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorWorkItemId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(pending.Property(x => x.ObservedAtUtc));
+        MarkUtcNullable(pending.Property(x => x.PromotionEndsAtUtc));
+        MarkUtc(pending.Property(x => x.RecordedAtUtc));
+    }
+
+    /// <summary>
+    /// The longest stored refusal or hold reason (issue #937). The reasons are
+    /// <c>PriceCollectorResultPolicy</c>'s own sentences rather than caller text, and this bound is
+    /// the same one a match suggestion's reason carries, so a reviewer's two explanations are stored
+    /// on the same terms.
+    /// </summary>
+    private const int MaxResultReasonLength = ProductMatchSuggestionPolicy.MaxReasonLength;
+
+    /// <summary>The column type a pack or regular price is stored as, wherever issue #937 declares one.</summary>
+    private const string MoneyColumnType = "decimal(18,4)";
+
+    /// <summary>The column type an individual item's size is stored as, wherever issue #937 declares one.</summary>
+    private const string SizeColumnType = "decimal(18,3)";
+
+    /// <summary>
+    /// Maps one issued piece of collector work (issue #924, parent #817).
+    ///
+    /// <para>A platform table like the runs beside it: no business key, no index on one and no query
+    /// filter, because a product description and a supplier's shelf are about no business. The
+    /// exactly-one-product rule is a check constraint as well as a
+    /// <c>PriceCollectorWorkItemPolicy</c> rule, for the reason the listing's exclusive-ownership
+    /// rule is one: a row naming two products or none is work no result could be attributed to, and a
+    /// stored row is not something an application-level check can be trusted to have prevented. The
+    /// outcome vocabulary is deliberately the Domain's alone, because expressing it in SQL would
+    /// hard-code the enum's numbers into migration history.</para>
+    ///
+    /// <para>Every reference restricts. A run, a supplier master record and a master product are all
+    /// things this row depends on for its meaning, and work issued against something that was then
+    /// deleted would be a search nobody could place.</para>
+    /// </summary>
+    private static void ConfigurePriceCollectorWorkItems(ModelBuilder modelBuilder)
+    {
+        var workItem = modelBuilder.Entity<PriceCollectorWorkItem>();
+
+        workItem.Property(x => x.WaitingKey).HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+
+        // The read #937 makes: one run's work. One work item by its own id needs no index, because
+        // that id is the primary key.
+        workItem.HasIndex(x => x.PriceCollectorRunId);
+
+        // "One work item per product and supplier in a run" is the database's rule rather than a
+        // WHERE clause two concurrent issues could both pass - and it is <em>two</em> filtered unique
+        // indexes rather than one over all four columns, because SQLite treats NULLs as distinct in a
+        // unique index. A single index would have compared (run, supplier, master, NULL) against
+        // (run, supplier, master, NULL) and found them different, so the rule it looked like it was
+        // enforcing would have been enforced for nothing: a work item names exactly one product, so
+        // one of those two columns is always NULL. Each filtered index covers the rows whose own key
+        // column is present, where there is no NULL left to be distinct from.
+        workItem
+            .HasIndex(x => new { x.PriceCollectorRunId, x.SupplierPresetId, x.MasterProductId })
+            .IsUnique()
+            .HasFilter(@"""MasterProductId"" IS NOT NULL");
+        workItem
+            .HasIndex(x => new { x.PriceCollectorRunId, x.SupplierPresetId, x.WaitingKey })
+            .IsUnique()
+            .HasFilter(@"""WaitingKey"" IS NOT NULL");
+
+        workItem.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorWorkItems_OneProduct",
+            @"(""MasterProductId"" IS NOT NULL AND ""WaitingKey"" IS NULL) "
+                + @"OR (""MasterProductId"" IS NULL AND ""WaitingKey"" IS NOT NULL)"));
+
+        // The outcome and the instant it was recorded at travel together, each being the evidence
+        // about the other - the same shape the listing's price state uses. An issued work item has
+        // neither; a reported one has both.
+        workItem.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorWorkItems_OutcomeAndInstantTogether",
+            @"(""Outcome"" IS NULL AND ""OutcomeAtUtc"" IS NULL) "
+                + @"OR (""Outcome"" IS NOT NULL AND ""OutcomeAtUtc"" IS NOT NULL)"));
+
+        workItem
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        workItem
+            .HasOne(x => x.SupplierPreset)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierPresetId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        workItem
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(workItem.Property(x => x.IssuedAtUtc));
+        MarkUtcNullable(workItem.Property(x => x.OutcomeAtUtc));
+    }
+
+    /// <summary>
+    /// Maps one run of the supplier price collector (issue #925, parent #817).
+    ///
+    /// <para>A platform table like the three above: no business key, no index on one and no query
+    /// filter, because a run reads suppliers' shelves for every business at once. The counts are
+    /// checked non-negative in the database as well as in <c>PriceCollectorRunPolicy</c>, because a
+    /// stored row is not something an application-level check can be trusted to have prevented. The
+    /// status-against-end-instant rule is deliberately the Domain's alone, for the reason the
+    /// mapping's status rule is: expressing it in SQL would hard-code the status enum's numbers into
+    /// migration history.</para>
+    /// </summary>
+    private static void ConfigurePriceCollectorRuns(ModelBuilder modelBuilder)
+    {
+        var run = modelBuilder.Entity<PriceCollectorRun>();
+
+        run.Property(x => x.Status).IsRequired();
+
+        run.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorRuns_CountsNotNegative",
+            @"""ListingsCheckedCount"" >= 0 AND ""ObservationsRecordedCount"" >= 0 "
+                + @"AND ""FailureCount"" >= 0"));
+
+        // The per-outcome counts of issue #937, checked on exactly the terms the three above are:
+        // a stored row is not something an application-level check can be trusted to have
+        // prevented, and a negative count of searches is not a smaller number of searches.
+        run.ToTable(table => table.HasCheckConstraint(
+            "CK_PriceCollectorRuns_SearchCountsNotNegative",
+            @"""CompleteSearchCount"" >= 0 AND ""TruncatedSearchCount"" >= 0 "
+                + @"AND ""NoMatchesSearchCount"" >= 0 AND ""FailedSearchCount"" >= 0 "
+                + @"AND ""NotSearchedCount"" >= 0"));
+
+        // The one read a collector and the summary of #930 both make: the most recent runs.
+        run.HasIndex(x => x.StartedAtUtc);
+
+        // And the one issuing a work list makes (issue #924): the runs that are still open, which a
+        // new run expires. Indexed on the status alone because "open" is one value of it and the
+        // table holds one row per run rather than per listing.
+        run.HasIndex(x => x.Status);
+
+        MarkUtc(run.Property(x => x.StartedAtUtc));
+        MarkUtcNullable(run.Property(x => x.CompletedAtUtc));
+        MarkUtcNullable(run.Property(x => x.ExpiresAtUtc));
+    }
+
+    /// <summary>
+    /// Maps one observed supplier price (issue #925, parent #817).
+    ///
+    /// <para><strong>A platform table, and an append-only one.</strong> What a supplier charges for a
+    /// pack is a fact about that supplier's shelf and about no business, so there is no business key,
+    /// no index on one and no query filter. There is no updated instant either: a correction is a
+    /// later observation, never an edit of a stored one, which is what keeps the raw facts separate
+    /// from the derived comparison (AGENTS.md § Nayax integration states the same rule for imported
+    /// facts).</para>
+    ///
+    /// <para><strong>Both references restrict.</strong> An observation whose listing or whose
+    /// collector run had been deleted from under it would be a price nobody could place or
+    /// trust.</para>
+    ///
+    /// <para><strong>The check constraints are the facts the comparison depends on.</strong> A pack
+    /// price of zero divides into a unit price of zero and compares as cheaper than every real offer;
+    /// a GST rate that is not a proportion - 10 where 0.10 belongs - converts a price to eleven times
+    /// itself; a promotion end date on a price that is not a promotion silently withdraws a real
+    /// offer; and a currency that is not AUD would be compared as though it were dollars. Each is
+    /// also a <c>SupplierPriceObservationPolicy</c> rule.</para>
+    /// </summary>
+    private static void ConfigureSupplierPriceObservations(ModelBuilder modelBuilder)
+    {
+        var observation = modelBuilder.Entity<SupplierPriceObservation>();
+
+        // Published amounts at the scale the imported financial facts in this schema are stored at.
+        // Nothing here is divided or rounded: the per-unit figure is derived by
+        // CheapestUnitOfferPolicy at full precision and rounded only where it is displayed.
+        observation.Property(x => x.PackPrice).HasColumnType("decimal(18,4)");
+        observation.Property(x => x.RegularPackPrice).HasColumnType("decimal(18,4)");
+
+        // A proportion, like a match suggestion's confidence beside it.
+        observation.Property(x => x.SupplierGstRate).HasColumnType("decimal(5,4)");
+
+        observation.Property(x => x.Currency)
+            .IsRequired()
+            .HasMaxLength(SupplierPriceObservationPolicy.Currency.Length);
+        observation.Property(x => x.PriceBasis).IsRequired();
+        observation.Property(x => x.StockStatus).IsRequired();
+        observation.Property(x => x.SourceReference)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceReferenceLength);
+        observation.Property(x => x.SourceUrl)
+            .HasMaxLength(SupplierPriceObservationPolicy.MaxSourceUrlLength);
+
+        // The two reads this table exists for: one listing's prices newest-first - which is how the
+        // latest observation of each listing is found - and one run's own results.
+        observation.HasIndex(x => new { x.SupplierListingId, x.ObservedAtUtc });
+        observation.HasIndex(x => x.PriceCollectorRunId);
+
+        observation.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_PackPricePositive",
+                @"""PackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_RegularPackPricePositive",
+                @"""RegularPackPrice"" IS NULL OR ""RegularPackPrice"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_GstRateIsAProportion",
+                @"""SupplierGstRate"" IS NULL "
+                    + @"OR (""SupplierGstRate"" >= 0 AND ""SupplierGstRate"" <= 1)");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_PromotionEndNeedsPromotion",
+                @"""PromotionEndsAtUtc"" IS NULL OR ""IsPromotion"" = 1");
+            table.HasCheckConstraint(
+                "CK_SupplierPriceObservations_CurrencyIsAud",
+                $@"""Currency"" = '{SupplierPriceObservationPolicy.Currency}'");
+        });
+
+        observation
+            .HasOne(x => x.SupplierListing)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierListingId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        observation
+            .HasOne(x => x.PriceCollectorRun)
+            .WithMany()
+            .HasForeignKey(x => x.PriceCollectorRunId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(observation.Property(x => x.ObservedAtUtc));
+        MarkUtcNullable(observation.Property(x => x.PromotionEndsAtUtc));
+        MarkUtc(observation.Property(x => x.CreatedAtUtc));
+    }
+
+    private static void ConfigureMasterProducts(ModelBuilder modelBuilder)
+    {
+        var master = modelBuilder.Entity<MasterProduct>();
+
+        master.Property(x => x.Brand).IsRequired().HasMaxLength(MasterProductPolicy.MaxBrandLength);
+        master.Property(x => x.Name).IsRequired().HasMaxLength(MasterProductPolicy.MaxNameLength);
+
+        // The size at the scale the Domain accepts and no finer, which is why MasterProductPolicy
+        // refuses a finer value rather than rounding one: a per-unit price divides by this number.
+        master.Property(x => x.SizeValue).HasColumnType("decimal(18,3)");
+        master.Property(x => x.SizeUnit).IsRequired();
+
+        // A size of zero is not a smaller product: it is a denominator that makes a per-unit price
+        // infinite and compares as cheaper than every real product. The database refuses it as well
+        // as MasterProductPolicy, because a stored row is not something an application-level check
+        // can be trusted to have prevented.
+        master.ToTable(table => table.HasCheckConstraint(
+            "CK_MasterProducts_SizeValuePositive",
+            @"""SizeValue"" > 0"));
+
+        // The comparison key, bounded at the longest value the policy's own vocabulary can produce -
+        // computed from it rather than guessed, so widening a part cannot leave this column too
+        // narrow for the keys it must hold.
+        master.Property(x => x.NormalisedKey)
+            .IsRequired()
+            .HasMaxLength(MasterProductPolicy.MaxNormalisedKeyLength);
+        master.HasIndex(x => x.NormalisedKey).IsUnique();
+
+        MarkUtc(master.Property(x => x.CreatedAtUtc));
+        MarkUtc(master.Property(x => x.UpdatedAtUtc));
+    }
+
+    private static void ConfigureSupplierListings(ModelBuilder modelBuilder)
+    {
+        var listing = modelBuilder.Entity<SupplierListing>();
+
+        listing.Property(x => x.SupplierProductId)
+            .IsRequired()
+            .HasMaxLength(SupplierListingPolicy.MaxSupplierProductIdLength);
+        listing.Property(x => x.Url).HasMaxLength(SupplierListingPolicy.MaxUrlLength);
+        listing.Property(x => x.Title).HasMaxLength(SupplierListingPolicy.MaxTitleLength);
+
+        // The listing's own identity reading (issue #937), at the one size scale this catalogue
+        // uses: a listing's size is compared against a master product's, so a second scale would be
+        // a second answer to "is this the same size?".
+        listing.Property(x => x.Variant).HasMaxLength(SupplierListingPolicy.MaxVariantLength);
+        listing.Property(x => x.SizeValue).HasColumnType(SizeColumnType);
+
+        // Text, and never a number: 0012345678905 and 12345678905 are different barcodes, and the
+        // leading zeros are not recoverable once a column has parsed them away.
+        listing.Property(x => x.Barcode).HasMaxLength(SupplierListingPolicy.MaxBarcodeLength);
+
+        listing.Property(x => x.WaitingKey).HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        listing.Property(x => x.OriginWaitingKey).HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        listing.Property(x => x.MatchStatus).IsRequired();
+
+        // One supplier lists one product once, which is what the collector work list of #924
+        // deduplicates by. It is not scoped by business because there is no business here: the
+        // supplier master record is platform configuration and so is its shelf.
+        listing.HasIndex(x => new { x.SupplierPresetId, x.SupplierProductId }).IsUnique();
+
+        // The two lookups the catalogue reads make: a master product's listings, and the listings a
+        // search is still holding under its waiting key.
+        listing.HasIndex(x => x.MasterProductId);
+        listing.HasIndex(x => x.WaitingKey);
+
+        // The exclusive-ownership rule of issue #923, in the database and not only in
+        // SupplierListingPolicy: a listing references exactly one of a master product and an active
+        // waiting key. Both at once is a listing claiming to be two things; neither is a listing
+        // nothing can ever find again. OriginWaitingKey is deliberately outside this constraint -
+        // that is the whole reason it is a second column - so a matched listing can still say which
+        // search discovered it.
+        //
+        // The pack and barcode rules are here for the same reason, and each is one of issue #923's
+        // criteria: a pack size of zero divides, and a carton barcode with no scope prices one can
+        // at the price of thirty. The mapping's own status/master/source consistency is deliberately
+        // left to ProductPriceTrackingPolicy instead, because expressing it in SQL would hard-code
+        // the status enum's numbers into migration history.
+        listing.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_SupplierListings_OneOwner",
+                @"(""MasterProductId"" IS NOT NULL AND ""WaitingKey"" IS NULL) "
+                    + @"OR (""MasterProductId"" IS NULL AND ""WaitingKey"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_SupplierListings_UnitsPerPackPositive",
+                @"""UnitsPerPack"" IS NULL OR ""UnitsPerPack"" > 0");
+            table.HasCheckConstraint(
+                "CK_SupplierListings_BarcodeAndScopeTogether",
+                @"(""Barcode"" IS NULL AND ""BarcodeScope"" IS NULL) "
+                    + @"OR (""Barcode"" IS NOT NULL AND ""BarcodeScope"" IS NOT NULL)");
+
+            // Issue #937's own pair, on the barcode rule's terms: a number with no unit cannot be
+            // compared with anything, and a unit with no number describes nothing. A size of zero
+            // is refused for the reason a master product's is - it is a denominator.
+            table.HasCheckConstraint(
+                "CK_SupplierListings_SizeAndUnitTogether",
+                @"(""SizeValue"" IS NULL AND ""SizeUnit"" IS NULL) "
+                    + @"OR (""SizeValue"" IS NOT NULL AND ""SizeUnit"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_SupplierListings_SizeValuePositive",
+                @"""SizeValue"" IS NULL OR ""SizeValue"" > 0");
+        });
+
+        listing
+            .HasOne(x => x.SupplierPreset)
+            .WithMany()
+            .HasForeignKey(x => x.SupplierPresetId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        listing
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // The listing's own price state (issue #925): which observation is current, when it was last
+        // checked successfully, and when its price last changed. Three facts rather than one, because
+        // "how old is this price?" and "when did this supplier last move it?" are different
+        // questions, and a daily re-read that finds the same price answers only the first.
+        //
+        // The pointer has no navigation property in either direction, like the supplier's link to its
+        // preset: it is a cursor into an append-only table, not a parent-child graph, and no Include
+        // may pull a listing's whole price history with it. Restrict, because the observation a
+        // listing points at is not something to delete from under it.
+        listing
+            .HasOne<SupplierPriceObservation>()
+            .WithMany()
+            .HasForeignKey(x => x.LatestObservationId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // SupplierListingPriceStatePolicy's rule, in the database too: the observation and the check
+        // instant are recorded together - each is the evidence about the other - and a price that was
+        // never observed cannot have changed. Nothing here clears any of the three: a failed or
+        // missing check leaves the last good price exactly where it was, which is the owner's
+        // constraint of 27 October 2026.
+        listing.ToTable(table => table.HasCheckConstraint(
+            "CK_SupplierListings_PriceStateConsistent",
+            @"((""LatestObservationId"" IS NULL AND ""LastCheckedAtUtc"" IS NULL "
+                + @"AND ""LastPriceChangeAtUtc"" IS NULL) "
+                + @"OR (""LatestObservationId"" IS NOT NULL AND ""LastCheckedAtUtc"" IS NOT NULL))"));
+
+        MarkUtc(listing.Property(x => x.CreatedAtUtc));
+        MarkUtc(listing.Property(x => x.UpdatedAtUtc));
+        MarkUtcNullable(listing.Property(x => x.LastCheckedAtUtc));
+        MarkUtcNullable(listing.Property(x => x.LastPriceChangeAtUtc));
+        MarkUtcNullable(listing.Property(x => x.LastNotFoundAtUtc));
+    }
+
+    private static void ConfigureProductMatchSuggestions(ModelBuilder modelBuilder)
+    {
+        var suggestion = modelBuilder.Entity<ProductMatchSuggestion>();
+
+        suggestion.Property(x => x.WaitingKey)
+            .IsRequired()
+            .HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        suggestion.Property(x => x.SuggestedBrand).HasMaxLength(MasterProductPolicy.MaxBrandLength);
+        suggestion.Property(x => x.SuggestedName).HasMaxLength(MasterProductPolicy.MaxNameLength);
+        suggestion.Property(x => x.SuggestedSizeValue).HasColumnType("decimal(18,3)");
+
+        // A proportion, at the scale ProductMatchSuggestionPolicy accepts. It is money-shaped and is
+        // not money: nothing in this catalogue holds an amount.
+        suggestion.Property(x => x.Confidence).HasColumnType("decimal(5,4)");
+
+        suggestion.Property(x => x.Reason)
+            .IsRequired()
+            .HasMaxLength(ProductMatchSuggestionPolicy.MaxReasonLength);
+        suggestion.Property(x => x.CollectorRun)
+            .IsRequired()
+            .HasMaxLength(ProductMatchSuggestionPolicy.MaxCollectorRunLength);
+        suggestion.Property(x => x.Status).IsRequired();
+
+        // The two reads this table exists for: what has been suggested for a waiting key, and whether
+        // a (waiting key, master product) pair was already refused. Neither is unique - a pair that
+        // was rejected and later proposed again is two rows, and keeping both is the point.
+        suggestion.HasIndex(x => new { x.WaitingKey, x.Status });
+        suggestion.HasIndex(x => new { x.MasterProductId, x.WaitingKey });
+
+        // One proposal per row: an existing master product, or a complete description of a new one,
+        // never both and never neither. Those are two different things to do about one waiting key,
+        // and a row holding both would leave the reviewer of #928 unable to tell which was meant. The
+        // suggested size and the confidence are checked on the same terms as a master product's own
+        // size: a stored value nothing could act on is worse than a refused write.
+        suggestion.ToTable(table =>
+        {
+            table.HasCheckConstraint(
+                "CK_ProductMatchSuggestions_OneProposal",
+                @"(""MasterProductId"" IS NOT NULL "
+                    + @"AND ""SuggestedBrand"" IS NULL AND ""SuggestedName"" IS NULL "
+                    + @"AND ""SuggestedSizeValue"" IS NULL AND ""SuggestedSizeUnit"" IS NULL) "
+                    + @"OR (""MasterProductId"" IS NULL "
+                    + @"AND ""SuggestedBrand"" IS NOT NULL AND ""SuggestedName"" IS NOT NULL "
+                    + @"AND ""SuggestedSizeValue"" IS NOT NULL AND ""SuggestedSizeUnit"" IS NOT NULL)");
+            table.HasCheckConstraint(
+                "CK_ProductMatchSuggestions_SuggestedSizePositive",
+                @"""SuggestedSizeValue"" IS NULL OR ""SuggestedSizeValue"" > 0");
+            table.HasCheckConstraint(
+                "CK_ProductMatchSuggestions_ConfidenceIsAProportion",
+                @"""Confidence"" >= 0 AND ""Confidence"" <= 1");
+        });
+
+        suggestion
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(suggestion.Property(x => x.CreatedAtUtc));
+        MarkUtc(suggestion.Property(x => x.UpdatedAtUtc));
+    }
+
+    private static void ConfigureProductPriceTracking(ModelBuilder modelBuilder)
+    {
+        var tracking = modelBuilder.Entity<ProductPriceTracking>();
+
+        tracking.Property(x => x.WaitingKey)
+            .IsRequired()
+            .HasMaxLength(PriceCatalogueWaitingKey.MaxLength);
+        tracking.Property(x => x.SearchName)
+            .IsRequired()
+            .HasMaxLength(ProductPriceTrackingPolicy.MaxSearchNameLength);
+
+        // Required and possibly empty, which is deliberate: Product.Unit is nullable, and "no unit
+        // label" has to have exactly one stored spelling or one product becomes two searches.
+        tracking.Property(x => x.UnitLabel)
+            .IsRequired()
+            .HasMaxLength(ProductPriceTrackingPolicy.MaxUnitLabelLength);
+        tracking.Property(x => x.Status).IsRequired();
+
+        // One mapping per product, scoped by business for the reason every uniqueness rule over
+        // tenant-owned data is: two businesses may legitimately track the same product, and a global
+        // constraint would let whichever tracked it first deny the other.
+        tracking.HasIndex(x => new { x.BusinessId, x.ProductId }).IsUnique();
+
+        // The master products a business is tracking through, and the waiting keys a work list groups
+        // by. The index on BusinessId alone is ConfigureBusinessOwnership's, added centrally.
+        tracking.HasIndex(x => new { x.BusinessId, x.MasterProductId });
+        tracking.HasIndex(x => x.WaitingKey);
+
+        // On the products' (BusinessId, Id) business key, so a mapping cannot name another business's
+        // product even in principle - the shape every tenant-owned reference to a product and a
+        // machine takes in this schema. Cascade because a mapping is a statement about a product and
+        // has no meaning without it, and because restricting would change what deleting a product
+        // does, which issue #923's last criterion forbids.
+        tracking
+            .HasOne(x => x.Product)
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.ProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Restrict, unlike the product above: a master product businesses are tracking through is not
+        // something to remove from under them, and nulling a mapping would turn a settled match back
+        // into a search without anybody deciding to.
+        tracking
+            .HasOne(x => x.MasterProduct)
+            .WithMany()
+            .HasForeignKey(x => x.MasterProductId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        MarkUtc(tracking.Property(x => x.CreatedAtUtc));
+        MarkUtc(tracking.Property(x => x.UpdatedAtUtc));
+    }
+
+    /// <summary>
+    /// Marks a persisted UTC instant as UTC on the way out. The SQLite provider returns an
+    /// unspecified kind otherwise; see the <c>StockAdjustment.CreatedAt</c> comment below for the
+    /// longer version of why that matters.
+    /// </summary>
+    private static void MarkUtc(
+        Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime> instant) =>
+        instant.HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+    /// <summary>
+    /// The same for an instant that may be absent, where "absent" stays absent rather than becoming
+    /// a UTC-marked default - the shape <c>SupportSession.EndedAtUtc</c> uses.
+    /// </summary>
+    private static void MarkUtcNullable(
+        Microsoft.EntityFrameworkCore.Metadata.Builders.PropertyBuilder<DateTime?> instant) =>
+        instant.HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
 
     /// <summary>
     /// Maps the provider identity of a business, a product and a category (issue #759, parent #329
@@ -1664,6 +3090,14 @@ public class AppDbContext : DbContext
         // SaveChanges, which a constraint cannot express, and the rest are facts an application
         // form records rather than values anything derives from.
         modelBuilder.Entity<Business>().Property(b => b.Status).IsRequired();
+
+        // The state or territory the business trades in (issue #933). Nullable, because no existing
+        // business has one and nothing backfills them, and bounded at the length of the longest
+        // abbreviation. The vocabulary itself is not a schema constraint, for the reason the status
+        // and the member's role carry none: SQLite cannot add a CHECK constraint to an existing
+        // table without rebuilding it, so an undeclared value is refused where it has to be anyway -
+        // BusinessStateEnforcer on SaveChanges, over every write path to a business alike.
+        modelBuilder.Entity<Business>().Property(b => b.State).HasMaxLength(AustralianStates.MaxLength);
 
         // The backfill audit is keyed only by its own id: it records what happened to a table,
         // including runs that assigned rows to the wrong business, so it must stay queryable

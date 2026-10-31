@@ -18,10 +18,17 @@ const SETTINGS: BusinessSettings = {
   contactEmail: 'owner@example.com',
   abn: '51824753556',
   gstRegistered: true,
-  timeZoneId: 'Australia/Sydney'
+  timeZoneId: 'Australia/Sydney',
+  state: 'NSW'
 };
 
-const LEGACY_SETTINGS: BusinessSettings = { ...SETTINGS, contactEmail: null, gstRegistered: null, abn: null };
+const LEGACY_SETTINGS: BusinessSettings = {
+  ...SETTINGS,
+  contactEmail: null,
+  gstRegistered: null,
+  abn: null,
+  state: null
+};
 
 /** What a successful `BusinessService.refresh()` emits; `null` is its "could not be read". */
 const CURRENT_BUSINESS: CurrentBusiness = { name: 'Corner Store', timeZoneId: 'Australia/Brisbane' };
@@ -76,7 +83,7 @@ async function submitForm(harness: Harness): Promise<void> {
 
 /**
  * The Business Settings edit workflow (issue #549), the dedicated feature component the page
- * composes: it edits the five settings issue #548 added, validates and saves them with the
+ * composes: it edits the six settings issues #548 and #933 added, validates and saves them with the
  * application form's own rules, confirms before a time zone change, and refreshes the shell
  * before reporting success.
  */
@@ -91,7 +98,8 @@ describe('BusinessSettingsFormComponent (issue #549)', () => {
       contactEmail: 'owner@example.com',
       abn: '51824753556',
       gstRegistered: true,
-      timeZoneId: 'Australia/Sydney'
+      timeZoneId: 'Australia/Sydney',
+      state: 'NSW'
     });
   });
 
@@ -103,7 +111,9 @@ describe('BusinessSettingsFormComponent (issue #549)', () => {
       contactEmail: '',
       abn: '',
       gstRegistered: null,
-      timeZoneId: 'Australia/Sydney'
+      timeZoneId: 'Australia/Sydney',
+      // Unchosen rather than guessed at, so the field asks for it (issue #933).
+      state: ''
     });
   });
 
@@ -145,8 +155,45 @@ describe('BusinessSettingsFormComponent (issue #549)', () => {
       contactEmail: 'owner@example.com',
       abn: '51824753556',
       gstRegistered: true,
-      timeZoneId: 'Australia/Sydney'
+      timeZoneId: 'Australia/Sydney',
+      state: 'NSW'
     });
+  });
+
+  /**
+   * Issue #933: the state is a field of this form, it is submitted with the rest of the set, and a
+   * business that has recorded none is refused before anything is sent - the same shape as the
+   * contact address and the GST registration.
+   */
+  it('saves a changed state with the rest of the settings', async () => {
+    const save = jest.fn(() => of({ ...SETTINGS, state: 'ACT' }));
+    const harness = await render({ save });
+    harness.fixture.componentInstance.draft.state = 'ACT';
+
+    await submitForm(harness);
+
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ state: 'ACT', timeZoneId: 'Australia/Sydney' }));
+  });
+
+  it('saves nothing while the state of a business that recorded none is unchosen', async () => {
+    const harness = await render({ settings: LEGACY_SETTINGS });
+    harness.fixture.componentInstance.draft.contactEmail = 'owner@example.com';
+    harness.fixture.componentInstance.draft.gstRegistered = true;
+
+    await submitForm(harness);
+
+    expect(harness.save).not.toHaveBeenCalled();
+    expect(byTestId(harness.host, 'error-state')).not.toBeNull();
+  });
+
+  it('offers the eight states and territories, and nothing else', async () => {
+    const { host } = await render({});
+
+    const options = Array.from(host.querySelectorAll<HTMLOptionElement>('#businessState option')).map(
+      (option) => option.value
+    );
+
+    expect(options).toEqual(['', 'NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT']);
   });
 
   it('asks for confirmation before saving a changed time zone, and saves nothing until confirmed', async () => {

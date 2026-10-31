@@ -45,6 +45,33 @@ module.exports = {
           800: '#262626', // headings, values, alert body text
         },
         'md-input-border': '#D2D6DA', // form field borders
+
+        // The public Restockroo landing page (issue #954), from the owner-approved Stitch export
+        // ("Field & Ledger"). `public/landing/` uses this scale and, since issue #972, so do the
+        // Dashboard and the authenticated shell's navigation (sidebar, mobile bottom bar and More
+        // sheet), since issue #996 the Pick List, and since issue #1029 the Add and Edit Purchase pages; no other authenticated page does. The text pairs it is used in are asserted in
+        // `design-tokens.contrast.spec.ts`.
+        rr: {
+          navy: '#0F172A', // headings, values
+          muted: '#475569', // body copy and secondary labels
+          caption: '#64748B', // captions on white or the canvas only
+          canvas: '#FAF8FF', // page ground
+          surface: '#F2F3FF', // dashboard frame and the integration panel
+          'surface-strong': '#EAEDFF', // the dashboard window bar
+          line: '#E2E8F0', // card borders and dividers
+          'line-strong': '#CBD5E1', // secondary button hover border
+          teal: '#0F766E', // primary actions, eyebrow labels, accents
+          'teal-hover': '#115E59',
+          'teal-active': '#134E4A',
+          'teal-tint': '#F0FDFA', // icon tiles and chips
+          'teal-border': '#CCFBF1',
+          'ok-text': '#15803D',
+          'ok-bg': '#DCFCE7',
+          'warn-text': '#B45309',
+          'warn-bg': '#FEF3C7',
+          'danger-text': '#B91C1C',
+          'danger-bg': '#FEE2E2',
+        },
       },
       backgroundImage: {
         'md-dark-gradient': gradient('#42424a', '#191919'),
@@ -76,6 +103,9 @@ module.exports = {
         // Inter is bundled by @fontsource/inter (weights 400/500/600/700, loaded from
         // angular.json). The fallback is the system stack the application used before.
         sans: ['Inter', "'Segoe UI'", 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
+        // The landing page's typeface (issue #954), bundled by @fontsource/hanken-grotesk the same
+        // way Inter is. Only `public/landing/` uses `font-rr`.
+        rr: ["'Hanken Grotesk'", 'Inter', "'Segoe UI'", 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
       },
       fontSize: {
         // Sizes only: line height stays the Tailwind preflight 1.5 so these tokens do not

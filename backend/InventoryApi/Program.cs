@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
+using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.Onboarding;
@@ -18,14 +19,20 @@ using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
+using InventoryApi.Adapters.Subscriptions;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PlatformPlans;
 using Inventory.Application.SupportSessions;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
 using InventoryApi.Auth.ExternalIdentity;
 using InventoryApi.Auth.PlatformAdmin;
+using InventoryApi.Auth.PriceCollector;
+using InventoryApi.Adapters.PriceCatalogue;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Infrastructure.PlatformDiagnostics;
 using Microsoft.AspNetCore.Authorization;
@@ -78,6 +85,36 @@ if (NayaxSaleProductResolutionCommand.Matches(args))
     return await NayaxSaleProductResolutionCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Granting every established business its grandfathered plan is the sixth human-invoked command
+// (issue #966). It is what a person runs before plan enforcement is switched on: it fixes the
+// cutoff, grants the businesses that were already trading, and records the completion marker
+// enforcement waits for. It applies no migration and writes no business's data beyond that one
+// grant, and reaching this branch means the process was started to grandfather plans and will exit
+// when it has.
+if (BusinessPlanGrandfatheringCommand.Matches(args))
+{
+    return await BusinessPlanGrandfatheringCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Reconciling stored attachment files against the records that refer to them is the seventh
+// human-invoked command (issue #968). A document's bytes live outside the database, so the two can
+// drift in three ways the application cannot see from inside; this is the operator's read of that,
+// and it never deletes a file - an apply fills in sizes that were never recorded and nothing else.
+if (AttachmentStorageReconciliationCommand.Matches(args))
+{
+    return await AttachmentStorageReconciliationCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Counting each counted business's connected machines is the eighth, and the first that a schedule
+// rather than a person normally starts (issue #978). It is the daily job of that issue: one bounded
+// pass that records today's snapshot for every business whose plan has its machines counted and that
+// has not been counted yet today. It applies no migration, writes nothing but append-only evidence,
+// and is safe to run twice - the second run records nothing.
+if (ConnectedMachineSnapshotCommand.Matches(args))
+{
+    return await ConnectedMachineSnapshotCommand.RunAsync(args, CancellationToken.None);
+}
+
 // Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
 // something normal startup performs (issue #331). It is callable manually for one-off
 // verification and by the scheduled backup job (issue #333) against the same configured database.
@@ -124,6 +161,14 @@ builder.Services.AddSingleton(configuredPlatformAdmin);
 builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
 builder.Services.AddScoped<IAuthorizationHandler, BusinessCapabilityAuthorizationHandler>();
 
+// The price collector policy (issue #924). It is satisfied only by an app-only token carrying the
+// PriceCollector.Run application role, no delegated scope at all, the configured collector tenant
+// and the configured collector application - never by a business role, a membership row, a support
+// session or anything else a request supplies. With the collector unconfigured, which is the shipped
+// state, it denies everyone. The decision it reads was made in AddInventoryApiAuthentication above,
+// from configuration, before any request existed.
+builder.Services.AddScoped<IAuthorizationHandler, PriceCollectorAuthorizationHandler>();
+
 // Gives the two support-session authorization refusals a body carrying their stable code (issue
 // #551), and leaves every other authorization failure exactly as the framework answers it - a bare
 // 403 that tells a caller nothing about the role matrix. A singleton, because it holds no
@@ -135,6 +180,12 @@ builder.Services.AddAuthorization(options =>
     {
         policy.RequireAuthenticatedUser();
         policy.AddRequirements(new PlatformAdminRequirement());
+    });
+
+    options.AddPolicy(PriceCollectorPolicy.Name, policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.AddRequirements(new PriceCollectorRequirement());
     });
 
     foreach (var capability in Capabilities.All)
@@ -278,6 +329,17 @@ builder.Services.AddScoped<ISupplierPresetAudit, LoggingSupplierPresetAudit>();
 // no field for a business, a member or anything of theirs, because this setting is about none of
 // them.
 builder.Services.AddScoped<IOptionVisibilityAudit, LoggingOptionVisibilityAudit>();
+// The price-catalogue review trail (issue #928): one event per committed decision, and a second one
+// beside it when a price outside the band was accepted on the reviewer's explicit exception. A
+// separate port again, for the same reason as the four above - a different event with different
+// fields, and an entry type with no field for a business, a count of businesses, a supplier name, a
+// listing title or an accepted price, so none of them can reach the trail by a sink's discretion.
+builder.Services.AddScoped<IPriceCatalogueReviewAudit, LoggingPriceCatalogueReviewAudit>();
+// The manual plan grant trail (issue #982): one event per committed create, change or end. A
+// separate port again, on the same terms - a different event with different fields - and its entry
+// type has no field for the administrator's reason text or for any name, so the reason stays in the
+// database row the decision wrote in its own transaction and never reaches a log.
+builder.Services.AddScoped<IPlatformPlanGrantAudit, LoggingPlatformPlanGrantAudit>();
 // What else happens when a business is deactivated (issue #545's hook point): since issue #550, every
 // active support session for that business ends. It is the single registration #545 declared this
 // hook for, replaced here rather than by editing that transition - the hook runs inside the
@@ -295,11 +357,36 @@ builder.Services.AddScoped<IBusinessDeactivationHook, EndSupportSessionsOnBusine
 builder.Services.AddSingleton<ISelfServiceOnboardingFlag>(
     new ConfiguredSelfServiceOnboardingFlag(builder.Configuration));
 
+// Whether plan entitlement is enforced at all (issue #966). Read once here for the reason the
+// onboarding flag above is - only the composition root reads configuration - and published as the
+// Application layer's narrow port so the entitlement GET /api/me/access reports, the startup check
+// below and every later enforcement decision cannot disagree about it. Off unless the setting says
+// otherwise: an absent, blank or unparseable value leaves it off, and while it is off every business
+// is unrestricted. A singleton, because it is one startup decision rather than a per-request one.
+builder.Services.AddSingleton<ISubscriptionEnforcementFlag>(
+    new ConfiguredSubscriptionEnforcementFlag(builder.Configuration));
+
+// How long an issued price collector run stays open (issue #924). Read once here, because only the
+// composition root reads configuration, and published as the Application layer's narrow port so the
+// run that is stored and the expiry the work list publishes cannot disagree. A blank, unparseable or
+// out-of-range value falls back to the owner's six-hour default and logs that it did - never to "no
+// expiry". A singleton, because it is one startup decision rather than a per-request one.
+builder.Services.AddSingleton<IPriceCollectorRunSettings>(serviceProvider =>
+    new ConfiguredPriceCollectorRunSettings(
+        builder.Configuration,
+        serviceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("InventoryApi.Auth.PriceCollector")));
+
+// The local dev server and the production frontend are fixed; a deployment such as the hosted
+// testing environment adds its own frontend's origin with Cors:AdditionalAllowedOrigins, and an
+// invalid entry fails startup here. See BrowserClientOrigins.
+var browserClientOrigins = BrowserClientOrigins.Resolve(builder.Configuration);
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngularDevClient", policy =>
+    options.AddPolicy(BrowserClientOrigins.PolicyName, policy =>
     {
-        policy.WithOrigins("http://localhost:4200", "https://red-island-0c128c000.7.azurestaticapps.net")
+        policy.WithOrigins([.. browserClientOrigins])
               .AllowAnyHeader()
               .AllowAnyMethod()
               // A browser client can read only the response headers a CORS policy exposes, so the
@@ -325,6 +412,12 @@ builder.Services.AddCors(options =>
 if (E2ETestEnvironment.IsEnabled(builder.Environment))
 {
     builder.Services.AddScoped<INayaxLynxClient, E2ETestNayaxLynxClient>();
+
+    // The connected-machine fleet read of issue #978 over that same stub, so this host composes
+    // completely and an E2E run counts the fleet it has: none. Outside this host the registration
+    // comes from AddNayaxLynxClient, which hands the reader the inner typed client rather than the
+    // port it decorates.
+    builder.Services.AddScoped<IConnectedMachineFleetReader, NayaxConnectedMachineFleetReader>();
 }
 else
 {
@@ -411,6 +504,13 @@ var app = builder.Build();
 app.Services.GetRequiredService<ExternalIdAuthenticationDecision>()
     .LogTo(app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.Auth.ExternalIdentity"));
 
+// And one about whether this deployment trusts a scheduled price collector (issue #924), logged for
+// the same reason and on the same terms: the decision was made in the composition root, from
+// configuration, before any request existed, and an unusable section is an error in the log rather
+// than a silently missing surface. It carries identifiers only; this configuration holds no secret.
+app.Services.GetRequiredService<PriceCollectorAuthenticationDecision>()
+    .LogTo(app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.Auth.PriceCollector"));
+
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
 // Production apply pending migrations automatically; any other environment applies nothing and
 // fails closed unless explicitly opted in. A migration failure always stops startup rather than
@@ -429,6 +529,17 @@ using (var scope = app.Services.CreateScope())
     DatabaseSchemaStartup.EnsureSchema(db, app.Environment, app.Configuration, loggerFactory);
 
     TenantOwnershipReadiness.Report(db, loggerFactory);
+
+    // Whether plan enforcement can take effect (issue #966), reported after the schema step because
+    // it reads the grandfathering row the schema step may just have created. It enforces nothing: a
+    // deployment that has switched the setting on without having run the grandfathering command
+    // still treats every business as unrestricted, and this is what says so in the log - with the
+    // missing step named - instead of letting that go unnoticed.
+    await SubscriptionEnforcementStartup.ReportAsync(
+        app.Services.GetRequiredService<ISubscriptionEnforcementFlag>(),
+        scope.ServiceProvider.GetRequiredService<ISubscriptionGrandfatheringStore>(),
+        loggerFactory,
+        CancellationToken.None);
 }
 
 // Isolated end-to-end test data (issue #46). This does nothing at all unless the process was
@@ -466,7 +577,7 @@ if (app.Environment.IsDevelopment())
 // authorization. Uploaded purchase and operating-expense documents are stored outside the
 // web root (see FileSystemDocumentStorage) and are only readable through the [Authorize]d
 // endpoints, so no business document has an anonymous URL.
-app.UseCors("AllowAngularDevClient");
+app.UseCors(BrowserClientOrigins.PolicyName);
 app.UseAuthentication();
 
 // A Super Admin's role preview (issue #720). After authentication, because whether the

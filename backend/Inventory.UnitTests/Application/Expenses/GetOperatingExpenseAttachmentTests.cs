@@ -1,5 +1,6 @@
 using Inventory.Application.Expenses;
 using Inventory.Domain.Expenses;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Machines;
 using Xunit;
 
@@ -27,7 +28,7 @@ public class GetOperatingExpenseAttachmentTests
     {
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
-        var created = await new CreateOperatingExpense(store, documents, new FakeLocalMachineStore()).Handle(Fields(), null, CancellationToken.None);
+        var created = await new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced()).Handle(Fields(), null, CancellationToken.None);
 
         var result = await new GetOperatingExpenseAttachment(store, documents).Handle(created.Record!.Id, CancellationToken.None);
 
@@ -40,7 +41,7 @@ public class GetOperatingExpenseAttachmentTests
         var store = new FakeOperatingExpenseStore();
         var documents = new FakeDocumentStorage();
         var attachment = new ExpenseAttachmentInput("invoice.pdf", 3, () => new MemoryStream([1, 2, 3]));
-        var created = await new CreateOperatingExpense(store, documents, new FakeLocalMachineStore()).Handle(Fields(), attachment, CancellationToken.None);
+        var created = await new CreateOperatingExpense(store, documents, new FakeLocalMachineStore(), FakeAttachmentQuota.NotEnforced()).Handle(Fields(), attachment, CancellationToken.None);
 
         var result = await new GetOperatingExpenseAttachment(store, documents).Handle(created.Record!.Id, CancellationToken.None);
 

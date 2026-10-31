@@ -81,6 +81,8 @@ export const breadcrumbRoutes: readonly BreadcrumbRouteEntry[] = [
   { pattern: '/super-admin/diagnostics', label: 'Platform Diagnostics', parent: SUPER_ADMIN },
   { pattern: '/super-admin/businesses', label: 'Businesses', parent: SUPER_ADMIN },
   { pattern: '/super-admin/supplier-presets', label: 'Supplier Presets', parent: SUPER_ADMIN },
+  { pattern: '/super-admin/price-catalogue-review', label: 'Supplier Price Review', parent: SUPER_ADMIN },
+  { pattern: '/super-admin/master-products', label: 'Master Products', parent: SUPER_ADMIN },
   // "Integrations" since issue #729, matching the sidebar entry, the Admin hub card and the page's
   // own heading: one destination, one name. Its pattern - the URL - is unchanged.
   { pattern: '/admin/nayax-settings', label: 'Integrations', parent: ADMIN },

@@ -103,6 +103,22 @@ run_step "Test model-decision eval runner" \
 run_step "Test Project status sync" \
     node --test "${repo_root}/scripts/sync-project-status.test.mjs"
 
+# Fixture-driven only: the JB Metro lookup's tests never call a supplier's site.
+run_step "Test JB Metro price lookup" \
+    node --test "${repo_root}/scripts/price-collector/jbmetro-lookup.test.mjs"
+
+# Stub-driven only: the collector scripts' tests answer themselves over a loopback HTTP stub and
+# never call Restockroo, Apify or a supplier.
+run_step "Test price collector scripts" \
+    node --test \
+    "${repo_root}/scripts/price-collector/get-work.test.mjs" \
+    "${repo_root}/scripts/price-collector/submit-results.test.mjs" \
+    "${repo_root}/scripts/price-collector/apify-guard.test.mjs" \
+    "${repo_root}/scripts/price-collector/output-schema.test.mjs" \
+    "${repo_root}/scripts/price-collector/pagination.test.mjs" \
+    "${repo_root}/scripts/price-collector/workflow.test.mjs" \
+    "${repo_root}/scripts/price-collector/workflow-contract.test.mjs"
+
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"
 

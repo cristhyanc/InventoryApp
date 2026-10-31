@@ -35,6 +35,7 @@ public class EfPlatformBusinessDirectoryStoreTests
     private static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime AppliedAt = new(2026, 9, 1, 6, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime DecidedAt = new(2026, 10, 12, 3, 30, 0, DateTimeKind.Utc);
+    private static readonly DateTime LastTestedAt = new(2026, 10, 25, 2, 15, 0, DateTimeKind.Utc);
 
     #region The directory read
 
@@ -108,6 +109,43 @@ public class EfPlatformBusinessDirectoryStoreTests
             business => Assert.False(business.NayaxConfigured));
 
         // The ordinary read through the very same context sees nothing, which is what makes the
+        // adapter's single IgnoreQueryFilters statement the whole of the exception.
+        Assert.Empty(await db.BusinessNayaxConnections.ToListAsync());
+    }
+
+    /// <summary>
+    /// The stored connection status travels with the yes/no, for each of the four values, and it is
+    /// read under the same denied scope through the same one widened projection (issue #983). A
+    /// business with no connection row reads <see cref="NayaxConnectionStatus.NotConfigured"/>,
+    /// which is what the absence of that row means - so "nothing stored" and "stored but unusable"
+    /// stay apart here exactly as they do on the row.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionStatus.PendingPermissions)]
+    [InlineData(NayaxConnectionStatus.Ready)]
+    [InlineData(NayaxConnectionStatus.NeedsAttention)]
+    public async Task The_directory_reports_each_businesss_stored_connection_status(
+        NayaxConnectionStatus stored)
+    {
+        await using var fixture = await DirectoryFixture.CreateAsync();
+        await fixture.SeedNayaxConnectionAsync(fixture.TradingBusinessId, stored);
+
+        var db = fixture.DeniedContext();
+        var listed = await new EfPlatformBusinessDirectoryStore(db).ListAsync(CancellationToken.None);
+
+        var trading = listed.Single(business => business.BusinessId == fixture.TradingBusinessId);
+        Assert.Equal(stored, trading.NayaxConnectionStatus);
+        Assert.True(trading.NayaxConfigured);
+
+        Assert.All(
+            listed.Where(business => business.BusinessId != fixture.TradingBusinessId),
+            business =>
+            {
+                Assert.Equal(NayaxConnectionStatus.NotConfigured, business.NayaxConnectionStatus);
+                Assert.False(business.NayaxConfigured);
+            });
+
+        // The ordinary read through the very same context still sees nothing, which is what keeps the
         // adapter's single IgnoreQueryFilters statement the whole of the exception.
         Assert.Empty(await db.BusinessNayaxConnections.ToListAsync());
     }
@@ -624,9 +662,13 @@ public class EfPlatformBusinessDirectoryStoreTests
 
         /// <summary>
         /// One stored Nayax connection, exactly as a save leaves it: a ciphertext that is not the
-        /// token, so a test can also assert that no part of it reaches the directory.
+        /// token, so a test can also assert that no part of it reaches the directory. The status is
+        /// the fixture's one parameter, because what the directory reports about a connection is that
+        /// stored value and nothing else (issue #983).
         /// </summary>
-        public async Task SeedNayaxConnectionAsync(int businessId)
+        public async Task SeedNayaxConnectionAsync(
+            int businessId,
+            NayaxConnectionStatus status = NayaxConnectionStatus.Ready)
         {
             await using var db = TestAppDbContext.Unrestricted(_options);
             db.BusinessNayaxConnections.Add(new BusinessNayaxConnection
@@ -635,8 +677,9 @@ public class EfPlatformBusinessDirectoryStoreTests
                 OperatorId = "2002736764",
                 AccessTokenCiphertext = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"cipher:{Token}")),
                 EncryptionKeyId = "2026-10",
-                Status = NayaxConnectionStatus.Ready,
+                Status = status,
                 CredentialRevision = 1,
+                LastTestedAtUtc = LastTestedAt,
                 UpdatedAtUtc = CreatedAt,
             });
             await db.SaveChangesAsync();

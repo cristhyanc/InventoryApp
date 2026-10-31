@@ -7,6 +7,7 @@ using Inventory.Infrastructure.Persistence;
 using InventoryApi.Controllers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Attachments;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -214,9 +215,9 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
     private static PurchaseDocumentUseCases CreatePurchaseUseCases(AppDbContext db, IDocumentStorage documents)
     {
-        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
         return new PurchaseDocumentUseCases(
-            new UploadPurchase(store, documents, new FakeClock(DateTime.UtcNow)),
+            TestPurchaseUseCases.Upload(store, documents, new FakeClock(DateTime.UtcNow)),
             new GetPurchaseFile(store, documents),
             new DeletePurchase(store, documents));
     }
@@ -232,14 +233,16 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
     private OperatingExpensesController ExpensesController(AppDbContext db)
     {
-        var store = new EfOperatingExpenseStore(db);
+        var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
         var documents = Documents();
         return new OperatingExpensesController(
             new ListOperatingExpenses(store),
             new GetOperatingExpense(store),
             new GetOperatingExpenseAttachment(store, documents),
-            new CreateOperatingExpense(store, documents, new EfLocalMachineStore(db)),
-            new UpdateOperatingExpense(store, documents, new EfLocalMachineStore(db)),
+            new CreateOperatingExpense(
+                store, documents, new EfLocalMachineStore(db), FakeAttachmentQuota.NotEnforced()),
+            new UpdateOperatingExpense(
+                store, documents, new EfLocalMachineStore(db), FakeAttachmentQuota.NotEnforced()),
             new DeleteOperatingExpense(store, documents));
     }
 
@@ -272,6 +275,9 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
 
         Assert.NotNull(purchase);
         Assert.Equal(businessId, purchase.BusinessId);
+        // Non-null because this purchase was uploaded with a document; nullable on the record since
+        // issue #976, where a purchase may have none.
+        Assert.NotNull(purchase.StoredFileName);
         return (purchase.Id, purchase.StoredFileName);
     }
 

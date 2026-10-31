@@ -17,8 +17,10 @@ const business: SuperAdminBusiness = {
   decidedAtUtc: null,
   contactEmail: 'owner@example.com',
   abn: '12345678901',
+  state: 'NSW',
   activeMemberCount: 1,
-  nayaxConfigured: false
+  nayaxConfigured: false,
+  nayaxConnectionStatus: 'NotConfigured'
 };
 
 const member: SuperAdminBusinessMember = {

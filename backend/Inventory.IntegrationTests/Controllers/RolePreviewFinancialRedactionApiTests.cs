@@ -52,9 +52,15 @@ public sealed class RolePreviewFinancialRedactionApiTests
     private const string Sites = "/api/sites";
     private const string StockHistory = "/api/stock-history";
 
-    /// <summary>The figures <c>Dashboard.ViewFinancials</c> governs on a site row (issue #697).</summary>
+    /// <summary>
+    /// The figures <c>Dashboard.ViewFinancials</c> governs on a site row (issue #697, with issue
+    /// #1012's two additive periods under the same rule).
+    /// </summary>
     private static readonly string[] SiteRevenueFields =
-        ["todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue"];
+    [
+        "todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue", "lastWeekRevenue",
+        "monthToDateRevenue",
+    ];
 
     /// <summary>The figures it governs on a machine row (issue #698).</summary>
     private static readonly string[] MachineFinancialFields =
@@ -169,6 +175,14 @@ public sealed class RolePreviewFinancialRedactionApiTests
         Assert.Equal(
             ApiFactory.PreviousComparableWeekSaleValue,
             theirOwn.GetProperty("previousComparableWeekRevenue").GetDecimal());
+        // Issue #1012's two additive periods are real amounts for the administrator's own request,
+        // so the previewed nulls above are withheld figures and not empty periods.
+        Assert.Equal(
+            ApiFactory.PreviousComparableWeekSaleValue,
+            theirOwn.GetProperty("lastWeekRevenue").GetDecimal());
+        Assert.Equal(
+            ApiFactory.TodaysSaleValue + ApiFactory.PreviousComparableWeekSaleValue,
+            theirOwn.GetProperty("monthToDateRevenue").GetDecimal());
         // The restocking figures are the same for both, so the preview removed the revenue and
         // nothing else.
         Assert.Equal(

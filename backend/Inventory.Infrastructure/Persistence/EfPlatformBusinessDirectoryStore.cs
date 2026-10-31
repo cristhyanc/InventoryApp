@@ -1,4 +1,5 @@
 using Inventory.Application.PlatformAdmin;
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -12,27 +13,30 @@ namespace Inventory.Infrastructure.Persistence;
 ///
 /// <para><strong>It is the whole of the Super Admin's business surface, in one file.</strong> Two
 /// tables it reads and writes - businesses and memberships, the structurally non-tenant-owned ones
-/// (docs/architecture.md § Tenant ownership) - and one column of a third that it only ever reads.
+/// (docs/architecture.md § Tenant ownership) - and two columns of a third that it only ever reads.
 /// The request it serves carries a <em>denied</em> <c>BusinessScope</c>: the platform administrator
 /// has no membership anywhere, nothing resolves a business for them, and the tenant query filters
 /// and <c>BusinessOwnershipEnforcer</c> are therefore fully in force over everything else on the
 /// context. No product, purchase, sale, document, report or Nayax credential is reachable here.</para>
 ///
 /// <para><strong>The one bypass, and why it is this narrow.</strong>
-/// <see cref="ListAsync"/> reports whether each business has stored Nayax credentials, and
-/// <c>BusinessNayaxConnection</c> is tenant-owned, so under a denied scope the central filter
+/// <see cref="ListAsync"/> reports whether each business has stored Nayax credentials and how its own
+/// last test left them, and <c>BusinessNayaxConnection</c> is tenant-owned, so under a denied scope
+/// the central filter
 /// <c>!TenantFilteringEnabled || e.BusinessId == CurrentBusinessId</c> matches none of its rows. The
 /// alternatives were all worse: an unscoped <c>AppDbContext</c> in a request path would hand this
 /// adapter every tenant-owned table at once, a second read-only SQLite connection would be a second
 /// cross-business path beside the diagnostics one, and resolving each business into the request
 /// scope in turn would make a platform read impersonate every tenant. What is here instead is a
-/// single <c>IgnoreQueryFilters</c> statement that projects <em>one</em> column -
-/// <c>BusinessId</c>, the ownership key itself, which is not business data - and nothing else: no
-/// operator id, no connection status, no key id, and under no circumstances the token ciphertext.
+/// single <c>IgnoreQueryFilters</c> statement that projects <em>two</em> columns -
+/// <c>BusinessId</c>, the ownership key itself, which is not business data, and <c>Status</c>, the
+/// stored connection status (issue #983, the owner-approved widening of this projection by exactly
+/// that status) - and nothing else: no operator id, no key id, no credential revision, no
+/// last-tested instant, and under no circumstances the token ciphertext.
 /// It is a reviewed exception recorded in AGENTS.md § Unrestricted access is an explicit opt-in and
 /// docs/architecture.md § Super Admin businesses API, and it is the only one: a second
-/// <c>IgnoreQueryFilters</c>, a widened projection or a predicate over a tenant-owned table here is
-/// a boundary change, not an implementation detail.</para>
+/// <c>IgnoreQueryFilters</c>, a further widened projection or a predicate over a tenant-owned table
+/// here is a boundary change, not an implementation detail.</para>
 ///
 /// <para><strong>Every write goes through <c>SaveChanges</c> on tracked entities, deliberately.</strong>
 /// The central enforcers that validate a business row - <see cref="BusinessStatusEnforcer"/>,
@@ -76,12 +80,15 @@ public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirector
                 business.DecidedAtUtc,
                 business.ContactEmail,
                 business.Abn,
+                // The state the application recorded (issue #933): one more column of the same
+                // fixed set of the business's own published details, never a tenant-owned value.
+                business.State,
                 ActiveMemberCount = business.Memberships.Count(membership => membership.IsActive),
             })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var configured = await NayaxConfiguredBusinessIdsAsync(cancellationToken).ConfigureAwait(false);
+        var connectionStatuses = await NayaxConnectionStatusesAsync(cancellationToken).ConfigureAwait(false);
 
         return businesses
             // Pending first, so the queue the Super Admin is here for leads, then by the business's
@@ -97,8 +104,15 @@ public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirector
                 business.DecidedAtUtc,
                 business.ContactEmail,
                 business.Abn,
+                business.State,
                 business.ActiveMemberCount,
-                configured.Contains(business.Id)))
+                connectionStatuses.ContainsKey(business.Id),
+                // A business with no connection row is NotConfigured, which is exactly what the
+                // absence of that row means (issue #983) - never a guess, and never a status a
+                // business with nothing stored could be presented as having.
+                connectionStatuses.TryGetValue(business.Id, out var status)
+                    ? status
+                    : NayaxConnectionStatus.NotConfigured))
             .ToList();
     }
 
@@ -322,24 +336,31 @@ public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirector
     }
 
     /// <summary>
-    /// The business ids that have a stored Nayax connection row at all - the one bypass this
-    /// adapter makes, and the whole of it.
+    /// The stored connection status of every business that has a Nayax connection row at all - the
+    /// one bypass this adapter makes, and the whole of it.
     ///
-    /// <para>It projects the ownership column and nothing else, so what crosses the business
-    /// boundary here is the single fact "credentials exist for this business". The credential
-    /// columns are not in the projection, are not materialised, and do not appear in the generated
-    /// SQL.</para>
+    /// <para>It projects the ownership column and the status column, and nothing else, so what
+    /// crosses the business boundary here is "credentials exist for this business" and "this is how
+    /// its last test left them" (issue #983, the owner-approved widening of this projection by
+    /// exactly that stored status). The credential columns are not in the projection, are not
+    /// materialised and do not appear in the generated SQL: no operator id, no key id, no credential
+    /// revision, no last-tested instant and under no circumstances the token ciphertext.</para>
+    ///
+    /// <para>A business has at most one connection row, enforced by a unique index on the ownership
+    /// column, so the status is read per business rather than chosen between candidates.</para>
     /// </summary>
-    private async Task<HashSet<int>> NayaxConfiguredBusinessIdsAsync(CancellationToken cancellationToken)
+    private async Task<Dictionary<int, NayaxConnectionStatus>> NayaxConnectionStatusesAsync(
+        CancellationToken cancellationToken)
     {
-        var businessIds = await _db.BusinessNayaxConnections
+        var connections = await _db.BusinessNayaxConnections
             .IgnoreQueryFilters()
             .AsNoTracking()
-            .Select(connection => connection.BusinessId)
-            .Distinct()
+            .Select(connection => new { connection.BusinessId, connection.Status })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return [.. businessIds];
+        return connections.ToDictionary(
+            connection => connection.BusinessId,
+            connection => connection.Status);
     }
 }

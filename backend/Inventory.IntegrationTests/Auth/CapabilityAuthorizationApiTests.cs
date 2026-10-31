@@ -86,11 +86,37 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Inventory.Operate", "GET", "/api/stock-history", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/products/1/stock", "Operator,Manager,Owner" },
         { "Inventory.Operate", "POST", "/api/products/1/inventory-count/apply", "Operator,Manager,Owner" },
+        // Issue #938. The "Track supplier prices" switch declares no capability of its own: the
+        // controller's existing Inventory.Operate is the product-edit capability the issue names,
+        // because deciding which of its products a business wants priced is the same day-to-day
+        // catalogue work as the rest of that controller. All three rows are safe to call in both
+        // directions - the two reads change nothing, and the write names a product that does not
+        // exist, so every role that holds the capability is answered 404 and writes nothing.
+        { "Inventory.Operate", "GET", "/api/products/price-tracking", "Operator,Manager,Owner" },
+        { "Inventory.Operate", "GET", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
+        { "Inventory.Operate", "PUT", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
+        // Issue #930. The cheapest-supplier summary is on Dashboard.View, which every role holds:
+        // an observed shelf price is purchasing guidance about a pack nobody has bought, not a
+        // recorded cost, so it is not behind the financial capability that guards what the business
+        // actually paid. It is safe to call in both directions here - the body below carries no
+        // product ids, which the use case refuses with 400 before anything is read.
+        { "Dashboard.View", "POST", "/api/cheapest-suppliers/summary", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/purchases", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/suppliers/1/gst-defaults", "Operator,Manager,Owner" },
+        // Issue #935. The "Available to add" list is a read on the suppliers' own capability: it is
+        // the Suppliers page, and deciding which suppliers this business buys from is purchasing
+        // work. The add beside it declares the same capability and is safe to call here in both
+        // directions, because a platform record with this id does not exist: every role that holds
+        // the capability is answered 404 and writes nothing.
+        { "Purchasing.Operate", "GET", "/api/suppliers/available-presets", "Operator,Manager,Owner" },
+        { "Purchasing.Operate", "POST", $"/api/suppliers/available-presets/{MissingId}", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "GET", "/api/supplierorders", "Operator,Manager,Owner" },
         { "Purchasing.Operate", "POST", "/api/supplierorders", "Operator,Manager,Owner" },
+        // Issue #974's completion preview. It writes nothing and this id is not an order of either
+        // business, so every role that holds the capability is answered 404 - which makes the row
+        // safe to call in both directions, exactly as the "Available to add" add above is.
+        { "Purchasing.Operate", "POST", $"/api/supplierorders/{MissingId}/completion-preview", "Operator,Manager,Owner" },
         { "Suppliers.ManageGstDefaults", "PUT", "/api/suppliers/1/gst-defaults", "Manager,Owner" },
 
         // Issue #681. The product catalogue is Inventory.Operate, but this one action reports the
@@ -164,6 +190,12 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // endpoint stopped being reachable under a read-only capability without any current role's
         // access changing.
         { "Dashboard.View", "POST", "/api/nayax-sales-sync", "Operator,Manager,Owner" },
+
+        // Issue #970. The plan catalogue - every plan's price, storage allowance and
+        // connected-machine terms - is visible to every member, exactly like the price and storage
+        // figures the plan page shows beside it, so it declares Dashboard.View rather than a
+        // narrower capability.
+        { "Dashboard.View", "GET", "/api/me/plan-catalogue", "Operator,Manager,Owner" },
     };
 
     /// <summary>
@@ -194,6 +226,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // Issue #548. Only the refusal direction: the allowed direction would rename the shared
         // fixture's business and move its time zone, which every other row here reads.
         { "Business.Manage", "PUT", "/api/business/settings", false, "Operator,Manager" },
+
 
         // Issue #537. Only the refusal direction: the re-test authenticates to Nayax with whatever
         // this host's connection holds, and this fixture substitutes no check runner, so the
@@ -279,6 +312,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
     [InlineData("/api/site-commissions/agreements", "Manager,Owner")]
     [InlineData("/api/settings/nayax-processing-fee-rates", "Owner")]
     [InlineData("/api/business/settings", "Owner")]
+    [InlineData("/api/me/plan-catalogue", "Operator,Manager,Owner")]
     public async Task A_role_that_holds_the_capability_is_answered_normally(string route, string rolesThatHoldIt)
     {
         await _factory.SeedAsync();

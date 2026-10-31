@@ -1,3 +1,4 @@
+using Inventory.Domain.Subscriptions;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
@@ -86,20 +87,94 @@ public class BusinessOwnershipCoverageTests
     /// key the row could carry and no filter a business could match it by. One row, one boolean, and
     /// nothing about anybody's data.</para>
     ///
+    /// <para><see cref="MasterProduct"/>, <see cref="SupplierListing"/> and
+    /// <see cref="ProductMatchSuggestion"/> are the third, fourth and fifth, and the reviewed
+    /// ownership decision on issue #923 (parent #817). The structural reason is the same for all
+    /// three and is the whole point of the parent issue: a product is looked up at a supplier
+    /// <em>once</em> for every business, so a brand, a name, a size, a supplier's shelf and a
+    /// matcher's opinion about them are facts about products and about no business at all. None of
+    /// them has a <c>BusinessId</c> to carry, and a <see cref="ProductMatchSuggestion"/> in
+    /// particular names a folded product description rather than the business whose product produced
+    /// it - which is what keeps one business from being able to learn that another is tracking
+    /// anything. What a business has instead is its own tenant-owned
+    /// <see cref="ProductPriceTracking"/> row, which is asserted to be owned in
+    /// <see cref="The_named_entity_is_business_owned"/> below. See docs/architecture.md § Supplier
+    /// price catalogue.</para>
+    ///
+    /// <para><see cref="PriceCollectorRun"/> and <see cref="SupplierPriceObservation"/> are the sixth
+    /// and seventh, and the reviewed ownership decision on issue #925 (parent #817). The structural
+    /// reason is the one above, one step further on: a product is looked up at a supplier once for
+    /// every business, so <em>what that supplier charged</em>, and the run that read it, are facts
+    /// about that supplier's shelf and about no business either. Neither has a <c>BusinessId</c> to
+    /// carry, and an observation names the listing it is a price of rather than anybody who wanted
+    /// that price - which is what keeps one business from learning that another is tracking anything.
+    /// What a business does with those prices is its own <see cref="ProductPriceTracking"/> mapping
+    /// and the comparison the summary of #930 will run for it. See docs/architecture.md § Supplier
+    /// price observations and comparison.</para>
+    ///
+    /// <para><see cref="PriceCollectorWorkItem"/> is the eighth, and the reviewed ownership decision on
+    /// issue #924 (parent #817). The structural reason is the same again: one issued piece of work is
+    /// a product description - a master product, or the folded search text of one nothing has matched
+    /// yet - and a supplier's shelf, so it is about no business either. There is no
+    /// <c>BusinessId</c> to carry and no business the work could be attributed to; what a business has
+    /// instead is still its own tenant-owned <see cref="ProductPriceTracking"/> mapping, and the
+    /// collector that reads the work list cannot learn which business any mapping came from. See
+    /// docs/architecture.md § Collector work list.</para>
+    ///
+    /// <para><see cref="PriceCollectorResultRow"/> and
+    /// <see cref="SupplierListingPendingObservation"/> are the ninth and tenth, and the reviewed
+    /// ownership decision on issue #937 (parent #817), whose own "Migration, data and deployment
+    /// impact" declares an additive platform table if a separate pending store were needed. The
+    /// structural reason is the one above, one step further on again: a reading a collector
+    /// submitted, the decision this application made about it, and a reading that was held back
+    /// rather than priced are all facts about a supplier's shelf and about no business. A result
+    /// row names the run, the issued work item and the supplier's own product id - a product
+    /// description and a shelf, never anybody who wanted the search - and a held reading names the
+    /// listing it is a reading of. Neither has a <c>BusinessId</c> to carry. See
+    /// docs/architecture.md § Collector results.</para>
+    ///
+    /// <para><see cref="SubscriptionGrandfathering"/> is the eleventh, and the reviewed ownership
+    /// decision on issue #966, whose own "Migration, data and deployment impact" declares an additive
+    /// table for the grandfathering record. The structural reason is the one
+    /// <see cref="PlatformOptionVisibility"/> states: the step runs <em>once, over every business</em>,
+    /// so its cutoff instant and its completion marker are one answer for the whole application and
+    /// there is no business whose key the row could carry or whose filter could match it. What the
+    /// step writes <em>per business</em> is an ordinary tenant-owned <see cref="BusinessPlanGrant"/>
+    /// row, stamped and filtered centrally with nothing added - and that row, with
+    /// <see cref="BusinessBillingSubscription"/> beside it, is asserted to be owned in
+    /// <see cref="The_named_entity_is_business_owned"/> below. It is also the one platform table no
+    /// request writes at all: its writer is the human-run <c>grandfather-business-plans</c> command,
+    /// and the per-request read of the completion marker is bounded to that one marker. See
+    /// docs/architecture.md § Business subscriptions and plan entitlements.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
-    /// by the ownership mechanism, because there is no ownership here to enforce. Reading is the same
-    /// for <see cref="SupplierPreset"/>, whose list no business endpoint knows exists. Issue #873's
-    /// one boolean is the single documented exception: <c>GET /api/me/access</c> publishes it to every
-    /// member, because an option the application switched off has to stop being offered to the people
-    /// it was switched off for. That read reaches this one column and nothing else - see AGENTS.md
-    /// § Tenant ownership and data isolation and docs/architecture.md § Switchable Admin option
-    /// visibility.</para>
+    /// by the ownership mechanism, because there is no ownership here to enforce. <strong>Reading has
+    /// two documented exceptions, each reviewed on its own issue.</strong> Issue #873's one boolean:
+    /// <c>GET /api/me/access</c> publishes it to every member, because an option the application
+    /// switched off has to stop being offered to the people it was switched off for, and that read
+    /// reaches one column and nothing else. And issue #935's "Available to add" suppliers:
+    /// <c>GET /api/suppliers/available-presets</c> publishes the id, name and website of the enabled
+    /// <see cref="SupplierPreset"/> rows that serve the caller's own business's state and that it
+    /// holds no copy of, so a record the platform added later is offered to a business rather than
+    /// pushed into it. Neither read takes a caller-supplied filter, and neither publishes anything
+    /// about any business - see AGENTS.md § Tenant ownership and data isolation,
+    /// docs/architecture.md § Switchable Admin option visibility and § Supplier records by business
+    /// state.</para>
     /// </summary>
     private static readonly HashSet<Type> PlatformEntities =
     [
         typeof(SupplierPreset),
         typeof(PlatformOptionVisibility),
+        typeof(MasterProduct),
+        typeof(SupplierListing),
+        typeof(ProductMatchSuggestion),
+        typeof(PriceCollectorRun),
+        typeof(SupplierPriceObservation),
+        typeof(PriceCollectorWorkItem),
+        typeof(PriceCollectorResultRow),
+        typeof(SupplierListingPendingObservation),
+        typeof(SubscriptionGrandfathering),
     ];
 
     /// <summary>
@@ -124,14 +199,29 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are two, each
-    /// added by its own reviewed issue - the supplier presets (#848) and the option-visibility
-    /// setting (#873) - and a third one arriving is the change this assertion exists to make visible.
+    /// about no business is a tenancy decision, not an implementation detail. There are eleven, each
+    /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
+    /// (#873), the shared price catalogue's master products, supplier listings and match suggestions
+    /// (#923), the collector runs and observed prices of #925, the collector work items of #924, the
+    /// submitted result rows and held readings of #937, and the subscription grandfathering record of
+    /// #966 - and a twelfth one arriving is the change this assertion exists to make visible.
     /// </summary>
     [Fact]
-    public void Exactly_two_entities_are_declared_platform_tables() =>
+    public void Exactly_eleven_entities_are_declared_platform_tables() =>
         Assert.Equal(
-            ["PlatformOptionVisibility", "SupplierPreset"],
+            [
+                "MasterProduct",
+                "PlatformOptionVisibility",
+                "PriceCollectorResultRow",
+                "PriceCollectorRun",
+                "PriceCollectorWorkItem",
+                "ProductMatchSuggestion",
+                "SubscriptionGrandfathering",
+                "SupplierListing",
+                "SupplierListingPendingObservation",
+                "SupplierPreset",
+                "SupplierPriceObservation",
+            ],
             PlatformEntities
                 .Select(type => type.Name)
                 .Order(StringComparer.Ordinal)
@@ -283,6 +373,135 @@ public class BusinessOwnershipCoverageTests
                 + "platform-admin request, which resolves no business, so a filter comparing the "
                 + "current business would match none of its rows (docs/architecture.md § Support "
                 + "sessions).");
+    }
+
+    /// <summary>
+    /// Exactly two foreign keys point from a tenant-owned table at a platform table: issue #934's,
+    /// where a business's <see cref="Supplier"/> records which <see cref="SupplierPreset"/> it was
+    /// copied from, and issue #923's, where a business's <see cref="ProductPriceTracking"/> records
+    /// which shared <see cref="MasterProduct"/> its product is.
+    ///
+    /// <para>They are accepted here <strong>by name</strong> rather than by exception, because each is
+    /// a tenancy decision and not an implementation detail. What makes them safe is what they do
+    /// <em>not</em> do: the referencing row is still tenant-owned, filtered and stamped exactly as
+    /// before; the platform row is still about no business; nothing is read back out of the business;
+    /// and the key is <c>Restrict</c>, so the platform cannot delete a row a business depends on and
+    /// nothing is cascaded or nulled into a business's data. A <em>third</em> such key, or one in the
+    /// other direction - a platform table referencing a tenant-owned one, which would give a row about
+    /// no business a dependency on one business's data - is a decision somebody has to make here.</para>
+    /// </summary>
+    [Fact]
+    public void Exactly_two_foreign_keys_run_from_tenant_owned_data_to_a_platform_table()
+    {
+        var model = BuildModel();
+
+        var crossing = model
+            .GetEntityTypes()
+            .Where(entityType => typeof(IBusinessOwned).IsAssignableFrom(entityType.ClrType))
+            .SelectMany(entityType => entityType.GetForeignKeys())
+            .Where(key => PlatformEntities.Contains(key.PrincipalEntityType.ClrType))
+            .ToArray();
+
+        var described = crossing
+            .Select(key =>
+                $"{key.DeclaringEntityType.ClrType.Name}({string.Join(", ", key.Properties.Select(p => p.Name))})"
+                    + $" -> {key.PrincipalEntityType.ClrType.Name} {key.DeleteBehavior}")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            [
+                "ProductPriceTracking(MasterProductId) -> MasterProduct Restrict",
+                "Supplier(SupplierPresetId) -> SupplierPreset Restrict",
+            ],
+            described);
+
+        // Optional, so a supplier the business created itself carries no link at all - the normal
+        // case, and the one the lock rules read as "this row is the business's own" - and a mapping
+        // still waiting for a match names no master product.
+        Assert.All(crossing, key => Assert.All(key.Properties, property => Assert.True(property.IsNullable)));
+    }
+
+    /// <summary>
+    /// And nothing points the other way. A platform table is about no business, so a key from one
+    /// into tenant-owned data would make a shared row depend on a single business's data - and would
+    /// be unwritable under the denied scope the platform-admin surface carries.
+    /// </summary>
+    [Fact]
+    public void No_platform_table_references_tenant_owned_data()
+    {
+        var model = BuildModel();
+
+        var offenders = PlatformEntities
+            .Select(type => model.FindEntityType(type)!)
+            .SelectMany(entityType => entityType.GetForeignKeys())
+            .Where(key => typeof(IBusinessOwned).IsAssignableFrom(key.PrincipalEntityType.ClrType))
+            .Select(key => $"{key.DeclaringEntityType.ClrType.Name} -> {key.PrincipalEntityType.ClrType.Name}")
+            .ToArray();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>
+    /// The one copy per preset per business rule of issue #934, asserted in the model: a filtered
+    /// unique index led by <c>BusinessId</c>. Led by it because two businesses legitimately hold a
+    /// copy of the same preset, and filtered because every unlinked supplier would otherwise
+    /// collide with every other one.
+    /// </summary>
+    [Fact]
+    public void A_business_may_hold_only_one_copy_of_each_supplier_preset()
+    {
+        var supplier = BuildModel().FindEntityType(typeof(Supplier))!;
+
+        var unique = Assert.Single(supplier.GetIndexes().Where(index => index.IsUnique));
+
+        Assert.Equal(
+            [nameof(IBusinessOwned.BusinessId), nameof(Supplier.SupplierPresetId)],
+            unique.Properties.Select(property => property.Name).ToArray());
+        Assert.Equal(@"""SupplierPresetId"" IS NOT NULL", unique.GetFilter());
+    }
+
+    /// <summary>
+    /// A business holds at most one <em>grandfathered</em> grant (issue #966), as a filtered unique
+    /// index led by the business key: led by it because two businesses legitimately hold one each,
+    /// and filtered because the complimentary grants of #982 are a list rather than a single row.
+    ///
+    /// <para>The filter is SQL, so it carries the source's numeric value as a literal. This test is
+    /// what pins that literal to the declared enum: renumbering
+    /// <see cref="ManualPlanGrantSource.Grandfathered"/> would otherwise leave an index filtered on a
+    /// value nothing writes, which would silently stop refusing a second grandfathered grant.</para>
+    /// </summary>
+    [Fact]
+    public void A_business_may_hold_only_one_grandfathered_plan_grant()
+    {
+        var grant = BuildModel().FindEntityType(typeof(BusinessPlanGrant))!;
+
+        var unique = Assert.Single(grant.GetIndexes().Where(index => index.IsUnique));
+
+        Assert.Equal(
+            [nameof(IBusinessOwned.BusinessId), nameof(BusinessPlanGrant.Source)],
+            unique.Properties.Select(property => property.Name).ToArray());
+        Assert.Equal(
+            FormattableString.Invariant($@"""Source"" = {(int)ManualPlanGrantSource.Grandfathered}"),
+            unique.GetFilter());
+    }
+
+    /// <summary>
+    /// And a business holds at most one billing subscription, as a unique index on the business key
+    /// itself - so "the business's subscription" has one answer rather than being whichever row a
+    /// read happened to return first.
+    /// </summary>
+    [Fact]
+    public void A_business_may_hold_only_one_billing_subscription()
+    {
+        var subscription = BuildModel().FindEntityType(typeof(BusinessBillingSubscription))!;
+
+        var unique = Assert.Single(subscription.GetIndexes().Where(index => index.IsUnique));
+
+        Assert.Equal(
+            [nameof(IBusinessOwned.BusinessId)],
+            unique.Properties.Select(property => property.Name).ToArray());
+        Assert.Null(unique.GetFilter());
     }
 
     private static IModel BuildModel()
@@ -442,6 +661,15 @@ public class BusinessOwnershipCoverageTests
     [InlineData(typeof(ImportedDevicePayment))]
     [InlineData(typeof(ImportedFee))]
     [InlineData(typeof(ImportedPaymentMethod))]
+    // The one tenant-owned table of the shared price catalogue (issue #923): the three tables beside
+    // it are about products and are declared in PlatformEntities above, and this one is a business
+    // saying it wants one of its own products priced - which is exactly what tenant ownership is for.
+    [InlineData(typeof(ProductPriceTracking))]
+    // The two tenant-owned halves of the business subscription state (issue #966): the plan a
+    // business paid for and the plans a person granted it are facts about that one business, while
+    // the grandfathering record beside them is about none and is declared in PlatformEntities above.
+    [InlineData(typeof(BusinessBillingSubscription))]
+    [InlineData(typeof(BusinessPlanGrant))]
     public void The_named_entity_is_business_owned(Type entityType)
     {
         Assert.True(

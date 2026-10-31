@@ -21,7 +21,7 @@ function configureRouter(reportsViewGranted: boolean): void {
       provideRouter(routes),
       { provide: MsalGuard, useValue: { canActivate: () => true } },
       { provide: AccountStateService, useValue: { state$: of({ status: 'known', accountState: MEMBER }) } },
-      { provide: AccessService, useValue: { allowsAny: () => of(reportsViewGranted) } }
+      { provide: AccessService, useValue: { allowsAny: () => of(reportsViewGranted), allowsPlanFeature: () => of(true) } }
     ]
   });
 }

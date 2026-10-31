@@ -10,9 +10,11 @@ import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { ToastService } from '../../services/toast.service';
 import { Product, ReorderAlertListing } from '../../models/models';
 import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
+import { SupplierPriceBasis } from '../../models/cheapest-supplier';
 
 /**
  * Products → Needs Ordering: the Google search link on the product name, the removed Price and
@@ -121,6 +123,13 @@ async function render(
       { provide: SupplierService, useValue: { getAll: () => of([]) } },
       { provide: SupplierOrderService, useValue: { create: jest.fn(() => of(undefined)) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries } },
+      // The observed Cheapest supplier column (issue #930) is a separate read with its own specs;
+      // here it answers "no product is tracked" so these purchase-cost assertions are about the
+      // purchase-cost columns alone.
+      {
+        provide: CheapestSupplierService,
+        useValue: { getSummary: () => of({ displayBasis: SupplierPriceBasis.InclusiveOfGst, products: [] }) }
+      },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: AccessService, useValue: { allows: () => of(options.canViewFinancials ?? true) } }

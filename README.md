@@ -4,9 +4,15 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A supplier that came from the platform's supplier list keeps that list's name and website, cannot be deleted, and can be marked **Not used** to keep it out of the pickers; a business receives the ones that serve the state it trades in, picks up more when it changes state, and can add any other that serves it in one click from **Available to add** (see [Suppliers from the platform list](#suppliers-from-the-platform-list)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
-- Purchases, their supporting documents, supplier orders, and stock movements.
+- Purchases, their supporting documents, supplier orders, and stock movements. A purchase's receipt is
+  **optional**, and one can be added to a purchase that has none later, so running out of somewhere to put a
+  receipt never stops you recording what you bought (see [A purchase without a
+  receipt](#a-purchase-without-a-receipt)). Recording the final delivery
+  against a supplier order that arrived short offers, before anything is saved, a choice between keeping the
+  order open and completing it with the remainder undelivered (see [Receiving a supplier order: keep it open,
+  or complete it](#receiving-a-supplier-order-keep-it-open-or-complete-it)).
 - Sites, vending machines, product assignments, and machine refills.
 - A **home dashboard reminder when machine restock sync is behind** (see [Machine restock sync reminder](#machine-restock-sync-reminder)): Sync Restock is something an operator asks for, so the dashboard says which Nayax-linked machines have not had a successful restock sync in the last three business days, or still have restock events waiting to be reviewed.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -17,7 +23,8 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports; **Bookkeeping is the one consolidated financial summary report** (issue #806 retired the separate Reporting Dashboard page once Bookkeeping covered its distinct figures; the old address now redirects to Bookkeeping, filters and all). Monthly Bookkeeping reports its own sales volume too — the number of completed transactions in the selected dates and machine scope, and the average sale over them; both figures follow the same date and machine filters as the rest of the report, appear in its CSV/XLSX export, and show their availability state rather than a zero when provider data does not cover the period. Monthly Bookkeeping also reconciles the reimbursement it expects — the period's card sales less the Nayax fees including GST — against the reimbursement an imported Nayax settlement actually recorded for that period, showing the signed difference and a Reconciled, Needs Review or Pending status (pending until a settlement import covers the period), with the same tolerance, filters, CSV/XLSX columns and availability labelling as the rest of the report; the calculated expectation stays separate from the imported actual and from the existing net reimbursement figure.
 - CSV/XLSX exports that use the same backend calculations as the UI.
 - Microsoft Entra sign-in and delegated-scope API authorization (see [Authentication configuration](#authentication-configuration)).
-- Owner-only business settings — name, contact email, ABN, GST registration and time zone, with a confirmation before a time zone change (see [Business settings (Admin page)](#business-settings-admin-page)).
+- Owner-only business settings — name, contact email, ABN, GST registration, time zone and the Australian state or territory the business trades in, with a confirmation before a time zone change (see [Business settings (Admin page)](#business-settings-admin-page)).
+- A **Plan page** every member can reach: the business's current plan, its attachment storage and connected-machine standing, and the Free/Starter/Pro comparison from the server's own catalogue (see [The Plan page](#the-plan-page-issue-970)).
 
 ## Technology
 
@@ -152,6 +159,29 @@ own setting: the running API reads the same `DocumentStorage:Provider`, so switc
 persistently would move live document reads to the container before anything had been copied or
 verified.
 
+### Reconciling attachment storage against the records (issue #968)
+
+A document's bytes live outside the database, so storage and records can disagree in three ways
+that nothing inside the application can see. `reconcile-attachment-storage` is the operator's read
+of that, per business, against whichever storage the deployment is configured with:
+
+```bash
+dotnet run --project backend/InventoryApi -- reconcile-attachment-storage --dry-run
+dotnet run --project backend/InventoryApi -- reconcile-attachment-storage --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll reconcile-attachment-storage --dry-run` /
+`--apply` instead. Exactly one of the two flags must be given; a dry run writes nothing.
+
+It reports, for each business, the records whose file is **missing**, the records whose attachment
+size was **never recorded**, and the stored files **no record refers to**. An `--apply` writes one
+thing and one thing only: a size filled in from the stored file itself. **It never deletes
+anything** — an orphan file is reported for a human to decide about, because deleting a business's
+receipt cannot be undone — and it never guesses: a size that cannot be read from storage stays
+unknown and is reported as a missing file. It exits `0` when nothing needs attention and `1` when
+something does, so an apply can be gated on a clean dry run. Running it again is safe and changes
+nothing new.
+
 The dry run writes nothing and reports what an apply would do. An apply copies each document to
 `tenants/{businessId}/purchases|expenses/{storedFileName}`, where the business is read from the
 record that owns the document, and verifies the copy by size and SHA-256 before counting it as
@@ -236,6 +266,82 @@ so re-running one writes nothing and can never move a sale off a product it alre
 [docs/architecture.md § The sale's own product](docs/architecture.md#the-sales-own-product-issue-758)
 for the model, the migration steps and what the failure gate guarantees.
 
+#### Grandfathering existing businesses onto Pro
+
+[Business plans](#business-plans-free-starter-and-pro) are enforced only once a human has run this
+command and it has recorded its completion marker (issue #966). It gives every business that was
+already trading a **Pro grant with no end date**, so switching enforcement on cannot downgrade a
+business that is using the application today:
+
+```bash
+dotnet run --project backend/InventoryApi -- grandfather-business-plans --dry-run
+dotnet run --project backend/InventoryApi -- grandfather-business-plans --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll grandfather-business-plans --dry-run` /
+`--apply` instead. `--apply` must be typed explicitly; neither flag is a dry run, both together are
+refused, and there is **no flag for a cutoff, a plan or a business** — a command line that could
+name a business would be a way to grant Pro to one that was not entitled to it.
+
+- **The cutoff is recorded once and never moves.** The first apply fixes it from the clock before
+  any grant is written; every later run reads it back and grants by it. A dry run records nothing
+  and reports the instant an apply would fix.
+- **Eligible:** a business created before the cutoff whose status at the cutoff was Active or
+  Deactivated — trading, or offboarded after having traded. **Not eligible:** a pending or rejected
+  application, anything created at or after the cutoff, and an application that was *decided* at or
+  after the cutoff, which is how a pending application approved later still starts on Free even when
+  the command is run again afterwards.
+- **Safe to rerun.** Each business's grant is one transaction that inserts only if that business
+  holds no grandfathered grant, with a unique index underneath it, and the completion marker is
+  written last. An interrupted run therefore leaves some businesses granted, the cutoff fixed and
+  **nothing enforced** — rerunning finishes the rest by the same cutoff. A run after completion
+  changes nothing and says so. A grant's end date, if an owner sets one later, survives a rerun
+  untouched.
+- The dry run lists every business with the rule's decision about it and writes nothing at all; the
+  apply lists what it granted, what already held a grant, and whether the completion marker was
+  written. Neither prints a business name, a member or a credential.
+
+It is independent of `Subscriptions__EnforcementEnabled` — this is the step run *before* enforcement
+is switched on — and it writes nothing but those grants and its own record: no business's status, no
+billing subscription and nothing else a business owns.
+
+**Do not run this against production from this description.** See
+[docs/architecture.md § Business subscriptions and plan entitlements](docs/architecture.md#business-subscriptions-and-plan-entitlements-issue-966)
+for the state model, the entitlement rule and the rollout order.
+
+Granting a plan to **one** business - a trial, a pilot site or a complimentary plan, without billing
+it - is the Super Admin's separate action on the Businesses page, described under
+[Super Admin businesses API](#super-admin-businesses-api).
+
+#### Recording each business's connected-machine count
+
+The daily job of issue #978. It records today's connected-machine count for every business whose plan
+has its machines counted and that has not been counted yet today — the dated evidence the extra-machine
+billing of issue #969 is charged from (see
+[Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)):
+
+```bash
+dotnet run --project backend/InventoryApi -- snapshot-connected-machines
+```
+
+On a deployed application use `dotnet InventoryApi.dll snapshot-connected-machines` instead.
+
+- **It takes no arguments at all** — no business, date, account series, count or limit. Which
+  businesses are counted is the plan records' answer, the day comes from the clock, and the account
+  series comes from each business's own stored connection.
+- **It is bounded and makes at most one Nayax call per business**: at most 100 fleet reads per run,
+  and reaching that bound is reported and logged. A business whose plan is not counted, whose Nayax
+  connection cannot be used, or that has already been counted today costs no call at all.
+- **Safe to run twice.** A second run on the same day records nothing. A business whose read failed is
+  logged, nothing is stored for it, and the next run is the retry; its last complete count remains and
+  is reported as stale with its age.
+- **It applies no migration** and refuses to run against a schema with pending ones. Exit code `0`
+  when the run completed, `1` when it was refused or any business's attempt failed.
+- **Most counts come from ordinary use of the application**: a complete fleet read any page already
+  makes records that day's count, so this job only tops up the businesses nothing read the fleet for.
+  **Putting it on a schedule is a deliberate operator step** — the same App Service WebJob mechanism as
+  the [database backup](#database-backup-and-restore) — and is not configured by this release.
+
 ### 2. How the frontend finds the API
 
 Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.
@@ -253,9 +359,11 @@ Open <http://localhost:4200>. The `start` script builds the Tailwind stylesheet 
 
 ### 4. Sign in
 
-The application requires a Microsoft Entra sign-in. Click **Sign in** in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
+Opening the application signed out shows the public Restockroo landing page at `/` (see [The public landing page](#the-public-landing-page) below); everything else requires a Microsoft Entra sign-in. Click **Sign in** on the landing page or in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route except the landing page requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
 
-A deployment that has a customer identity tenant configured offers a choice first, on the public `/sign-in` page: **Continue with Google or an email address** or **Sign in with a Microsoft work account** — see [Signing in with Google](#signing-in-with-google-issue-711) and [Signing in with an email address and password](#signing-in-with-an-email-address-and-password-issue-712) below. With no such tenant configured, which is the state in source control, nothing changes: **Sign in** redirects straight to the workforce authority with no extra page and no extra click.
+A deployment that has a customer identity tenant configured offers a choice first, on the public `/sign-in` page: **Continue with Google or email** or **Sign in with a Microsoft account** — see [Signing in with Google](#signing-in-with-google-issue-711) and [Signing in with an email address and password](#signing-in-with-an-email-address-and-password-issue-712) below. With no such tenant configured, which is the state in source control, nothing changes: **Sign in** redirects straight to the workforce authority with no extra page and no extra click.
+
+Since issue #957 `/sign-in` is drawn like the landing page, in the public layout with no application sidebar or header: a Restockroo header linked to `/home`, a **Back to home** link, and one card headed **Sign in to Restockroo**. Google and email stay one action because they are one Microsoft-hosted flow, where creating an account and resetting a password also happen. The card keeps the warning visible that each sign-in method is a separate account, which does not share business access with the others, so an existing user should sign in the way they did before. The longer verification-code and password-reset help is in a **Help with verification codes and passwords** section that opens on demand. Only the presentation changed: the authorities offered, the redirect each action starts, the return destination and the error handling are the same.
 
 ## Authentication configuration
 
@@ -297,7 +405,7 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 
 Google sign-in is the **hosted** customer identity journey: the SPA redirects to the configured External ID tenant's own sign-up/sign-in user flow, where a human has enabled Google as a built-in identity provider, and the API receives a token that *tenant* issued. The application never talks to Google, never exchanges a Google ID token, sends no provider hint or query parameter of its own, and reads nothing from the upstream Google subject — the actor is the validated `(tid, oid)` pair exactly as for every other sign-in. Design: [docs/identity-provider-decision.md](docs/identity-provider-decision.md) § 4 journey C and § 9; boundary: [docs/architecture.md § The sign-in choice and the Google journey](docs/architecture.md#the-sign-in-choice-and-the-google-journey-issue-711).
 
-**What a person sees.** With a customer identity tenant configured, a signed-out visitor reaches the public `/sign-in` page instead of being redirected automatically — the authority has to be chosen explicitly, once, before any redirect — and it offers the customer identity action, **Continue with Google or an email address** since issue #712 added the local journey to the same hosted flow, beside **Sign in with a Microsoft work account**. The choice is remembered in `localStorage`, so a reload, a new tab and a token refresh go back to the authority that issued the session; signing out forgets it, so the next person chooses again. Each tab pins its own snapshot of that choice for as long as it is open, so a second tab changing it cannot alter the authority this tab is already signing in against. A cancelled or failed hosted sign-in returns to `/sign-in` with the reason and the same two choices and starts no further redirect by itself. The page the visitor originally asked for is carried across in the tab's `sessionStorage` and handed to MSAL as the redirect start page; it comes from the router state, never from a URL parameter, and an absolute, protocol-relative, `/auth` or `/sign-in` destination is refused. **It survives a cancelled or failed attempt**, so pressing an action again returns the person to the page they were going to — an invite acceptance page included — rather than to the dashboard; it is released when a sign-in completes, and trying again never extends its 15-minute window.
+**What a person sees.** With a customer identity tenant configured, a signed-out visitor reaches the public `/sign-in` page instead of being redirected automatically — the authority has to be chosen explicitly, once, before any redirect — and it offers the customer identity action, **Continue with Google or email** (named for both journeys since issue #712 added the local journey to the same hosted flow, and shortened by issue #957), beside **Sign in with a Microsoft account** (a work, school or personal Microsoft account: the `common` authority's app registrations accept all three). The choice is remembered in `localStorage`, so a reload, a new tab and a token refresh go back to the authority that issued the session; signing out forgets it, so the next person chooses again. Each tab pins its own snapshot of that choice for as long as it is open, so a second tab changing it cannot alter the authority this tab is already signing in against. A cancelled or failed hosted sign-in returns to `/sign-in` with the reason and the same two choices and starts no further redirect by itself. The page the visitor originally asked for is carried across in the tab's `sessionStorage` and handed to MSAL as the redirect start page; it comes from the router state, never from a URL parameter, and an absolute, protocol-relative, `/auth` or `/sign-in` destination is refused. **It survives a cancelled or failed attempt**, so pressing an action again returns the person to the page they were going to — an invite acceptance page included — rather than to the dashboard; it is released when a sign-in completes, and trying again never extends its 15-minute window.
 
 **Google sign-in grants nothing by itself.** A Google identity that nobody invited lands on the existing welcome page with `NoMembership`, and that page now says plainly that each way of signing in is a separate account: a member who normally uses their work account and then signs in with Google gets a *new* actor with no membership, no role and no inherited access. Nothing is linked by a matching email address — an address is display-only data here and decides nothing — and Google sign-in on its own never redeems an invite. Joining a business is still the existing invite or onboarding journey.
 
@@ -352,7 +460,7 @@ Recorded from the design's § 13 verification (checked against Microsoft's publi
 
 **Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input. There are exactly three endpoints such an account may still reach, all on a reviewed allowlist the build enforces, and none names an existing business or reads business data. `GET /api/me/account-state` (issue #523) answers only with the state that account is in — `Member`, `NoMembership`, `ApplicationPending`, `ApplicationRejected`, `MembershipRevoked`, `BusinessDeactivated` or `MembershipAmbiguous` — so the application can show the right screen instead of a bare error. `POST /api/invites/redeem` (issue #532) takes an invite token an Owner created and nothing else, and creates that account's **own** membership in the business the invite belongs to, with the role the invite grants; it returns only that role, and an unusable token and an account that already belongs somewhere are both refused with one fixed sentence. `POST /api/onboarding/business-applications` (issue #541) is the self-service application described [below](#starting-a-business-self-service-onboarding), behind a flag that is off by default. The `403` every other endpoint returns is unchanged, for all three of those callers.
 
-**The Angular application reads that state before any business call and shows the screen it calls for** (issue #529). `Member` reaches the page asked for. `NoMembership` goes to a welcome page offering **I have an invite link** — paste the link or the code from it, or open the link directly — and, when `onboardingEnabled` is true, **Start a new business**, which opens the business application form at `/apply` (issue #543): business name, contact email (starting as the signed-in account's own address), optional ABN, a stated yes or no for GST registration, and a time zone chosen from the browser's IANA list. The form checks each field with the API's own rules and sentences before sending anything, shows any refusal the API returns (an account that already belongs to a business, a different application already waiting, the rate limit, or onboarding switched off), and after a recorded application re-reads the account state and lands on the pending-approval page. `ApplicationPending` goes to a pending-approval page with a **Check again** button that re-reads the account state; once approved, it refreshes the capability cache too and loads the app as Owner. `ApplicationRejected` goes to a rejected page that shows the Super Admin's own recorded reason when there is one, and offers the same invite-link option plus **Apply again**, which opens the same form, when `onboardingEnabled` is true. `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` go to one "access unavailable" page that names no business — it says to contact the business Owner for the first and third, and support for the second. Because a revoked or released person is the one case `GET /api/me/account-state`'s `onboardingEnabled` flag can make eligible, that page also offers **I have an invite link** always and **Start a new business** only when `onboardingEnabled` is true, matching the API's own eligibility rule. A `403` from any other member endpoint shows "you don't have access to this" through the application's toast, except on one of those destination routes or `/invite/:token`, which already explain the situation themselves. None of this is a boundary: `BusinessScopeMiddleware` refuses every business call the same way regardless of what the router shows.
+**The Angular application reads that state before any business call and shows the screen it calls for** (issue #529). `Member` reaches the page asked for. `NoMembership` goes to a welcome page offering **I have an invite link** — paste the link or the code from it, or open the link directly — and, when `onboardingEnabled` is true, **Start a new business**, which opens the business application form at `/apply` (issue #543): business name, contact email (starting as the signed-in account's own address), optional ABN, a stated yes or no for GST registration, a time zone chosen from the browser's IANA list, and the Australian state or territory the business trades in — one of NSW, VIC, QLD, SA, WA, TAS, ACT or NT, chosen rather than defaulted, because a time zone cannot tell NSW from the ACT (issue #933). The form checks each field with the API's own rules and sentences before sending anything, shows any refusal the API returns (an account that already belongs to a business, a different application already waiting, the rate limit, or onboarding switched off), and after a recorded application re-reads the account state and lands on the pending-approval page. `ApplicationPending` goes to a pending-approval page with a **Check again** button that re-reads the account state; once approved, it refreshes the capability cache too and loads the app as Owner. `ApplicationRejected` goes to a rejected page that shows the Super Admin's own recorded reason when there is one, and offers the same invite-link option plus **Apply again**, which opens the same form, when `onboardingEnabled` is true. `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` go to one "access unavailable" page that names no business — it says to contact the business Owner for the first and third, and support for the second. Because a revoked or released person is the one case `GET /api/me/account-state`'s `onboardingEnabled` flag can make eligible, that page also offers **I have an invite link** always and **Start a new business** only when `onboardingEnabled` is true, matching the API's own eligibility rule. A `403` from any other member endpoint shows "you don't have access to this" through the application's toast, except on one of those destination routes or `/invite/:token`, which already explain the situation themselves. None of this is a boundary: `BusinessScopeMiddleware` refuses every business call the same way regardless of what the router shows.
 
 ### Rollout verification, staging smoke tests and rollback (issue #714)
 
@@ -369,7 +477,7 @@ Everything above describes what the application does with a customer identity te
 A business is created in one of two ways. The legacy way is the human-invoked `bootstrap-business` command, which adopts the one existing Australian vending operation and creates it already `Active`; see [docs/tenant-rollout.md](docs/tenant-rollout.md). The other, since issue #541, is a **self-service application** behind the `SelfServiceOnboarding:Enabled` flag:
 
 1. Somebody signs in for the first time. `GET /api/me/account-state` reports `NoMembership`, and its `onboardingEnabled` field reports whether this deployment allows an application at all.
-2. They `POST /api/onboarding/business-applications` with the business's name, contact email address, optional ABN, GST registration and IANA time zone. All of those except the ABN are required, and the GST registration must be *stated* — a missing field is a `400`, never a recorded `false`.
+2. They `POST /api/onboarding/business-applications` with the business's name, contact email address, optional ABN, GST registration, IANA time zone and state or territory (issue #933 — one of NSW, VIC, QLD, SA, WA, TAS, ACT or NT). All of those except the ABN are required, the GST registration must be *stated* — a missing field is a `400`, never a recorded `false` — and a state outside those eight is a `400` too, because a business's state is recorded rather than inferred from its time zone or address.
 3. The server creates a **`Pending`** business with those details and makes the applicant its active **Owner**, in one transaction. It decides everything the request did not: the business's identifier, its status, the applicant's role, and who the applicant is (the validated `(tid, oid)` claim pair of their own token). The response carries only the application's name, status and submission instant — no business identifier.
 4. The business is **not usable yet.** Only an `Active` business resolves, so the applicant's very next request is answered with the same `403` as before, and `GET /api/me/account-state` now reports `ApplicationPending` so the application can show them a waiting screen. The new business starts completely empty, with no Nayax connection (`NotConfigured`).
 5. Approving or rejecting an application is a Super Admin decision, made through the [Super Admin businesses API](#super-admin-businesses-api) below (issue #544). Approving sets the business `Active`, so its Owner's next request is served; rejecting records a reason, which `GET /api/me/account-state` reports back to that applicant alone as `ApplicationRejected`, and releases the applicant's membership. The rejected application is kept, and the person may apply again, which creates a new business.
@@ -379,6 +487,157 @@ Who may apply: an account with **no active membership anywhere** — never a mem
 **The flag is `false` in source control and must stay off in production until a human has verified the release gate** — see [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541). With it off, the endpoint answers `404` and `onboardingEnabled` is `false`.
 
 The journey a second live business needs is now complete end to end. The application form exists (issue #543, `/apply`, above), and the approval **user interface** of issue #510 does too: the Super Admin's own Businesses page (issue #547, see [Super Admin businesses API](#super-admin-businesses-api) above) approves, rejects, deactivates and reactivates a business and releases a member of a deactivated one. The Nayax credential is no longer a blocker either: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). An Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and drives it from the connection wizard on Admin → Integrations (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners of issue #539 are on the screens that depend on Nayax — the machine list and machine detail, Sync Restock, the site list and a site's products, and the pick list — so a member who cannot reach that wizard still sees why those screens have no Nayax data. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+
+## The public landing page
+
+A visitor who is not signed in sees the **Restockroo landing page** at `/` (issue #954): what the
+application does, an example dashboard drawn from clearly labelled sample data, the optional Nayax
+integration, a three-step workflow, pricing and FAQs. It makes no request to the API at all, so
+opening or refreshing it never asks for a sign-in or reads any business, account or Nayax data.
+
+- **Sign in** uses the existing sign-in: the `/sign-in` chooser when a customer identity authority
+  is configured, otherwise a redirect straight to Microsoft that returns to `/`.
+- **Get started** opens the business application at `/apply` (see
+  [Starting a business](#starting-a-business-self-service-onboarding)), taking the visitor through
+  sign-in first. While `SelfServiceOnboarding:Enabled` is off, a new account lands on the welcome
+  page instead, exactly as before.
+- **Signed in**, `/` is still the dashboard. The landing page stays reachable at `/home`, where the
+  **Open app** button returns to `/`.
+
+Core inventory - products, stock, purchases, suppliers and machine records - works without Nayax;
+the page presents Nayax only as an optional connection for supported sales data and the reports
+built on it. The page has **no Privacy Policy, Terms of Service or Contact link**, because none of
+those pages exists yet; add them to its footer once they do. The approved design and every wording
+change are recorded in [docs/design/restockroo-landing-page.md](docs/design/restockroo-landing-page.md).
+
+### Pricing on the landing page (issue #971)
+
+A **Pricing** link in the header, mobile menu and footer navigation scrolls to a section before the
+FAQs with three static plan cards - `landing-content.ts`'s `LANDING_PLANS`, read only by the page,
+never fetched - matching the catalogue [issue #965](https://github.com/cristhyanc/InventoryApp/issues/965)
+agreed: **Free** (A$0, 1 GB of purchase/expense attachments, every manual feature - Dashboard,
+Machines, Inventory, Purchases, Supplier orders, Suppliers, Expenses and manual Pick List entry -
+with no supplier comparisons and no reports), **Starter** (A$7 per business per month; Free plus
+20 GB of attachments, daily cheapest-supplier comparisons, and the Bookkeeping and GST reports with
+their CSV/XLSX export) and **Pro** (A$15 per business per month; Starter plus the Nayax connection
+and everything that needs it today - Sites, Site Commissions, the Daily, Transactions,
+Reconciliation, Machines and Products reports, machine latest sales, Sync Restock, dashboard sales
+refresh, the Nayax sales file import and the calculated Pick List matrix - with 5 connected
+machines included and A$2/month per additional connected machine).
+
+**Coming soon, not purchasable.** Paid enforcement, billing and the plan catalogue API (issue #965's
+other child tasks) are not live. Free carries an "Available now" badge; Starter and Pro carry a
+"Coming soon" badge. Every plan card's action is the same **Get started**/**Open app** as the rest
+of the page - the existing business application journey - so there is no checkout, trial promise or
+waitlist, nothing a visitor could mistake for a live purchase. The Pro card also states explicitly
+that plan entitlement and a *usable* Nayax connection are separate: Pro will include the Nayax
+connection, but connected features still need the business's own working Nayax credentials, exactly
+as today.
+
+**Existing copy reconciled with the plan catalogue.** The "Optional sales connection" and "Optional
+integration" facts in the Nayax section now say Nayax will be a Pro plan feature once paid plans go
+live (it stays open to every business today, and connecting it stays optional even on Pro), and the
+former "Inventory and cost reporting" feature card is "Inventory value at cost" naming the dashboard
+figure it actually shows, so it does not read as the gated Reports area. The FAQ "Do I need Nayax?"
+is unchanged and stays true either way. Three FAQs were added covering when Starter/Pro become
+purchasable, what the storage allowances will do once the paid plans launch, and that the extra
+connected-machine charge only starts once paid plans and the Nayax connection are both live. GST tax
+treatment of the advertised prices is one of #965's open launch decisions and is intentionally not
+asserted here until it is decided.
+
+**Plan limits are still described as future behaviour, because none of them applies to a visitor
+today.** The attachment quota is implemented (issue #968) but applies only once a deployment
+switches plan enforcement on, which the shipped state does not; the extra connected-machine charge
+needs billing (issue #969) that is not live. So the section's lead paragraph says the storage
+allowances and the connected-machine charge start when the paid plans launch and that nothing is
+limited today, the Free card repeats it for its 1 GB allowance, and the storage FAQ describes the
+80% warning and the 100% upload pause only as what will happen from launch — which is exactly what
+[Attachment storage](#attachment-storage) does once enforcement is on. The page must never present a
+limit, a paused upload or a per-machine charge as today's behaviour;
+`landing-page.component.spec.ts` holds that as a copy regression. (Recording a purchase without
+attaching a document has since shipped, issue #976, and the page claims nothing about it either
+way.)
+
+## The dashboard and the menu
+
+Signed in, `/` is the **Dashboard** in the Restockroo design (issue #972). It changes how the page
+and the menu look, not what any figure means: no calculation, endpoint, permission or lock rule
+changed, and every "Unavailable" still means unavailable, never zero.
+
+- **Four summary cards**: Sales this week, Machines needing refill, Products needing ordering and
+  Business-owned inventory at cost. The inventory card says separately that its storage-unit count
+  excludes stock in machines.
+- **Needs attention** collects what is waiting for you: empty selections, machines needing refill,
+  products needing ordering and the [restock sync reminder](#machine-restock-sync-reminder)
+  ("Recorded refills haven't been synced yet."). Its count is the number of alerts actually shown,
+  and the panel is hidden when there is none. It is two columns on a wide screen and one on a phone,
+  and it offers only the two existing actions, **Open pick list** and **View needs ordering**. The
+  reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
+- **Site and machine performance** is one card (issue #987): each site is a summary row - its name,
+  how many machines it has, its stock level in words as well as in colour, its low and empty
+  selections and its sales - and an expand button under the site's name reveals that site's machines
+  indented directly beneath it. Sites start expanded, collapsing one leaves the others alone, and a
+  refresh keeps whichever groups you closed. Machines with no site, or at a site that was not
+  returned, come last under **Other machines**, and a site the fleet read returned no machine for
+  stays visible saying so. Every machine appears exactly once.
+  - **One period at a time, shared by both layouts.** The Today / This week / Last week / Month to
+    date buttons above the table choose the period for every row, and the sales column names it. The
+    comparison column shows the published "vs same time last week" figure while This week is
+    selected and says there is no comparison for the other periods, because that is the only
+    comparison these reads publish. Sites and machines both publish all four periods, so a site row
+    shows its own sales figure for whichever one you choose, on a wide screen and on a phone; a
+    period with no completed sale shows `$0.00`, and a figure your role may not see shows as
+    Unavailable. A site's figure is the sum of the machines standing at it, worked out on the server
+    for exactly the period and business days the column names.
+  - **Every machine row shows its own stock level** (issue #1013). `GET api/sites` already fetched
+    every site machine's selections to work out the site percentage; it now publishes that split as
+    well, so a machine row carries its own percentage, bar and status in words - worked out on the
+    server by the same rule as the site figure, over that machine's selections alone. A site's
+    percentage is never repeated down its machines and nothing is worked out in the browser, the
+    percentage is always written out so colour never carries the level alone, and switching the
+    period changes no stock figure and makes no new request. Two cases say so instead of showing a
+    number: a machine whose selections report no capacity at all shows **No capacity set** - not 0%
+    and not 100% - and a machine under **Other machines** shows **Unavailable**, because the sites
+    read does not cover it. If the sites read fails, every machine's stock shows as unavailable
+    rather than as 0% or a stale figure.
+  - **The low/empty counts stay a site figure.** They come from the sites read and exist per site
+    only, so a machine row still shows them as unavailable, and the card says why.
+  - **Actions are the existing ones**: **Products** opens that site's products, **Details** opens
+    that machine, and a machine this business has no local record of gets no Details link at all
+    rather than an invented one.
+  - **One totals row for the fleet**, over every machine the read returned, so collapsing a group
+    never changes it and no site figure is ever added into it. A period total is shown only when
+    every machine's figure for that period is known, and is "Unavailable" otherwise.
+  - The sites and the machines are still read separately: if one read fails the card keeps the
+    other's results and says which one is unavailable, and a failed read is never shown as an empty
+    business. On a phone the same hierarchy is expandable site cards holding machine cards.
+- **Reorder priorities** shows the first five products of the reorder list, in the list's own order,
+  and a link naming how many there really are ("View all 7 products needing ordering") to Products →
+  Needs Ordering. Its columns are product, storage stock, machine need, need to order, the last and
+  cheapest purchase, and **Cheapest supplier** (issue #981). Last and cheapest purchase are
+  **historical costs from your own purchases**; Cheapest supplier is the lowest price your own
+  suppliers **currently list** per unit - observed prices for purchasing guidance, not costs you have
+  paid. That last explanation is behind a small help button beside the **Cheapest supplier** heading,
+  and beside the same label on each narrow-screen card (issue #1016): press, tap or focus it to read
+  the sentence beside the column, and press Escape or click away to close it again. The supplier
+  column is the same cell and popup as
+  [on Needs Ordering](#the-cheapest-supplier-on-needs-ordering): one request for the five products,
+  shown to everyone who sees the dashboard, unavailable in a read-only support view, and a failed
+  read says so with a **Retry** without affecting the rest of the dashboard.
+
+**The menu** is grouped under four headings: **Operations** (Dashboard, Pick List, Sites,
+Machines), **Inventory & purchasing** (Inventory, Purchases), **Finance & reports** (Expenses,
+Reports) and **Settings** (Admin). A heading appears only when you have something under it. A
+platform administrator also sees a separate **Super admin** heading over Platform Diagnostics,
+Businesses and Supplier Presets; nobody else does. Locked entries are shown exactly as before (see
+[The menu without a usable provider](#the-menu-without-a-usable-provider)).
+
+**On a phone** a bottom bar offers Dashboard, Pick List, Sites and Inventory — only those your role
+already has in its menu — and **More**, which opens the whole menu as a sheet from the bottom (the
+top bar's menu button opens the same sheet). While it is open the page behind it cannot be clicked,
+focused or reached by a screen reader. The sheet scrolls to its last entry, keeps a **Close** button
+at the top, keeps clear of the phone's home indicator, keeps keyboard focus inside itself, closes
+with Escape, Close or a tap on the dimmed page, and returns focus to the button that opened it.
 
 ## Roles and capabilities
 
@@ -402,7 +661,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
-  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue` and `previousComparableWeekRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock, MDB codes, machine counts and the alert counts, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
+  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue` and `monthToDateRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — MDB codes, machine counts and the alert counts, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
   - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. The catalogue `unitPrice` that decision also named is no longer a question: the field was removed, so no response carries it (see [A product carries no selling price](#a-product-carries-no-selling-price)). A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
   - **Every remaining Operator-readable endpoint has been audited, and the last two leaks are closed** (issue #700). Issue #700 walked every endpoint a role without `Dashboard.ViewFinancials` can reach — taken from the capability policies themselves — and classified each restricted figure on each one; the endpoint-by-endpoint table is in [docs/architecture.md § Operator-readable financial disclosure](docs/architecture.md#operator-readable-financial-disclosure-issue-700). Two figures were still being sent. A **stock movement's `inventoryValueAfter`** — the business's inventory value at cost after that movement, so the latest one reports the current valuation — is now `null` for a caller without the capability on `GET`/`POST api/products/{id}/stock`, on `GET api/stock-history`, and nested in a product's `stockAdjustments`. The **catalogue product nested in a purchase line or a supplier-order line** now withholds its `inventoryValue` on the `api/purchases` and `api/supplierorders` responses, the same way `api/products` has since #698 — otherwise listing purchases was a way around that. Never `0`: both fields already mean "no cost" or "no valuation yet" when they are `null`, and a withheld amount arriving as zero would be a false statement about the business. **Nothing else is withheld.** A movement's own `unitCost`, `totalCost` and `averageUnitCostAfter`, a purchase's `totalAmount`, delivery and package charges, each line's `unitCost` and `lineTotal` and its input-GST block, and a supplier order's quantities, `unitPrice` and `outstandingQuantity` all stay visible to every role, because they are purchasing and unit-cost data an Operator enters and has to be able to read back. Every other Operator-readable endpoint — the pick list, categories, take inventory, the price history and restock-cost suggestion, Sync Restock, the machine stock ledger, suppliers and the stored purchase document — carries no restricted figure at all. A Manager's and an Owner's responses are unchanged, and a new revenue, profit, margin, sales or inventory-value property on any of these responses now fails the build until somebody decides what happens to it.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Integrations or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
@@ -458,6 +717,119 @@ Opening an invite link (`/invite/:token`) goes straight to an Accept button at `
 - **Accepting joins the business immediately.** The application re-checks the signed-in person's access and lands on the dashboard with the role the invite granted — there is nothing further to do and no sign-out to force.
 - See [docs/architecture.md § Invite acceptance page](docs/architecture.md#invite-acceptance-page-issue-535) for the design, the token's one accepted residual, and what each account state is shown.
 
+## Business plans (Free, Starter and Pro)
+
+Every business has one **plan**, and a plan says what the business has *bought* — which is a different question from what a member may do (their [role](#roles-and-capabilities)) and from whether Nayax is [connected](#connecting-nayax-admin-page). All three have to be satisfied for a connected feature to work, and no one of them implies another.
+
+**Nothing is enforced until a deployment switches it on.** Issue #966 defines the plan state, the catalogue and the one entitlement rule and publishes the answer; issue #967 is what makes the server withhold a feature (see [How a plan is enforced](#how-a-plan-is-enforced) below), and the attachment storage allowance (issue #968, [below](#attachment-storage)) is the one storage limit, which also applies only once a plan is being enforced. Issue #977 is the same enforcement over the supplier price comparisons and the daily collection behind them; the frontend's own locks (#979) are still separate, later work. With the rollout setting off — which is the shipped state, see [`Subscriptions__EnforcementEnabled`](#configuration-and-secrets) — **every business is unrestricted and behaves exactly as it does today**: nothing is withheld, no endpoint refuses anything, attachments upload as before and no extra query is made.
+
+### The plans
+
+Prices are AUD per business per month, as agreed on issue #965. Whether the advertised price includes GST is an open launch decision; the catalogue records the advertised amount and claims nothing about its tax treatment.
+
+| | **Free** | **Starter** | **Pro** |
+| --- | --- | --- | --- |
+| Price per month | A$0 | A$7 | A$15 |
+| Local features (below) | Yes | Yes | Yes |
+| Purchase/expense attachments | 1 GB | 20 GB | 20 GB |
+| Daily cheapest-supplier comparisons | — | Yes | Yes |
+| Bookkeeping and GST reports, with exports | — | Yes | Yes |
+| Nayax connection and everything that needs it (below) | — | — | Yes |
+| Connected machines included | — | — | 5, then A$2/month each |
+
+A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**. How that count is taken, how old it may be, and what happens when the Nayax account changes are in [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978).
+
+Storage limits cover purchase and expense attachments combined — not transaction records — 1 GB means 1,000,000,000 bytes, and attachments are **never deleted automatically** on a downgrade. See [Attachment storage](#attachment-storage) for exactly what happens as a business fills it up.
+
+### What is local and what needs a connected plan
+
+The split is the same one the application already makes for a business with no usable provider, and [The menu without a usable provider](#the-menu-without-a-usable-provider) is the list of what Nayax is behind. Said in plan terms:
+
+- **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)), and the **Track supplier prices** switch itself (see below).
+- **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
+- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list).
+
+A paid plan and a usable Nayax connection are separate conditions: a Pro business whose credentials are missing or have stopped working sees exactly today's connection-required pages, and a connected Free or Starter business sees the same "no usable provider" behaviour it would without credentials.
+
+### How a plan is enforced
+
+Once the rollout setting is on, the plan is checked on the server in two places and nowhere else.
+
+**Everything that needs the Nayax connection is refused in one place.** Every ordinary Nayax call in the application resolves the business's credentials through one component, and that component now checks the plan **before it reads the stored connection at all**. So a business whose plan does not include the connection makes **no Nayax request**, however valid the credentials it has saved, and every mixed page behaves exactly as it already does for a business with no usable connection:
+
+| Page or feature | What a Free or Starter business sees |
+| --- | --- |
+| Dashboard | The whole local summary, with the machine refill card marked unavailable |
+| Needs Ordering / low-stock alerts | A real count, labelled **storage stock only** |
+| Machines | The business's own machine records; the live fleet view is unavailable |
+| Pick List | Manual entry, as it does with no connection |
+| Sites, Site Commissions | Unavailable, with the stored agreements and payments untouched |
+| Sync Restock, and its Dashboard reminder | Unavailable; the reminder is not shown |
+| Catalogue review, inventory-cost transition previews | Unavailable, as they are with no connection |
+| Purchases, Suppliers, Inventory, Expenses, manual pick-list entry, Take Inventory | **Completely unchanged** |
+
+Each of those answers carries a **distinct reason** — `PlanRequired`, not "Nayax is not connected" — so a screen can eventually say "needs Pro" rather than sending somebody to reconnect credentials that are working. A Pro business whose connection really is unusable keeps today's connection reason.
+
+**What a plan refuses outright answers `403` with the code `plan_required`** and names the plan the business would need. That applies to:
+
+- **Starter and Pro:** Bookkeeping and GST, and their CSV/XLSX exports; and the **supplier price comparisons** — the one read behind the **Cheapest supplier** column on Needs Ordering, All Products and the Dashboard.
+- **Pro:** the Daily, Transactions, Reconciliation, Machines, Products and reporting-dashboard reports and their exports; Site Commissions (report, agreements and payments); the Nayax sales file import under Admin → Imports; and the Owner's **Test**, **Save** and **Re-test** connection actions on the Integrations page.
+
+A report and its own download always need the same plan. A refused save or import changes nothing at all — the plan is checked before the request body is read, so no credential is written and no row is imported.
+
+**Supplier price comparisons, in plan terms.** On Free, the **Cheapest supplier** column reads as unavailable and the rest of those pages — the row, the purchase-cost columns beside it and every action — is untouched. The daily collection follows the same line: a product is looked up at the suppliers while **at least one** business on Starter or Pro is tracking it, so a product you and a Starter business both track is still priced and nothing you have tracked is ever deleted. And the **Track supplier prices** switch stays available on every plan: you can turn it on and off on Free, the setting is kept through a downgrade, and the prices appear as soon as the plan includes them. See [Track supplier prices on a product](#track-supplier-prices-on-a-product) and [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
+
+**Reading the connection status stays available on every plan**, to every role that can see it today, and makes no Nayax call. That is deliberate: a business that moves to a plan without the connection keeps its saved credentials and their status, and the Integrations page still shows them. Nothing is deleted or changed by a plan change — sales, costs, product links, history, agreements, payments and attachments are all exactly as they were, and they become readable again the moment the plan includes them.
+
+**A plan is not a permission.** The role check happens first and is unchanged: a member whose role does not grant a feature is refused exactly as before, with no mention of plans, and a plan never gives a role access it does not have. See [Roles and capabilities](#roles-and-capabilities).
+
+### How a business's plan is decided
+
+Two records per business, and **neither ever changes the other**:
+
+- a **billing subscription**, written only by verified billing events (issue #969), and
+- **manual grants**, written only by a Super Admin (issue #982) or by the grandfathering step below.
+
+From those, one rule decides what the business may use:
+
+- **The rollout setting off → unrestricted.** Today's behaviour, whatever either record says.
+- **On, but the grandfathering step has not completed → still unrestricted**, and the API logs a startup error naming the missing command. Enforcement cannot start before the businesses that were already trading hold their grant.
+- Otherwise the effective plan is **the higher of** the active manual grant and the active paid plan.
+- **Expired, cancelled, missing or unreadable records → Free** for paid features. Free's own local features are never locked.
+- Grants and paid periods are **UTC instants**: a period applies from its start instant inclusive and stops at its end instant exclusive.
+
+`GET /api/me/access` publishes the answer beside the capability set — `entitlement.enforced`, the plan, where it came from (`ManualGrant`, `BillingSubscription`, `NoActiveRecord`, or the two unrestricted states), when that record ends, and `entitlement.connectedMachines` with the machine allowance, the last recorded count and how old it is (`null` while nothing is enforced; see [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)). It is computed per request with no server cache, there is no separate endpoint and no request names a business. Inside a [support session](#super-admin-support-sessions) it reports the **viewed** business's own plan, and a [role preview](#previewing-the-app-as-a-role-issues-720-and-721) narrows role capabilities only and never changes the plan.
+
+Beside it, `entitlement.attachmentStorage` carries the business's attachment storage: how much it is using, its plan's allowance, and whether that is `Normal`, `Warning` (80% and over) or `Full`. It is `null` while nothing is enforced, because then there is no allowance and nothing is counted.
+
+### Attachment storage
+
+Each plan includes an amount of purchase and expense attachment storage, and that allowance is enforced once plans are being enforced (issue #968). It is about **documents only**: nothing here ever stops a purchase, an expense or any other record being saved.
+
+- **What counts.** The sizes of the attachments the business's purchases and expenses actually refer to, plus any upload it has in progress. A file left in storage that no record refers to is **not** charged to the business, and neither is an attachment whose size was never recorded — both are reported by [`reconcile-attachment-storage`](#reconciling-attachment-storage-against-the-records-issue-968) instead.
+- **Deleting frees it immediately.** Deleting a purchase, an expense or an attachment releases its bytes as soon as that change is saved, whether or not the stored file is removed successfully.
+- **At 80% the business is warned**, and the warning state travels with the plan in the access read above, so the app can say so before anything is refused.
+- **At 100% only new uploads pause.** Viewing, downloading and deleting attachments keep working, and so does recording purchases and expenses — a purchase can be saved [without a receipt](#a-purchase-without-a-receipt) and the document added later. An upload that does not fit is refused with a sentence that says the record can still be saved without it, and nothing is written to storage.
+- **Replacing a file when storage is full works, as long as it does not grow.** Replacing an expense's attachment is charged only the **difference**: a smaller or same-size file succeeds even at or over the allowance, and a larger one needs room for the difference alone. The old file's bytes stop counting the moment the record points at the new file.
+- **If two people replace the same attachment at once, exactly one wins.** The other is refused with "This attachment was replaced by someone else while the upload was in progress. Reload the record and try again." — its file is removed, nothing about the record changed, and retrying from the reloaded record is safe.
+- **An abandoned or crashed upload stops holding storage on its own**, within 30 minutes, without anybody having to clean anything up.
+- **After a downgrade a business can be above its new allowance, and nothing is deleted.** Every existing attachment stays viewable, downloadable and deletable; only new uploads that would add bytes are refused, until enough has been freed or the plan is upgraded again.
+
+### The Plan page (issue #970)
+
+Every member reaches **Plan**, a top-level entry under the sidebar's **Settings** heading beside Admin (route `/plan`) — it needs no stronger capability than `Dashboard.View`, which every role and a [support session](#super-admin-support-sessions) hold, because the figures it shows are visible to everybody.
+
+- **The current plan, in plain language.** It shows the effective plan and where it came from, using only the five `entitlement.source` values the server actually publishes today: a paid subscription, a manual grant (labelled "Manual grant" — the page never guesses whether a grant is complimentary or grandfathered, because the server does not say), no active subscription (never labelled cancelled or expired), or, while enforcement is off or grandfathering has not completed, a plain statement that **no plan limits currently apply**. A source value a build does not recognise is shown by its raw name rather than an invented friendly one. Pending, past-due, cancelled, grace and a separate complimentary/grandfathered display are deferred until issue #969 or a reviewed contract extension publishes them.
+- **What that plan costs, from the same catalogue the comparison table uses.** The current plan's monthly price is the matching row of the server catalogue, never a figure kept in the app. If the catalogue cannot be read, or has no row for the plan the server named, the card says the price is unavailable rather than showing one it guessed.
+- **Storage and connected machines beside it**, read from the same `GET /api/me/access` answer: an accessible progress bar for attachment storage with the 80% warning and 100% full message (see [Attachment storage](#attachment-storage) above), and the connected-machine count against the Pro allowance with its "as of" time, a **stale** badge with its age, or a plain-language reason when the count is unavailable (see [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978)). Machines over the allowance are noted as billed, never blocked.
+- **The Free/Starter/Pro comparison table comes from the server's own catalogue** (`GET /api/me/plan-catalogue`, read from `Inventory.Domain.Subscriptions.PlanCatalogue`) rather than any price hard-coded in Angular. Every plan's price and storage allowance are visible to every member; the per-extra-machine rate on Pro additionally needs `Dashboard.ViewFinancials`, the same capability that gates every other billing figure.
+- **An Owner sees an upgrade/manage-billing action, and everyone else is told to ask their Owner** — both are withheld entirely inside a support session or a [role preview](#previewing-the-app-as-a-role-issues-720-and-721), because neither is a context a write or a billing action belongs in. Until billing (issue #969) exists the Owner's action is text only — "coming soon" — with no checkout or success state.
+- **It re-reads itself for free.** The page subscribes to the same cached `GET /api/me/access` answer every other capability-aware page does, so a support session starting or ending and a role preview changing both reach it through the existing re-reads those features already trigger, with no extra call of its own. There is no business switching on it — a member sees only their own current business.
+
+### Grandfathering, in one sentence
+
+When plan enforcement is being switched on, a human runs [`grandfather-business-plans`](#grandfathering-existing-businesses-onto-pro) once: every business that was already trading (or had traded and been offboarded) before the recorded cutoff is given a **Pro grant with no end date**, every other business starts on **Free**, and the command records the completion marker enforcement waits for. A pending application approved after the cutoff starts on Free, and the command is safe to run again — it changes nothing once it has completed.
+
 ## Privacy: the personal data this application stores
 
 The application stores almost no personal data. It holds a vending business's own trading records — products, purchases, sales, expenses and reports — and the only people it records are the business's own members.
@@ -489,9 +861,16 @@ PlatformAdmin__ObjectId
 ExternalId__Instance
 ExternalId__TenantId
 ExternalId__ClientId
+PriceCollector__TenantId
+PriceCollector__ClientId
+PriceCollector__RunExpiryHours
 SelfServiceOnboarding__Enabled
+Subscriptions__EnforcementEnabled
+Cors__AdditionalAllowedOrigins__0
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
+
+`Cors__AdditionalAllowedOrigins__0` (then `__1`, ...) adds a browser origin to the API's CORS policy beside the two fixed ones, the local dev server and the production frontend. It is absent in source control, so production allows only those two. The hosted testing environment sets it to its own frontend origin. Each value must be a bare `https://<host>` origin, and an invalid value fails startup; see [Hosted testing environment](docs/testing-environment.md).
 
 `NayaxLynx__BaseUrl` is the only Nayax **connection** setting left: it is non-secret, global, and validated at startup — the API refuses to start with a missing or invalid value rather than failing on the first Nayax call. **The operator id and the access token are not configuration any more** (issue #520): each business's own pair is held encrypted in its connection record and is read per call from the trusted current business, with no fallback to a global value or to another business's. Startup therefore requires neither, and an API with no Nayax credential configured at all starts and serves every non-Nayax feature normally; a business whose record is empty gets a stable "Nayax is not connected" error on its Nayax features and nothing else. See [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520).
 
@@ -505,9 +884,97 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 
 `ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId` name the one Microsoft Entra External ID tenant whose tokens the API also trusts (issue #710) — see [Customer identity: a second trusted issuer](#customer-identity-a-second-trusted-issuer-issue-710). None of the three is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. All three empty is the shipped, fail-closed state: the second bearer scheme is not registered, every token from that authority is rejected, and workforce sign-in is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. The values are read once at startup, so filling them in takes effect on the next restart.
 
+`PriceCollector__TenantId` and `PriceCollector__ClientId` name the one scheduled price collector whose app-only token the API trusts (issue #924) — see [The scheduled price collector](#the-scheduled-price-collector-issue-924) below. Neither is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. Both empty is the shipped, fail-closed state: the collector bearer scheme accepts nothing, the collector policy denies everybody, and `GET /api/price-collector/work` answers `401` to every request while every other endpoint is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. `PriceCollector__RunExpiryHours` is how long an issued run stays open unless the collector reports back; blank, unparseable or outside 1–168 means the owner's default of **6 hours**, logged when it falls back, and it is never read as "no expiry". All three are read once at startup, so filling them in takes effect on the next restart.
+
 `SelfServiceOnboarding__Enabled` switches [self-service business onboarding](#starting-a-business-self-service-onboarding) on (issue #541). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off `POST /api/onboarding/business-applications` answers `404` and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can create a business in a deployment that has not deliberately opened the door. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on in production is a human decision with a verified release gate in front of it — [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541).
 
+`Subscriptions__EnforcementEnabled` switches [business plan enforcement](#business-plans-free-starter-and-pro) on (issue #966). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off every business is unrestricted and behaves exactly as it did before plans existed, and `GET /api/me/access` reports `entitlement.enforced: false` with no plan at all. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on is a human decision with two gates in front of it: the [`grandfather-business-plans`](#grandfathering-existing-businesses-onto-pro) command must have completed first — otherwise the API logs a startup error and keeps treating every business as unrestricted — and the paid plans themselves are switched on only when the whole rollout is released together (issue #965's launch gate).
+
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
+
+## The scheduled price collector (issue #924)
+
+The shared supplier price catalogue is collected by a scheduled GitHub Actions workflow, and it signs in to this API **without a person and without a stored password**. This section is the human setup that makes that possible; the boundary itself is [docs/architecture.md § The price collector's app-only path](docs/architecture.md#the-price-collectors-app-only-path-issue-924), [§ Collector work list](docs/architecture.md#collector-work-list-issue-924), [§ Collector results](docs/architecture.md#collector-results-issue-937) and [§ Collector product matching](docs/architecture.md#collector-product-matching-issue-941).
+
+```text
+GET  /api/price-collector/work                          issues one run and answers the work it is to do
+POST /api/price-collector/results                       one batch of what it read off a shelf
+POST /api/price-collector/matches                       what it thinks each waiting product is
+POST /api/price-collector/work-items/{id}/outcome       finishes one search
+POST /api/price-collector/runs/{id}/complete            closes the run
+```
+
+**What has shipped.** The authentication path, the work list, the results endpoints (#937), the matches endpoint (#941), the JB Metro lookup script (#927), and the collector prompt, the Apify limits and the helper scripts (#926, see [Running the collector scripts locally](#running-the-collector-scripts-locally) below). The scheduled workflow itself, its Claude CLI flags, its permission settings and its secrets (#929) are a separate task, so nothing runs this on a schedule yet.
+
+**The shipped state trusts no collector.** `PriceCollector__TenantId` and `PriceCollector__ClientId` are **empty** in `appsettings.json`, which is both the fail-closed state and the rollback lever: with them empty the collector endpoint answers `401` to every request, issues nothing, and no other endpoint is affected in any way. A half-filled or malformed section means the same thing and is logged as a startup error. Neither identifier is a credential — the API validates with Entra's published signing keys and the collector holds no secret either — so they are ordinary application settings with no Key Vault reference, and no real identifier may be committed. Supply them with `dotnet user-secrets` locally or application settings in Azure; see [Configuration and secrets](#configuration-and-secrets).
+
+Human-controlled portal setup this depends on (no agent may perform any of it, and the API deliberately does not check that it was done):
+
+- **Add the app role to the API app registration.** Value exactly `PriceCollector.Run`, with **Applications** as the allowed member type — an application role, not a delegated scope. The API compares the value ordinally, so the spelling has to match.
+- **Register the collector application** in the owner's tenant, as its own app registration. It needs **no** client secret, **no** certificate and **no** redirect URI.
+- **Add a federated credential** on that registration for GitHub OIDC workload identity federation, scoped to this repository and to the workflow's own environment or branch — that scoping is what stops another repository obtaining the same token. Nothing about it is stored here.
+- **Assign the role**: grant the collector application the `PriceCollector.Run` **application** permission on the API registration, and grant admin consent for it. An unassigned application authenticates nowhere: a token without the role is `401`.
+- **Set the two App Service settings** to that tenant's GUID and that registration's application id, and restart. Optionally set `PriceCollector__RunExpiryHours`.
+- Decide the API registration's accepted access-token version if you have not already; the API pins both audience spellings (`<client-id>` and `api://<client-id>`), so either validates, and reads the calling application from `azp` or `appid` accordingly.
+
+**Why both identifiers are pinned, and not just the role.** The workforce scheme is multi-tenant (`TenantId: common`), so another Entra tenant can consent to this API and assign `PriceCollector.Run` to an application of its own — and Microsoft signs that tenant's tokens with the same key set, so the signature is genuine. Pinning `tid` is what makes that somebody else's token, and pinning `azp`/`appid` is what stops the owner's *other* workloads. The token must also carry **no delegated scope at all**, because Entra puts an assigned application role in a signed-in person's token too: that rule is what stops a person impersonating the collector.
+
+**How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
+
+### Verified Apify retailer configuration
+
+The owner-confirmed actor identities are `abotapi/kmart-au-scraper`,
+`axlymxp/bigw-product-scraper` and `dromb/big-w-au-product-scraper` (schemas inspected
+31 October 2026). Their exact search/fallback inputs are in `scripts/price-collector/prompt.md`.
+The guard forces reviews and unnecessary enrichment off and bounds internal search pages.
+The three actors remain `actorIdConfirmed: false`: metadata verification is not the paid dry run
+required by #926. Regular activation waits for output and cost evidence; the manual test workflow
+can explicitly permit these already verified actors in one private, bounded sample to obtain it,
+without changing the repository flags.
+The repository sets no dollar cap (owner decision, 31 October 2026): spending is capped by the
+Apify account usage limit, which must keep overage disabled so it suspends runs instead of billing
+more; the guard's per-run call cap is what stops a run that loops.
+
+### Running the collector scripts locally
+
+The collector side lives in `scripts/price-collector/` and is plain Node with no dependencies: the run's instructions (`prompt.md`), the Apify MCP configuration and per-actor rules (`apify-mcp.json`, `apify-limits.json`), the `PreToolUse` guard that enforces them (`apify-guard.mjs`), and the two scripts that talk to this API. The complete design is [docs/architecture.md § The collector prompt, the Apify limits and the helper scripts](docs/architecture.md#the-collector-prompt-the-apify-limits-and-the-helper-scripts-issue-926).
+
+Both scripts read the API base URL and the collector's bearer token from the environment, and never from an argument or a default — a token on a command line is a token in a process list:
+
+```bash
+export PRICE_COLLECTOR_API_BASE_URL="https://localhost:7001"   # your test API, no trailing slash needed
+export PRICE_COLLECTOR_API_TOKEN="<an app-only token for the configured collector application>"
+
+# 1. The work list. Run it once: reading it issues a run, and a second call expires the first.
+node scripts/price-collector/get-work.mjs            # the collector's view: one entry per search
+node scripts/price-collector/get-work.mjs --raw      # the API's answer verbatim
+
+# 2. What a run would write, by hand, for one of the work items the step above printed:
+mkdir -p price-collector-out
+# price-collector-out/<work-item-id>.json   — see scripts/price-collector/output.schema.json
+# price-collector-out/match-<key>.json      — one match proposal, when something is awaiting one
+
+# 3. The submission the scheduled workflow runs after the collector finishes or stops.
+node scripts/price-collector/submit-results.mjs --dir price-collector-out --run-id 41
+```
+
+`get-work.mjs` exits `1` on a non-2xx answer, an unreachable API or an answer that is not a work list, and `2` when a setting is missing — printing nothing on stdout in each case, because half a work list read as the night's work is a night of listings silently not checked. `submit-results.mjs` validates every file on its own, skips and reports one it cannot use, posts the match files before the result files, sends a work item's outcome only after all of its batches succeeded, and always completes the run at the end so unanswered searches are recorded as "not searched". Both print counts and reasons only: no price, product name, supplier product id, base URL or token. `price-collector-out/` is git-ignored; never commit a collector output file, and never put a token in one.
+
+To see what the run itself would do without spending anything, read `scripts/price-collector/prompt.md`: it is the reviewed instruction set, and the guard beside it is what makes the actor rules, the per-run call cap and the write-once output folder true whatever the model does. The tests (`bash scripts/validate.sh`) make no live call at all.
+
+**What the guard refuses, and why it refuses more than you might expect.** `apify-guard.mjs` is the `PreToolUse` hook that decides every Apify call in its own process, and it allows no call it cannot count. It calls only an actor `apify-limits.json` lists **and** marks `actorIdConfirmed: true` — the three actors whose ids and input field names the owner has still to confirm in the bounded dry run are refused outright, so today Varnmill is the only Apify actor a run may call (the JB Metro route is not an Apify actor) and confirming another is a one-line change in that file. Each allowed call is **reserved** before it is allowed: the run's call count is read, compared against the per-run call cap and written inside a cross-process lock, and flushed to the disk before the answer comes back, so two calls at once cannot take the same remaining allowance. Only a state file that does not exist yet is read as a run with no calls; an accounting that cannot be read, is corrupt, cannot be locked or cannot be written refuses the paid call instead of starting the count again. The guard sets and counts no dollar amount: the Apify account usage limit is the spending cap. A refused call leaves the accounting untouched, and a `Write` is guarded without consulting it at all — a broken state file can stop a run from spending and can never make the output folder permissive.
+
+**What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). **Nothing it reports becomes a price by itself**: a reading of a listing nobody has confirmed is held where a person can see it, and the [Super Admin supplier price review](#super-admin-supplier-price-review) is what confirms, corrects or refuses it. Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
+
+### Manual collector integration test (#929)
+
+The actor choices have already been tested; the next check is the complete collector flow against
+a disposable **test API**. The `Price collector (manual test)` workflow issues a small sample,
+runs Claude without the Restockroo bearer token, then submits finished results and completes the
+run even if the model step fails. There is no cron or production API input. See
+[Manual collector test](docs/price-collector-testing.md) for Entra/OIDC and GitHub environment setup,
+the normal and interrupted runs, sample limits, and actual provider cost evidence. Human review,
+release to `main`, environment setup and dispatch are separate from implementing the workflow.
 
 ## Platform diagnostics API
 
@@ -540,59 +1007,230 @@ POST /api/super-admin/businesses/{businessId}/deactivate   Active -> Deactivated
 POST /api/super-admin/businesses/{businessId}/reactivate    Deactivated -> Active, needs an active Owner
 GET  /api/super-admin/businesses/{businessId}/members       while Deactivated only
 POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   while Deactivated only
+GET  /api/super-admin/businesses/{businessId}/plan-grant      the manual grant, and its revision
+PUT  /api/super-admin/businesses/{businessId}/plan-grant      { plan, endsOnUtc?, reason, revision }
+POST /api/super-admin/businesses/{businessId}/plan-grant/end  { reason, revision }
 ```
 
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the diagnostics API, checked on every request, plus the ordinary authentication and `access_as_user` scope requirements. **With the pair unset — the shipped state — nobody reaches it at all.** An Owner holds the strongest business role there is and is refused here like anybody else: a business role is not platform authority.
-- **What the Super Admin does with it.** See every business — name, status, created/applied/decided dates, contact email, ABN, how many of its members are active, and whether Nayax credentials are stored — approve an application so the business starts trading, or refuse it with an optional reason the applicant reads back on their own account-state screen. Refusing also releases the applicant's membership, which is what frees them to apply again.
+- **What the Super Admin does with it.** See every business — name, status, created/applied/decided dates, contact email, ABN, the state or territory it recorded, how many of its members are active, whether Nayax credentials are stored and how usable they were at that business's last connection test — approve an application so the business starts trading, or refuse it with an optional reason the applicant reads back on their own account-state screen. Refusing also releases the applicant's membership, which is what frees them to apply again.
 - **Switching a business off, and on again.** **Deactivate** takes a trading business to `Deactivated` in one transaction, cancels every invite link of it that is still live, so no outstanding link survives, and ends every active [support session](#super-admin-support-sessions) for it; the response says how many invites were cancelled. **Nothing is deleted and no membership is changed** — the business simply stops resolving, so its members get the ordinary `403` on their next request. **Reactivate** brings it back, but only while it still has an active Owner membership: without one the business would trade with nobody able to administer it, so that is a `409` and nothing changes. A reactivation restores only the business — a released or revoked membership stays inactive, and a cancelled invite stays cancelled.
 - **Freeing somebody from a business that is off.** A person belongs to one business at a time, so a membership in a deactivated business would otherwise stop them joining anywhere else — and that business has no reachable Owner to release them. While a business is `Deactivated` (and only then) the Super Admin can **list its members** — membership id, display name, role and whether it is active, and nothing else — and **release** one, which marks that membership inactive and frees the person to accept an invite or apply for a business of their own. The usual "a business must keep an active Owner" rule deliberately does not apply here; the reactivation refusal above is what it is replaced by. Both endpoints answer `409` for a business in any other status: a trading business's members are its own Owner's to manage.
-- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id.
+- **Giving a business a plan without billing it (issue #982).** The last three routes above are the Super Admin's **manual plan grant**: grandfathering, a trial, a pilot site or a complimentary plan. A grant sets the plan (`Starter` or `Pro` — `Free` is not a grant, because a business with no grant is already on Free), an optional last day in UTC, and a **required reason**, and that is all it can set: there is no payment, price, billing status or subscription field here, the business's paid subscription is neither read to validate a grant nor changed, and the effective plan stays "the higher of the active grant and the active paid plan". Every write carries the grant's current `revision`, which the `GET` reports; a stale one is `409` with "reload it and decide again", so two Super Admin tabs cannot overwrite each other. **End** stops the grant at that moment and deletes nothing — the row keeps its plan, its start and the reason it was granted for — and the business falls back to its paid plan, or Free, on its members' next read of `GET /api/me/access`. Who may use it is the same answer as every route above: the configured Entra pair alone. An Owner, Manager or Operator is refused, a role preview cannot change a grant, and a member who presents a support-session id is still an ordinary member. See [docs/architecture.md § Super Admin sets a business's plan](docs/architecture.md#super-admin-sets-a-businesss-plan-issue-982).
+- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets, decide that business's manual plan grant, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no and the connection status stored beside it, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id. The plan grant is its **own** narrow store beside that one, over the business's grant row and the append-only record of each decision about it — and nothing else.
 - **Only a pending application may be decided.** An already-trading, already-refused or deactivated business is `409`; an unknown id is `404`. Approving also requires that the applicant's membership in the application is still active and that they hold no active membership in any other business — a person belongs to one business at a time — so an approval after they joined somewhere else is `409` and changes nothing. Two decisions arriving at once resolve to one recorded decision and one `409`: the business is re-read inside the write transaction that decides it.
-- **Audit.** Every committed decision emits one structured `ILogger` event with the actor `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the correlation id; every committed deactivation, reactivation and member release emits one of its own, with the action, the membership id where one applies and how many invites were cancelled. Neither ever contains a name of any kind — not the business's, not the applicant's or released member's — nor a contact address, an Entra identity or the reason's text, and there is deliberately no audit table. A refused action, and one that changed nothing, are audited as nothing. **The log destination and retention period are platform configuration, exactly as for the diagnostics audit above, and a human must verify them before relying on these trails.**
-- **The page.** The Angular app offers the Businesses page (issue #547) at `/super-admin/businesses`, shown as **Businesses** in the sidebar's **Super Admin** group (next to **Platform Diagnostics**) only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like that link; entering the URL directly works identically, because the policy above decides access on every request. The table shows seven of the directory's ten fields - name, status, applied date, contact email, ABN, how many members are active, and whether Nayax is configured - never the created/decided instants or the business id itself, which the page keeps only to name the subject of an action - filterable by status with pending applications first, the order the API already returns them in. **Approve** and **Reject** (with an optional reason) are offered for a pending application; **Deactivate** for a trading one; **Reactivate** and **Members** - which lists a deactivated business's memberships and **Release**s one - for a deactivated one; each action is behind a confirmation and shows the API's own result or refusal sentence verbatim, including reactivate's "no active Owner" one. The sidebar's pending-count badge, on both the group and the Businesses link, re-reads `GET .../pending-count` after every action on the page, so it is never more than one action's delay out of date. An action refused with `409` or `404` - the business was decided, changed or removed elsewhere, for example in another tab - also reloads the table and re-reads the badge, alongside the refusal, so the stale row does not keep offering the action that was just refused. **View as this business**, offered for an `Active` business, is the one action that leaves this page rather than reloading it — see [Super Admin support sessions](#super-admin-support-sessions) for what it starts. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
+- **Audit.** Every committed decision emits one structured `ILogger` event with the actor `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the correlation id; every committed deactivation, reactivation and member release emits one of its own, with the action, the membership id where one applies and how many invites were cancelled. Neither ever contains a name of any kind — not the business's, not the applicant's or released member's — nor a contact address, an Entra identity or the reason's text, and neither has an audit table. A **plan grant is the one platform action that does** (issue #982): each committed grant, change or end writes an append-only row — the actor, the business, the transition, the end instant, the revision, the reason as typed and the instant — in the **same transaction as the grant**, so a granted plan and the record of who gave it commit together or not at all, and nothing can later rewrite that row. The log event emitted beside it carries no reason text and no name at all. A refused action, and one that changed nothing, are audited as nothing. **The log destination and retention period are platform configuration, exactly as for the diagnostics audit above, and a human must verify them before relying on these trails.**
+- **The page.** The Angular app offers the Businesses page (issue #547) at `/super-admin/businesses`, shown as **Businesses** in the sidebar's **Super Admin** group (next to **Platform Diagnostics**) only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like that link; entering the URL directly works identically, because the policy above decides access on every request. The table shows nine of the directory's twelve fields - name, status, applied date, contact email, the recorded state or territory (issue #933, an em dash for a business that has none), ABN, how many members are active, whether Nayax is configured, and the stored Nayax connection status as a coloured dot beside the name (issue #983, see [Each business's Nayax connection status](#each-businesss-nayax-connection-status) below) - never the created/decided instants or the business id itself, which the page keeps only to name the subject of an action - filterable by status with pending applications first, the order the API already returns them in. **Approve** and **Reject** (with an optional reason) are offered for a pending application; **Deactivate** for a trading one; **Reactivate** and **Members** - which lists a deactivated business's memberships and **Release**s one - for a deactivated one; each action is behind a confirmation and shows the API's own result or refusal sentence verbatim, including reactivate's "no active Owner" one. The sidebar's pending-count badge, on both the group and the Businesses link, re-reads `GET .../pending-count` after every action on the page, so it is never more than one action's delay out of date. An action refused with `409` or `404` - the business was decided, changed or removed elsewhere, for example in another tab - also reloads the table and re-reads the badge, alongside the refusal, so the stale row does not keep offering the action that was just refused. **Plan** (issue #982), offered for an `Active` business, opens its own dialog, which reads that business's manual grant through the route above, offers the plan, the optional last day and the required reason, and shows the API's own refusal verbatim - including the stale-revision one; the table itself shows no plan, because the grant is read per business rather than listed. **View as this business**, offered for an `Active` business, is the one action that leaves this page rather than reloading it — see [Super Admin support sessions](#super-admin-support-sessions) for what it starts. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
+
+### Each business's Nayax connection status
+
+The Businesses list used to say only **yes or no** about a business's Nayax credentials, which could not
+tell a verified connection from a token that was saved and never tried, or from one whose last test
+failed. Since issue #983 the list reports the status each business already **stores**, and the page shows
+it as a coloured dot next to the business's name:
+
+| Dot | Status | What it says, in words |
+| --- | --- | --- |
+| 🟢 Green | `Ready` | Nayax verified at last test |
+| 🟠 Orange | `PendingPermissions` | Nayax token saved, not tested yet |
+| 🟠 Orange | `NeedsAttention` | Nayax last test failed |
+| 🔴 Red | `NotConfigured` | Nayax not set up |
+
+- **The words are always there, not only the colour.** Each sentence above is the dot's tooltip *and* a
+  screen-reader label in the same cell, so the two orange states never look like one thing and nobody has
+  to tell three hues apart to read the table. A status name the app does not recognise shows a neutral dot
+  and "Nayax status unknown" rather than being presented as one of the four.
+- **It is the stored result of that business's own last test, never a live check.** Loading the list makes
+  no Nayax call, resolves no credentials and decrypts no token, so the page is as fast and as safe as it
+  was, and a business whose connection is temporarily unreachable does not change colour because somebody
+  opened this page. A business with no connection stored at all reads **Nayax not set up**, which is
+  exactly what having nothing stored means.
+- **It is the status and nothing else.** No operator ID, no part of a token, no encryption key, no Nayax
+  error text, and not even when the test ran. The Super Admin can see which businesses are connected; they
+  cannot read or diagnose anybody's credentials from here.
+- **Testing a connection is still the business's own job.** This surface has no Test or Re-test action, and
+  nothing here changes a status: an Owner tests and re-tests their own connection on their own
+  [Connecting Nayax](#connecting-nayax-admin-page) page, exactly as before. Business Owners, Managers and
+  Operators see nothing new — the whole Super Admin surface still refuses them.
 
 ## Super Admin supplier presets
 
-The Super Admin also keeps **one platform-wide list of suggested suppliers** — Coles, Woolworths, Big W and Costco as shipped. **A business approved from now on starts with its own copy of every enabled preset** instead of an empty supplier list (issue #849, child C of #835); keeping the list is issue #848, child B. See [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets) below for exactly who gets them, and [docs/architecture.md § Tenant ownership](docs/architecture.md#tenant-ownership-issue-64) for why this is the one table in the schema that belongs to no business.
+The Super Admin also keeps **one platform-wide list of suggested suppliers**, which is two things at once: the list **a business approved from now on starts with its own copy of** instead of an empty supplier list (issue #849, child C of #835), and the **supplier master a price check reads** (issue #931, the first task of #817). Keeping the list is issue #848, child B. The shipped list is nine records: Coles, Woolworths, ALDI, Big W, Kmart, Costco and three JB Metro sites. See [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets) below for exactly who gets them, and [docs/architecture.md § Tenant ownership](docs/architecture.md#tenant-ownership-issue-64) for why this is one of the few tables in the schema that belong to no business.
 
 ```text
 GET  /api/super-admin/supplier-presets          every preset, enabled and disabled, ordered by name
-POST /api/super-admin/supplier-presets          { "name": "...", "url": "..." | null } -> 201
-PUT  /api/super-admin/supplier-presets/{id}     { "name": "...", "url": "..." | null, "isEnabled": true|false }
+POST /api/super-admin/supplier-presets          { "name", "url", "servesNationwide", "servedStates",
+                                                  "pricesIncludeGst", "priceConnector",
+                                                  "priceConnectorKey" } -> 201
+PUT  /api/super-admin/supplier-presets/{id}     the same, plus "isEnabled": true|false
 ```
 
-- **It only affects businesses approved later.** This list is a source to copy *from*. Nothing on this surface reads or writes any business's own suppliers: a preset never appears in `/api/suppliers`, editing or disabling one changes nothing a business already has, and a business's supplier of the same name is an entirely separate row that business owns outright. A preset added or re-enabled today reaches no business that was approved yesterday.
+- **It never writes to a business.** This list is a source to copy *from*. Nothing on this surface reads or writes any business's own suppliers: a preset is never a supplier in a business's own list, editing or disabling one changes nothing a business already has, and a business's supplier of the same name is an entirely separate row that business owns outright. A preset added or re-enabled today is **not pushed** into any existing business (issue #935): it is *offered* to the ones it serves, under **Available to add** on their own Suppliers page, and becomes a supplier only when somebody there adds it — see [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the three surfaces above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair unset — the shipped state — nobody can reach it at all.** A business Owner, Admin or member is refused with `403` like anybody else, and an anonymous request is `401`. A [role preview](#previewing-the-app-as-a-role-issues-720-and-721) is refused on both writes as read-only, exactly as on the Businesses surface, while a previewed **read** is unaffected: this controller declares no capability for a preview to narrow. The `X-Support-Session` header is **not acted on here at all** — as on every endpoint of this class — so an ordinary member who sets it is still an ordinary member refused `403`, and an administrator who happens to hold a live [support session](#super-admin-support-sessions) reaches this surface as themselves, writes included, exactly as they still reach the Businesses surface.
-- **What a preset is.** A name (required, trimmed, at most 200 characters), an optional website, whether it is still suggested, and the instants it was created and last changed. The website must be a complete `http://` or `https://` address of at most 2048 characters; a blank one is stored as "no website" rather than as an empty string, and nothing fetches, resolves or checks the address. That is not a rule of this feature's own: it is [the one a business supplier's own website uses](#a-suppliers-website) (issue #847), reused here so a preset and a supplier cannot disagree about what a valid address is — which matters because the copy below turns the one into the other.
+- **What a preset is.** A name (required, trimmed, at most 200 characters), an optional website, whether it is still suggested, the three supplier-master facts below, and the instants it was created and last changed. The website must be a complete `http://` or `https://` address of at most 2048 characters; a blank one is stored as "no website" rather than as an empty string, and nothing fetches, resolves or checks the address. That is not a rule of this feature's own: it is [the one a business supplier's own website uses](#a-suppliers-website) (issue #847), reused here so a preset and a supplier cannot disagree about what a valid address is — which matters because the copy below turns the one into the other.
+- **What it serves, what its prices mean, and who collects them (issue #931).** Each record says **which states it serves** — Australia nationwide, *or* one or more of NSW, VIC, QLD, SA, WA, TAS, ACT and NT, never both and never neither — whether **its published prices include GST** (yes for the supermarkets, Kmart and BIG W; no for JB Metro, whose prices are ex-GST), and **how those prices are collected**: nothing at all, Varnmill with a key naming the retailer (`coles`, `woolworths`, `aldi`), Kmart, BIG W, or JB Metro. The key is required for Varnmill and refused for every other route and for no route, and an invalid combination is `400` with a sentence saying which rule it broke. Whether prices include GST is a **recorded fact and never inferred** from a name, a connector or an amount, and it is required on every write so an omitted value cannot silently record a price list as ex-GST. A JB Metro record's **website is the site its connector reads**, which is why a new JB Metro site is a new record and not new code. No price is collected, stored or compared by this feature: it records what a later price check needs to know. Each record also carries **how old one of its prices may be and still be compared** (issue #925): 30 hours for a supplier checked daily, and 102 for Big W, which is checked on Thursday and Sunday — each one the longest expected gap between two checks plus a six-hour margin, so a collection run that starts a little later than yesterday's does not make every price look out of date. It is stored on the record rather than decided in code, so a supplier whose schedule changes is an edit to data; it is **not on this page or in this API yet**, and the shipped records were given their two values by the migration that added the column.
 - **Names are unique, ignoring case.** "Coles" and "COLES" are the same suggestion, so the second one is refused with `409` and "A supplier preset with this name already exists." The rule is a unique database index over a stored normalised name, not a check made before the insert, so two requests arriving at once leave one preset and one refusal — never two rows and never a server error.
 - **There is no delete.** A preset that should stop being suggested is **disabled**, which is reversible and leaves whatever a business already copied from it untouched. Disabled presets stay in the list, because one nobody can see is one nobody can re-enable.
-- **The shipped four are inserted once, by the migration that creates the table.** They are not seeded at startup and not declared as EF `HasData`, both of which re-apply themselves: production applies migrations on startup, so either would quietly undo an edit, or switch a deliberately disabled preset back on, at the next deployment. Rename one, give it a website, disable it or delete it directly in the database, and it stays that way.
-- **Audit.** Every committed create and edit emits one structured `ILogger` event with the actor `(tid, oid)`, the preset's key, which change it was, whether the preset is suggested afterwards, the instant and the correlation id. It deliberately carries **neither the name nor the website** — the same restraint the two audits above show about a business's name and contact address — and there is no audit table. A refused create or edit is audited as nothing. **The log destination and retention period are platform configuration, exactly as for the audit trails above, and a human must verify them before relying on this trail.**
-- **The page.** The Angular app offers Supplier presets at `/super-admin/supplier-presets`, shown as **Supplier Presets** in the sidebar's **Super Admin** group only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like the two links beside it; entering the URL directly works identically, because the policy above decides access on every request. The table lists every preset — name, website as a link that opens in a new tab, whether it is suggested, and when it last changed — with **Add preset**, **Edit** on each row, and **Disable**/**Enable** behind a confirmation that says plainly that businesses which already have the supplier keep it. The form checks the name and website with the API's own rules and sentences before sending anything, and shows any refusal the API returns — the duplicate-name `409` included — verbatim.
+- **The shipped records are inserted once, by migrations.** The original four came with the migration that created the table; ALDI, Kmart and the three JB Metro records came with the one that added the supplier-master columns, which also set those columns on the four that already existed, matching them **by name**. Neither is seeded at startup and neither is declared as EF `HasData`, both of which re-apply themselves: production applies migrations on startup, so either would quietly undo an edit, or switch a deliberately disabled preset back on, at the next deployment. Rename one, give it a website, change what it serves, disable it or delete it directly in the database, and it stays that way — and a record that was **renamed before** the supplier-master migration ran is left entirely alone by it, which shows on the page as a market that is **not set** until somebody fills it in. A record you had **already created yourself** under one of those five names is left alone in the same way: the migration inserts a record only when that name is free, so your record keeps its name, website, enabled state and instants, its new fields start **not set**, and the upgrade cannot fail on the duplicate name. Reversing that migration removes only the records it created itself, never one that was already there.
+- **Audit.** Every committed create and edit emits one structured `ILogger` event with the actor `(tid, oid)`, the preset's key, which change it was, whether the preset is suggested afterwards, what it serves, whether its prices include GST, its connector and that connector's key, the instant and the correlation id. It deliberately carries **neither the name nor the website** — the same restraint the two audits above show about a business's name and contact address — and there is no audit table. A refused create or edit is audited as nothing. **The log destination and retention period are platform configuration, exactly as for the audit trails above, and a human must verify them before relying on this trail.**
+- **The page.** The Angular app offers Supplier presets at `/super-admin/supplier-presets`, shown as **Supplier Presets** in the sidebar's **Super Admin** group only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like the two links beside it; entering the URL directly works identically, because the policy above decides access on every request. The table lists every preset — name, website as a link that opens in a new tab, what it serves, whether its prices include GST, which connector collects them, whether it is suggested, and when it last changed — with **Add preset**, **Edit** on each row, and **Disable**/**Enable** behind a confirmation that says plainly that businesses which already have the supplier keep it. The form offers one switch for nationwide and the eight state checkboxes while it is off, the "prices include GST" switch, and the connector with its key shown only for the route that needs one; it checks every rule with the API's own sentences before sending anything, and shows any refusal the API returns — the duplicate-name `409` included — verbatim.
 
 ### New businesses start with the enabled presets
 
 When a Super Admin **approves** a business application, that business is created with **one supplier
-of its own per enabled preset**, name and website copied, so it starts trading with a usable supplier
-list instead of an empty one (issue #849). It happens as part of the approval: either the business
-becomes active with its copies, or the approval fails and it is still waiting for a decision — never
-one without the other.
+of its own per enabled preset that serves the state it trades in**, name and website copied, so it
+starts trading with a usable supplier list instead of an empty one (issues #849 and #935). It happens
+as part of the approval: either the business becomes active with its copies, or the approval fails and
+it is still waiting for a decision — never one without the other.
 
+- **Only the records that serve its state** (issue #935). A record marked *Australia nationwide* goes
+  to every business; a record that serves particular states and territories goes only to a business
+  trading in one of them — so a Canberra business gets JB Metro South Coast & ACT and a Perth one does
+  not. A business with **no state recorded** — every business that existed before that field did —
+  gets the nationwide records only: its state is never guessed from its time zone, its address or its
+  ABN. A record whose market nobody has set yet goes to nobody. What happens **after** the approval —
+  when the business changes state, and when the platform adds a supplier — is in
+  [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **Who gets them.** Only a business whose `Pending` application is approved, and only the first time
   it is approved. A business that **already exists** gets nothing and is never backfilled: it already
-  has the suppliers it uses, and adding four more would be a change to its own data. An application
-  still waiting when this shipped gets its copies when it is approved, because it is a new business.
+  has the suppliers it uses, and adding the whole suggested list to it would be a change to its own
+  data. An application still waiting when this shipped gets its copies when it is approved, because
+  it is a new business.
+- **Only the name and the website are copied.** What a preset says about the states it serves, whether
+  its prices include GST and how they are collected (issue #931) is platform configuration for price
+  checks and is **not** copied: a business's own supplier row has no such fields, and giving it one
+  would be a separate decision.
 - **Who never gets them.** A rejected application, a deactivation, a reactivation, a repeated
   approval attempt, a business created by `bootstrap-business`, and the disposable end-to-end test
   fixture.
-- **Disabled presets are not copied**, and a list with nothing enabled approves the business
-  normally, with no suppliers.
-- **A copy is the business's own supplier from that moment on.** It is listed, edited and deleted
-  through the ordinary Suppliers page under the ordinary supplier permission, with no contact details
-  and no GST defaults set — a supplier's GST default is always something a business configures
-  deliberately, never something copied or inferred. Editing, renaming or disabling a preset
-  afterwards changes nothing any business already has, and a business editing or deleting its copy
-  changes neither the preset nor another business's copy.
+- **Disabled presets are not copied**, and a list with nothing enabled — or nothing that serves the
+  business's state — approves the business normally, with no suppliers.
+- **A copy is the business's own supplier from that moment on, and it stays linked to the list it
+  came from** (issue #934). It is listed on the ordinary Suppliers page under the ordinary supplier
+  permission, with no contact details and no GST defaults set — a supplier's GST default is always
+  something a business configures deliberately, never something copied or inferred. Editing,
+  renaming or disabling a preset afterwards changes nothing any business already has, and a business
+  editing its copy changes neither the preset nor another business's copy. What the business may
+  change about a linked copy is in [Suppliers from the platform list](#suppliers-from-the-platform-list)
+  below.
+
+## Super Admin supplier price review
+
+The shared supplier price catalogue is collected automatically — a daily run searches each supplier's
+site for the products businesses asked to have priced — and **nothing it finds takes part in a price
+comparison until a person has confirmed it**. That person is the Super Admin, and this is the page
+they do it on (issue #928, the seventh task of #817). The data is shared by every business, so one
+wrong pack quantity would be one wrong "cheapest supplier" for everybody tracking the product: Claude
+may propose, and a Business Owner may not confirm anything here at all.
+
+```text
+GET  /api/super-admin/price-catalogue-review                  the whole review queue
+POST /api/super-admin/price-catalogue-review/listings/{id}/decision
+                                                              confirm (as reviewed) or refuse one listing
+POST /api/super-admin/price-catalogue-review/matches          { waitingKey, decision, … }
+POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/confirm
+POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
+```
+
+- **Who may use it.** Exactly the same answer as every Super Admin route above: the configured Entra
+  `(tid, oid)` pair alone. An Owner, a Manager and an Operator are refused, a role preview cannot
+  write, and a member who presents a support-session id is still an ordinary member. The request
+  resolves no business at all.
+- **Products awaiting a match** are listed by their **search name and unit label** with a **count of
+  the businesses waiting** — never which business asked, which is not in the API at all — together
+  with what the collector suggested, how sure it was, why, which run said so, and the supplier
+  listings its searches have found. The Super Admin can accept the suggestion, pick another master
+  product, create one (prefilled from the suggestion), refuse the suggestion, or record that nothing
+  in the catalogue is this product. A match settles every business waiting under that search at once
+  and moves the listings it had collected to the product — still as proposals, because a match says
+  which product a search was for and never that somebody confirmed a listing.
+- **Automatic matches** are listed separately and flagged **Auto-matched**, with the run, the
+  confidence and the reason. **Confirm** settles them. **Undo** returns the businesses waiting under
+  the search to awaiting a match, moves the *proposed* listings back to it, leaves **confirmed**
+  listings exactly as they are, and records the pair so it is never matched automatically again.
+- **Confirming a listing is the only thing that confirms a pack size.** The pack quantity, the barcode
+  and its scope, the variant and the individual size are confirmed as reviewed — correcting any of
+  them and confirming is one action, which is how a BIG W row whose pack count was read out of its
+  name ("Coca Cola 375Ml Coke 36Pk 36 Pack") gets the count a comparison then divides by.
+- **Confirming also accepts the price the listing was holding, but only when it stands up.** The
+  reading must be inside that supplier's own freshness limit, must describe the pack that was
+  confirmed, and must be inside the band around the listing's last accepted price (no more than 50%
+  below, no more than 100% above). Otherwise the listing is **confirmed with no current price** and is
+  priced on the next run — the page says which of the two happened and why.
+- **Correcting the pack also withdraws the price the listing was already showing.** A comparison
+  divides a listing's pack price by the listing's own pack count, so a $40 30-pack confirmed as a
+  36-pack would otherwise have been shown as $40 for 36 — a price no supplier ever charged. Changing
+  the pack quantity, the variant, the individual size or the barcode therefore leaves the listing with
+  **no current price** until the next run reads the pack that was confirmed; a confirmation that
+  corrects nothing keeps the price it had. Nothing is deleted: every price ever observed stays in the
+  history, and the business is shown "not checked yet" rather than a wrong number.
+- **A price exception is explicit.** A price past the band is accepted only when the Super Admin ticks
+  **Approve this price exception**, which is offered only when the band is what would otherwise refuse
+  the reading; the accepted price then becomes the reference the next run's band is measured against.
+  The exception overrides the band and nothing else — it cannot make a stale reading fresh — and it is
+  **audited separately** from the listing decision, because it overrides a financial safeguard.
+- **Barcode matches are shown first.** A listing whose barcode is a **confirmed** listing's barcode in
+  the same scope is flagged as a barcode match and shows which listing it matches, because that is the
+  one fact two suppliers can publish about the same physical pack. It still needs confirming.
+- **Decisions are kept.** A refused listing is not shown again unless its identity changes, a confirmed
+  one comes back only when a later run flags it, and the same shelf found every day proposes nothing
+  twice. Supplier wording is shown as plain text, and the listing's own page is the only link.
+- **Audit.** Every committed decision emits one structured `ILogger` event with the actor
+  `(tid, oid)`, which decision it was, the listing, master product and suggestion keys, the search key,
+  whether a price was accepted and the pack quantity confirmed — and a second event when a price
+  exception was used. It carries **no business, no supplier name, no listing title and no price**, and
+  there is no audit table. **The log destination and retention period are platform configuration, as
+  for the trails above, and a human must verify them before relying on this trail.**
+- **The page.** The Angular app offers it at `/super-admin/price-catalogue-review`, shown as
+  **Supplier Price Review** in the sidebar's **Super Admin** group only while
+  `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like the three links beside
+  it; entering the URL directly works identically, because the policy decides access on every request.
+  It shows the three sections above, re-reads the queue after every decision so what is on screen is
+  what is stored, and shows the API's own refusal sentence verbatim — including the `409` that says
+  somebody else decided the same row first. See
+  [docs/architecture.md § Super Admin review of the supplier price catalogue](docs/architecture.md#super-admin-review-of-the-supplier-price-catalogue-issue-928).
+
+## Super Admin master products
+
+The review above is a **queue**: products awaiting a match, automatic matches to check, listings
+awaiting a decision. This page is the catalogue **itself** — every master product in the shared
+supplier price catalogue, searchable, with the supplier listings that hang from each one (issue #1023,
+the eighth task of #817). It exists because a product nothing was waiting on could not be found,
+searched for or inspected at all.
+
+**It is read only.** Creating, editing and deleting a master product are separate tasks that follow
+this one, and the Supplier Price Review stays the only place a master product is created or corrected.
+
+```text
+GET /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
+GET /api/super-admin/master-products/{id}                      one product and its supplier listings
+```
+
+- **Who may use it.** Exactly the same answer as every Super Admin route above: the configured Entra
+  `(tid, oid)` pair alone. An Owner, a Manager and an Operator are refused, and a member who presents
+  a support-session id is still an ordinary member. The request resolves no business at all.
+- **Nothing about any business is in either response** — no business id, no business name, no
+  business's product id, and **no count of who is tracking a product**. That count is the review's, and
+  it is deliberately not here: this page is master-catalogue management only.
+- **Searching and paging happen on the server.** `search` matches the brand or the name, ignoring case
+  and treating a typed `%` literally; `page` and `pageSize` are bounded (50 by default, 200 at most)
+  and the response reports the page and size it actually served, with the total number of products the
+  search matched.
+- **Each product carries its supplier-listing counts** by what the catalogue thinks of each listing —
+  proposed, confirmed, needs review and refused, with the total. Refused listings are counted, because
+  a refusal is kept rather than deleted.
+- **Each listing shows what a supplier publishes**: the supplier's name, its own product id, its
+  wording, the individual size, the pack quantity, the match status, when it was last checked, the
+  listing's own page, and the pack price of the reading it currently points at — with that reading's
+  currency, whether it includes GST, and when it was observed. A listing nobody has priced says
+  **Never checked** rather than showing a zero, and an unpublished pack quantity stays **Unknown**.
+  Nothing here is a per-unit price: that comparison is the Cheapest supplier column's.
+- **The page.** The Angular app offers it at `/super-admin/master-products`, shown as **Master
+  Products** in the sidebar's **Super Admin** group beside Supplier Price Review and only while
+  `GET /api/admin/diagnostics/access` confirms the signed-in actor; entering the URL directly works
+  identically, because the policy decides access on every request. It has no Add, Edit or Delete
+  control. See
+  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issue-1023).
 
 ## Super Admin option visibility
 
@@ -1077,6 +1715,43 @@ and the **Edit Purchase** page each offer a GST picker with three states — **T
 and the package charge. A charge never inherits a line's classification, and there is no single
 classification for a whole purchase.
 
+**One layout for Add and Edit** (issue #1029). Add Purchase and Edit Purchase share one compact page:
+**Purchase details** (Supplier, Purchase date and an editable Purchase title, with an optional **Attach
+receipt** button beneath), **Purchased items**, the optional **Additional costs** and **Notes**, a **Purchase
+summary**, and a bar along the bottom with **Cancel** on the left and **Save purchase** on the right that stays
+in view while you scroll. The longer explanations of prices and GST sit behind small **i** help buttons beside
+the column headings; tap, click or press Enter on one to read it, and Escape or a tap elsewhere closes it.
+Screenshots: [Add, filled, 1440px](docs/screenshots/issue-1029/add-filled-1440px.png),
+[Add, 390px](docs/screenshots/issue-1029/add-filled-390px.png) and
+[Edit, expanded, 1440px](docs/screenshots/issue-1029/edit-expanded-1440px.png).
+
+- **Title.** A new purchase opens on today's date with a suggested title made from the supplier and the date
+  (for example "Sample Wholesale — 24 Oct 2026"), which follows the supplier and date until you type a title of
+  your own. Nothing ever replaces a title you typed, or the title of a purchase you are editing.
+- **Products.** Each line's product is a search box over your own products: type part of the name and pick it
+  from the list, which shows the product's size or unit where it has one. A new line starts with no product
+  chosen, and a line cannot be saved until it has one. **Quantity** is always individual units, never cartons.
+- **Validation.** A line you have not touched yet shows no errors; a missing product, quantity or price is
+  pointed out once you have worked on that line or pressed Save purchase. If the server refuses a save,
+  everything you entered stays on the page.
+- **Additional costs and Notes** start collapsed while they are empty. Expanding Additional costs shows
+  separate **Delivery** and **Packaging** amounts, each with its own GST picker once it has a value; Edit opens
+  either section automatically when it holds something. Collapsing a section only hides it: its values are
+  kept and saved.
+- **Receipt.** Attach receipt takes a PDF or an image. Before you save, the attached file can be previewed,
+  replaced or removed, and nothing is uploaded until the purchase is saved. On Edit, a purchase that already
+  has a receipt shows it with **Preview** only: a saved receipt cannot be replaced or removed from this page,
+  and opening or cancelling Edit never deletes it. A receipt attached while editing a purchase that has none is
+  added after your changes are saved; if the receipt is refused, your changes stay saved and you are told, and
+  the Purchases list still offers **Add document**.
+- **Purchase summary.** Items subtotal, Delivery and Packaging (when there are any), **Included GST** and the
+  **Purchase total**. On Add, Included GST says it is calculated when saved, because GST is worked out by the
+  server; on Edit it shows the GST as last saved, with any part still not classified. The **Receipt total
+  (optional)** is the purchase's existing total amount, stored exactly as before; when you enter one, the
+  summary says **Matches receipt** or **Difference: $X**, compared the same way the Purchases list's mismatch
+  warning compares it. It is information only: a difference never blocks a save and never changes what is
+  saved, and a blank receipt total means none was entered, not $0.
+
 **Edit** on a purchase row opens the Edit Purchase page at `/purchases/<id>/edit`; nothing expands inside the
 Purchases table. That address is bookmarkable and survives a page refresh, **Save** stores the changes and
 returns to the Purchases list, and **Cancel** returns without saving. Leaving the page by Cancel, by the
@@ -1084,10 +1759,10 @@ browser's Back button or by any other link discards unsaved edits without asking
 other form page in the application behaves.
 
 **Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line shows
-both of its prices side by side — **Unit price ($)** and **Total price ($)** — and you can type into either
-one. The other is calculated from that line's purchased unit quantity, so you can check both before saving:
-type $32.50 into Total price for 20 units and the Unit price fills in as $1.6250; type $1.50 into Unit price
-for 28 units and the Total price fills in as $42.00. The figure you typed **last** is the one the other
+both of its prices side by side — **Unit price ($)** and **Line total ($)** (called Total price before issue
+#1029) — and you can type into either one. The other is calculated from that line's purchased unit quantity, so you can check both before saving:
+type $32.50 into Line total for 20 units and the Unit price fills in as $1.6250; type $1.50 into Unit price
+for 28 units and the Line total fills in as $42.00. The figure you typed **last** is the one the other
 follows, so if you change the quantity afterwards, a total you typed is spread over the new quantity while a
 unit price you typed is multiplied by it. A line is still saved as its quantity and unit cost, and a total
 that does not divide evenly — $100.00 over 300 units, for example — is saved so the line still comes to
@@ -1095,7 +1770,7 @@ exactly the $100.00 you entered, even though the Unit price field shows the roun
 starts each line on the total paid; a line already on a purchase you are editing starts on its recorded unit
 price, so correcting only its quantity keeps the cost it was recorded at, and neither receiving a supplier
 order nor opening the edit page changes a line's unit cost until you type a price yourself. The purchase's own
-**Total Amount**, **Delivery Cost** and **Package Cost** are unaffected and are still entered as plain
+**Receipt total**, **Delivery** and **Packaging** amounts are unaffected and are still entered as plain
 amounts.
 
 - Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
@@ -1123,6 +1798,75 @@ amounts.
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.
 
+## A purchase without a receipt
+
+A purchase is the record of what you bought; the receipt is paperwork about it. So the **Attach receipt**
+button on Add Purchase is optional: leave it unused and the purchase is saved exactly as it would be with a
+receipt attached - the same stock, the same cost, the same GST, the same supplier-order handling. A purchase
+still needs a **Purchase title**; Add Purchase suggests one from the supplier and the date.
+
+The Purchases list says **No document** for a purchase that has none, and offers **Add document** on that row.
+Pick the receipt when it turns up and it is added to the purchase that was already recorded; it then opens and
+downloads from the list like any other.
+
+- Adding a document **adds** one; it never replaces one. A purchase that already has a document is left alone,
+  and if somebody else attaches one between your choosing a file and pressing the button, you are told the
+  purchase already has a document rather than having theirs quietly thrown away.
+- The receipt itself follows the same rules it always has: an image or a PDF, up to 10 MB. A file that is
+  refused leaves the purchase exactly as it was, with no document recorded.
+- **Add document** is not offered while a Super Admin is looking at your business in a support session, for
+  the same reason Delete is not: a support session can read, never write.
+
+## Receiving a supplier order: keep it open, or complete it
+
+**Receive / Create Purchase** on the Supplier Orders page opens Add Purchase with the order's outstanding
+lines prefilled, exactly as before. Suppliers do not always send everything they were ordered, though, and an
+order you record a short final delivery against used to stay **Partially received** until you cancelled it
+separately — which said the wrong thing, because the goods that *did* arrive were delivered and recorded.
+
+So when you press **Add Purchase** on a purchase that came from a supplier order, and the order would still
+be short of something afterwards, the application asks what should happen to the remainder before it saves
+anything:
+
+- **Keep order open** — the safe default, and the behaviour saving the purchase has always had. The order
+  stays **Partially received**, and the quantities that have not arrived stay on order: they still count
+  towards the restock target, so the products do not ask to be ordered again.
+- **Complete order** — nothing more is expected. The purchase is saved and the order is closed in the same
+  step, with the status **Completed — partially delivered**.
+- **Back to purchase** — closes the question and saves nothing. Everything you entered — the document, the
+  title, every line, the charges and the classifications — is still on the form.
+
+The dialog lists the affected products with what was ordered, what had already been received, what this
+purchase delivers and what would be left outstanding, each in the unit the product is ordered in. Those
+figures come from the server, which projects your entered lines against the order's own stored receipts using
+the same allocation it will use when it saves — the page does not work them out itself.
+
+**What completing an order does, and what it deliberately does not.**
+
+- It records **only what actually arrived**. The quantities that never came create no stock, no cost, no
+  weighted-average change, no GST and no purchase amount of any kind. Nothing on the order is rewritten to
+  make it add up, and a line this purchase left out entirely is closed at the zero that really arrived.
+- The order keeps its **ordered quantities, its real receipts and its purchase links** as history, with the
+  undelivered balance readable beside them, and records who completed it and when. It is **not** relabelled
+  **Cancelled** (goods really were delivered) and **not** relabelled **Received** (part of it never came).
+- The closed balance stops being **on order**. It no longer counts towards a restock target, so the products
+  on it start asking to be ordered again — which is the point: nobody is sending them.
+- A completed order accepts **no further receipts**, is no longer listed among the open orders, and cannot be
+  cancelled. Reopening one is not supported.
+- Because the order was closed on that purchase's receipts, **that purchase can no longer be edited or
+  deleted**. Both are refused with a message naming the order, rather than silently reopening it or leaving
+  it recording a delivery no purchase holds.
+
+**A fully received order is unchanged.** If your purchase receives everything still outstanding, nothing is
+asked and the order becomes **Received** as it always did. A purchase that is not linked to an order is
+unchanged too.
+
+**If the order changed while you were deciding** — somebody else recorded another receipt, or cancelled or
+completed it — the save is refused, **nothing at all is stored** (not the purchase, not its stock, not the
+order's status), and the page asks you to reload the order and review the outstanding quantities with your
+entered purchase still on screen. The same applies if the save fails for any other reason: nothing ever
+reports an order as completed unless the server stored it.
+
 ## Products and categories
 
 The catalogue is the business's own. A business with no sales provider connected creates and
@@ -1149,7 +1893,10 @@ does not manage.
   list's **Deactivate** and **Reactivate** (which send the whole product back) keep working for
   those older products. Imported products are unaffected: the catalogue import gives a product it
   creates the `unit` default and leaves a linked product's own label alone, and no label is
-  backfilled anywhere.
+  backfilled anywhere. **One feature does require a real label**: supplier price tracking cannot be
+  switched on for a product whose label is blank or is still that `unit` default, because the label
+  is half of what is searched for at a supplier — see
+  [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **New Product is read down in titled sections** (issue #892). **Products → New Product** groups
   its fields under **Product details** — Name beside SKU, Category beside Unit Label, Description
   across the row below them, and then the compact **Active product** checkbox — **Opening
@@ -1266,7 +2013,11 @@ does not manage.
   are unaffected by this change. The **Status** column itself is shown only under **All**: under
   **Only active**, every row would say "Active" anyway, so the column (and a sort on it) is hidden
   instead, and switching back to **Only active** clears a Status sort rather than leaving it pointed
-  at a hidden column (issue #828).
+  at a hidden column (issue #828). Which products have supplier prices tracked, and where each one
+  has got to, is shown in the **Cheapest supplier** column rather than a separate one (issue #1022);
+  the full set of statuses, including **Matched automatically** and **Paused**, stays on the
+  product's own Edit page — see
+  [Track supplier prices on a product](#track-supplier-prices-on-a-product).
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase
@@ -1295,6 +2046,11 @@ does not manage.
   "cola", "COLA" and "Cola" all find a product named "Coca Cola".
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
+- **A category that comes from Nayax cannot be deleted either** (issue #1026), the same way its name
+  cannot be edited: the local catalogue would otherwise drift from the provider's. The Categories
+  page shows no **Delete** button for such a category, and the API refuses the delete outright if
+  it is attempted anyway — before the "used by products" check, so this refusal wins when both
+  apply.
 - **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739), **and it
   has its own page: Products → Import products** (`/products/import`, issue #888). The sidebar's
   **Inventory → Import products** entry goes there, for every business that may run imports with a
@@ -1320,6 +2076,137 @@ does not manage.
   target, the active flag and all of your stock, costing and history. Nayax publishes no unit or
   volume label at all, so the review never proposes one.
 
+## Track supplier prices on a product
+
+You choose which of your products should have their prices checked at the suppliers in the shared
+price catalogue, and you can see whether each one has been matched yet. Nothing is checked for a
+product you have not switched on.
+
+- **Products → edit a product → Track supplier prices.** One switch. Turning it on asks for this
+  product's prices; turning it off withdraws the request. It saves on its own, separately from the
+  rest of the product form, because it is not a catalogue field — the same way the **GST rule**
+  panel beside it saves.
+- **A product is searched for by its own name and unit label** — "Coca-Cola Classic" and "375mL".
+  Those two values are copied when you switch tracking on, so what is searched for is what you were
+  shown rather than something that changes under you later.
+- **A real unit label is required** (see **Unit Label is required** under
+  [Products and categories](#products-and-categories)). A product whose label is blank, or is still
+  the generic `unit` every imported product starts with, cannot be switched on: the switch is
+  unavailable and says so — *"Supplier prices are searched for by the product's name and unit label,
+  so this product needs a real unit label such as "375mL" before tracking can be turned on."*
+  Give the product its real label on the same form, save, and the switch becomes available. This
+  changes nothing about what a product may be saved with; it is only a condition for tracking it.
+- **What the status means.** Under the switch, a tracked product shows one of five states, and each
+  is an answer rather than a stage:
+  - **Awaiting match** — the request is recorded and nothing has matched it yet.
+  - **Matched automatically, awaiting check** — the matcher chose a catalogue product and nobody has
+    reviewed that choice. The product it chose is named beside it, with its size.
+  - **Matched** — the match is settled. The catalogue product's name and size are named beside it.
+  - **Not found** — it was looked for and nothing in the catalogue describes it. A real answer, which
+    is why it is not searched for again every run.
+  - **Paused - this product cannot be searched for** — the product's own name or unit label can no
+    longer be searched for, usually because the unit label was replaced by the generic `unit`.
+    Nothing is searched for it, it is matched to nothing, and the same sentence about a real unit
+    label is shown under it saying how to resume. Give the product a real unit label again and it
+    goes back to **awaiting match**.
+  Only the catalogue product's **name and size** are ever shown — nothing about which suppliers
+  stock it, what it costs, or any other business.
+- **Renaming or relabelling the product.** While a product is still **awaiting a match**, editing its
+  name or unit label updates what is searched for. For a product that is already **matched**,
+  changing its **unit label** puts it back to **awaiting a match** with the new text — a 375 ml can
+  that became a 1.25 l bottle is not the same product — while a **name-only** change keeps the match.
+  A **not found** product is left as it is.
+- **Taking a product's unit label away pauses its tracking; it never prices the old size.** If you
+  replace a tracked product's unit label with the generic `unit`, the edit is still saved — tracking
+  never stops you editing a product — but its tracking goes to **Paused**: any match it had is
+  dropped, so no supplier's price for the old size is shown as this product's, and nothing is
+  searched for it in the meantime. Giving it a real unit label again starts it off from the product's
+  current name and label; it waits for a match afresh rather than returning to the match it had,
+  because that match was made on the size you changed.
+- **Turning it off removes only your request.** The shared catalogue of products, supplier listings
+  and prices is untouched, and so is every other business's. You can switch it back on at any time.
+- **Nobody sees anybody else's choices.** A business cannot see which products another business
+  tracks, and the shared catalogue records no business at all — a product is looked up once for
+  everybody, which is the whole point of sharing it.
+- **Products → All Products** shows which of your products are tracked and where each one has got to
+  through its **Cheapest supplier** column (issue #1022); the finer distinctions it does not carry —
+  **Matched automatically** versus **Matched**, and **Awaiting match** versus **Paused** — stay on
+  each product's own **Edit** page. There is no way to switch many products on at once.
+- **What the prices look like once a product is matched** is on **Products → Needs Ordering**,
+  **Products → All Products** and the Dashboard's **Reorder priorities**, in the **Cheapest
+  supplier** column — see
+  [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
+- **New Product** has no switch — there is no product yet to track. The form says so, and the switch
+  is on that product's **Edit** page once it exists.
+- **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
+  permission is involved. It is unavailable while you are looking at a business in read-only support
+  view, and while a Super Admin is previewing a role, like every other write in those states.
+- **It works on every plan, and the prices it leads to are a Starter feature.** The switch and its
+  status are available whatever the business's
+  [plan](#business-plans-free-starter-and-pro) says: you can turn tracking on and off on Free, and
+  the setting is kept if the plan changes — nothing clears it on a downgrade. What a plan decides is
+  whether the **prices** are shown (the column below) and whether the daily collection is run for
+  your product: a product only Free businesses track is not looked up at the suppliers, while a
+  product you and a Starter or Pro business both track still is. Turn the plan back on and the
+  prices come back with it, from the request you had already made.
+
+## The cheapest supplier, on Needs Ordering
+
+Once a product's prices are being tracked and the catalogue has matched it, **Products → Needs
+Ordering** shows what your own suppliers charge for it. The column is called **Cheapest supplier**,
+it sits after the purchase-cost columns, and a row reads like `JB Metro $0.95/unit inc GST
+(special)`. These are prices observed on suppliers' own pages as purchasing guidance — they are
+**not** costs you have paid, they never change a purchase, a cost, an inventory value or any report,
+and what you actually paid stays in the **Last purchase** and **Cheapest purchase** columns beside
+them. **Products → All Products** (issue #940) and the Dashboard's **Reorder priorities** carry the
+same column, cell and popup — everything below applies to all three.
+
+- **Clicking the cell opens a popup listing every one of your suppliers**, cheapest first — for
+  example `JB Metro $0.95/unit (24 pack $22.70, special) · Coles $1.27/unit · Woolworths: no match`.
+  Each row shows the pack size and pack price, the unit price **on both GST bases**, whether it is a
+  special, what the supplier said about stock, when it was last checked, and a link that opens that
+  supplier's own page for the product in a new tab. **Last checked** is shown on your business's own
+  clock, in the time zone set in Admin → Business settings, not in whatever zone the computer you
+  are using happens to be in; a listing nobody has checked yet says **Never**.
+- **The popup is a real dialog, so the page behind it waits.** While it is open, the rest of the page
+  cannot be clicked or tabbed into: **Tab** and **Shift+Tab** cycle through the popup's own links and
+  buttons and stay there. **Escape**, clicking outside the panel and **Close** all close it, and the
+  keyboard goes back to the cell you opened it from.
+- **The price you are compared on follows your GST registration.** A GST-registered business is
+  shown and compared on **ex-GST** prices, because that is what it really pays for a can; a business
+  that is not registered is shown the price it hands over, **inc-GST**. Both figures are in the
+  popup either way, and the cheapest supplier is always the smallest number you are shown.
+- **Which suppliers take part.** Your own suppliers that came from the platform's supplier list and
+  that you have not marked **Not used** (see [Suppliers from the platform
+  list](#suppliers-from-the-platform-list)). A supplier you typed in yourself has no catalogue
+  listings to compare, and a **Not used** supplier is one you have said you do not buy from.
+- **A supplier that is listed with no price is still listed, and says why.** "No match" is a
+  supplier that does not list the product at all, "Not checked yet" is a listing nobody has read a
+  price from, and an offer that cannot be compared says the one reason — out of stock, the special
+  has ended, the pack size is not published, the match is not confirmed, the GST rate is unknown, or
+  the last check is too old. A price that is not known is never shown as `$0.00`.
+- **The cell itself is an answer, not a blank.** It says **Not tracked** for a product you have not
+  switched on, **Awaiting match** while nothing has matched it, **No match found** when it was
+  looked for and nothing described it, **No eligible price** when no offer could be compared,
+  **Loading** while the prices are being read, and **Unavailable** if that read fails — the rest of
+  the page still works, and a Retry sits above the table. When the match was made automatically and
+  nobody has checked it, the popup says **Matched automatically**.
+- **Who may see it.** The same permission that opens the dashboard (`Dashboard.View`), which every
+  role holds — these are suppliers' published prices rather than your own financial figures. The
+  column reads as **Unavailable** while a Super Admin is looking at your business in read-only
+  support view, which is read-only and asks for nothing.
+- **And which plan.** Supplier price comparisons are a **Starter** feature (see
+  [Business plans](#business-plans-free-starter-and-pro)). While plans are being enforced, a Free
+  business is refused this one read and the column reads as unavailable; everything else on the
+  page, including **Last purchase** and **Cheapest purchase**, which are your own purchase history,
+  is unaffected. Nothing you have tracked is lost, and the column fills in again as soon as the plan
+  includes it.
+- **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
+  the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
+  disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the
+  purchase-cost columns, with one request for the page's products — the same batching, failure
+  message and Retry described above, and no sort of its own.
+
 ## A supplier's website
 
 A supplier can record an optional **Website** beside its name, contact and address, so you can open
@@ -1341,6 +2228,70 @@ no website is normal, and editing one you recorded earlier works without touchin
   none is recorded, and `POST`/`PUT /api/suppliers` accept it. It is also part of the nested
   `supplier` object on a purchase, a supplier order and an operating expense, as an additive
   nullable field; nothing else about those payloads changed.
+- **One supplier's website cannot be changed**: a supplier that came from the platform's supplier
+  list keeps that list's website, as it keeps that list's name. See
+  [Suppliers from the platform list](#suppliers-from-the-platform-list).
+
+## Suppliers from the platform list
+
+A business approved from now on starts with one supplier of its own per enabled platform preset that
+serves the state it trades in (see
+[New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets)), and
+each of those copies **stays linked** to the list it came from. The Suppliers page marks a linked
+supplier with a **Platform list** label.
+
+- **Change your state and the suppliers that serve it are added** (issue #935). When an Owner changes
+  the state or territory in Business settings, every supplier on the platform's list that now serves
+  you and that you do not already have is added as part of that save. **Nothing is ever removed**: a
+  supplier you no longer "match" stays exactly as it is, with its purchase history, because you did
+  buy from it — mark it **Not used** if you have stopped. Saving anything else on that page changes
+  no supplier at all.
+- **A supplier the platform adds later appears under "Available to add"** (issue #935). It is never
+  pushed into your business. The Suppliers page shows an **Available to add** section listing the
+  platform suppliers that serve your state and that you have not added yet, with their name and
+  website; **Add** creates your own copy of one, with that list's name and website, in one click. The
+  section is not shown at all when there is nothing left to add. Adding needs the same permission as
+  the rest of the Suppliers page, and the action is hidden — and refused — in a read-only support
+  session and while previewing another role. Adding the same one twice (two tabs, say) tells you it
+  has already been added and leaves one supplier; a supplier that serves another state is not offered
+  and cannot be added.
+
+- **Its name and website are the platform's.** Open a linked supplier for editing and the Name and
+  Website fields are read-only, with a note saying why. The API refuses a change to either with
+  `400` and a message you can read, whatever a client sends.
+- **It cannot be deleted.** There is no Delete button on a linked row, and the endpoint refuses the
+  delete.
+- **Its contact details and GST defaults are yours.** Contact name, phone, email and address save
+  normally, and so do the supplier's three
+  [GST defaults](#product-and-supplier-gst-rules) — those are your own accounting settings about a
+  supplier you buy from, and the link only fixes who the supplier *is*.
+- **Mark one you do not use as "Not used".** The Suppliers page has a **Not used** switch on each
+  linked row. Switched on, the supplier stops being offered when you record a purchase, place a
+  supplier order or order from the Needs Ordering page. Nothing is removed: the row stays on the
+  Suppliers page so you can switch it back on, and every purchase, supplier order and expense that
+  already names it still shows it. The switch needs the same permission as the rest of the Suppliers
+  page, and it is hidden — and refused — in a read-only support session.
+- **A supplier you added yourself is unchanged.** Rename it, re-point its website, delete it, exactly
+  as before. "Not used" is deliberately not offered for one: you can simply delete it.
+- **For the API.** `GET /api/suppliers` and `GET /api/suppliers/{id}` publish `isLinked`, `isHidden`,
+  `canRename` and `canDelete` beside the fields they already carried, so a client shows the right
+  controls; the server enforces the rules either way. `GET /api/suppliers` leaves the suppliers
+  marked "Not used" **out** unless you ask for them with `?includeHidden=true`, so every picker gets
+  the right list by default. `PUT /api/suppliers/{id}/not-used` takes `{ "isHidden": true|false }`.
+  `GET /api/suppliers/available-presets` lists what you may add — each with `id`, `name` and `url`
+  and nothing else — and `POST /api/suppliers/available-presets/{presetId}` adds one, with **no
+  body**: its name and website come from the platform's list, and the business is your own. That add
+  answers `201` with the new supplier, `409` if you already have it, and `404` for a supplier that
+  does not exist, is no longer suggested, or does not serve your state — including when it stopped
+  being one of those while your Suppliers page was open, because the add checks all three for itself
+  at the moment it writes rather than trusting the list you are looking at. The nested `supplier`
+  object on a purchase, supplier order or expense is unchanged.
+- **Businesses approved before this** had their existing suppliers linked once, by name: a supplier
+  whose name matches a list entry exactly (ignoring case and surrounding spaces) was linked, and
+  nothing else about it was touched. Where one business held **two** suppliers matching the same
+  entry, **neither** was linked, because there is no way to tell which one you actually buy from —
+  those rows stay yours to rename and delete as before. No supplier was created, renamed, hidden or
+  deleted by that upgrade.
 
 ## A product carries no supplier
 
@@ -1415,6 +2366,9 @@ it is in, on the Machines pages.
 
 ## What you paid, on the dashboard's Reorder Alerts
 
+Since issue #972 this table is the dashboard's **Reorder priorities** (its first five products, with
+a link to all of them on Needs Ordering), and its two cost columns are unchanged.
+
 Where the Reorder Alerts table used to carry a selling price, it now carries what you actually paid:
 a **Last purchase** column and a **Cheapest purchase** column, each showing the supplier and the unit
 cost — for example `Acme · $1.25`. Both come from your recorded purchase history, so you can see
@@ -1439,8 +2393,9 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
 
 - **A machine is listed for either of two reasons.** Its last fully successful restock sync is three
   or more business days old — counted as calendar days in your own business time zone, so a
-  daylight-saving change never moves the line — or it still has imported restock events nobody has
-  resolved. Either one alone is enough, and both are shown: a recent sync clears only the first.
+  daylight-saving change never moves the line — or it still has imported restock events from the
+  last 14 business days nobody has resolved. Either one alone is enough, and both are shown: a
+  recent sync clears only the first.
 - **"No recorded sync" means exactly that, not "never synced".** A successful sync has been recorded
   since this feature was added; machines you were already syncing before then start with nothing
   recorded, and nothing guesses a date for them from an event, a sales sync or a stock count. The
@@ -1449,14 +2404,18 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
   of what it read, records nothing at all — and one that succeeded and found no new alert counts as
   a success, because an empty answer is an answer. A successful sync is never a promise that all of
   your history has been fetched: Nayax's last-alerts list is a rolling window of recent events.
-- **Pending counts are what has been imported.** They include events needing review, events you have
-  not got enough storage stock for, and possible duplicates you have not resolved; they exclude ones
-  you have applied or marked as already recorded manually. A count of zero means nothing imported is
-  outstanding — it cannot promise that Nayax is holding no alert nobody has fetched yet, which is why
-  the overdue-sync warning is reported separately.
-- **Old work never disappears quietly.** The Sync Restock dialog opens on the last three days by
-  default, so when a machine has pending events older than that, the reminder says so and tells you
-  to clear the From date or move it back to the oldest pending date.
+- **Pending counts are what has been imported in the last 14 days.** They include events needing
+  review, events you have not got enough storage stock for, and possible duplicates you have not
+  resolved; they exclude ones you have applied or marked as already recorded manually, and events
+  reporting a zero or negative quantity — those are machine discrepancies, never restocks, and Sync
+  Restock never applies them. Events older than 14 days are not counted, but nothing is deleted:
+  clear or move back the From date in Sync Restock and they are still there to resolve. A count of
+  zero means nothing imported in that window is outstanding — it cannot promise that Nayax is holding
+  no alert nobody has fetched yet, which is why the overdue-sync warning is reported separately.
+- **The link opens Sync Restock far enough back.** The Sync Restock dialog opens on the last three
+  days by default. A machine's link on the reminder carries the date of its oldest counted pending
+  event (`?restockFrom=yyyy-MM-dd`), and when that date is earlier, the dialog opens from it instead,
+  so every event the reminder counted is on screen. You can still change or clear the date.
 - **It reminds, and does nothing else.** Each row links to the machine and names the **Sync Restock**
   action there. Opening the dashboard, following a link or opening a preview applies nothing,
   resolves no duplicate, changes no inventory and does not mark anything as seen — after you apply or
@@ -1746,11 +2705,11 @@ reorder alerts and its ordering figures, calculated from the data this applicati
 The dashboard presents those states (issue #727). Without a usable Nayax connection it is a
 storage-management dashboard, and it says what the business has rather than what it is missing:
 
-- **"Sales this week" and "Needs refill" are not shown, and neither are the Sites and Machines
-  sections.** Every figure on them comes from Nayax, so they are hidden rather than shown empty or
-  "Unavailable" — an empty Sites section would say the business has no sites, which is a different
-  claim. **"Needs ordering" and "Inventory" are shown as usual**, and the reorder alerts are then
-  the page's main section.
+- **"Sales this week" and "Needs refill" are not shown, and neither is the Site and machine
+  performance card.** Every figure on them comes from Nayax, so they are hidden rather than shown
+  empty or "Unavailable" — an empty site list would say the business has no sites, which is a
+  different claim. **"Needs ordering" and "Inventory" are shown as usual**, and the reorder alerts
+  are then the page's main section.
 - **The storage-only figures say so.** The "Needs ordering" card and the reorder-alert list each
   carry a label — "Storage stock only: these figures do not include the machines' current
   replenishment need, because Nayax is not connected" — and the list drops its "Machine need"
@@ -1771,7 +2730,8 @@ storage-management dashboard, and it says what the business has rather than what
   request that fails says so ("The Sites section could not be loaded. Reload the page to try
   again."). It is never shown as "No sites available yet" or "No reorder alerts. Everything looks
   good!", which are statements about data the page was never given. A genuinely empty answer still
-  shows those messages.
+  shows those messages. The sites and the machines are read separately, so the Site and machine
+  performance card keeps whichever of the two succeeded and reports only the one that did not.
 
 **Products → Needs Ordering** works the same way in storage-only mode: the full page, with its
 filters, sorting and "Mark as ordered", over the storage-only alerts, labelled with the mode and
@@ -1872,41 +2832,44 @@ that cannot be used.
 
 - **The calculated matrix is offered only when it can actually work.** With a usable connection and
   Nayax granted both the machine fleet read and each machine's own product read, the page opens on
-  the existing calculated matrix exactly as before, with a toggle to **Enter quantities taken**
-  alongside it. Without either, the page opens straight into that manual entry screen instead, with
+  calculated matrix, **Plan picks**, with a toggle to **Record refill** (the manual entry screen;
+  until issue #996 these were called "Calculated" and "Enter quantities taken") alongside it. Without
+  either, the page opens straight into Record refill instead, with
   one sentence saying why the calculated list is unavailable, and the toggle to switch back is not
   offered — there is nothing to switch to.
 - **Manual entry needs no machine, no fleet read and no product read.** It lists the business's
-  active products with a search box, a category filter and a "Taken" quantity box per row, from the
+  active products with a search box, a category filter and a "Quantity taken" box per row, from the
   same catalogue the calculated view's Products filter already reads. With no machine selected,
   saving sends every entered quantity as one request to the batch refill endpoint
   (`POST /api/pick-list/refills`), recording one
   `MachineRefill` stock movement per product in a single all-or-nothing operation — a guarantee the
   machine-detail page's old per-product Restock action, since removed in favour of this screen (see
   [Record refill from a machine's page](#record-refill-from-a-machines-page) below), never had. A
-  malformed "Taken" entry (anything that is not a whole number greater than zero) is reported on its
+  malformed "Quantity taken" entry (anything that is not a whole number greater than zero) is reported on its
   own row before anything is sent, and any refusal the server returns is put back on the row it was
   about.
 - **The page says which of the two it is.** The line under the title describes the view you are
-  actually in: the calculated matrix is planning only and saves nothing, while manual entry says that
-  nothing is saved until you click Save and that Save then records one machine refill per quantity
-  entered and reduces that product's storage quantity.
+  actually in: Plan picks is planning only and changes no stock — the quantities you adjust there
+  stay in your browser — while Record refill says that nothing is recorded until you click **Record
+  refill** and that recording then reduces each product's storage quantity by the quantity taken.
 - **A retry never double-deducts.** Each save keeps an exact record of what it last sent. Clicking
-  Save again with nothing changed resends the identical request under the identical idempotency key,
+  Record refill again with nothing changed resends the identical request under the identical idempotency key,
   which the server answers with the result it already recorded rather than taking the stock twice;
   changing any quantity before retrying sends a new key, because it is a different pick. **While a
   save's outcome could not be confirmed at all** — a dropped connection, a server error — nothing you
   do on screen can send a *different* request: the screen keeps the exact pick it sent and offers
   **Retry save**, which resends precisely that one, so an edited quantity, a removed machine column
   or a reordered selection cannot turn one physical pick into a second deduction. Only once that
-  attempt is answered does Save start a new pick again.
+  attempt is answered does Record refill start a new pick again. Since issue #996 the quantity boxes,
+  the machine selection and Clear are locked while that retry is outstanding, and Retry save is the
+  only action offered.
 - **An unconfirmed save is not lost by switching views.** A save whose outcome could not be confirmed
-  stays reported on the screen until a later Save settles it, and switching to the calculated view and
+  stays reported on the screen until a later attempt settles it, and switching to Plan picks and
   back keeps every quantity you typed — so the retry is still the same request under the same key, not
-  a second pick. While a save is actually being sent, the Calculated button is disabled until it
+  a second pick. While a save is actually being sent, the Plan picks button is disabled until it
   finishes, so an outstanding write always lands where you can see what it did.
 - **Read-only during a support session.** While a support session is active, manual entry still
-  lists the products and their storage quantities, but the "Taken" boxes and Save are hidden and the
+  lists the products and their storage quantities, but the quantity boxes and the record button are hidden and the
   screen says why, so nothing can be recorded on the business's behalf. A refusal the server returns
   is reported as a refusal, not as a save that might need retrying.
 - **A product list that could not be read is never shown as empty.** While the product list is still
@@ -1927,15 +2890,16 @@ that cannot be used.
 #### Entering one pick run across several machines (issue #904)
 
 An operator preparing one run usually visits several machines. Select them all in the Manual Pick
-List's **Machines** dropdown and each one gets its own quantity column, so the whole run is typed
-once and saved once.
+List's **Machines** dropdown (Record refill, since issue #996) and each one gets its own quantity
+column, so the whole run is typed once and recorded once.
 
-- **The row reads Product, Category, Storage Qty, Total Taken, then one column per machine.** Total
-  Taken is that product's own sum across the selected machines — what the pick takes off one shelf —
-  and under the table **Total storage required** is the whole pick's, counting the rows your search
-  or category filter is currently hiding, and saying how many units and products those are. A filter
-  hides rows; it never changes what Save sends.
-- **One Save sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
+- **The row reads Product (with its category under it), Storage available, one column per machine,
+  then Total quantity taken** (column order since issue #996). The total is that product's own sum
+  across the selected machines — what the pick takes off one shelf — and the summary beside the table
+  gives the **whole submission**'s total, counting the rows your search or category filter is
+  currently hiding, and saying how many units and products those are. A filter hides rows; it never
+  changes what is sent.
+- **One click of Record refill sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
   see [Recording one pick across several machines (the API)](#recording-one-pick-across-several-machines-the-api-issue-897)
   below) — never one request per machine. That is the point of it: only one request can weigh each
   product's **total** across the machines you allocated it to against the storage it comes off, so
@@ -1943,7 +2907,7 @@ once and saved once.
   half-saved. A refusal keeps everything you typed editable and puts the server's own message on each
   cell it was about. Success reports the whole run — how many entries across how many machines — and
   refreshes the storage quantities once.
-- **With no machine selected, nothing changes.** The screen is exactly the single "Taken" column
+- **With no machine selected, nothing changes.** The screen is exactly the single "Quantity taken" column
   described above, saved through the existing endpoint as a refill attributed to no machine.
 - **Quantities are never silently moved, copied or dropped.** A quantity typed against "No machine"
   is never copied into every machine column — that would invent a pick several times the size of the
@@ -1958,8 +2922,95 @@ once and saved once.
   phone. Every quantity box is labelled with both its product and its machine for screen readers.
 - **Opening the screen from a machine's page** (the **Record refill** link) preselects exactly that
   machine as the only column, and you can add more beside it.
-- **Read-only during a support session**, exactly as before: the quantity boxes and Save are hidden
-  and the screen says why.
+- **Read-only during a support session**, exactly as before: the quantity boxes and the record
+  button are hidden and the screen says why.
+
+#### Plan picks and Record refill (issue #996)
+
+Issue #996 refreshes both Pick List views and renames them after what each is for: **Plan picks**
+(the calculated list, which needs a usable Nayax connection) works out what to take, and **Record
+refill** (the manual entry screen above) records what was actually taken. No API, stored data or
+Nayax call changed; everything below happens in the browser.
+
+**Plan picks**
+
+- **One row per product, one column per machine.** On a desktop the product column and the header
+  rows stay in place while the table scrolls, the machine columns are grouped under their site's name
+  when your machines have sites (two sites with the same name still get a header each), and a "Scroll sideways" hint appears once the run has more than two
+  machines. The MDB code is a sortable column of its own instead of being repeated in every cell.
+- **Each suggested pick is adjusted where it sits (issue #1008).** Every cell you can change shows
+  **− | quantity box | +** with the tick box still on its right, the same on a desktop and on a
+  phone. The box starts on the suggested quantity (or on your own adjustment if you already made
+  one); − and + move it by one and stop at 0 and at the largest quantity the list supports. You can
+  also type straight into it — phones offer the number keypad. There is no pencil, no Confirm and no
+  Cancel: as soon as the box reads a whole number of 0 or more, the totals, shortages and progress
+  follow it. An adjusted cell shows "Suggested: N" with **Use suggested** to go back, and the label
+  disappears once it matches the suggestion again. **0 means skip that machine** for this product; a
+  skipped cell has no tick box but keeps its box, so you can change your mind. The adjustment lives
+  only in this browser tab: it is never sent to Nayax and never changes stock.
+- **Your plan is waiting when you come back (issue #1021).** Everything you have adjusted, ticked or
+  half-typed is kept in this browser tab, together with the snapshot you planned against and the
+  time it was read, so going to another page and back — or reloading — brings the whole plan back
+  exactly as you left it, without reading a new pick list from Nayax. It is kept per tab: closing
+  the tab clears it, another tab or another device never sees it, it is never sent to the server,
+  and it is never kept or restored for a different sign-in, a different business, a support session
+  or a role preview. Your search, category, filters, sorting and the machine a phone is focused on
+  are not restored — only the plan is. If a machine has gone from your fleet since, it is quietly
+  dropped from the restored plan with whatever you had entered for it. A plan is only ever brought
+  back for the machines it was planned for: if those machines now belong to a different business —
+  even one with the same name — the plan is thrown away rather than shown. And if the sign-in, the
+  business or a support session changes while the page is open, the plan on screen is cleared along
+  with the stored copy, because it is not this account's or business's to look at any more. Where
+  none of the machines in a run is one your business has a machine record for, the plan cannot be
+  kept at all, and leaving asks before discarding it exactly as it used to.
+- **A quantity the list cannot use is never guessed at.** A negative, fractional, non-numeric or
+  too-large entry is refused whole — never cut down to the part that happens to be a number — and an
+  empty box means "not filled in yet", not 0. The cell keeps exactly what you typed, says what is
+  wrong and which quantity the run is still counting ("Using 4 until this is fixed."), and until you
+  fix it its − and + and its tick box are switched off, so a cell you are still correcting can never
+  look done. Fixing the box takes effect at once.
+- **Tick each pick as you take it.** Every cell with something to pick has its own tick box, separate
+  from the quantity controls, and changing the quantity clears that cell's tick because it is a
+  different pick now (a tick survives re-entering the same number). The summary says "12 of 20 picks
+  completed", the units still to pick, and how many products the planned run needs more of than
+  storage holds ("Storage short by N" on the row).
+- **Filters keep your work.** Search (by name or MDB), Category, **Only remaining** and **Only
+  shortages**, sorting, switching to Record refill and back, and focusing on one machine never discard
+  an adjustment, a tick or a half-typed quantity. Products and
+  Machines are applied with **Apply**; each selected machine is a chip you can remove.
+- **Discarding is always asked first.** **Refresh** (or **Retry** after a failed read) re-reads
+  exactly the same selection from Nayax and **Reset** clears it; if you have adjusted or ticked
+  anything, or left a box holding something that is not yet a usable quantity, both ask before throwing it away, and so does removing a machine whose cells you changed.
+  Cancel changes nothing, including the copy kept in this tab; a discard you confirm throws that copy
+  away too, so it cannot come back later. The time of the snapshot you are looking at is shown beside Refresh, and an
+  answer to an earlier, superseded request is ignored rather than replacing a newer one.
+- **On a phone** the matrix becomes one card per product with the machine picks inside it, a
+  machine strip to focus on one stop, the same − | box | + controls and tick box, Current/Target
+  under them, and the progress summary kept above the bottom bar.
+
+**Record refill**
+
+- **The same workflow, clearer totals.** Storage available, a quantity box per selected machine (or
+  the single "Quantity taken" box with no machine), each row's total and the whole submission's total
+  across all machines. Rows are marked **Entered**, **Ready to record** or "Storage short by N".
+- **A shortage blocks recording.** If any product's total across every machine — rows your filters
+  hide included — is more than its storage, the button reads **Resolve shortage to record** and
+  nothing is sent until you fix it. Entering less than a Plan picks suggestion is only noted, never
+  blocked. (Suggestions appear as "/ N suggested" when the same machine is selected in both views.)
+- **Hidden entries are never forgotten.** When a filter hides rows that have quantities, a banner
+  says how many, with **Show entered products** and **Show all**. **Clear** asks before emptying
+  every box. There is no draft: what you type stays only until you leave the page.
+- **An unconfirmed save stays put.** If the outcome of a submission is unknown, a persistent **Retry
+  save** resends exactly the same refill under the same idempotency key and the entries stay locked
+  until it is answered (see above).
+- **Leaving is guarded, for what would actually be lost.** Navigating away from the Pick List, or
+  closing or reloading the tab, while Record refill has entered quantities, or a save is outstanding
+  or unconfirmed, asks you to confirm first. Plan picks no longer asks, because its plan is kept in
+  this tab (above) — unless this browser refuses to keep it, for instance in private mode or when
+  site data is blocked, in which case the old warning appears exactly as before, because the work
+  really would be lost.
+- **On a phone** Record refill also uses cards, with a machine strip, steppers and the totals and
+  record button kept above the bottom bar.
 
 #### Recording one pick across several machines (the API, issue #897)
 
@@ -2019,7 +3070,9 @@ out.
   **Sites**, **Machines** (since issue #740 — see [Machines](#machines) below), **Inventory** (the
   group that used to be called Products — the Products page inside it, its URL and its breadcrumb
   are unchanged), Purchases, Expenses, Reports and Admin, and what an entry needs from Nayax is
-  shown on the entry itself rather than by where it sits. **Site Commissions is back under
+  shown on the entry itself rather than by where it sits. Issue #972 put that same order under the
+  headings Operations, Inventory & purchasing, Finance & reports and Settings (see [The dashboard
+  and the menu](#the-dashboard-and-the-menu)); none of them is about Nayax. **Site Commissions is back under
   Reports**, after Products and before GST.
 - **A locked entry is still visible, still clickable.** Without the Nayax connection it needs, an
   entry is shown **locked**, and opening it — or typing its URL — reaches a "needs a provider" page
@@ -2089,6 +3142,55 @@ The **Machines** entry itself is never locked — a business keeps its own machi
 the next section), which is a different destination from the machine profitability **report** under
 Reports.
 
+#### The menu without an included plan
+
+Issue #979 adds a second lock beside the provider one above, over what the business's **plan**
+includes rather than over its Nayax connection (issue #966's entitlement, enforced by issue #967).
+Until enforcement is switched on, nothing here changes anything: every feature below is offered to
+every business exactly as it is today.
+
+- **The order of checks is role, then plan, then Nayax connection.** A member whose role does not
+  hold an entry never sees it at all, locked or not. Only then is the plan checked, and only once the
+  plan includes the feature is the Nayax connection consulted — so a Free or Starter business is
+  **never** told to connect Nayax for a page the plan itself withholds; it is told to upgrade, because
+  that is the one thing that would actually open it. A Pro business with no connection sees today's
+  provider lock unchanged.
+- **Route-level plan locks**, where the whole page is one higher-plan feature: every entry under
+  **Reports** (Bookkeeping and GST need the Starter plan; Daily, Transactions, Reconciliation,
+  Machines, Products and Site Commissions need Pro), **Sites**, and the machine detail page (stock,
+  revenue, latest sales and Sync Restock — all of it is Nayax). Opening one, or typing its URL, shows
+  a "needs Starter/Pro" page linking to the [Plan page](#the-plan-page-issue-970) instead of the
+  report, the site list or the machine; **no request is sent that can only be refused.** Unlike the
+  provider lock's page, it never offers a Connect action — buying a plan is not something this
+  application does for you — and it never claims anything stored has been lost: the page it stands in
+  for opens again, unchanged, the moment the business is on a plan that includes it.
+- **Inline plan locks**, where only one optional part of an otherwise usable page needs the higher
+  plan: the **Cheapest supplier** column on the Dashboard, Needs Ordering and All Products shows a
+  small "needs the Starter plan" state in place of itself, with a link to the Plan page and no Retry
+  — a `403 plan_required` is this business's own answer, not a failure that retrying could change.
+  The Dashboard's machine-fleet sections and the Pick List's calculated matrix say the same thing in
+  their own wording when the business's plan does not include the sales provider, naming the Pro
+  plan rather than claiming Nayax is not connected — which would be untrue of a business whose
+  credentials are stored and working. **Importing a Nayax sales file** is the same kind of lock on
+  **Admin → Imports**: that one card says it needs the Pro plan and withholds the file
+  controls, so nothing is uploaded that could only be refused, while the pending reimbursement XML
+  import, the product-catalogue import link and the CSV template download on the same page keep
+  working exactly as they do now. A refusal that arrives anyway — the plan changed between reads, or
+  it could not be read at all — is shown in that card too, naming the plan the refusal itself named,
+  rather than as a failed-import message with a retry that would be refused again.
+- **An unread entitlement locks nothing.** Exactly as an unread capability or provider answer does
+  not, a plan that has not been read yet, or could not be read, leaves every entry open and every
+  inline part showing its ordinary loading or unavailable state; the page's own request, once it is
+  made, is what actually answers for the business's plan.
+- **A downgrade takes effect on the next navigation or refresh, never mid-page.** Already-rendered
+  paid data is not torn out from under you while you are looking at it; open the page again, or
+  reload the part that shows it, and the lock applies from the entitlement as it now stands. Nothing
+  about a plan is cached across sessions.
+
+See
+[docs/architecture.md § Plan-locked navigation](docs/architecture.md#plan-locked-navigation-issue-979)
+for how this is implemented.
+
 ## Machines
 
 The machines a business operates are its own records, and they work with or without a sales provider
@@ -2148,6 +3250,65 @@ of the live Nayax fleet — so a business with no provider had no machines.
   above Machines in the menu since issue #868). Manual sites are a separate change.
 - **In a read-only support view** the machine list is readable and every one of its write controls is
   hidden, like every other write surface in that view.
+
+### Connected machines and the Pro allowance (issue #978)
+
+Pro includes **five connected machines** and bills **A$2 per month** for each one beyond that (see
+[Business plans](#business-plans-free-starter-and-pro)). This section is what that count is, where it
+comes from, and what it does when it cannot be taken. The [Plan page](#the-plan-page-issue-970) is
+what now displays it; nothing here is billed yet, because that is issue #969's own work. While plan
+enforcement is switched off — the shipped state — nothing is displayed and nothing is charged.
+
+- **A connected machine is a machine on your Nayax account**, whether or not it is linked in this
+  application. That is deliberate: Nayax imports sales for every machine on the account either way, so
+  the count follows the data you actually receive. A **manual** machine — one you added here, with no
+  Nayax id — is never counted.
+- **The count comes from the same fleet read the Machines page already makes**, authenticated with your
+  own stored Nayax credentials. Every machine the read returns is counted once. Nayax's fleet response
+  does carry a `MachineStatusBit`, but the Nayax documentation gives that field a meaning only for
+  *creating* a machine, and says nothing about what a read returns for a machine that was removed — so
+  this application deliberately does not read it, and counts every machine Nayax returns. Excluding
+  inactive machines later is a change in its own right, with the then-confirmed Nayax contract behind
+  it.
+- **One count per day, as dated evidence.** The first complete fleet read of each UTC day records that
+  day's count — the number, the machine ids behind it and when it was taken. The recorded counts are
+  **append-only**: a later day is a later record, and nothing edits or deletes one, because the extra
+  machines are billed from them. Concurrent page loads and the daily job can never produce two counts
+  for one day: they all record through the same insert-if-absent claim, so the first to commit wins and
+  the others simply discard what they read.
+- **No extra Nayax calls on a page load.** The count is taken from a fleet read that was happening
+  anyway. A background job tops it up once a day for businesses nothing read the fleet for — one read
+  per business per day, only for businesses on a plan whose machines are counted and with a usable
+  connection, and bounded per run. It is a command of the deployed application,
+  `snapshot-connected-machines`, scheduled the same way the daily database backup is (see
+  [Database backup and restore](#database-backup-and-restore)); **putting it on a schedule is a
+  deliberate operator step**, and until it is scheduled the counts come from ordinary use of the
+  application.
+- **Above the allowance you are billed, never blocked.** Being over five machines never stops you
+  linking a machine, importing sales, running a report or using the pick list, and nothing removes a
+  link or any history. The entitlement the application reads reports the allowance, the current count,
+  the day it was taken and how many machines are over the allowance — as an amount to charge for,
+  never as a limit.
+- **A count that could not be refreshed stays the count, and says how old it is.** A failed or partial
+  fleet read records nothing at all: the last complete count remains, reported as *stale* with its age
+  in days. It is never replaced by a zero — a fleet nobody could read is not a fleet with no machines
+  in it.
+- **No usable connection means "count unavailable".** If Nayax is not connected, or the stored
+  credentials need attention, no call is made and no count is reported at all. Reconnecting and the
+  next complete fleet read restore it.
+- **Changing your Nayax account starts a new count series.** Saving credentials for a **different**
+  Nayax operator id begins a new series, and the time of the change is recorded. The previous
+  account's counts are kept exactly as they are and are never reported as the new account's, so a day
+  you switched on can hold one count per account — the later one being that day's count. Re-saving or
+  re-testing credentials for the **same** account changes nothing: it is the same account and the same
+  fleet. Until the new account has been counted once, the count reads as unavailable rather than
+  showing the account you left.
+- **A read that was already under way when you switched accounts is recorded against the account it
+  was made with.** Each count is attributed using the credentials that actually fetched the fleet, so
+  a fleet read that started on the old account and finished after you connected the new one is kept as
+  the old account's count — never relabelled as the new account's, and never taking up the new
+  account's count for that day. Your first complete read on the new account still records its own
+  count the same day.
 
 ### Connecting Nayax when you already have machines (issue #742)
 
@@ -2267,12 +3428,13 @@ machine selector both exist.
 ## Business settings (Admin page)
 
 **Admin → Business Settings** is where an Owner reads and changes their own business's name,
-contact email, ABN, GST registration and time zone, through `GET`/`PUT /api/business/settings`
-(issue #548). Only an Owner can reach it — the route, the sidebar entry and the endpoint itself all
-require `Business.Manage` — and the five fields are validated with the exact same rules as the
-business application form (issue #543): a required name, a single well-formed contact address, an
-optional but checksum-validated ABN, and a GST registration that must be *stated*, never defaulted
-to "not registered".
+contact email, ABN, GST registration, time zone and the state or territory it trades in, through
+`GET`/`PUT /api/business/settings` (issue #548, and issue #933 for the state). Only an Owner can
+reach it — the route, the sidebar entry and the endpoint itself all require `Business.Manage` — and
+the six fields are validated with the exact same rules as the business application form (issue
+#543): a required name, a single well-formed contact address, an optional but checksum-validated
+ABN, a GST registration that must be *stated*, never defaulted to "not registered", and a state or
+territory that must be one of **NSW, VIC, QLD, SA, WA, TAS, ACT or NT**.
 
 - **Changing the time zone needs an explicit confirmation.** Saving with a different time zone than
   the one the page was last read with shows a dialog explaining that business days and report date
@@ -2289,16 +3451,25 @@ to "not registered".
   If the save succeeds but that refresh cannot be read, the page says the settings were saved but
   the page could not refresh, and asks for a reload — it does not report the save as failed, and a
   time zone just saved is not confirmed a second time.
-- **The migrated business is missing its contact email and GST registration**, because it predates
-  the application form (issue #540). While either is unrecorded, a dismissible prompt on the
-  Dashboard and on this page asks the Owner to complete them; completing both is what actually
+- **The state or territory decides which supplier records a business can be offered** (issue #933,
+  under #817), which is why it is recorded rather than worked out: the time zone cannot tell NSW
+  from the ACT, and nothing infers a state from a time zone or an address. **Changing it adds the
+  platform suppliers the new state serves** and nothing else (issue #935): no supplier is removed,
+  hidden or relinked — a supplier you have bought from stays — and no stock, cost or report figure
+  moves. See [Suppliers from the platform list](#suppliers-from-the-platform-list).
+- **The migrated business is missing its contact email, GST registration and state**, because it
+  predates the application form (issue #540, and the state column itself — no existing business has
+  one and nothing backfills them). While any of them is unrecorded, a dismissible prompt on the
+  Dashboard and on this page asks the Owner to complete them; completing all three is what actually
   clears it, and the prompt on this page disappears as soon as the save that completes them
   succeeds; dismissing it only hides it for the page currently on screen, not everywhere, and it
-  returns on the next visit or reload while the business is still incomplete.
+  returns on the next visit or reload while the business is still incomplete. Nothing else is
+  blocked while the state is unset — the business works exactly as before until the Owner records
+  one.
 
 ## Delivery workflow
 
-Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend without deploying. Production releases are separate pull requests from `develop` to `main`; a merge to `main` makes the code releasable but deploys nothing. A human deploys production by starting the **Deploy Production** workflow from the Actions tab on `main`; it has no inputs and deploys exactly the `main` commit it was dispatched from, with the migration baseline read from the recorded releases. A separate **Deploy Production (advanced recovery)** workflow, which takes a full commit SHA, exists only to deploy an exact earlier `main` commit or to bootstrap the first baseline when no release is recorded. Either one validates that commit, reports the database migrations production startup is expected to apply, deploys the API, checks `/health/ready`, and then deploys the frontend from the same commit (see `docs/automation.md` § Deploy Production). After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and a human starts Deploy Production.
+Changes are made on feature branches created from `develop` and validated through pull requests that target `develop`. Every pull request to `develop` or `main` runs the validation workflow. A push to `develop` builds and tests the backend, and **Deploy Testing** deploys that exact commit's API and frontend to the separate hosted testing environment (its own Azure resources, database, document storage and OIDC identity; never production). That environment exists only after the one-time human setup in [docs/testing-environment.md](docs/testing-environment.md), and until the repository variable `TESTING_DEPLOYMENT_ENABLED` is `true` each run deploys nothing. Production releases are separate pull requests from `develop` to `main`; a merge to `main` makes the code releasable but deploys nothing. A human deploys production by starting the **Deploy Production** workflow from the Actions tab on `main`; it has no inputs and deploys exactly the `main` commit it was dispatched from, with the migration baseline read from the recorded releases. A separate **Deploy Production (advanced recovery)** workflow, which takes a full commit SHA, exists only to deploy an exact earlier `main` commit or to bootstrap the first baseline when no release is recorded. Either one validates that commit, reports the database migrations production startup is expected to apply, deploys the API, checks `/health/ready`, and then deploys the frontend from the same commit (see `docs/automation.md` § Deploy Production). After opening a pull request, an automated engineering agent may update only its feature branch, for at most two permitted repair attempts in response to CI or review failures, and then returns control to a human. It never merges or deploys. An agent may prepare a release pull request only when a human explicitly requests it; a human reviews and merges that pull request, and a human starts Deploy Production.
 
 Tasks intended for an implementation agent use the **Agent task** issue form, and every pull request uses the repository pull request template. Claude is the only agent provider: applying `agent-ready-claude` (the default) to a reviewed issue has Claude Code implement it, a separate read-only Claude invocation check its architecture, Claude fix the findings, and another separate read-only Claude invocation do the final review after exact-SHA validation. Both are recorded as same-provider reviews rather than independent ones. Copilot no longer implements, checks or reviews. The legacy label `agent-ready-full-claude` is still accepted and routes the same way. Model triage always uses Claude Haiku, on every route. All final reviews are comment-only and publish an explicit verdict. The repository owner may request at most two repairs, with `@claude repair` on the agent pull request. Human approval and branch protection remain the merge gate. The full lifecycle, authority model, task labels, risk classification, and retry policy are in [docs/automation.md](docs/automation.md).
 

@@ -48,7 +48,10 @@ public class AddSupplierPresetsMigrationTests
 
         Assert.Contains("SupplierPresets", await MigrationSchemaProbe.TableNamesAsync(connection));
 
-        var presets = await db.SupplierPresets.AsNoTracking().OrderBy(p => p.Name).ToListAsync();
+        // Read with SQL rather than through the entity: at this point in the history the
+        // supplier-master columns issue #931 added do not exist yet, and the model that maps them
+        // would ask the database for them.
+        var presets = await ReadRowsAsync(connection);
 
         Assert.Equal(ShippedNames, presets.Select(preset => preset.Name).ToArray());
         Assert.All(presets, preset =>
@@ -65,7 +68,14 @@ public class AddSupplierPresetsMigrationTests
     /// <summary>
     /// The acceptance criterion in full: a Super Admin renames and disables a shipped preset, the
     /// schema is brought up to date again and the application starts again, and the edit is still
-    /// there. Nothing is re-inserted, nothing is re-enabled, and no fifth row appears.
+    /// there. Nothing is re-inserted, nothing is re-enabled, and no extra row appears.
+    ///
+    /// <para>Bringing the schema fully up to date now also applies issue #931's
+    /// <c>AddSupplierPresetMasterFields</c>, which inserts five more records - so the list this test
+    /// reads is nine rows, and the four it is about are the four #848 shipped. That migration's own
+    /// behaviour over edited rows is <c>AddSupplierPresetMasterFieldsMigrationTests</c>'s subject;
+    /// what matters here is unchanged, and is in fact strengthened: an edit made before a <em>later</em>
+    /// migration existed still survives it.</para>
     /// </summary>
     [Fact]
     public async Task An_edited_and_disabled_seeded_preset_survives_a_second_migrate_and_restart()
@@ -101,8 +111,19 @@ public class AddSupplierPresetsMigrationTests
         await using var verify = TestAppDbContext.Unrestricted(options);
         var presets = await verify.SupplierPresets.AsNoTracking().OrderBy(p => p.Name).ToListAsync();
 
+        // The four #848 shipped, one of them renamed, beside the five #931 inserted.
         Assert.Equal(
-            ["Big W", "Coles Supermarkets", "Costco", "Woolworths"],
+            [
+                "ALDI",
+                "Big W",
+                "Coles Supermarkets",
+                "Costco",
+                "JB Metro NSW",
+                "JB Metro SA & NT",
+                "JB Metro South Coast & ACT",
+                "Kmart",
+                "Woolworths",
+            ],
             presets.Select(preset => preset.Name).ToArray());
 
         var edited = presets.Single(preset => preset.Name == "Coles Supermarkets");
@@ -138,8 +159,19 @@ public class AddSupplierPresetsMigrationTests
         await using var verify = TestAppDbContext.Unrestricted(options);
         await verify.Database.MigrateAsync();
 
+        // Everything the migration history inserts, minus the one row that was removed: the eight
+        // that remain, and no re-created "Big W".
         Assert.Equal(
-            ["Coles", "Costco", "Woolworths"],
+            [
+                "ALDI",
+                "Coles",
+                "Costco",
+                "JB Metro NSW",
+                "JB Metro SA & NT",
+                "JB Metro South Coast & ACT",
+                "Kmart",
+                "Woolworths",
+            ],
             await verify.SupplierPresets
                 .AsNoTracking()
                 .OrderBy(preset => preset.Name)
@@ -183,7 +215,9 @@ public class AddSupplierPresetsMigrationTests
 
     /// <summary>
     /// The table is about no business, which is the half of the tenancy decision a schema can carry:
-    /// there is no <c>BusinessId</c> column for anything to filter or stamp.
+    /// there is no <c>BusinessId</c> column for anything to filter or stamp - including after issue
+    /// #931 added the five supplier-master columns and issue #925 the price-check freshness limit,
+    /// all of which say something about a supplier and never whose supplier it is.
     /// </summary>
     [Fact]
     public async Task The_table_carries_no_business_column()
@@ -198,7 +232,21 @@ public class AddSupplierPresetsMigrationTests
 
         Assert.DoesNotContain("BusinessId", columns);
         Assert.Equal(
-            ["CreatedAtUtc", "Id", "IsEnabled", "Name", "NormalisedName", "UpdatedAtUtc", "Url"],
+            [
+                "CreatedAtUtc",
+                "Id",
+                "IsEnabled",
+                "Name",
+                "NormalisedName",
+                "PriceCheckFreshnessHours",
+                "PriceConnector",
+                "PriceConnectorKey",
+                "PricesIncludeGst",
+                "ServedStates",
+                "ServesNationwide",
+                "UpdatedAtUtc",
+                "Url",
+            ],
             columns.Order(StringComparer.Ordinal).ToArray());
     }
 
@@ -221,4 +269,39 @@ public class AddSupplierPresetsMigrationTests
 
         Assert.DoesNotContain("SupplierPresets", await MigrationSchemaProbe.TableNamesAsync(connection));
     }
+
+    /// <summary>
+    /// The four shipped rows as this migration left them, read with SQL because the test that uses it
+    /// stands on a schema that predates the supplier-master columns of issue #931.
+    /// </summary>
+    private static async Task<List<SeededRow>> ReadRowsAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT Name, NormalisedName, Url, IsEnabled, CreatedAtUtc, UpdatedAtUtc "
+                + "FROM SupplierPresets ORDER BY Name;";
+        await using var reader = await command.ExecuteReaderAsync();
+
+        var rows = new List<SeededRow>();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new SeededRow(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.GetBoolean(3),
+                reader.GetString(4),
+                reader.GetString(5)));
+        }
+
+        return rows;
+    }
+
+    private sealed record SeededRow(
+        string Name,
+        string NormalisedName,
+        string? Url,
+        bool IsEnabled,
+        string CreatedAtUtc,
+        string UpdatedAtUtc);
 }

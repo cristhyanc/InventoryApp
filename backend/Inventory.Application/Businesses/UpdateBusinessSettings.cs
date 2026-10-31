@@ -1,3 +1,4 @@
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
@@ -7,7 +8,8 @@ namespace Inventory.Application.Businesses;
 
 /// <summary>
 /// Saves the settings of the signed-in Owner's own business (issue #548): its name, contact
-/// address, ABN, GST registration and the IANA time zone its business days are derived in.
+/// address, ABN, GST registration, the IANA time zone its business days are derived in, and the
+/// Australian state or territory it trades in (issue #933).
 ///
 /// <para><strong>Which business is never asked.</strong> The use case takes the submitted settings
 /// and nothing else: the business comes from the authenticated actor's membership through
@@ -38,6 +40,15 @@ namespace Inventory.Application.Businesses;
 /// business already requires an identified actor - and the ordering is what keeps that true if it
 /// ever can.</para>
 ///
+/// <para><strong>A change of state adds the supplier records that state serves (issue #935).</strong>
+/// In the same transaction, immediately after the save, <see cref="AddMatchingSupplierPresets"/>
+/// adds a linked copy of every enabled platform supplier record that now matches and that this
+/// business holds no copy of - an ordinary write in the Owner's own business scope, through the
+/// central ownership stamp, and not issue #849's provisioning exception, whose limits are unchanged.
+/// It runs only when the state actually changed, and it only ever adds: no existing supplier is
+/// removed, hidden, relinked or edited, because a copy may already be named on a purchase. See
+/// <see cref="SaveAndTopUpSuppliersAsync"/>.</para>
+///
 /// <para><strong>Nothing stored is rewritten by a zone change.</strong> A new time zone changes how
 /// stored instants are read, not the instants: business days and report boundaries for past and
 /// future data alike are re-derived in the new zone from the next request onwards, because the zone
@@ -50,6 +61,7 @@ public sealed class UpdateBusinessSettings
     private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IAuthenticatedActorAccessor _actors;
     private readonly IBusinessSettingsStore _store;
+    private readonly AddMatchingSupplierPresets _supplierPresets;
     private readonly MembershipWriteGuard _guard;
     private readonly IBusinessSettingsAudit _audit;
     private readonly IClock _clock;
@@ -58,6 +70,7 @@ public sealed class UpdateBusinessSettings
         ICurrentBusinessProvider currentBusiness,
         IAuthenticatedActorAccessor actors,
         IBusinessSettingsStore store,
+        AddMatchingSupplierPresets supplierPresets,
         MembershipWriteGuard guard,
         IBusinessSettingsAudit audit,
         IClock clock)
@@ -65,6 +78,7 @@ public sealed class UpdateBusinessSettings
         _currentBusiness = currentBusiness;
         _actors = actors;
         _store = store;
+        _supplierPresets = supplierPresets;
         _guard = guard;
         _audit = audit;
         _clock = clock;
@@ -105,7 +119,8 @@ public sealed class UpdateBusinessSettings
             submission.ContactEmail,
             submission.Abn,
             submission.GstRegistered,
-            submission.TimeZoneId);
+            submission.TimeZoneId,
+            submission.State);
 
         // Inside the shared BEGIN IMMEDIATE transaction (issue #680), which re-reads the business's
         // lifecycle status in the lock before the save: the business id was resolved when the
@@ -114,7 +129,7 @@ public sealed class UpdateBusinessSettings
         var result = await _guard
                 .ExecuteAsync(
                     new MembershipWriteIntent(BusinessThatMustStillBeActive: businessId),
-                    token => _store.SaveAsync(businessId, submitted, token),
+                    token => SaveAndTopUpSuppliersAsync(businessId, submitted, token),
                     cancellationToken)
                 .ConfigureAwait(false)
             ?? throw new DomainConflictException(BusinessSettingsMessages.BusinessUnavailable);
@@ -130,6 +145,39 @@ public sealed class UpdateBusinessSettings
         }
 
         return result.Saved;
+    }
+
+    /// <summary>
+    /// The settings save, and - when the save actually changed the business's state - the supplier
+    /// records that state newly entitles the business to (issue #935).
+    ///
+    /// <para><strong>Both are inside the one write transaction</strong> the guard opened, and the
+    /// top-up runs <em>after</em> the save, so what it matches against is the state that was just
+    /// stored rather than the one the request arrived with. A failure in either rolls both back: a
+    /// business whose recorded state and whose supplier list disagree is exactly the half-applied
+    /// outcome one transaction exists to prevent.</para>
+    ///
+    /// <para><strong>Only a change to the state tops up, and it only ever adds.</strong> Saving the
+    /// settings without touching the state adds nothing, because a record the platform added or
+    /// enabled later is deliberately never pushed into a business that already exists - it is
+    /// offered on the Suppliers page under "Available to add" instead, and pushing it is out of
+    /// scope of this issue. Nothing is removed, hidden, relinked or changed either: a copy may
+    /// already be named on a purchase, and a business that moves has still bought what it bought.
+    /// </para>
+    /// </summary>
+    private async Task<BusinessSettingsSaveResult?> SaveAndTopUpSuppliersAsync(
+        BusinessId businessId,
+        BusinessSettings submitted,
+        CancellationToken cancellationToken)
+    {
+        var saved = await _store.SaveAsync(businessId, submitted, cancellationToken).ConfigureAwait(false);
+
+        if (saved is not null && saved.ChangedFields.Contains(BusinessSettingsField.State))
+        {
+            await _supplierPresets.Handle(businessId, cancellationToken).ConfigureAwait(false);
+        }
+
+        return saved;
     }
 }
 
@@ -148,4 +196,5 @@ public sealed record BusinessSettingsSubmission(
     string? ContactEmail,
     string? Abn,
     bool? GstRegistered,
-    string? TimeZoneId);
+    string? TimeZoneId,
+    string? State);

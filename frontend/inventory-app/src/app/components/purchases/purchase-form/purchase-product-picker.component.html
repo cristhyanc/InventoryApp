@@ -1,0 +1,63 @@
+<div class="relative">
+  <input
+    type="text"
+    role="combobox"
+    autocomplete="off"
+    aria-autocomplete="list"
+    class="w-full pr-9"
+    placeholder="Search products"
+    [attr.id]="inputId || null"
+    [attr.data-testid]="testId || null"
+    [attr.aria-label]="ariaLabel"
+    [attr.aria-expanded]="open"
+    [attr.aria-controls]="listboxId"
+    [attr.aria-activedescendant]="activeDescendantId"
+    [attr.aria-invalid]="invalid"
+    [attr.aria-describedby]="describedBy"
+    [class.border-md-danger]="invalid"
+    [value]="query"
+    (input)="onInput($event)"
+    (focus)="openPanel()"
+    (click)="openPanel()"
+    (keydown)="onKeydown($event)"
+    (blur)="onBlur($event)"
+  />
+  <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-rr-caption">
+    <app-icon name="search" [size]="18" />
+  </span>
+
+  @if (open) {
+    <div class="absolute left-0 right-0 z-40 mt-1 rounded-lg border border-rr-line bg-white p-1 shadow-md-lg">
+      <!-- Focus stays in the box, so the rows are deliberately out of the Tab order. -->
+      <ul [attr.id]="listboxId" role="listbox" [attr.aria-label]="ariaLabel" class="m-0 max-h-64 list-none overflow-y-auto p-0">
+        @for (product of matches; track product.id; let index = $index) {
+          <li>
+            <button
+              type="button"
+              role="option"
+              tabindex="-1"
+              data-testid="purchase-product-option"
+              class="flex min-h-11 w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm text-rr-navy hover:bg-rr-teal-tint"
+              [attr.id]="optionId(index)"
+              [attr.aria-selected]="isSelected(product)"
+              [class.bg-rr-teal-tint]="index === activeIndex"
+              (mousedown)="$event.preventDefault()"
+              (click)="choose(product)"
+            >
+              <span class="min-w-0 break-words" [class.font-semibold]="isSelected(product)">{{ product.name }}</span>
+              @if (productDetail(product)) {
+                <span class="shrink-0 text-xs text-rr-muted"><span class="sr-only">, </span>{{ productDetail(product) }}</span>
+              }
+            </button>
+          </li>
+        }
+      </ul>
+
+      @if (noMatches) {
+        <p class="m-0 px-3 py-2 text-sm text-rr-muted">No product matches “{{ query.trim() }}”.</p>
+      } @else if (products.length === 0) {
+        <p class="m-0 px-3 py-2 text-sm text-rr-muted">No products to choose from yet.</p>
+      }
+    </div>
+  }
+</div>

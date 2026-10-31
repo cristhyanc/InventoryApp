@@ -33,6 +33,7 @@
               <th scope="col" class="table-cell">Status</th>
               <th scope="col" class="table-cell">Applied</th>
               <th scope="col" class="table-cell">Contact email</th>
+              <th scope="col" class="table-cell">State</th>
               <th scope="col" class="table-cell">ABN</th>
               <th scope="col" class="table-cell">Members</th>
               <th scope="col" class="table-cell">Nayax</th>
@@ -42,7 +43,19 @@
           <tbody>
             @for (business of filteredBusinesses; track business.businessId) {
               <tr class="table-row">
-                <td class="table-cell">{{ business.name }}</td>
+                <td class="table-cell">
+                  <span class="inline-flex items-center gap-2">
+                    <span
+                      class="h-2 w-2 shrink-0 rounded-full"
+                      [ngClass]="nayaxDotClass(business)"
+                      [title]="nayaxStatusLabel(business)"
+                      data-testid="nayax-connection-dot"
+                      aria-hidden="true"
+                    ></span>
+                    <span class="sr-only" data-testid="nayax-connection-label">{{ nayaxStatusLabel(business) }}</span>
+                    {{ business.name }}
+                  </span>
+                </td>
                 <td class="table-cell">
                   <span
                     class="badge"
@@ -56,6 +69,7 @@
                 </td>
                 <td class="table-cell">{{ business.appliedAtUtc ? (business.appliedAtUtc | date: 'dd/MM/yyyy' : 'UTC') : '—' }}</td>
                 <td class="table-cell">{{ business.contactEmail ?? '—' }}</td>
+                <td class="table-cell" data-testid="business-state">{{ business.state ?? '—' }}</td>
                 <td class="table-cell">{{ business.abn ?? '—' }}</td>
                 <td class="table-cell table-num">{{ business.activeMemberCount }}</td>
                 <td class="table-cell">{{ business.nayaxConfigured ? 'Yes' : 'No' }}</td>
@@ -72,6 +86,14 @@
                     @if (business.status === 'Active') {
                       <button type="button" class="btn btn-secondary btn-sm" (click)="requestViewAs(business)">
                         View as this business
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        data-testid="plan-grant"
+                        (click)="openPlanGrant(business)"
+                      >
+                        Plan
                       </button>
                       <button type="button" class="btn btn-danger btn-sm" (click)="requestDeactivate(business)">
                         Deactivate
@@ -123,6 +145,15 @@
     (closed)="closeMembers()"
     (memberReleased)="onMemberReleased()"
   ></app-business-members-dialog>
+}
+
+@if (planGrantTarget) {
+  <app-business-plan-grant-dialog
+    [businessId]="planGrantTarget.businessId"
+    [businessName]="planGrantTarget.name"
+    (saved)="onPlanGrantSaved()"
+    (closed)="closePlanGrant()"
+  ></app-business-plan-grant-dialog>
 }
 
 @if (viewAsTarget) {

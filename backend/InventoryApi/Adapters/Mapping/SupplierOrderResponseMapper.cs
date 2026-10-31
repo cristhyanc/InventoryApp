@@ -48,6 +48,7 @@ public static class SupplierOrderResponseMapper
             Status = record.Status,
             CreatedAt = record.CreatedAt,
             UpdatedAt = record.UpdatedAt,
+            CompletedWithUndeliveredAt = record.CompletedWithUndeliveredAt,
             Lines = record.Lines.Select(line => ToLineResponse(line, record.Status, visibility)).ToList(),
         };
 

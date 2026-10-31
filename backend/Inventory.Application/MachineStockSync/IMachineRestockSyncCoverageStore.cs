@@ -21,13 +21,15 @@ namespace Inventory.Application.MachineStockSync;
 /// evidence about the token that replaced it.
 /// </param>
 /// <param name="KnownPendingEventCount">
-/// How many imported restock events of this machine are still unresolved - neither applied nor
-/// explicitly reconciled as already recorded manually. It counts <em>persisted</em> facts only:
-/// zero means nothing imported is outstanding, never that Nayax holds no un-fetched alert.
+/// How many imported restock events of this machine, dated on or after the pending window's start,
+/// are still unresolved - neither applied nor explicitly reconciled as already recorded manually -
+/// and do not report a zero or negative quantity (issue #948). It counts <em>persisted</em> facts
+/// only: zero means nothing imported inside the window is outstanding, never that Nayax holds no
+/// un-fetched alert.
 /// </param>
 /// <param name="OldestKnownPendingEventAtUtc">
-/// The canonical <c>EventDateTimeGMT</c> of the oldest of those events, or <see langword="null"/>
-/// when there is none.
+/// The canonical <c>EventDateTimeGMT</c> of the oldest of those counted events, or
+/// <see langword="null"/> when there is none.
 /// </param>
 public sealed record MachineRestockSyncCoverageRecord(
     long LocalMachineId,
@@ -85,6 +87,14 @@ public interface IMachineRestockSyncCoverageStore
     ///   this operation can claim.</item>
     /// </list>
     ///
+    /// <para>The third condition is that <strong>nothing is left to sync</strong> (issue #1018): the
+    /// machine has no pending restock event in the reminder's window - by exactly the definition
+    /// <see cref="GetProviderMachineCoverageAsync"/> counts with - when the statement runs. A fetch
+    /// that leaves work waiting therefore records nothing, so opening Sync Restock and walking away
+    /// never presents a machine as synced; the fetch the dialog makes after the last pending event
+    /// is applied or resolved is the one that records it. The check is part of the same statement,
+    /// so an event a concurrent sync imports cannot slip between it and the write.</para>
+    ///
     /// <para>It records nothing else: no event, no inventory quantity, no cost and no connection
     /// status. It is also the only thing in this application that writes this coverage - nothing
     /// backfills it, and no migration dates it from history that was never measured.</para>
@@ -97,15 +107,26 @@ public interface IMachineRestockSyncCoverageStore
     /// The Nayax credential revision read before the operation's first Nayax call, which the fence
     /// above verifies is still the stored one.
     /// </param>
+    /// <param name="nayaxMachineId">
+    /// The machine's provider number, which its imported restock events are keyed by.
+    /// </param>
+    /// <param name="pendingFromUtc">
+    /// The start of the reminder's pending window (<see cref="MachineRestockSyncPendingWindow"/>).
+    /// </param>
     /// <param name="cancellationToken">The request's cancellation token.</param>
     /// <returns>
     /// <see langword="true"/> when the stored coverage was advanced, and <see langword="false"/>
     /// when it was left alone - because the machine is not the caller's business's, because the
-    /// credentials have been replaced since the operation read their revision, or because what is
-    /// stored is already the same or newer.
+    /// credentials have been replaced since the operation read their revision, because the machine
+    /// still has pending restock work, or because what is stored is already the same or newer.
     /// </returns>
     Task<bool> TryRecordSuccessfulSyncAsync(
-        long localMachineId, DateTime startedAtUtc, int credentialRevision, CancellationToken cancellationToken);
+        long localMachineId,
+        DateTime startedAtUtc,
+        int credentialRevision,
+        long nayaxMachineId,
+        DateTime pendingFromUtc,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// The restock-sync state of every machine of the caller's business that its sales provider
@@ -119,6 +140,12 @@ public interface IMachineRestockSyncCoverageStore
     /// credential and writes nothing - which is what makes it safe to run on every Dashboard
     /// load.</para>
     /// </summary>
+    /// <param name="pendingFromUtc">
+    /// The instant the pending window starts (issue #948): the start of the business day
+    /// <c>MachineRestockSyncReminderPolicy.PendingFromBusinessDate</c> names. Only events whose
+    /// canonical instant is at or after it are counted; older ones stay stored and untouched.
+    /// </param>
+    /// <param name="cancellationToken">The request's cancellation token.</param>
     Task<IReadOnlyList<MachineRestockSyncCoverageRecord>> GetProviderMachineCoverageAsync(
-        CancellationToken cancellationToken);
+        DateTime pendingFromUtc, CancellationToken cancellationToken);
 }

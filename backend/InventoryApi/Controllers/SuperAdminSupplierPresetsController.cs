@@ -87,8 +87,9 @@ public sealed class SuperAdminSupplierPresetsController : ControllerBase
     /// <summary>Adds one preset, enabled.</summary>
     /// <response code="201">The preset as it was stored.</response>
     /// <response code="400">
-    /// The name is blank or longer than 200 characters, or the website is not an absolute http(s)
-    /// address or is longer than 2048 characters. Nothing was written.
+    /// The name is blank or longer than 200 characters, the website is not an absolute http(s)
+    /// address or is longer than 2048 characters, or the served states or the price connector and its
+    /// key are not a combination the supplier-master rules accept (issue #931). Nothing was written.
     /// </response>
     /// <response code="409">
     /// Another preset already holds this name, ignoring case. Nothing was written, and this is the
@@ -104,7 +105,7 @@ public sealed class SuperAdminSupplierPresetsController : ControllerBase
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var created = await _create.Handle(request.Name, request.Url, cancellationToken);
+        var created = await _create.Handle(request.ToSubmission(), cancellationToken);
 
         return CreatedAtAction(
             nameof(List),
@@ -112,11 +113,15 @@ public sealed class SuperAdminSupplierPresetsController : ControllerBase
     }
 
     /// <summary>
-    /// Edits one preset: its name, its website and whether it is still suggested, all three
-    /// together. Enabling and disabling is this call.
+    /// Edits one preset: its name, its website, what it serves, whether its prices include GST, how
+    /// they are collected and whether it is still suggested, all together. Enabling and disabling is
+    /// this call.
     /// </summary>
     /// <response code="200">The preset as the edit left it.</response>
-    /// <response code="400">The name or the website failed its rule. Nothing was written.</response>
+    /// <response code="400">
+    /// The name, the website, the served states or the connector and its key failed their rule.
+    /// Nothing was written.
+    /// </response>
     /// <response code="404">No such preset.</response>
     /// <response code="409">
     /// Another preset already holds this name, ignoring case. Nothing was written.
@@ -135,8 +140,7 @@ public sealed class SuperAdminSupplierPresetsController : ControllerBase
 
         var updated = await _update.Handle(
             id,
-            request.Name,
-            request.Url,
+            request.ToSubmission(),
             request.IsEnabled,
             cancellationToken);
 

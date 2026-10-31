@@ -1,10 +1,12 @@
 using Azure.Identity;
 using Azure.Storage.Blobs;
+using Inventory.Application.Attachments;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
+using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Costing;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Documents;
@@ -23,6 +25,8 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformOptions;
+using Inventory.Application.PlatformPlans;
+using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
@@ -40,6 +44,7 @@ using Inventory.Application.SalesSync;
 using Inventory.Application.SaleTimestampRepair;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupportSessions;
@@ -56,6 +61,7 @@ using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace Inventory.Infrastructure;
 
@@ -199,6 +205,39 @@ public static class InfrastructureServiceCollectionExtensions
         // request's own denied-scope context and a member's read on their own resolved one; neither
         // scope selects anything, because there is no owner to compare.
         services.AddScoped<IOptionVisibilityStore, EfOptionVisibilityStore>();
+        // The business subscription state of issue #966: three deliberately tiny adapters over three
+        // tables, kept apart because the records they hold must never write each other. The billing
+        // subscription and the manual grants are ordinary tenant-owned reads and writes through the
+        // central filters and the ownership stamp - the business comes from the caller's resolved
+        // scope, never from a parameter - and the grandfathering record is the third table in this
+        // schema that names no business, for the same reason the option visibility is: the cutoff and
+        // the completion marker are one answer for the whole application. All three are scoped like
+        // every adapter here, so the per-request entitlement read runs on the request's own context
+        // and the human-run grandfathering command on the one it opened per business.
+        services.AddScoped<IBillingSubscriptionStore, EfBillingSubscriptionStore>();
+        services.AddScoped<IManualPlanGrantStore, EfManualPlanGrantStore>();
+        services.AddScoped<ISubscriptionGrandfatheringStore, EfSubscriptionGrandfatheringStore>();
+        // The connected-machine snapshots of issue #978: ordinary tenant-owned, append-only rows
+        // recorded through one insert-if-absent claim, with the uniqueness rule on (business, UTC
+        // date, account series) belonging to the database. Scoped like every adapter here, so a page
+        // load records on the request's own context and the daily job on the one it opened for that
+        // business.
+        services.AddScoped<IConnectedMachineSnapshotStore, EfConnectedMachineSnapshotStore>();
+
+        // The Super Admin's manual plan grant (issue #982). A separate adapter rather than a method
+        // on either store above, because it answers a different kind of question: the business is the
+        // subject of a platform decision rather than the caller's own resolved scope, so this is the
+        // one path that reads and writes a business's grant under a denied scope - through one
+        // business-pinned IgnoreQueryFilters read and the narrow write lease of
+        // AppDbContext.BeginPlanGrantWrite. Scoped like every adapter here, so it runs on the
+        // request's own context and inside the decision's transaction on it, which is also the only
+        // way that lease can be taken at all.
+        services.AddScoped<IPlatformPlanGrantStore, EfPlatformPlanGrantStore>();
+
+        // The attachment storage accounting of issue #968: the business's own usage, and the
+        // reservation an upload takes before it writes a byte. Scoped like every adapter here, so
+        // it runs on the request's own context and inside its resolved business.
+        services.AddScoped<IAttachmentQuotaStore, EfAttachmentQuotaStore>();
         // The one provisioning write of issue #849: the copies of those presets a business receives
         // when its application is approved. A separate one-method adapter rather than a method on
         // the directory store above, because this is the only platform-admin path that writes a
@@ -207,6 +246,57 @@ public static class InfrastructureServiceCollectionExtensions
         // approval's transaction on it - which is also the only way its narrow provisioning lease
         // can be taken at all.
         services.AddScoped<IBusinessSupplierProvisioningStore, EfBusinessSupplierProvisioningStore>();
+        // The shared supplier price catalogue (issue #923, parent #817). Two adapters because they
+        // answer two different kinds of question: one business's own mappings, which are ordinary
+        // tenant-owned data read and written through the central filters and the ownership stamp; and
+        // the deduplicated work list the collector of #924 is built from, which reads the platform
+        // catalogue tables and carries no business identity out. Both are scoped on the request's own
+        // AppDbContext like every adapter here, and neither is given an unscoped context. The work
+        // list store is where issue #924's reviewed cross-business read lives: two
+        // IgnoreQueryFilters statements over the mappings' business-free text columns, reachable only
+        // from the collector endpoint - and, since issue #977, the plan read that decides which
+        // businesses those two statements may reach at all, which is the one place a business id
+        // exists on this path and never leaves it. See EfPriceCatalogueWorkListStore and
+        // docs/architecture.md § Collector work list.
+        services.AddScoped<IProductPriceTrackingStore, EfProductPriceTrackingStore>();
+        services.AddScoped<IPriceCatalogueWorkListStore, EfPriceCatalogueWorkListStore>();
+        // The collector work list's one write (issue #924): a run and its work items, both platform
+        // tables, in one transaction on the request's own denied-scope context.
+        services.AddScoped<IPriceCollectorRunStore, EfPriceCollectorRunStore>();
+        // And the collector's results (issue #937): the same platform tables plus the listings, the
+        // observations, the held readings and the recorded outcome of every submitted row - each
+        // method one transaction on that same denied-scope context, so the authoritative read, the
+        // comparison and the write are one operation. See EfPriceCollectorResultStore.
+        services.AddScoped<IPriceCollectorResultStore, EfPriceCollectorResultStore>();
+        // And the collector's match proposals (issue #941): the match suggestions, the listings a
+        // matched key had already collected, and the four match columns of the mappings that carry
+        // that key - the one tenant-owned write a denied scope may make here, inside the narrow
+        // matching window AppDbContext grants and BusinessOwnershipEnforcer bounds. Scoped on the
+        // request's own context like every adapter above, so nothing can hand it an unscoped one.
+        // See EfPriceCollectorMatchStore and docs/architecture.md § Collector product matching.
+        services.AddScoped<IPriceCollectorMatchStore, EfPriceCollectorMatchStore>();
+        // And the Super Admin's review of all of it (issue #928): the queue and the four decisions.
+        // It is the only writer of MasterProducts in the application, the only path that confirms a
+        // supplier listing or a pack size, and the second path that writes a mapping's match columns
+        // under a denied scope - through the narrow review window AppDbContext grants and
+        // BusinessOwnershipEnforcer bounds, and through one IgnoreQueryFilters read in one place.
+        // Scoped on the request's own context like every adapter above, so nothing can hand it an
+        // unscoped one. See EfPriceCatalogueReviewStore and docs/architecture.md § Super Admin review
+        // of the supplier price catalogue.
+        services.AddScoped<IPriceCatalogueReviewStore, EfPriceCatalogueReviewStore>();
+        // And the Super Admin's read-only view of the master products themselves (issue #1023): one
+        // bounded, searchable page of the shared catalogue and one product with its supplier listings.
+        // It writes nothing, takes no lease and makes no IgnoreQueryFilters statement, because every
+        // table it reads is a platform table that carries no business key at all - so a denied scope
+        // reads the whole catalogue and none of anybody's own rows. Scoped on the request's own
+        // context like every adapter above, so nothing can hand it an unscoped one. See
+        // EfMasterProductCatalogueStore and docs/architecture.md § Super Admin master products.
+        services.AddScoped<IMasterProductCatalogueStore, EfMasterProductCatalogueStore>();
+        // The cheapest-supplier summary (issue #930): the read behind the Cheapest supplier column.
+        // It reaches the platform catalogue only through the caller's own matched mappings and the
+        // supplier records the caller holds a copy of, on the request's own scoped context like the
+        // adapters above.
+        services.AddScoped<ICheapestSupplierSummaryStore, EfCheapestSupplierSummaryStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
@@ -235,6 +325,11 @@ public static class InfrastructureServiceCollectionExtensions
         // request's own AppDbContext.
         services.AddScoped<IProviderMachineLinkStore, EfProviderMachineLinkStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
+
+        // The "Available to add" suppliers of issue #935. Scoped on the request's own AppDbContext
+        // like every other adapter here: its reads and its insert are the ordinary tenant-scoped
+        // ones, and the state change's top-up joins the settings save's own write transaction.
+        services.AddScoped<IAvailableSupplierPresetStore, EfAvailableSupplierPresetStore>();
         services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
         services.AddScoped<IProductStore, EfProductStore>();
         services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
@@ -248,6 +343,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxSaleTimestampRepairStore, EfNayaxSaleTimestampRepairStore>();
         services.AddScoped<IStockAdjustmentStore, EfStockAdjustmentStore>();
         services.AddScoped<ISupplierOrderStore, EfSupplierOrderStore>();
+        services.AddScoped<ISupplierOrderCompletionStore, EfSupplierOrderCompletionStore>();
         services.AddScoped<ISiteFactsStore, EfSiteFactsStore>();
         services.AddScoped<IMachineDashboardFactsStore, EfMachineDashboardFactsStore>();
         services.AddScoped<IProductPurchasePriceHistoryProvider, EfProductPurchasePriceHistoryProvider>();
@@ -467,12 +563,38 @@ public static class InfrastructureServiceCollectionExtensions
         // resolves the credential provider and the business scope per request like every other
         // consumer. A test can still put its own double behind it. Transient, as the typed client it
         // wraps is.
-        services.AddTransient<INayaxLynxClient>(serviceProvider => new CachingNayaxLynxClient(
-            serviceProvider.GetRequiredService<NayaxLynxClient>(),
-            serviceProvider.GetRequiredService<INayaxRequestCredentialProvider>(),
-            serviceProvider.GetRequiredService<IBusinessScope>(),
-            serviceProvider.GetRequiredService<NayaxMachineListCache>(),
-            serviceProvider.GetRequiredService<NayaxMachineProductsCache>()));
+        //
+        // Outside it sits the connected-machine counter of issue #978, which records the day's
+        // snapshot from a complete fleet read the application was performing anyway - so the count
+        // costs no extra Nayax call on a page load - and delegates everything else untouched. It is
+        // outermost because it must see the fresh reads every consumer makes, and it is the only
+        // place the refresh path records a snapshot. It takes the caching decorator as
+        // INayaxFleetProvenanceClient, because the fleet read has to come back with the account
+        // series of the credential snapshot that authenticated it: that is what the snapshot is
+        // stamped with, and reading the connection again afterwards would describe whichever account
+        // is stored by then rather than the one the fleet was read from.
+        services.AddTransient<INayaxLynxClient>(serviceProvider =>
+            new ConnectedMachineCountingNayaxLynxClient(
+                new CachingNayaxLynxClient(
+                    serviceProvider.GetRequiredService<NayaxLynxClient>(),
+                    serviceProvider.GetRequiredService<INayaxRequestCredentialProvider>(),
+                    serviceProvider.GetRequiredService<IBusinessScope>(),
+                    serviceProvider.GetRequiredService<NayaxMachineListCache>(),
+                    serviceProvider.GetRequiredService<NayaxMachineProductsCache>()),
+                serviceProvider.GetRequiredService<IConnectedMachineSnapshotRecorder>(),
+                serviceProvider
+                    .GetRequiredService<ILogger<ConnectedMachineCountingNayaxLynxClient>>()));
+
+        // The daily job's own fleet read (issue #978) is given the inner typed client explicitly,
+        // never the port registered above: the port is the decorator, so resolving it here would make
+        // the job's read record the snapshot twice over - once through the decorator and once through
+        // the job - and would be a resolution cycle besides. Every refusal is unchanged, because the
+        // status gate and the support-session rule belong to the credential provider the typed client
+        // already uses. The typed client is also an INayaxFleetProvenanceClient, so the job's read
+        // reports the account series it was authenticated as and the snapshot is stamped with that
+        // rather than with the series the job read before the call.
+        services.AddScoped<IConnectedMachineFleetReader>(serviceProvider =>
+            new NayaxConnectedMachineFleetReader(serviceProvider.GetRequiredService<NayaxLynxClient>()));
 
         // The connection-test check runner (issue #536) gets its own HttpClient from the same base
         // address and the same resilience handler, and registers no credential here either: it

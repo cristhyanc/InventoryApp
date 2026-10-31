@@ -6,7 +6,7 @@ namespace InventoryApi.DTOs;
 /// <summary>
 /// One business as <c>GET /api/super-admin/businesses</c> reports it (issue #544).
 ///
-/// <para>These ten fields are the whole contract, and what is missing from it is the point. There is
+/// <para>These twelve fields are the whole contract, and what is missing from it is the point. There is
 /// no sale, stock, cost, purchase, product, machine, site or report value - nothing tenant-owned at
 /// all - and no member's display name, email address or Entra identifier. The Super Admin decides
 /// whether a business may trade; this response is the whole of what that decision needs.</para>
@@ -32,13 +32,30 @@ namespace InventoryApi.DTOs;
 /// business's published detail, not a member's personal address.
 /// </param>
 /// <param name="Abn">Its stored 11-digit ABN, or <c>null</c>.</param>
+/// <param name="State">
+/// The Australian state or territory it recorded - one of <c>NSW</c>, <c>VIC</c>, <c>QLD</c>,
+/// <c>SA</c>, <c>WA</c>, <c>TAS</c>, <c>ACT</c>, <c>NT</c> - or <c>null</c> for a business that has
+/// not recorded one (issue #933). Shown when an application is reviewed.
+/// </param>
 /// <param name="ActiveMemberCount">
 /// How many of its memberships are currently active - how many people can reach it at all. A
 /// rejected application reads <c>0</c>, because the rejection released its applicant.
 /// </param>
 /// <param name="NayaxConfigured">
 /// Whether the business has stored Nayax credentials at all. A yes/no and nothing more: never an
-/// operator id, a connection status or any part of a token.
+/// operator id, a key id or any part of a token.
+/// </param>
+/// <param name="NayaxConnectionStatus">
+/// The published <c>Inventory.Domain.Nayax.NayaxConnectionStatus</c> name - <c>NotConfigured</c>,
+/// <c>PendingPermissions</c>, <c>Ready</c> or <c>NeedsAttention</c> - rather than a number a client
+/// would have to map and a renumbering would silently change (issue #983). It is the business's own
+/// <em>stored</em> status: the result of the last permission test it ran itself, never a live check,
+/// and reading this list makes no Nayax call. <c>NotConfigured</c> is what a business with no
+/// connection row reads, which is exactly what the absence of that row means.
+///
+/// <para>It is the second and last thing this response says about a connection. The operator id, the
+/// credential revision, the instant of that test, whether the machine checks were left unverified,
+/// any Nayax error text and every part of the token are all deliberately absent.</para>
 /// </param>
 public sealed record SuperAdminBusinessResponse(
     int BusinessId,
@@ -49,8 +66,10 @@ public sealed record SuperAdminBusinessResponse(
     DateTime? DecidedAtUtc,
     string? ContactEmail,
     string? Abn,
+    string? State,
     int ActiveMemberCount,
-    bool NayaxConfigured)
+    bool NayaxConfigured,
+    string NayaxConnectionStatus)
 {
     public static SuperAdminBusinessResponse From(PlatformBusinessSummary business)
     {
@@ -65,8 +84,10 @@ public sealed record SuperAdminBusinessResponse(
             business.DecidedAtUtc,
             business.ContactEmail,
             business.Abn,
+            business.State,
             business.ActiveMemberCount,
-            business.NayaxConfigured);
+            business.NayaxConfigured,
+            business.NayaxConnectionStatus.ToString());
     }
 }
 

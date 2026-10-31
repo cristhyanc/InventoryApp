@@ -1,11 +1,12 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
-import { BehaviorSubject, NEVER, Observable, of, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { PurchaseEditPageComponent } from './purchase-edit-page.component';
 import { PurchaseService, PurchaseUpdatePayload } from '../../../services/purchase.service';
 import { SupplierService } from '../../../services/supplier.service';
 import { ProductService } from '../../../services/product.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { ToastService } from '../../../services/toast.service';
 import {
   GstClassification,
   GstClassificationSource,
@@ -80,6 +81,9 @@ function product(id: number, name: string): Product {
 interface Stubs {
   get?: jest.Mock;
   update?: jest.Mock;
+  attachDocument?: jest.Mock;
+  getFile?: jest.Mock;
+  gstSummary?: { inputGst: number; unresolvedComponentCount: number; unresolvedAmount: number } | null;
   id?: string;
   sessionActive?: Observable<boolean>;
 }
@@ -88,8 +92,14 @@ interface Stubs {
 function createPage(stubs: Stubs = {}) {
   const get = stubs.get ?? jest.fn(() => of(purchase()));
   const update = stubs.update ?? jest.fn(() => of(purchase()));
-  const purchaseService = { get, update } as unknown as PurchaseService;
-  const supplierService = { getAll: jest.fn(() => of([])) } as unknown as SupplierService;
+  const attachDocument = stubs.attachDocument ?? jest.fn(() => of(purchase()));
+  const getFile = stubs.getFile ?? jest.fn(() => of(new Blob(['receipt'])));
+  const getGstSummaryFor = jest.fn(() => stubs.gstSummary ?? null);
+  const purchaseService = { get, update, attachDocument, getFile, getGstSummaryFor } as unknown as PurchaseService;
+  // `getAllIncludingHidden` is deliberately absent (issue #934): a picker must ask for the
+  // selectable list, and calling the Suppliers page's own read here would fail this render.
+  const getSuppliers = jest.fn(() => of([]));
+  const supplierService = { getAll: getSuppliers } as unknown as SupplierService;
   const productService = {
     getAll: jest.fn(() => of([product(10, 'Coke'), product(20, 'Chips')]))
   } as unknown as ProductService;
@@ -98,11 +108,14 @@ function createPage(stubs: Stubs = {}) {
   const navigate = jest.fn();
   const router = { navigate } as unknown as Router;
   const supportSession = { active$: stubs.sessionActive ?? of(false) } as unknown as SupportSessionService;
+  const toastService = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 
-  const component = new PurchaseEditPageComponent(purchaseService, supplierService, productService, router, route, supportSession);
+  const component = new PurchaseEditPageComponent(
+    purchaseService, supplierService, productService, router, route, supportSession,
+    toastService as unknown as ToastService);
   component.ngOnInit();
 
-  return { component, get, update, navigate, paramMap };
+  return { component, get, update, attachDocument, getFile, navigate, paramMap, getSuppliers, toastService };
 }
 
 /** The update payload the page handed to `PurchaseService.update`, with the id it used. */
@@ -130,6 +143,17 @@ describe('PurchaseEditPageComponent loading (issue #475)', () => {
     expect(component.purchase?.id).toBe(42);
     expect(component.loading).toBe(false);
     expect(component.unavailable).toBe('');
+  });
+
+  /**
+   * The supplier picker asks for the selectable list (issue #934), which the API answers without
+   * the suppliers the business has marked "Not used" - so one cannot be chosen for a new purchase
+   * while a purchase that already names it still shows it.
+   */
+  it('asks for the selectable suppliers rather than the Suppliers page list', () => {
+    const { getSuppliers } = createPage();
+
+    expect(getSuppliers).toHaveBeenCalledTimes(1);
   });
 
   it('reloads for a different route id, so browser Back and Forward show the right purchase', () => {
@@ -244,6 +268,12 @@ describe('PurchaseEditPageComponent saving (issue #475)', () => {
     expect(navigate).toHaveBeenCalledWith(['/purchases']);
   });
 
+  it('keeps the saved GST summary the read returned, for the form to show as last saved', () => {
+    const { component } = createPage({ gstSummary: { inputGst: 2.5, unresolvedComponentCount: 1, unresolvedAmount: 4 } });
+
+    expect(component.gstSummary).toEqual({ inputGst: 2.5, unresolvedComponentCount: 1, unresolvedAmount: 4 });
+  });
+
   it('returns to the list on Cancel without persisting anything', () => {
     const { component, update, navigate } = createPage();
 
@@ -259,7 +289,11 @@ describe('PurchaseEditPageComponent template (issue #475)', () => {
     await TestBed.configureTestingModule({
       imports: [PurchaseEditPageComponent],
       providers: [
-        { provide: PurchaseService, useValue: { get: stubs.get, update: jest.fn(() => of(purchase())) } },
+        {
+          provide: PurchaseService,
+          useValue: { get: stubs.get, update: jest.fn(() => of(purchase())), getGstSummaryFor: jest.fn(() => null) }
+        },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of([product(10, 'Coke')])) } },
         { provide: SupportSessionService, useValue: { active$: stubs.sessionActive ?? of(false) } },
@@ -284,18 +318,18 @@ describe('PurchaseEditPageComponent template (issue #475)', () => {
   });
 
   /**
-   * The same page shell and card width `/purchases/new` uses, so both forms read alike. Since
-   * issue #478 that width is the whole available content area: the card must neither cap nor
-   * centre itself, because the content area already supplies the sidebar space and the gutters.
+   * The same page shell `/purchases/new` uses, headed Edit Purchase with no subtitle (issue #1029).
+   * The shared form layout draws its own cards, so the page adds no card around it, and nothing caps
+   * or centres the content area that already supplies the sidebar space and the gutters.
    */
-  it('uses the shared page shell and lets the form card use the available content width', async () => {
+  it('uses the shared page shell, headed Edit Purchase with no subtitle', async () => {
     const { host } = await render({ get: jest.fn(() => of(purchase())) });
 
-    expect(host.querySelector('.page > .page-header .page-title')?.textContent).toContain('Edit Purchase');
-
-    const card = host.querySelector('.page > .card');
-    expect(card).not.toBeNull();
-    const classes = Array.from(card?.classList ?? []);
+    expect(host.querySelector('.page h1')?.textContent?.trim()).toBe('Edit Purchase');
+    expect(host.querySelector('.page-subtitle')).toBeNull();
+    expect(host.querySelector('.page > .card')).toBeNull();
+    const page = host.querySelector('.page');
+    const classes = Array.from(page?.classList ?? []);
     expect(classes).not.toContain('mx-auto');
     expect(classes.filter((className) => /(^|:)max-w-/.test(className))).toEqual([]);
   });
@@ -328,6 +362,246 @@ describe('PurchaseEditPageComponent template (issue #475)', () => {
 
     const save = host.querySelector('[data-testid="edit-purchase-save"]') as HTMLButtonElement;
     expect(save.disabled).toBe(false);
+  });
+});
+
+/**
+ * A receipt chosen during the edit (issue #1029). It goes through the existing attach endpoint only
+ * after the edit has saved, and nothing here replaces or deletes a receipt the purchase already holds.
+ */
+describe('PurchaseEditPageComponent receipt (issue #1029)', () => {
+  const file = () => new File(['scan'], 'receipt.pdf', { type: 'application/pdf' });
+
+  it('saves the edit without attaching anything when no receipt was chosen', () => {
+    const { component, update, attachDocument, navigate } = createPage();
+
+    component.onSave(PAYLOAD);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(attachDocument).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+
+  it('attaches the chosen receipt through the existing endpoint only after the edit saved', () => {
+    const order: string[] = [];
+    const update = jest.fn(() => { order.push('update'); return of(purchase()); });
+    const attachDocument = jest.fn(() => { order.push('attach'); return of(purchase()); });
+    const { component, navigate } = createPage({ update, attachDocument });
+    const chosen = file();
+    component.pendingReceipt = chosen;
+
+    component.onSave(PAYLOAD);
+
+    expect(order).toEqual(['update', 'attach']);
+    expect(attachDocument).toHaveBeenCalledWith(42, chosen);
+    expect(component.pendingReceipt).toBeNull();
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+
+  it('never attaches when the edit itself is refused, and keeps the chosen receipt', () => {
+    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { component, attachDocument, navigate } = createPage({ update: jest.fn(() => throwError(() => ({ error: 'Rejected' }))) });
+    const chosen = file();
+    component.pendingReceipt = chosen;
+
+    component.onSave(PAYLOAD);
+    logged.mockRestore();
+
+    expect(attachDocument).not.toHaveBeenCalled();
+    expect(component.pendingReceipt).toBe(chosen);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('reports a refused attach without undoing the saved edit', () => {
+    const attachDocument = jest.fn(() => throwError(() => ({ error: 'The document is too large.' })));
+    const { component, navigate, toastService } = createPage({ attachDocument });
+    component.pendingReceipt = file();
+
+    component.onSave(PAYLOAD);
+
+    expect(toastService.error).toHaveBeenCalledWith(
+      'The purchase was saved, but the receipt was not attached. The document is too large. You can add it from the Purchases list.');
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+    expect(component.saving).toBe(false);
+  });
+
+  it('forgets a chosen receipt when another purchase is opened', () => {
+    const { component, paramMap } = createPage();
+    component.pendingReceipt = file();
+
+    paramMap.next(convertToParamMap({ id: '43' }));
+
+    expect(component.pendingReceipt).toBeNull();
+  });
+
+  it('opens the saved receipt through the authorized file read', () => {
+    const open = jest.spyOn(window, 'open').mockImplementation(() => null);
+    const createObjectURL = jest.fn(() => 'blob:receipt');
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true });
+    const { component, getFile } = createPage();
+
+    component.previewStoredReceipt();
+
+    expect(getFile).toHaveBeenCalledWith(42);
+    expect(open).toHaveBeenCalledWith('blob:receipt', '_blank', 'noopener');
+    open.mockRestore();
+  });
+});
+
+describe('PurchaseEditPageComponent save bound to the purchase it was started for (issue #1029)', () => {
+  const fileNamed = (name: string) => new File(['scan'], name, { type: 'application/pdf' });
+
+  /** An update and an attach that answer only when the test says so, one subject per call. */
+  function delayed() {
+    const updates: Subject<Purchase>[] = [];
+    const attaches: Subject<Purchase>[] = [];
+    const update = jest.fn(() => {
+      const answer = new Subject<Purchase>();
+      updates.push(answer);
+      return answer.asObservable();
+    });
+    const attachDocument = jest.fn(() => {
+      const answer = new Subject<Purchase>();
+      attaches.push(answer);
+      return answer.asObservable();
+    });
+    const page = createPage({ update, attachDocument });
+    return { ...page, updates, attaches };
+  }
+
+  function complete(answer: Subject<Purchase>): void {
+    answer.next(purchase());
+    answer.complete();
+  }
+
+  it('attaches the receipt submitted with A to A after the person moved to B and chose another file', () => {
+    const { component, paramMap, updates, attachDocument, navigate } = delayed();
+    const receiptA = fileNamed('a.pdf');
+    const receiptB = fileNamed('b.pdf');
+    component.pendingReceipt = receiptA;
+    component.onSave(PAYLOAD);
+
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.pendingReceipt = receiptB;
+    complete(updates[0]);
+
+    expect(attachDocument).toHaveBeenCalledTimes(1);
+    // Files compare equal by structure, so the one sent is checked by identity.
+    const [sentTo, sent] = attachDocument.mock.calls[0] as unknown as [number, File];
+    expect(sentTo).toBe(42);
+    expect(sent).toBe(receiptA);
+    expect(sent).not.toBe(receiptB);
+    expect(component.pendingReceipt).toBe(receiptB);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('opens B ready to save, rather than still saving A', () => {
+    const { component, paramMap } = delayed();
+    component.onSave(PAYLOAD);
+    expect(component.saving).toBe(true);
+
+    paramMap.next(convertToParamMap({ id: '43' }));
+
+    expect(component.saving).toBe(false);
+  });
+
+  it('leaves B alone when A\'s save succeeds, without navigating it away or ending B\'s own save', () => {
+    const { component, paramMap, updates, navigate } = delayed();
+    component.onSave(PAYLOAD);
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.onSave(PAYLOAD);
+
+    complete(updates[0]);
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.saving).toBe(true);
+
+    complete(updates[1]);
+
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+
+  it('reports A\'s refused save by toast and never shows it as B\'s error', () => {
+    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { component, paramMap, updates, attachDocument, navigate, toastService } = delayed();
+    component.pendingReceipt = fileNamed('a.pdf');
+    component.onSave(PAYLOAD);
+    paramMap.next(convertToParamMap({ id: '43' }));
+
+    updates[0].error({ error: 'Rejected' });
+    logged.mockRestore();
+
+    expect(component.saveError).toBe('');
+    expect(component.saving).toBe(false);
+    expect(attachDocument).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(toastService.error).toHaveBeenCalledWith('Your changes to "Weekly restock" were not saved. Rejected');
+  });
+
+  it('reports A\'s refused attach by name, keeps A\'s saved edit, and leaves B\'s page as it is', () => {
+    const { component, paramMap, updates, attaches, navigate, toastService } = delayed();
+    const receiptB = fileNamed('b.pdf');
+    component.pendingReceipt = fileNamed('a.pdf');
+    component.onSave(PAYLOAD);
+    complete(updates[0]);
+
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.pendingReceipt = receiptB;
+    attaches[0].error({ error: 'The document is too large.' });
+
+    expect(toastService.error).toHaveBeenCalledWith(
+      '"Weekly restock" was saved, but its receipt was not attached. The document is too large. You can add it from the Purchases list.');
+    expect(component.pendingReceipt).toBe(receiptB);
+    expect(component.saving).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate or clear B\'s receipt when A\'s attach succeeds later', () => {
+    const { component, paramMap, updates, attaches, navigate } = delayed();
+    const receiptB = fileNamed('b.pdf');
+    component.pendingReceipt = fileNamed('a.pdf');
+    component.onSave(PAYLOAD);
+    complete(updates[0]);
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.pendingReceipt = receiptB;
+
+    complete(attaches[0]);
+
+    expect(component.pendingReceipt).toBe(receiptB);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('still attaches the submitted receipt after the page is destroyed, without navigating', () => {
+    const { component, updates, attaches, attachDocument, navigate } = delayed();
+    const receiptA = fileNamed('a.pdf');
+    component.pendingReceipt = receiptA;
+    component.onSave(PAYLOAD);
+
+    component.ngOnDestroy();
+    complete(updates[0]);
+    complete(attaches[0]);
+
+    const [sentTo, sent] = attachDocument.mock.calls[0] as unknown as [number, File];
+    expect(sentTo).toBe(42);
+    expect(sent).toBe(receiptA);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('ignores a read for A that answers after B was opened', () => {
+    const reads: Subject<Purchase>[] = [];
+    const get = jest.fn(() => {
+      const answer = new Subject<Purchase>();
+      reads.push(answer);
+      return answer.asObservable();
+    });
+    const { component, paramMap } = createPage({ get });
+    paramMap.next(convertToParamMap({ id: '43' }));
+
+    reads[1].next(purchase({ id: 43, title: 'B' }));
+    reads[0].next(purchase({ id: 42, title: 'A' }));
+
+    expect(component.purchase?.title).toBe('B');
+    expect(component.loading).toBe(false);
   });
 });
 

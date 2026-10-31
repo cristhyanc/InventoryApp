@@ -94,7 +94,8 @@ public class MachinesControllerTests
                 FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
                 Time.Clock,
                 new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
-                new FakeMachineRestockSyncCoverageStore()),
+                new FakeMachineRestockSyncCoverageStore(),
+                Time.Calendar),
             new ApplyMachineStockSync(store),
             new ResolveMachineStockDuplicate(store),
             new ResolveMachineStockEventsAsAlreadyRecorded(store),
@@ -345,6 +346,30 @@ public class MachinesControllerTests
     }
 
     /// <summary>
+    /// Issue #980: each machine names its site - the provider's <c>CustomerID</c>, the id the site
+    /// reads publish - so the dashboard can list a site's machines under it. A machine at no site
+    /// answers <c>null</c>, never a made-up site.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_carries_each_machines_site_id()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new NayaxMachine { MachineID = MachineId, MachineName = "Pavillion Left", CustomerID = 91 },
+                new NayaxMachine { MachineID = 99, MachineName = "Warehouse", CustomerID = null },
+            ]);
+
+        var result = await Controller(Mock.Of<IMachineStockEventStore>(), nayax.Object, EmptyCostedFacts())
+            .GetAll();
+
+        var machines = Assert.IsType<List<MachineResponse>>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(91, Assert.Single(machines, machine => machine.MachineID == MachineId).SiteId);
+        Assert.Null(Assert.Single(machines, machine => machine.MachineID == 99).SiteId);
+    }
+
+    /// <summary>
     /// Issue #741: the single-machine read takes the local id, reads the provider by that machine's
     /// own Nayax number, and answers both - the local id the route was given and the provider's
     /// number - the way the fleet list does.
@@ -362,6 +387,7 @@ public class MachinesControllerTests
         var machine = Assert.IsType<MachineResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Equal(MachineId, machine.MachineID);
         Assert.Equal(LocalMachineId, machine.LocalMachineId);
+        Assert.Equal(91, machine.SiteId);
     }
 
     /// <summary>

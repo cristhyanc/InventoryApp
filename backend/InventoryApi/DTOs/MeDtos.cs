@@ -40,13 +40,212 @@ namespace InventoryApi.DTOs;
 /// members whose capabilities already allowed it, and the classification endpoints keep authorizing
 /// every request by <c>Data.Repair</c> either way.
 /// </param>
+/// <param name="Entitlement">
+/// What the business has <em>bought</em> (issue #966): the effective plan, or - in the shipped state -
+/// that nothing is enforced at all. Always present, never omitted, so a client never has to tell
+/// "the API does not report this" from "nothing is enforced"; see
+/// <see cref="MeEntitlementResponse"/>. It is deliberately not a capability and implies none.
+/// </param>
 public sealed record MeAccessResponse(
     string? Role,
     IReadOnlyList<string> Capabilities,
     string BusinessName,
     string TimeZoneId,
     MeSupportSessionResponse? SupportSession,
-    bool HistoricalGstClassificationVisible);
+    bool HistoricalGstClassificationVisible,
+    MeEntitlementResponse Entitlement);
+
+/// <summary>
+/// The business's plan entitlement, as <c>GET /api/me/access</c> reports it (issue #966).
+///
+/// <para>There is deliberately no separate read endpoint and no caller-supplied business id: this
+/// is computed per request, with no server cache, for the business the request already resolved -
+/// which inside a support session is the business being viewed, so a supporter sees that business's
+/// own plan. A role preview never changes it.</para>
+///
+/// <para>It carries no price, no storage figure and no machine allowance. Those are the plan
+/// catalogue's (<c>Inventory.Domain.Subscriptions.PlanCatalogue</c>), and the page that shows them
+/// is issue #970's work; repeating them in every access read would be a second place a price could
+/// be wrong.</para>
+/// </summary>
+/// <param name="Enforced">
+/// Whether plan entitlement applies at all. <see langword="false"/> is the shipped state and today's
+/// behaviour - every business unrestricted - and a client that reads it offers everything, exactly as
+/// it does now. It is <see langword="false"/> both while the rollout setting is off and while the
+/// grandfathering step has not completed, which is one answer on purpose: in both states nothing is
+/// withheld from anybody.
+/// </param>
+/// <param name="Plan">
+/// The effective plan's published name - <c>Free</c>, <c>Starter</c> or <c>Pro</c> - while
+/// <paramref name="Enforced"/> is <see langword="true"/>, and an explicit <c>null</c> while it is
+/// not. Null rather than <c>Pro</c>, because "unrestricted" is not a plan anybody is on; null rather
+/// than <c>Free</c>, because reporting Free would lock a business nothing is enforcing anything for.
+/// A name rather than a number, for the reason the role and the capabilities are names.
+/// </param>
+/// <param name="Source">
+/// Where that plan came from, as the published name of
+/// <c>Inventory.Domain.Subscriptions.EntitlementSource</c>: <c>EnforcementDisabled</c>,
+/// <c>GrandfatheringNotCompleted</c>, <c>ManualGrant</c>, <c>BillingSubscription</c> or
+/// <c>NoActiveRecord</c>. It is reported so a client (and a support request) can tell a
+/// complimentary or grandfathered plan from a paid one, and an unrestricted deployment from a
+/// business that has nothing active.
+/// </param>
+/// <param name="EndsAtUtc">
+/// When the record that decided the plan stops entitling it, <strong>exclusive</strong>, or
+/// <c>null</c> when it has no recorded end - which is what a grandfathered grant has until an owner
+/// sets one. It is that one record's end, never a combination of both records' dates.
+/// </param>
+/// <param name="AttachmentStorage">
+/// The business's purchase and expense attachment storage (issue #968), or an explicit <c>null</c>
+/// while nothing is enforced - because then there is no allowance, nothing is counted and nothing
+/// is refused. See <see cref="MeAttachmentStorageResponse"/>.
+/// </param>
+/// <param name="ConnectedMachines">
+/// What the business's connected machines cost it (issue #978), or <c>null</c> while nothing is
+/// enforced - which is the shipped state, where nothing about the business is read at all. Being over
+/// the allowance is billed, never blocked; see <see cref="MeConnectedMachinesResponse"/>.
+/// </param>
+public sealed record MeEntitlementResponse(
+    bool Enforced,
+    string? Plan,
+    string Source,
+    DateTime? EndsAtUtc,
+    MeAttachmentStorageResponse? AttachmentStorage,
+    MeConnectedMachinesResponse? ConnectedMachines);
+
+/// <summary>
+/// How much of its attachment storage allowance a business is using, as
+/// <c>GET /api/me/access</c> reports it (issue #968).
+///
+/// <para>It is reported here rather than from an endpoint of its own for the reason the
+/// entitlement is: the warning a page shows at 80% and the explanation it gives for a refused
+/// upload at 100% have to come from the same answer as the plan they are about. There is no
+/// caller-supplied business id and no cache: the figures are the resolved business's own, read per
+/// request.</para>
+///
+/// <para>It <strong>withholds nothing</strong>. At or over the allowance only new attachment
+/// <em>uploads</em> are refused: viewing, downloading and deleting attachments, and recording
+/// purchases and expenses without a document, keep working exactly as they do under it, and no
+/// attachment is ever deleted automatically - including after a downgrade that leaves a business
+/// above its new allowance.</para>
+/// </summary>
+/// <param name="UsedBytes">
+/// The recorded sizes of the attachments the business's purchases and expenses refer to, plus the
+/// uploads it currently has in progress. A stored file no record refers to is not charged to the
+/// business, and an attachment whose size was never recorded counts as nothing rather than as a
+/// guess; the reconciliation command reports both.
+/// </param>
+/// <param name="LimitBytes">
+/// The effective plan's allowance, from <c>Inventory.Domain.Subscriptions.PlanCatalogue</c>. 1 GB
+/// is 1,000,000,000 bytes.
+/// </param>
+/// <param name="WarningLevel">
+/// The published <c>Inventory.Domain.Attachments.AttachmentStorageWarningLevel</c> name -
+/// <c>Normal</c> under 80% of the allowance, <c>Warning</c> from 80%, <c>Full</c> at or over it -
+/// rather than a number a client would have to map, and rather than a percentage each client would
+/// round its own way.
+/// </param>
+public sealed record MeAttachmentStorageResponse(
+    long UsedBytes, long LimitBytes, string WarningLevel);
+
+/// <summary>
+/// The business's connected machines, as <c>GET /api/me/access</c> reports them beside the plan
+/// (issue #978, child of #965).
+///
+/// <para><strong>A connected machine is a machine on the business's Nayax account</strong>, linked in
+/// this application or not - the decision of 29 October 2026, because Nayax imports sales for every
+/// machine on the account either way. A manual machine has no provider id and is never counted.</para>
+///
+/// <para><strong>The count is recorded evidence, not a live read.</strong> It is the stored snapshot
+/// of the latest complete fleet read for the business's <em>current</em> Nayax account, so this
+/// response costs no Nayax call: a count taken earlier today is <c>Current</c>, an older one stays the
+/// count and is reported <c>Stale</c> with its age, and a connection that cannot be read reports
+/// <c>Unavailable</c> with a reason - never a zero.</para>
+///
+/// <para><strong>Being over the allowance is billed, never blocked.</strong> No client may read
+/// <paramref name="MachinesOverAllowance"/> as a limit: linking a machine, importing sales, the
+/// reports and the pick list are unaffected by it, and nothing removes a link or any history. What an
+/// extra machine costs is the plan catalogue's, and the page that shows it is #970's work.</para>
+/// </summary>
+/// <param name="IncludedByPlan">
+/// How many connected machines the effective plan includes - five on Pro, none on a plan with no
+/// Nayax connection.
+/// </param>
+/// <param name="PurchasedAdditional">
+/// How many extra connected machines the business has bought. It is <c>0</c> until the billing
+/// integration of #969 records a purchase; an unrecorded purchase is none rather than a guess.
+/// </param>
+/// <param name="Allowance">
+/// <paramref name="IncludedByPlan"/> plus <paramref name="PurchasedAdditional"/>: the number the
+/// count is compared against.
+/// </param>
+/// <param name="Count">
+/// The machines the current account was last counted at, or <c>null</c> when there is no count. Null,
+/// never zero: a count nobody could take is not an empty fleet.
+/// </param>
+/// <param name="AsOfDateUtc">The UTC day that count was taken for, or <c>null</c> when there is none.</param>
+/// <param name="AgeInDays">
+/// How many UTC days old the count is: <c>0</c> while it is current, its real age while it is stale,
+/// and <c>null</c> when there is no count.
+/// </param>
+/// <param name="State">
+/// How well known the count is, as the published name of
+/// <c>Inventory.Domain.ConnectedMachines.ConnectedMachineCountState</c>: <c>Current</c>, <c>Stale</c>
+/// or <c>Unavailable</c>.
+/// </param>
+/// <param name="UnavailableReason">
+/// Why there is no count, as the published name of
+/// <c>Inventory.Domain.ConnectedMachines.ConnectedMachineCountUnavailableReason</c> -
+/// <c>NotConnected</c>, <c>ConnectionNeedsAttention</c>, <c>NeverCounted</c> or
+/// <c>AccountNotYetCounted</c> - and <c>None</c> when there is one.
+/// </param>
+/// <param name="MachinesOverAllowance">
+/// How many counted machines are above the allowance, never negative, and <c>null</c> when there is no
+/// count - because "none over" and "not known" are different answers.
+/// </param>
+public sealed record MeConnectedMachinesResponse(
+    int IncludedByPlan,
+    int PurchasedAdditional,
+    int Allowance,
+    int? Count,
+    DateTime? AsOfDateUtc,
+    int? AgeInDays,
+    string State,
+    string UnavailableReason,
+    int? MachinesOverAllowance);
+
+/// <summary>
+/// The Free/Starter/Pro catalogue, as <c>GET /api/me/plan-catalogue</c> reports it (issue #970), so
+/// the plan page can show every plan's price, storage allowance and connected-machine terms without
+/// keeping a second copy of <c>Inventory.Domain.Subscriptions.PlanCatalogue</c> in Angular.
+///
+/// It is visible to every member and carries no business fact: every row is the same for every
+/// caller, whatever the business holds or has bought. What the business itself has - the effective
+/// plan, its source and its own usage - stays on <c>GET /api/me/access</c>'s
+/// <see cref="MeEntitlementResponse"/>.
+/// </summary>
+public sealed record MePlanCatalogueResponse(IReadOnlyList<MePlanCatalogueEntryResponse> Plans);
+
+/// <summary>
+/// One plan's price and inclusions, as <c>GET /api/me/plan-catalogue</c> reports it (issue #970),
+/// read directly from <c>Inventory.Domain.Subscriptions.PlanCatalogue</c>.
+/// </summary>
+/// <param name="Plan">The plan's published name - <c>Free</c>, <c>Starter</c> or <c>Pro</c>.</param>
+/// <param name="MonthlyPriceMinorUnits">The advertised monthly price, in minor units of <paramref name="CurrencyCode"/>.</param>
+/// <param name="CurrencyCode">The ISO 4217 code the price is in.</param>
+/// <param name="AttachmentStorageLimitBytes">The plan's combined purchase/expense attachment storage allowance.</param>
+/// <param name="IncludedConnectedMachines">How many connected machines the price includes.</param>
+/// <param name="AdditionalConnectedMachinePriceMinorUnits">
+/// What each connected machine beyond <paramref name="IncludedConnectedMachines"/> costs per month,
+/// or <see langword="null"/> when the plan offers no connected machines to add to.
+/// </param>
+public sealed record MePlanCatalogueEntryResponse(
+    string Plan,
+    int MonthlyPriceMinorUnits,
+    string CurrencyCode,
+    long AttachmentStorageLimitBytes,
+    int IncludedConnectedMachines,
+    int? AdditionalConnectedMachinePriceMinorUnits);
 
 /// <summary>
 /// The support session a request is inside, as <c>GET /api/me/access</c> reports it (issue #551).

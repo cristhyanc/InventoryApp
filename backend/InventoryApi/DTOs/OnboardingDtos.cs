@@ -6,7 +6,7 @@ namespace InventoryApi.DTOs;
 /// The business application a person submits to <c>POST /api/onboarding/business-applications</c>
 /// (issue #541).
 ///
-/// <para>These five fields are the whole contract, and they are the same five an Owner can later
+/// <para>These six fields are the whole contract, and they are the same six an Owner can later
 /// edit through <c>PUT /api/business/settings</c>, under the same rules. The request deliberately
 /// carries <strong>no</strong> business identifier, no status, no role and no applicant: which
 /// business this becomes, that it starts as <c>Pending</c>, that the applicant becomes its Owner,
@@ -36,12 +36,20 @@ namespace InventoryApi.DTOs;
 /// The IANA time zone the business's days are derived in, for example <c>Australia/Sydney</c>.
 /// Required, because a business with no zone has no derivable business dates at all.
 /// </param>
+/// <param name="State">
+/// The Australian state or territory the business trades in (issue #933). Required, and one of
+/// <c>NSW</c>, <c>VIC</c>, <c>QLD</c>, <c>SA</c>, <c>WA</c>, <c>TAS</c>, <c>ACT</c> or <c>NT</c>:
+/// a supplier that serves only some states has to be offered to the right businesses, and
+/// <paramref name="TimeZoneId"/> cannot answer that question - <c>Australia/Sydney</c> is both New
+/// South Wales and the Australian Capital Territory.
+/// </param>
 public sealed record BusinessApplicationRequest(
     string? Name,
     string? ContactEmail,
     string? Abn,
     bool? GstRegistered,
-    string? TimeZoneId);
+    string? TimeZoneId,
+    string? State);
 
 /// <summary>
 /// The application as it now stands, as that endpoint returns it (issue #541).

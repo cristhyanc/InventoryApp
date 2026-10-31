@@ -619,7 +619,8 @@ public sealed class PurchaseGstClassificationTests : IDisposable
         await using var db = TestAppDbContext.Unrestricted(_options);
         return await CreateController(db).Upload(
             CreateFile(), "Weekly restock", null, null, deliveryCost, deliveryGst, packageCost, packageGst,
-            new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc), null, Serialize(items));
+            new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc), null, Serialize(items),
+            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
     }
 
     private async Task<PurchaseResponse> Update(
@@ -678,13 +679,14 @@ public sealed class PurchaseGstClassificationTests : IDisposable
 
     private PurchasesController CreateController(AppDbContext db)
     {
-        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db), TestClocks.Fixed);
         var documents = _documents.Object;
         return new PurchasesController(
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, documents),
-            new UploadPurchase(store, documents, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.Upload(store, documents, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.Attach(store, documents),
             new UpdatePurchase(store),
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation(),

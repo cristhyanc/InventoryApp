@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { GstClassification, Supplier, SupplierGstDefaults } from '../models/models';
+import { AvailableSupplierPreset, GstClassification, Supplier, SupplierGstDefaults } from '../models/models';
 import { ConfigService } from './config.service';
 
 export interface SupplierDto {
@@ -32,8 +32,48 @@ export class SupplierService {
 
   constructor(private http: HttpClient, private config: ConfigService) {}
 
+  /**
+   * The suppliers a purchase, a supplier order or a product's order dialog may be recorded
+   * against. The API leaves out the ones marked "Not used" unless asked for them (issue #934), so
+   * a picker gets the right list by asking for nothing.
+   */
   getAll(): Observable<Supplier[]> {
     return this.http.get<Supplier[]>(this.baseUrl);
+  }
+
+  /**
+   * Every supplier, the ones marked "Not used" included (issue #934). Only the Suppliers page asks
+   * for these: switching "Not used" back off requires seeing the row.
+   */
+  getAllIncludingHidden(): Observable<Supplier[]> {
+    return this.http.get<Supplier[]>(`${this.baseUrl}?includeHidden=true`);
+  }
+
+  /**
+   * The suppliers from the platform's list this business may add (issue #935): the enabled records
+   * that serve its own state and that it holds no copy of. The server decides both; this request
+   * carries no filter, no state and no business.
+   */
+  getAvailablePresets(): Observable<AvailableSupplierPreset[]> {
+    return this.http.get<AvailableSupplierPreset[]>(`${this.baseUrl}/available-presets`);
+  }
+
+  /**
+   * Adds one of them as this business's own linked copy (issue #935). The request carries the
+   * record's id and no body at all: its name and website are the platform's, so there is nothing
+   * for a client to send. A record this business already has answers `409`, and one it is not
+   * offered answers `404`.
+   */
+  addFromPreset(presetId: number): Observable<Supplier> {
+    return this.http.post<Supplier>(`${this.baseUrl}/available-presets/${presetId}`, null);
+  }
+
+  /**
+   * Sets or clears a linked supplier's "Not used" switch (issue #934). Nothing is removed either
+   * way: a purchase or order that already names the supplier still shows it.
+   */
+  setNotUsed(id: number, isHidden: boolean): Observable<void> {
+    return this.http.put<void>(`${this.baseUrl}/${id}/not-used`, { isHidden });
   }
 
   get(id: number): Observable<Supplier> {

@@ -2,6 +2,7 @@ using System.Reflection;
 using Inventory.Application.Access;
 using InventoryApi.Auth;
 using InventoryApi.Auth.PlatformAdmin;
+using InventoryApi.Auth.PriceCollector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Routing;
@@ -11,17 +12,17 @@ using Xunit;
 namespace InventoryApi.Tests.Architecture;
 
 /// <summary>
-/// Every endpoint declares how it is authorized, and there are exactly four ways to do it
-/// (issue #525, one slice of #502).
+/// Every endpoint declares how it is authorized, and there are exactly five ways to do it
+/// (issue #525, one slice of #502; the fifth added by issue #924).
 ///
 /// <para>The reason this test exists is the failure mode it removes. Before capability policies, an
 /// endpoint that declared nothing beyond <c>[Authorize]</c> was reachable by every active member of
 /// a business, and a <em>new</em> endpoint that declared nothing was reachable the same way - open
 /// by default, and invisibly so, because nothing in the diff said "this is open". This test turns
-/// that into a build failure: an action that is in none of the four classes below, and whose
+/// that into a build failure: an action that is in none of the five classes below, and whose
 /// controller is not on the pending list, fails here until the same pull request classifies it.</para>
 ///
-/// <para>The four classes, which are the complete set:</para>
+/// <para>The five classes, which are the complete set:</para>
 /// <list type="number">
 ///   <item><b>A capability policy.</b> <c>[RequireCapability(...)]</c> on the action or its
 ///   controller. This is what a business endpoint normally is.</item>
@@ -40,6 +41,18 @@ namespace InventoryApi.Tests.Architecture;
 ///   to ask what they may do whatever role they hold, so it can carry no capability of its own
 ///   without becoming unanswerable for somebody. It still requires authentication, the delegated
 ///   scope and a membership.</item>
+///   <item><b>The price collector surface.</b> <see cref="PriceCollectorPolicy"/> <em>and</em>
+///   <see cref="PriceCollectorEndpointAttribute"/> together, on an endpoint named in
+///   <see cref="PriceCollectorAllowlist"/> below (issue #924). It is the fifth class because it is
+///   the first caller that is not a person: an app-only Entra token, pinned to one tenant and one
+///   client application, carrying the <c>PriceCollector.Run</c> application role and <em>no</em>
+///   delegated scope at all. None of the four classes above can express that - each of them requires
+///   <c>[RequiredScope("access_as_user")]</c>, which a token with no <c>scp</c> can never satisfy,
+///   and the capability and platform-admin classes both answer a question about a <em>person</em>
+///   (which role do they hold, are they the configured administrator) that has no answer here. It is
+///   recorded in this test and in docs/architecture.md § Capability authorization together, which is
+///   what the fourth class's remarks said a fifth would have to be: a reviewed boundary decision made
+///   in both places, never a kind that quietly appears.</item>
 /// </list>
 ///
 /// <para>The classes are mutually exclusive, which is asserted rather than assumed: an endpoint
@@ -107,6 +120,51 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
+    /// Every endpoint the price collector may reach, as its route template and method - class 5, and
+    /// the reviewed allowlist issue #924 introduced.
+    ///
+    /// <para>Adding a line here is the exemption itself, for the same reason the list above is: the
+    /// collector marker is what makes an authenticated caller stop being a person acting in one
+    /// business's API, so it may only ever be given to an endpoint that serves the shared price
+    /// catalogue and no business's own data. <c>GET api/price-collector/work</c> is the first entry
+    /// and serves a work list that carries no business id, business name, business product id or
+    /// price (docs/architecture.md § Collector work list).</para>
+    ///
+    /// <para>The other three are issue #937's results surface, reviewed on that issue: a collector
+    /// submits what it read, finishes one search, and closes its run. Each of them is the same kind
+    /// of entry as the first - every request and every response is about the shared catalogue, a
+    /// supplier's shelf and the run's own issued work, and none of them carries a business id, a
+    /// business name, a business product id or anything a business owns in either direction
+    /// (docs/architecture.md § Collector results). They write six platform tables and nothing
+    /// tenant-owned, under the same denied <c>BusinessScope</c>.</para>
+    ///
+    /// <para>The fifth is issue #941's matches endpoint, reviewed on that issue: the collector says
+    /// what it thinks each waiting <em>key</em> is, and the backend decides. Its request and its
+    /// response are about product descriptions - a folded search key, a master product id, a
+    /// suggestion id - and carry no business id, business name, business product id or even a count of
+    /// the mappings a match moved, which would be a count of the businesses tracking the product. It
+    /// is the one collector endpoint that writes anything tenant-owned, and what it may write is three
+    /// columns and an instant of a price-tracking mapping, inside the narrow matching window
+    /// <c>BusinessOwnershipEnforcer</c> bounds (docs/architecture.md § Collector product
+    /// matching).</para>
+    /// </summary>
+    internal static readonly PriceCollectorEndpoint[] PriceCollectorAllowlist =
+    [
+        new("api/price-collector/work", "GET"),
+        new("api/price-collector/results", "POST"),
+        new("api/price-collector/matches", "POST"),
+        new("api/price-collector/work-items/{workItemId:long}/outcome", "POST"),
+        new("api/price-collector/runs/{runId:long}/complete", "POST"),
+    ];
+
+    /// <summary>One allowlisted collector endpoint: the route template and the HTTP method together.</summary>
+    internal sealed record PriceCollectorEndpoint(string Route, string Method)
+    {
+        /// <inheritdoc />
+        public override string ToString() => $"{Method} {Route}";
+    }
+
+    /// <summary>
     /// Class 4: the one endpoint that is its own class. It is named rather than marked, because a
     /// marker would be a mechanism somebody could reuse - and it is named by route <em>and</em>
     /// method (issue #681), so a second action added at this route would be classified on its own
@@ -144,25 +202,26 @@ public class EndpointAuthorizationClassificationTests
     /// </summary>
     private const BindingFlags ActionCandidates = BindingFlags.Public | BindingFlags.Instance;
 
-    /// <summary>How an endpoint declares its authorization. Exactly four, and no "other".</summary>
+    /// <summary>How an endpoint declares its authorization. Exactly five, and no "other".</summary>
     private enum EndpointClass
     {
         CapabilityPolicy,
         PlatformDiagnostics,
         MembershipNotRequired,
         OwnAccess,
+        PriceCollector,
     }
 
     #region Every endpoint is classified
 
     /// <summary>
-    /// The rule itself: every action on every controller is in one of the four classes, with no
+    /// The rule itself: every action on every controller is in one of the five classes, with no
     /// exception and no pending list (issue #526 removed the last one). A new endpoint therefore
     /// cannot default to "every member may call it" - the build fails until somebody decides what
     /// it requires.
     /// </summary>
     [Fact]
-    public void Every_endpoint_declares_one_of_the_four_authorization_classes()
+    public void Every_endpoint_declares_one_of_the_five_authorization_classes()
     {
         var unclassified = Endpoints()
             .Where(endpoint => ClassesOf(endpoint).Count == 0)
@@ -174,9 +233,10 @@ public class EndpointAuthorizationClassificationTests
             unclassified.Length == 0,
             "Every endpoint must declare how it is authorized: a capability policy "
                 + "([RequireCapability]), the platform diagnostics policy plus its marker, the "
-                + "reviewed membership-not-required marker, or GET api/me/access. An endpoint that "
-                + "declares none of them is reachable by every active member of its business, which "
-                + "is what issue #502 exists to end (AGENTS.md § Architecture rules, "
+                + "reviewed membership-not-required marker, GET api/me/access, or the price "
+                + "collector policy plus its marker on an allowlisted collector route. An endpoint "
+                + "that declares none of them is reachable by every active member of its business, "
+                + "which is what issue #502 exists to end (AGENTS.md § Architecture rules, "
                 + "docs/architecture.md § Capability authorization). Unclassified endpoint(s): "
                 + $"{string.Join(", ", unclassified)}.");
     }
@@ -205,12 +265,13 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
-    /// The recognised classes are exactly four. A fifth would be a new way for an endpoint to be
+    /// The recognised classes are exactly five. A sixth would be a new way for an endpoint to be
     /// authorized, which is a boundary decision to be made here and in docs/architecture.md
-    /// together rather than a kind that quietly appears.
+    /// together rather than a kind that quietly appears - which is exactly how the fifth arrived
+    /// (issue #924, under the owner's reviewed design on parent #817).
     /// </summary>
     [Fact]
-    public void Exactly_four_classes_are_recognised()
+    public void Exactly_five_classes_are_recognised()
     {
         Assert.Equal(
             [
@@ -218,6 +279,7 @@ public class EndpointAuthorizationClassificationTests
                 EndpointClass.PlatformDiagnostics,
                 EndpointClass.MembershipNotRequired,
                 EndpointClass.OwnAccess,
+                EndpointClass.PriceCollector,
             ],
             Enum.GetValues<EndpointClass>());
     }
@@ -367,6 +429,11 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/Sites/list", "GET", Capability.InventoryOperate)]
     [InlineData("api/purchases", "POST", Capability.PurchasingOperate)]
     [InlineData("api/purchases/{id:int}/file", "GET", Capability.PurchasingOperate)]
+    // Issue #976's "add a document" declares no capability of its own: the controller's existing
+    // Purchasing.Operate is the capability recording the purchase already needs, because attaching
+    // the receipt for a purchase you may record is the same purchasing work. Which also means a
+    // read-only support session and a role preview are refused it by the central GET/HEAD rules.
+    [InlineData("api/purchases/{id:int}/file", "POST", Capability.PurchasingOperate)]
     [InlineData("api/SupplierOrders", "POST", Capability.PurchasingOperate)]
     [InlineData("api/Suppliers", "GET", Capability.PurchasingOperate)]
     [InlineData("api/Suppliers/{id:int}/gst-defaults", "PUT", Capability.SuppliersManageGstDefaults)]
@@ -499,6 +566,17 @@ public class EndpointAuthorizationClassificationTests
             [Capability.BusinessManage],
             CapabilitiesOf(Endpoint("api/business/settings", "PUT")));
     }
+
+    /// <summary>
+    /// The plan catalogue of issue #970 is visible to every member, so it declares
+    /// <c>Dashboard.View</c> - the capability every role and a support session hold - rather than a
+    /// narrower one.
+    /// </summary>
+    [Fact]
+    public void The_plan_catalogue_endpoint_declares_dashboard_view() =>
+        Assert.Equal(
+            [Capability.DashboardView],
+            CapabilitiesOf(Endpoint("api/me/plan-catalogue", "GET")));
 
     /// <summary>
     /// A preview is as restricted as its apply. Every action of every data-repair controller
@@ -639,6 +717,19 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/supplier-presets", "GET")]
     [InlineData("api/super-admin/supplier-presets", "POST")]
     [InlineData("api/super-admin/supplier-presets/{id:int}", "PUT")]
+    // Issue #928's review of the shared price catalogue: the one authority that may confirm, correct
+    // or refuse a supplier listing, match a waiting product, or confirm or undo an automatic match.
+    // Class 2 again - one class, one marker, one policy - and not a sixth class.
+    [InlineData("api/super-admin/price-catalogue-review", "GET")]
+    [InlineData("api/super-admin/price-catalogue-review/listings/{supplierListingId:long}/decision", "POST")]
+    [InlineData("api/super-admin/price-catalogue-review/matches", "POST")]
+    [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm", "POST")]
+    [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo", "POST")]
+    // Issue #1023's read-only view of the shared catalogue's master products: the searchable, paged
+    // listing and one product with its supplier listings. Class 2 again - the same marker and the same
+    // policy as the review beside it - and read only, so neither of them writes anything at all.
+    [InlineData("api/super-admin/master-products", "GET")]
+    [InlineData("api/super-admin/master-products/{id:long}", "GET")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);
@@ -676,12 +767,141 @@ public class EndpointAuthorizationClassificationTests
 
     #endregion
 
+    #region Class 5: the price collector surface (issue #924)
+
+    /// <summary>
+    /// The collector surface is both halves together, on an allowlisted route, and it declares
+    /// neither a capability nor the delegated scope.
+    ///
+    /// <para>Each of those absences is a rule rather than an omission. A capability is a business
+    /// role's power and the collector holds no role in any business, so a capability here would be
+    /// unsatisfiable for the only caller the surface exists for - and would invite a business role onto
+    /// a cross-business path, which is the same reason the platform-admin surface declares none.
+    /// <c>[RequiredScope("access_as_user")]</c> is a <em>delegated</em> scope, and an app-only token
+    /// carries no <c>scp</c> at all: requiring one would make the surface permanently
+    /// unreachable.</para>
+    /// </summary>
+    [Fact]
+    public void The_collector_surface_declares_both_halves_and_neither_a_capability_nor_a_delegated_scope()
+    {
+        var collector = Endpoints().Where(HasPriceCollectorMarker).ToArray();
+
+        Assert.NotEmpty(collector);
+        foreach (var endpoint in collector)
+        {
+            Assert.True(
+                HasPriceCollectorPolicy(endpoint),
+                $"{endpoint.Route} carries the collector marker without the collector policy.");
+            Assert.True(
+                IsPriceCollectorAllowlisted(endpoint),
+                $"{endpoint.Route} carries the collector marker and is not on the reviewed "
+                    + "collector allowlist in this test.");
+            Assert.Empty(CapabilitiesOf(endpoint));
+            Assert.False(HasAttribute<RequiredScopeAttribute>(endpoint));
+            Assert.False(HasAttribute<AllowAnonymousAttribute>(endpoint));
+            Assert.False(HasPlatformDiagnosticsMarker(endpoint));
+            Assert.False(HasMembershipNotRequiredMarker(endpoint));
+        }
+    }
+
+    /// <summary>
+    /// The collector policy appears only on marked endpoints, which is the other direction of the
+    /// rule above: the policy alone would be an endpoint nothing lets past the membership requirement,
+    /// and the marker alone grants nothing at all.
+    /// </summary>
+    [Fact]
+    public void The_collector_policy_appears_only_on_marked_collector_endpoints() =>
+        Assert.All(
+            Endpoints().Where(HasPriceCollectorPolicy),
+            endpoint => Assert.True(
+                HasPriceCollectorMarker(endpoint),
+                $"{endpoint.Route} carries the collector policy without the collector marker."));
+
+    /// <summary>
+    /// The class-5 surface, endpoint by endpoint, as issue #924 lists it. It is kept beside the rule
+    /// above because that rule would still pass if the one collector route quietly moved to a
+    /// capability policy - and a collector endpoint on a business capability would be unreachable by
+    /// the only caller it exists for, while a business role would have become a way into a
+    /// cross-business surface.
+    /// </summary>
+    [Theory]
+    [InlineData("api/price-collector/work", "GET")]
+    [InlineData("api/price-collector/results", "POST")]
+    [InlineData("api/price-collector/matches", "POST")]
+    [InlineData("api/price-collector/work-items/{workItemId:long}/outcome", "POST")]
+    [InlineData("api/price-collector/runs/{runId:long}/complete", "POST")]
+    public void The_collector_endpoints_are_class_five_and_nothing_else(string route, string httpMethod)
+    {
+        var endpoint = Endpoint(route, httpMethod);
+
+        Assert.Equal([EndpointClass.PriceCollector], ClassesOf(endpoint));
+        Assert.True(HasPriceCollectorMarker(endpoint));
+        Assert.True(HasPriceCollectorPolicy(endpoint));
+        Assert.Empty(CapabilitiesOf(endpoint));
+
+        // Authentication is still required, and it is required through the collector's own scheme:
+        // naming the scheme is what keeps the app-only path on this route and off every other
+        // endpoint in the API.
+        Assert.True(HasAttribute<AuthorizeAttribute>(endpoint));
+        Assert.Contains(
+            PriceCollectorBearerScheme.Name,
+            AuthorizeAttributesOf(endpoint)
+                .Select(authorize => authorize.AuthenticationSchemes)
+                .Where(schemes => schemes is not null)
+                .SelectMany(schemes => schemes!.Split(',', StringSplitOptions.TrimEntries)));
+    }
+
+    /// <summary>
+    /// The collector allowlist is matched by method as well as route, like the membership-not-required
+    /// one (issue #681's rule applied to the new class): an exemption belongs to one endpoint, and a
+    /// second action at the same route is a second endpoint.
+    /// </summary>
+    [Fact]
+    public void An_allowlisted_collector_route_does_not_exempt_a_different_method_on_it()
+    {
+        var reviewed = PriceCollectorAllowlist[0];
+
+        Assert.DoesNotContain(reviewed with { Method = "POST" }, PriceCollectorAllowlist);
+        Assert.Contains(reviewed, PriceCollectorAllowlist);
+        Assert.All(
+            PriceCollectorAllowlist,
+            entry => Assert.False(string.IsNullOrWhiteSpace(entry.Method)));
+    }
+
+    /// <summary>
+    /// No endpoint outside the collector surface names the collector's authentication scheme. That is
+    /// what makes the issue's second criterion structural rather than checked per endpoint: a route
+    /// that does not name the scheme cannot be authenticated by it, so an app-only token presented
+    /// anywhere else is refused by that endpoint's own scheme and its delegated-token rule.
+    /// </summary>
+    [Fact]
+    public void No_other_endpoint_names_the_collector_authentication_scheme()
+    {
+        var offenders = Endpoints()
+            .Where(endpoint => AuthorizeAttributesOf(endpoint).Any(authorize =>
+                authorize.AuthenticationSchemes is { } schemes
+                && schemes.Split(',', StringSplitOptions.TrimEntries)
+                    .Contains(PriceCollectorBearerScheme.Name, StringComparer.Ordinal)))
+            .Where(endpoint => !HasPriceCollectorMarker(endpoint))
+            .Select(endpoint => $"{endpoint.HttpMethod} {endpoint.Route}")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "Only the price collector surface may be authenticated by the collector's app-only "
+                + "bearer scheme (issue #924, docs/architecture.md § Collector work list). Offending "
+                + $"endpoint(s): {string.Join(", ", offenders)}.");
+    }
+
+    #endregion
+
     #region Minimal APIs and inherited actions (issue #681)
 
     /// <summary>
     /// The only non-controller endpoint registrations this application is allowed to make, by the
     /// mapping call that makes them. Both are the anonymous health probes of issue #164, which serve
-    /// no business data and resolve no business at all - they are deliberately outside the four
+    /// no business data and resolve no business at all - they are deliberately outside the five
     /// classes, and that decision is recorded here.
     /// </summary>
     private static readonly string[] AllowedEndpointMappings = ["MapControllers", "MapHealthChecks"];
@@ -705,7 +925,7 @@ public class EndpointAuthorizationClassificationTests
     /// The classification rules read controllers, so an endpoint registered as a minimal API would
     /// not be classified at all - and would not fail anything (issue #681). Rather than teach the
     /// reflection scan a second endpoint model, this makes introducing one a build failure: a
-    /// minimal API is an endpoint, an endpoint must declare how it is authorized, and the four
+    /// minimal API is an endpoint, an endpoint must declare how it is authorized, and the five
     /// classes are declared with attributes on a controller action.
     ///
     /// <para>Checked against the source text, like
@@ -727,7 +947,7 @@ public class EndpointAuthorizationClassificationTests
 
         Assert.True(
             offenders.Length == 0,
-            "Every endpoint declares how it is authorized, and the four classes are declared with "
+            "Every endpoint declares how it is authorized, and the five classes are declared with "
                 + "attributes on a controller action - so this application registers no minimal API. "
                 + "A minimal-API endpoint is invisible to the classification rules above and would "
                 + "be reachable by every active member of its business with nothing in the diff "
@@ -822,7 +1042,7 @@ public class EndpointAuthorizationClassificationTests
     #region There is no pending list
 
     /// <summary>
-    /// The same rule as <see cref="Every_endpoint_declares_one_of_the_four_authorization_classes"/>,
+    /// The same rule as <see cref="Every_endpoint_declares_one_of_the_five_authorization_classes"/>,
     /// asked one controller at a time, which is what issue #525's pending list used to say and what
     /// issue #526 turned into a standing fact: every controller in the API is classified end to end.
     /// It is kept beside the per-endpoint rule because this is the failure message a reviewer wants
@@ -969,7 +1189,7 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
-    /// Which of the four classes an endpoint is in. A set rather than a single value, so
+    /// Which of the five classes an endpoint is in. A set rather than a single value, so
     /// <see cref="No_endpoint_is_in_more_than_one_class"/> can assert the exclusivity instead of
     /// this helper hiding it behind a first match.
     /// </summary>
@@ -1000,6 +1220,17 @@ public class EndpointAuthorizationClassificationTests
             classes.Add(EndpointClass.OwnAccess);
         }
 
+        // Both halves and the reviewed route, matched on route and method like class 3: the marker
+        // alone grants nothing, the policy alone is not a membership bypass, and an endpoint not on
+        // the allowlist is classified on its own merits - which for this shape means not classified
+        // at all, and so a build failure.
+        if (HasPriceCollectorMarker(endpoint)
+            && HasPriceCollectorPolicy(endpoint)
+            && IsPriceCollectorAllowlisted(endpoint))
+        {
+            classes.Add(EndpointClass.PriceCollector);
+        }
+
         return classes;
     }
 
@@ -1025,10 +1256,28 @@ public class EndpointAuthorizationClassificationTests
     private static bool HasMembershipNotRequiredMarker(ApiEndpoint endpoint) =>
         HasAttribute<MembershipNotRequiredEndpointAttribute>(endpoint);
 
+    private static bool HasPriceCollectorMarker(ApiEndpoint endpoint) =>
+        HasAttribute<PriceCollectorEndpointAttribute>(endpoint);
+
+    private static bool IsPriceCollectorAllowlisted(ApiEndpoint endpoint) =>
+        PriceCollectorAllowlist.Contains(
+            new PriceCollectorEndpoint(endpoint.Route, endpoint.HttpMethod));
+
+    private static bool HasPriceCollectorPolicy(ApiEndpoint endpoint) =>
+        AuthorizeAttributesOf(endpoint)
+            .Any(authorize => string.Equals(authorize.Policy, PriceCollectorPolicy.Name, StringComparison.Ordinal));
+
     private static bool HasPlatformAdminPolicy(ApiEndpoint endpoint) =>
-        endpoint.Method.GetCustomAttributes<AuthorizeAttribute>()
-            .Concat(endpoint.Controller.GetCustomAttributes<AuthorizeAttribute>(inherit: true))
+        AuthorizeAttributesOf(endpoint)
             .Any(authorize => string.Equals(authorize.Policy, PlatformAdminPolicy.Name, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Every <c>[Authorize]</c> on the action and on its controller, because authorization metadata
+    /// accumulates down the endpoint and all of it is enforced.
+    /// </summary>
+    private static IEnumerable<AuthorizeAttribute> AuthorizeAttributesOf(ApiEndpoint endpoint) =>
+        endpoint.Method.GetCustomAttributes<AuthorizeAttribute>()
+            .Concat(endpoint.Controller.GetCustomAttributes<AuthorizeAttribute>(inherit: true));
 
     /// <summary>
     /// Whether the action or its controller carries <typeparamref name="TAttribute"/>. Asked over

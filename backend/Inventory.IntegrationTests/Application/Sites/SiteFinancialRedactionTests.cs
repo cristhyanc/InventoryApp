@@ -18,7 +18,7 @@ namespace InventoryApi.Tests.Application.Sites;
 /// Which site figures each use case calculates for whom (issue #697).
 ///
 /// <para>Sites is part of the day-to-day inventory work, so every role holds
-/// <c>Inventory.Operate</c> and reaches both use cases; the three revenue figures and the estimated
+/// <c>Inventory.Operate</c> and reaches both use cases; every revenue figure and the estimated
 /// card profit additionally need <c>Dashboard.ViewFinancials</c>. The expected roles are written out
 /// literally from the agreed table of issue #328 rather than read back from
 /// <c>RoleCapabilities</c> - a test that asked the capability table what it allows would pass
@@ -64,6 +64,8 @@ public class SiteFinancialRedactionTests
         Assert.Null(site.TodayRevenue);
         Assert.Null(site.CurrentWeekRevenue);
         Assert.Null(site.PreviousComparableWeekRevenue);
+        Assert.Null(site.LastWeekRevenue);
+        Assert.Null(site.MonthToDateRevenue);
     }
 
     /// <summary>
@@ -94,12 +96,21 @@ public class SiteFinancialRedactionTests
         Assert.Equal(9m, site.TodayRevenue);
         Assert.Equal(9m, site.CurrentWeekRevenue);
         Assert.Equal(3m, site.PreviousComparableWeekRevenue);
+        // The 3.00 sale is at the previous comparable week's start, which is also last week's start
+        // and inside the month, so last week is that sale and month to date is both of them.
+        Assert.Equal(3m, site.LastWeekRevenue);
+        Assert.Equal(12m, site.MonthToDateRevenue);
         Assert.Single(facts.CompletedSalesRequests);
     }
 
     /// <summary>
-    /// Redaction removes the three amounts and changes nothing else: every other figure is the one
+    /// Redaction removes the revenue amounts and changes nothing else: every other figure is the one
     /// the same request produces for an Owner over the same fleet and fixtures.
+    ///
+    /// <para>The row is compared field by field rather than as a record, for the reason
+    /// <see cref="An_operators_site_product_matches_an_owners_apart_from_the_estimate"/> already
+    /// gives: since issue #1013 <see cref="SiteSummary.MachineStocks"/> is a list, and record
+    /// equality would compare the two calls' lists by reference and pass whatever they held.</para>
     /// </summary>
     [Fact]
     public async Task An_operators_site_summary_matches_an_owners_apart_from_the_revenue()
@@ -107,13 +118,25 @@ public class SiteFinancialRedactionTests
         var asOperator = Assert.Single(await Summaries(BusinessRole.Operator, Facts()));
         var asOwner = Assert.Single(await Summaries(BusinessRole.Owner, Facts()));
 
-        Assert.Equal(
-            asOwner with { TodayRevenue = null, CurrentWeekRevenue = null, PreviousComparableWeekRevenue = null },
-            asOperator);
+        Assert.Null(asOperator.TodayRevenue);
+        Assert.Null(asOperator.CurrentWeekRevenue);
+        Assert.Null(asOperator.PreviousComparableWeekRevenue);
+        Assert.Null(asOperator.LastWeekRevenue);
+        Assert.Null(asOperator.MonthToDateRevenue);
+        Assert.Equal(asOwner.SiteId, asOperator.SiteId);
+        Assert.Equal(asOwner.SiteName, asOperator.SiteName);
+        Assert.Equal(asOwner.MachineCount, asOperator.MachineCount);
+        Assert.Equal(asOwner.TotalStockPercentage, asOperator.TotalStockPercentage);
+        Assert.Equal(asOwner.LowProductCount, asOperator.LowProductCount);
+        Assert.Equal(asOwner.EmptyProductCount, asOperator.EmptyProductCount);
+        Assert.Equal(asOwner.MachineStocks, asOperator.MachineStocks);
 
         // The fixture really has stock to report, so the comparison above is not two empty rows
-        // agreeing with each other.
+        // agreeing with each other - at the site and, since issue #1013, at its one machine.
         Assert.Equal(40m, asOperator.TotalStockPercentage);
+        var machine = Assert.Single(asOperator.MachineStocks);
+        Assert.Equal(MachineId, machine.MachineId);
+        Assert.Equal(40m, machine.StockPercentage);
     }
 
     /// <summary>
@@ -129,6 +152,7 @@ public class SiteFinancialRedactionTests
             .Handle(CancellationToken.None));
 
         Assert.Equal(9m, site.TodayRevenue);
+        Assert.Equal(12m, site.MonthToDateRevenue);
     }
 
     /// <summary>

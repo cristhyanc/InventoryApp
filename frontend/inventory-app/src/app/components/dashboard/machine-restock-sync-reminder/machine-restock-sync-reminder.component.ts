@@ -10,6 +10,8 @@ import {
   isMachineRestockSyncReminderApplicable
 } from '../../../models/models';
 import { MachineService } from '../../../services/machine.service';
+import { IconComponent } from '../../shared/icon.component';
+import { SYNC_RESTOCK_OPEN, SYNC_RESTOCK_QUERY_PARAM } from '../../machines/machine-restock-sync/sync-restock-link';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
@@ -46,13 +48,20 @@ export type RestockSyncReminderState = 'idle' | 'loading' | 'loaded' | 'hidden' 
  * (issue #551), so a reminder to go and sync would name work its reader cannot do. The backend
  * withholds it in that state too; this simply does not ask.</p>
  *
+ * <p>**Where it sits.** Since issue #972 it is one alert in the Dashboard's Needs attention panel,
+ * which reads {@link isShown} and {@link state} to decide whether the panel has anything to show
+ * and how many alerts to count. Its eligibility, window and links are unchanged.</p>
+ *
  * <p>**A failed read is visible.** The alternative - rendering nothing - would read as "no machine
  * needs attention", which is the one thing a failed read cannot say.</p>
  */
 @Component({
   selector: 'app-machine-restock-sync-reminder',
   standalone: true,
-  imports: [CommonModule, RouterLink, BusinessDateTimePipe],
+  imports: [CommonModule, RouterLink, BusinessDateTimePipe, IconComponent],
+  // No box of its own (issue #972): the Dashboard places it as one alert in its Needs attention
+  // grid, so the rendered alert - or nothing at all - is the grid item.
+  host: { class: 'contents' },
   templateUrl: './machine-restock-sync-reminder.component.html'
 })
 export class MachineRestockSyncReminderComponent implements OnDestroy {
@@ -155,6 +164,21 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
     return machine.knownPendingEventCount === 1
       ? '1 known pending restock event'
       : `${machine.knownPendingEventCount} known pending restock events`;
+  }
+
+  /**
+   * The query parameters a row's machine link carries: `syncRestock=open` (issue #1011), so the
+   * machine page opens its Sync Restock dialog by itself, and the business date of the oldest
+   * counted pending event as `restockFrom` (issue #948), so that dialog opens far enough back to
+   * show every event this row counted. `restockFrom` is left off when nothing is pending.
+   */
+  restockLinkQueryParams(machine: MachineRestockSyncReminderMachine): Record<string, string> {
+    const params: Record<string, string> = { [SYNC_RESTOCK_QUERY_PARAM]: SYNC_RESTOCK_OPEN };
+    const oldest = machine.oldestKnownPendingEventBusinessDate;
+    if (oldest) {
+      params['restockFrom'] = oldest.slice(0, 10);
+    }
+    return params;
   }
 
   private ensureLoaded(): void {

@@ -1,0 +1,424 @@
+<!--
+  One Add/Edit purchase layout (issue #1029). Every control keeps the existing form object's field and
+  the existing line-price module's arithmetic; only the presentation is shared here.
+-->
+<form
+  class="flex flex-col gap-6 font-rr text-rr-navy [&_input]:scroll-mb-40 [&_select]:scroll-mb-40 [&_textarea]:scroll-mb-40"
+  novalidate
+  (ngSubmit)="submit()"
+>
+  @if (error) {
+    <div class="alert alert-danger" role="alert" [attr.data-testid]="testId('purchase-error')">
+      <p class="alert-title">{{ error }}</p>
+    </div>
+  }
+
+  <!-- Purchase details -->
+  <section class="rounded-xl border border-rr-line bg-white" [attr.aria-labelledby]="fieldId('detailsHeading')">
+    <h2 [id]="fieldId('detailsHeading')" class="m-0 flex items-center gap-2 border-b border-rr-line px-4 py-3 text-base font-semibold text-rr-navy">
+      <span class="text-rr-teal"><app-icon name="storefront" [size]="20" /></span>
+      Purchase details
+    </h2>
+    <div class="grid gap-4 p-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,2fr)]">
+      <div class="field">
+        <label class="field-label" [for]="fieldId('supplierId')">Supplier</label>
+        <select [id]="fieldId('supplierId')" [attr.name]="fieldId('supplierId')" [ngModelOptions]="{ standalone: true }" [ngModel]="form.supplierId" (ngModelChange)="onSupplierChange($event)">
+          <option value="">None</option>
+          @for (s of suppliers; track s.id) {
+            <option [ngValue]="s.id">{{ s.name }}</option>
+          }
+        </select>
+      </div>
+
+      <div class="field">
+        <label class="field-label" [for]="fieldId('purchaseDate')">Purchase date</label>
+        <input [id]="fieldId('purchaseDate')" [attr.name]="fieldId('purchaseDate')" [ngModelOptions]="{ standalone: true }" type="date" [ngModel]="form.purchaseDate" (ngModelChange)="onDateChange($event)" />
+      </div>
+
+      <div class="field">
+        <label class="field-label" [for]="fieldId('title')">Purchase title</label>
+        <input
+          [id]="fieldId('title')"
+          [attr.name]="fieldId('title')" [ngModelOptions]="{ standalone: true }"
+          required
+          [ngModel]="form.title"
+          (ngModelChange)="onTitleChange($event)"
+          (blur)="titleTouched = true"
+          [class.border-md-danger]="showTitleProblem"
+          [attr.aria-invalid]="showTitleProblem"
+          [attr.aria-describedby]="showTitleProblem ? fieldId('titleError') : null"
+        />
+        @if (showTitleProblem) {
+          <p class="field-error m-0" [id]="fieldId('titleError')">{{ titleProblem }}</p>
+        }
+      </div>
+    </div>
+    <div class="border-t border-rr-line px-4 py-3">
+      <app-purchase-receipt-field
+        [inputId]="fieldId('receiptFile')"
+        [pendingFile]="pendingFile"
+        [stored]="storedReceipt"
+        [disabled]="saving"
+        (pendingFileChange)="pendingFileChange.emit($event)"
+        (previewStored)="previewStoredReceipt.emit()"
+      />
+    </div>
+  </section>
+
+  <!-- Purchased items -->
+  <section class="rounded-xl border border-rr-line bg-white" [attr.aria-labelledby]="fieldId('itemsHeading')">
+    <div class="flex flex-wrap items-center gap-2 border-b border-rr-line px-4 py-3">
+      <h2 [id]="fieldId('itemsHeading')" class="m-0 flex items-center gap-2 text-base font-semibold text-rr-navy">
+        <span class="text-rr-teal"><app-icon name="assignment" [size]="20" /></span>
+        Purchased items
+      </h2>
+      <span class="rounded-full border border-rr-teal-border bg-rr-teal-tint px-2 py-0.5 text-xs font-semibold text-rr-teal" [attr.data-testid]="testId('purchase-item-count')">
+        {{ items.length }} {{ items.length === 1 ? 'item' : 'items' }}
+      </span>
+    </div>
+
+    @if (lineError) {
+      <div class="alert alert-danger mx-4 mt-3" role="alert" [attr.data-testid]="testId('purchase-line-error')">
+        <p class="alert-title">{{ lineError }}</p>
+      </div>
+    }
+
+    <!-- Column headings for the wide table layout; each line labels its own fields below that. -->
+    <div class="hidden border-b border-rr-line bg-rr-canvas px-4 py-2 text-xs font-semibold uppercase tracking-wide text-rr-muted xl:grid xl:grid-cols-[minmax(0,1fr)_5.5rem_8rem_8rem_9.5rem_2.75rem] xl:items-center xl:gap-3">
+      <span class="flex items-center gap-1">
+        Product
+        @if (mode === 'edit') {
+          <app-help-toggletip label="About changing a saved line's product">A line already on this purchase keeps its product. To record a different product, remove the line and add the new product as its own line.</app-help-toggletip>
+        }
+      </span>
+      <span>Quantity</span>
+      <span class="flex items-center gap-1">
+        Unit price ($)
+        <app-help-toggletip label="About unit price">The price of one unit. Type either the unit price or the line total; the one you typed last sets the other, using the line's quantity.</app-help-toggletip>
+      </span>
+      <span class="flex items-center gap-1">
+        Line total ($)
+        <app-help-toggletip label="About line total">What you paid for the whole line, such as a box price. Quantity is always individual units, never cartons.</app-help-toggletip>
+      </span>
+      <span class="flex items-center gap-1">
+        GST
+        <app-help-toggletip label="About GST">Prices include GST. Choose Taxable or GST-free for each line. Not classified stays unresolved and adds no GST until you choose. GST amounts are worked out when you save.</app-help-toggletip>
+      </span>
+      <span class="sr-only">Remove</span>
+    </div>
+
+    @if (items.length === 0) {
+      <p class="m-0 px-4 py-4 text-sm text-rr-muted" [attr.data-testid]="testId('purchase-items-empty')">No items yet. Add the products you bought.</p>
+    }
+
+    @for (item of items; track $index; let index = $index) {
+      <div
+        [attr.data-testid]="testId('purchase-item')"
+        class="grid grid-cols-6 items-start gap-x-2 gap-y-2 border-b border-rr-line px-4 py-3 xl:grid-cols-[minmax(0,1fr)_5.5rem_8rem_8rem_9.5rem_2.75rem] xl:items-center xl:gap-3"
+      >
+        <div class="col-span-5 row-start-1 min-w-0 xl:col-span-1">
+          @if (isFixedProductLine(item)) {
+            <div [attr.data-testid]="testId('purchase-item-product-fixed')" class="flex min-h-11 items-center rounded-md-control border border-rr-line bg-rr-canvas px-3 py-2 text-sm font-medium text-rr-navy">
+              <span class="min-w-0 break-words">{{ productName(item.productId) }}</span>
+              <span class="sr-only">. Product cannot be changed. Remove this line and add the new product as its own line.</span>
+            </div>
+          } @else {
+            <app-purchase-product-picker
+              [products]="products"
+              [productId]="item.productId"
+              [inputId]="lineFieldId(index, 'product')"
+              [testId]="testId('purchase-item-product')"
+              [ariaLabel]="'Product for item ' + (index + 1)"
+              [invalid]="productProblem(item) !== null"
+              [describedBy]="productProblem(item) ? lineFieldId(index, 'product-error') : null"
+              (productIdChange)="onProductChange(item, $event)"
+              (touched)="markLineTouched(item)"
+            />
+          }
+          @if (productProblem(item)) {
+            <p class="field-error m-0 mt-1" [id]="lineFieldId(index, 'product-error')">{{ productProblem(item) }}</p>
+          }
+        </div>
+
+        <div class="col-span-2 min-w-0 self-end xl:col-span-1 xl:self-auto">
+          <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-rr-muted xl:sr-only" [for]="lineFieldId(index, 'quantity')">Quantity</label>
+          <input
+            [id]="lineFieldId(index, 'quantity')"
+            [attr.data-testid]="testId('purchase-item-quantity')"
+            class="w-full px-2 text-right [appearance:textfield] xl:px-3 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            type="number"
+            inputmode="numeric"
+            min="1"
+            step="1"
+            [ngModel]="item.quantity"
+            (ngModelChange)="onQuantityChange(item, $event)"
+            (blur)="markLineTouched(item)"
+            [attr.name]="fieldId('quantity') + index" [ngModelOptions]="{ standalone: true }"
+            [attr.aria-label]="'Quantity for item ' + (index + 1)"
+          />
+        </div>
+
+        <div class="col-span-2 min-w-0 self-end xl:col-span-1 xl:self-auto">
+          <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-rr-muted xl:sr-only" [for]="lineFieldId(index, 'unit-price')">Unit price ($)</label>
+          <input
+            [id]="lineFieldId(index, 'unit-price')"
+            [attr.data-testid]="testId('purchase-item-cost')"
+            class="w-full px-2 text-right [appearance:textfield] xl:px-3 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            type="number"
+            inputmode="decimal"
+            min="0"
+            step="0.0001"
+            [ngModel]="unitPriceValue(item)"
+            (ngModelChange)="onUnitPriceChange(item, $event)"
+            (blur)="markLineTouched(item)"
+            [attr.name]="fieldId('unitCost') + index" [ngModelOptions]="{ standalone: true }"
+            [class.border-md-danger]="priceProblem(item) !== null"
+            [attr.aria-label]="'Unit price for item ' + (index + 1)"
+          />
+        </div>
+
+        <div class="col-span-2 min-w-0 self-end xl:col-span-1 xl:self-auto">
+          <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-rr-muted xl:sr-only" [for]="lineFieldId(index, 'line-total')">Line total ($)</label>
+          <input
+            [id]="lineFieldId(index, 'line-total')"
+            [attr.data-testid]="testId('purchase-item-line-total')"
+            class="w-full px-2 text-right [appearance:textfield] xl:px-3 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            type="number"
+            inputmode="decimal"
+            min="0"
+            step="0.01"
+            [ngModel]="totalPriceValue(item)"
+            (ngModelChange)="onLineTotalChange(item, $event)"
+            (blur)="markLineTouched(item)"
+            [attr.name]="fieldId('lineTotal') + index" [ngModelOptions]="{ standalone: true }"
+            [class.border-md-danger]="priceProblem(item) !== null"
+            [attr.aria-label]="'Total price for item ' + (index + 1)"
+          />
+        </div>
+
+        <div class="col-span-6 min-w-0 sm:col-span-3 xl:col-span-1">
+          <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-rr-muted xl:sr-only" [for]="lineFieldId(index, 'gst')">GST</label>
+          <select
+            [id]="lineFieldId(index, 'gst')"
+            [attr.data-testid]="testId('purchase-item-gst')"
+            class="w-full"
+            [(ngModel)]="item.gstClassification"
+            [attr.name]="fieldId('gstClassification') + index" [ngModelOptions]="{ standalone: true }"
+            [attr.aria-label]="'GST classification for item ' + (index + 1)"
+          >
+            @for (option of gstOptions; track option.value) {
+              <option [ngValue]="option.value">{{ option.label }}</option>
+            }
+          </select>
+        </div>
+
+        <div class="col-start-6 row-start-1 flex justify-end xl:col-start-auto xl:row-start-auto">
+          <button
+            type="button"
+            class="inline-flex h-11 w-11 items-center justify-center rounded-md text-rr-muted hover:bg-rr-danger-bg hover:text-rr-danger-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-rr-teal"
+            [attr.data-testid]="testId('purchase-item-remove')"
+            [attr.aria-label]="'Remove item ' + (index + 1)"
+            (click)="removeLine.emit(index)"
+          >
+            <app-icon name="delete" [size]="20" />
+          </button>
+        </div>
+
+        @if (priceProblem(item)) {
+          <p class="field-error col-span-6 m-0">{{ priceProblem(item) }}</p>
+        }
+      </div>
+    }
+
+    <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <button type="button" class="rr-button-secondary" [attr.data-testid]="testId('purchase-add-item')" (click)="addLine.emit()">
+        <app-icon name="add" [size]="18" />
+        Add product
+      </button>
+      <span class="text-sm text-rr-muted">Items subtotal: <strong class="text-rr-navy">{{ itemsSubtotal | currency }}</strong></span>
+    </div>
+  </section>
+
+  <div class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div class="flex flex-col gap-4">
+      <!-- Additional costs -->
+      <section class="rounded-xl border border-rr-line bg-white">
+        <h2 class="m-0">
+          <button
+            type="button"
+            class="flex min-h-14 w-full items-center justify-between gap-3 px-4 py-3 text-left text-base font-semibold text-rr-navy"
+            [attr.data-testid]="testId('purchase-additional-costs-toggle')"
+            [attr.aria-expanded]="additionalCostsOpen"
+            [attr.aria-controls]="fieldId('additionalCostsPanel')"
+            (click)="toggleAdditionalCosts()"
+          >
+            <span class="flex items-center gap-2">
+              <span class="text-rr-teal"><app-icon name="local_shipping" [size]="20" /></span>
+              Additional costs
+            </span>
+            <span class="text-sm font-normal text-rr-muted">{{ additionalCostsOpen ? 'Hide' : 'Show' }}</span>
+          </button>
+        </h2>
+        @if (additionalCostsOpen) {
+        <div [id]="fieldId('additionalCostsPanel')" class="grid gap-4 border-t border-rr-line p-4 sm:grid-cols-2">
+          <div class="field">
+            <label class="field-label" [for]="fieldId('deliveryCost')">Delivery ($)</label>
+            <input [id]="fieldId('deliveryCost')" [attr.name]="fieldId('deliveryCost')" [ngModelOptions]="{ standalone: true }" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.deliveryCost" />
+            @if (hasCharge(form.deliveryCost)) {
+              <label class="field-label mt-2" [for]="fieldId('deliveryGstClassification')">Delivery GST</label>
+              <select [id]="fieldId('deliveryGstClassification')" [attr.data-testid]="testId('delivery-gst')" [(ngModel)]="form.deliveryGstClassification" [attr.name]="fieldId('deliveryGstClassification')" [ngModelOptions]="{ standalone: true }">
+                @for (option of gstOptions; track option.value) {
+                  <option [ngValue]="option.value">{{ option.label }}</option>
+                }
+              </select>
+            }
+          </div>
+          <div class="field">
+            <label class="field-label" [for]="fieldId('packageCost')">Packaging ($)</label>
+            <input [id]="fieldId('packageCost')" [attr.name]="fieldId('packageCost')" [ngModelOptions]="{ standalone: true }" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.packageCost" />
+            @if (hasCharge(form.packageCost)) {
+              <label class="field-label mt-2" [for]="fieldId('packageGstClassification')">Packaging GST</label>
+              <select [id]="fieldId('packageGstClassification')" [attr.data-testid]="testId('package-gst')" [(ngModel)]="form.packageGstClassification" [attr.name]="fieldId('packageGstClassification')" [ngModelOptions]="{ standalone: true }">
+                @for (option of gstOptions; track option.value) {
+                  <option [ngValue]="option.value">{{ option.label }}</option>
+                }
+              </select>
+            }
+          </div>
+        </div>
+        }
+      </section>
+
+      <!-- Notes -->
+      <section class="rounded-xl border border-rr-line bg-white">
+        <h2 class="m-0">
+          <button
+            type="button"
+            class="flex min-h-14 w-full items-center justify-between gap-3 px-4 py-3 text-left text-base font-semibold text-rr-navy"
+            [attr.data-testid]="testId('purchase-notes-toggle')"
+            [attr.aria-expanded]="notesOpen"
+            [attr.aria-controls]="fieldId('notesPanel')"
+            (click)="toggleNotes()"
+          >
+            <span class="flex items-center gap-2">
+              <span class="text-rr-teal"><app-icon name="edit" [size]="20" /></span>
+              Notes
+            </span>
+            <span class="text-sm font-normal text-rr-muted">{{ notesOpen ? 'Hide' : 'Show' }}</span>
+          </button>
+        </h2>
+        @if (notesOpen) {
+          <div [id]="fieldId('notesPanel')" class="border-t border-rr-line p-4">
+            <label class="field-label sr-only" [for]="fieldId('notes')">Notes</label>
+            <textarea class="w-full" [id]="fieldId('notes')" [attr.name]="fieldId('notes')" [ngModelOptions]="{ standalone: true }" rows="3" [(ngModel)]="form.notes"></textarea>
+          </div>
+        }
+      </section>
+    </div>
+
+    <!-- Purchase summary -->
+    <section class="rounded-xl border border-rr-line bg-white" [attr.aria-labelledby]="fieldId('summaryHeading')" [attr.data-testid]="testId('purchase-summary')">
+      <h2 [id]="fieldId('summaryHeading')" class="m-0 flex items-center gap-2 border-b border-rr-line px-4 py-3 text-base font-semibold text-rr-navy">
+        <span class="text-rr-teal"><app-icon name="account_balance_wallet" [size]="20" /></span>
+        Purchase summary
+      </h2>
+      <dl class="m-0 flex flex-col gap-2 px-4 py-3 text-sm">
+        <div class="flex items-center justify-between gap-3">
+          <dt class="text-rr-muted">Items subtotal</dt>
+          <dd class="m-0 font-semibold tabular-nums" [attr.data-testid]="testId('purchase-summary-subtotal')">{{ itemsSubtotal | currency }}</dd>
+        </div>
+        @if (hasCharge(form.deliveryCost)) {
+          <div class="flex items-center justify-between gap-3">
+            <dt class="text-rr-muted">Delivery</dt>
+            <dd class="m-0 tabular-nums">{{ form.deliveryCost | currency }}</dd>
+          </div>
+        }
+        @if (hasCharge(form.packageCost)) {
+          <div class="flex items-center justify-between gap-3">
+            <dt class="text-rr-muted">Packaging</dt>
+            <dd class="m-0 tabular-nums">{{ form.packageCost | currency }}</dd>
+          </div>
+        }
+        <div class="flex items-start justify-between gap-3">
+          <dt class="flex items-center gap-1 text-rr-muted">
+            Included GST
+            @if (gstSummary) {
+              <app-help-toggletip label="About included GST">The GST the purchase held when it was last saved, worked out from each line's and charge's classification. Save to update it after changes.</app-help-toggletip>
+            } @else {
+              <app-help-toggletip label="About included GST">GST is worked out from each line's and charge's classification when the purchase is saved.</app-help-toggletip>
+            }
+          </dt>
+          <dd class="m-0 text-right" [attr.data-testid]="testId('purchase-summary-gst')">
+            @if (gstSummary) {
+              <span class="tabular-nums">{{ gstSummary.inputGst | currency }}</span>
+              <span class="block text-xs text-rr-muted">as last saved</span>
+              @if (gstSummary.unresolvedComponentCount > 0) {
+                <span class="block text-xs text-rr-warn-text">{{ gstSummary.unresolvedComponentCount }} not classified ({{ gstSummary.unresolvedAmount | currency }})</span>
+              }
+            } @else {
+              <span class="text-rr-muted">Calculated when saved</span>
+            }
+          </dd>
+        </div>
+      </dl>
+      <div class="flex items-end justify-between gap-3 border-t border-rr-line px-4 py-3">
+        <div>
+          <p class="m-0 text-base font-semibold">Purchase total</p>
+          <p class="m-0 text-xs text-rr-muted">Including GST</p>
+        </div>
+        <p class="m-0 text-2xl font-bold tabular-nums text-rr-teal" [attr.data-testid]="testId('purchase-summary-total')">{{ total | currency }}</p>
+      </div>
+      <div class="flex flex-col gap-2 border-t border-rr-line px-4 py-3">
+        <div class="flex items-center gap-1">
+          <label class="field-label" [for]="fieldId('totalAmount')">Receipt total (optional)</label>
+          <app-help-toggletip label="About receipt total">The total printed on the receipt, if you want to compare it with this purchase. Leave it blank if you don't have one. It never changes what the purchase costs.</app-help-toggletip>
+        </div>
+        <input
+          [id]="fieldId('totalAmount')"
+          [attr.name]="fieldId('totalAmount')" [ngModelOptions]="{ standalone: true }"
+          type="number"
+          inputmode="decimal"
+          step="0.01"
+          min="0"
+          class="w-full"
+          [(ngModel)]="form.totalAmount"
+          [attr.aria-describedby]="fieldId('receiptComparison')"
+        />
+        <output [id]="fieldId('receiptComparison')" class="block text-sm" [attr.data-testid]="testId('purchase-receipt-comparison')">
+          @switch (receiptComparison.kind) {
+            @case ('match') {
+              <span class="inline-flex items-center gap-1 rounded-md bg-rr-ok-bg px-2 py-1 font-semibold text-rr-ok-text">
+                <app-icon name="check_circle" [size]="16" />
+                Matches receipt
+              </span>
+            }
+            @case ('difference') {
+              @if (receiptComparison.kind === 'difference') {
+                <span
+                  class="inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold"
+                  [ngClass]="receiptComparison.beyondTolerance ? 'bg-rr-warn-bg text-rr-warn-text' : 'bg-rr-surface text-rr-navy'"
+                >Difference: {{ receiptComparison.difference | currency }}</span>
+              }
+            }
+            @case ('incomplete') {
+              <span class="text-rr-muted">Complete every item to compare with the receipt.</span>
+            }
+          }
+        </output>
+      </div>
+    </section>
+  </div>
+
+  <!--
+    The action bar sticks to the bottom of the window while the form is on screen. Below the wide
+    layout the shell's bottom navigation is fixed there, so the bar sits just above it. Form fields
+    keep a bottom scroll margin, so focusing one never leaves it underneath the bar.
+  -->
+  <div class="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 -mx-4 flex items-center justify-between gap-3 border-t border-rr-line bg-white px-4 py-3 sm:-mx-6 sm:px-6 lg:bottom-0">
+    <button type="button" class="rr-button-secondary" [attr.data-testid]="testId('purchase-cancel')" (click)="cancel()">Cancel</button>
+    <button type="submit" class="rr-button-primary" [attr.data-testid]="testId('purchase-save')" [disabled]="saving || sessionActive">
+      <app-icon name="check_circle" [size]="18" />
+      {{ saving ? 'Saving...' : 'Save purchase' }}
+    </button>
+  </div>
+</form>

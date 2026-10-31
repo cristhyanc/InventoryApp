@@ -51,6 +51,16 @@
         <button type="button" class="btn btn-sm btn-secondary" (click)="retryPurchaseCosts()">Retry</button>
       </div>
     }
+    <!--
+      The Cheapest supplier column's one read for the rows on screen (issue #930), split into
+      requests of at most 200 ids by the service. The component renders its own failure message and
+      Retry here, above the table, exactly as the purchase-cost banner above does; the rows beside
+      it are the business's own reorder figures and stay usable either way.
+    -->
+    <app-cheapest-suppliers
+      [productIds]="listedProductIds"
+      (suppliersChange)="cheapestSuppliers = $event"
+    ></app-cheapest-suppliers>
     @if (loadState.loadFailed) {
       <p class="p-4 text-md-body value-negative">Failed to load products needing ordering. Change a filter or reload the page to try again.</p>
     } @else if (loadState.loaded && products.length === 0) {
@@ -95,6 +105,12 @@
                   <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchaseCost')">{{ sortLabel('Cheapest purchase', 'cheapestPurchaseCost') }}</button>
                 </th>
               }
+              <!--
+                Observed supplier prices (issue #930). Not sortable: sorting by price is explicitly
+                out of that issue's scope, and a sort over a column whose values are still arriving
+                would reorder the page under the reader.
+              -->
+              <th scope="col" class="table-cell">Cheapest supplier</th>
               <th scope="col" class="table-cell"></th>
             </tr>
           </thead>
@@ -164,6 +180,19 @@
                     }
                   </td>
                 }
+                <!--
+                  The cheapest of this business's own linked suppliers per unit, and the popup
+                  listing every one of them (issue #930). The cell formats the server's answer and
+                  calculates nothing.
+                -->
+                <td class="table-cell">
+                  <app-cheapest-supplier-cell
+                    [product]="cheapestSupplier(p)"
+                    [state]="cheapestSuppliers.state"
+                    [displayBasis]="cheapestSuppliers.displayBasis"
+                    [productName]="p.name"
+                  ></app-cheapest-supplier-cell>
+                </td>
                 <!-- Stock is the row's only action; there is no Edit here. -->
                 <td class="table-cell">
                   <div class="flex flex-wrap gap-2">

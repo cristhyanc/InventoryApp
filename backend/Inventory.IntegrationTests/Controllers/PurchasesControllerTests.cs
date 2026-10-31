@@ -35,7 +35,8 @@ public class PurchasesControllerTests
             new ListPurchases(store),
             new GetPurchase(store),
             new GetPurchaseFile(store, storage),
-            new UploadPurchase(store, storage, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.Upload(store, storage, new FakeClock(new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc))),
+            TestPurchaseUseCases.Attach(store, storage),
             new UpdatePurchase(store),
             new DeletePurchase(store, storage),
             new ComputePurchaseTotalValidation(),
@@ -147,24 +148,42 @@ public class PurchasesControllerTests
     }
 
     /// <summary>
-    /// Model binding supplies no file at all when the multipart body omits it. The controller keeps
-    /// answering the retired delegator's deliberately vague message rather than reaching the use
-    /// case with a null file.
+    /// Model binding supplies no file at all when the multipart body omits it, and since issue #976
+    /// that is a purchase with no document rather than a refusal: the use case is reached with a
+    /// <c>null</c> file, the store is asked to create with <c>null</c> metadata, and nothing is
+    /// written to document storage.
     /// </summary>
     [Fact]
-    public async Task Upload_returns_bad_request_when_no_file_was_posted()
+    public async Task Upload_creates_a_purchase_with_no_document_when_no_file_was_posted()
     {
-        var store = new Mock<IPurchaseStore>();
-
-        var result = await UploadThrough(CreateController(store.Object), file: null!);
-
-        Assert.Equal(InvalidFileOrSupplier, Assert.IsType<BadRequestObjectResult>(result.Result).Value);
-        store.Verify(
-            s => s.CreateAsync(
+        var store = AcceptingStore();
+        PurchaseFileMetadata? captured = new("unset", "unset", "unset", 0);
+        store.Setup(s => s.CreateAsync(
                 It.IsAny<PurchaseFields>(),
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
-                It.IsAny<PurchaseFileMetadata>(),
-                It.IsAny<CancellationToken>()),
+                It.IsAny<PurchaseFileMetadata?>(),
+                It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((
+                PurchaseFields _,
+                IReadOnlyList<PurchaseItemInput> _,
+                PurchaseFileMetadata? file,
+                Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? _,
+                Inventory.Application.Attachments.AttachmentUploadReservation? _,
+                CancellationToken _) => captured = file)
+            .ReturnsAsync(Record(withDocument: false));
+        var documents = new Mock<IDocumentStorage>();
+
+        var result = await UploadThrough(CreateController(store.Object, documents.Object), file: null);
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var envelope = Assert.IsType<PurchaseResponseDto>(created.Value);
+        Assert.Null(envelope.Purchase.StoredFileName);
+        Assert.Null(envelope.Purchase.FileSizeBytes);
+        Assert.Null(captured);
+        documents.Verify(
+            d => d.SaveAsync(It.IsAny<DocumentCategory>(), It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -220,6 +239,8 @@ public class PurchasesControllerTests
                 It.IsAny<PurchaseFields>(),
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
                 It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Record(totalAmount: 30m));
         var documents = new Mock<IDocumentStorage>();
@@ -238,6 +259,61 @@ public class PurchasesControllerTests
         documents.Verify(
             d => d.SaveAsync(DocumentCategory.PurchaseDocument, It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    /// <summary>
+    /// The two completion form fields the purchase form may carry (issue #974) become one request,
+    /// and only when both are present: an order id with no fingerprint is a decision nothing was
+    /// shown for, so the controller sends none at all rather than one the save would have to guess
+    /// at. Nothing else about the order travels inwards - no quantity, no receipt total, no status.
+    /// </summary>
+    [Theory]
+    [InlineData(9, "fingerprint-from-the-preview", true)]
+    [InlineData(null, "fingerprint-from-the-preview", false)]
+    [InlineData(9, null, false)]
+    [InlineData(9, "   ", false)]
+    [InlineData(null, null, false)]
+    public async Task Upload_forwards_the_completion_choice_only_when_both_fields_are_present(
+        int? supplierOrderId, string? fingerprint, bool expectDecision)
+    {
+        var store = new Mock<IPurchaseStore>();
+        store.Setup(s => s.SupplierExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        store.Setup(s => s.AllProductsExistAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        store.Setup(s => s.FindConflictingCostTransitionBaselineAsync(
+                It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((long, string?, DateTime)?)null);
+        Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? captured = null;
+        store.Setup(s => s.CreateAsync(
+                It.IsAny<PurchaseFields>(),
+                It.IsAny<IReadOnlyList<PurchaseItemInput>>(),
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision?>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback((
+                PurchaseFields _,
+                IReadOnlyList<PurchaseItemInput> _,
+                PurchaseFileMetadata _,
+                Inventory.Application.SupplierOrders.SupplierOrderCompletionDecision? decision,
+                Inventory.Application.Attachments.AttachmentUploadReservation? _,
+                CancellationToken _) => captured = decision)
+            .ReturnsAsync(Record(totalAmount: 30m));
+
+        await CreateController(store.Object).Upload(
+            CreateFile("scan.jpg"), "Weekly restock", null, 30m, null, null, null, null, null, 4,
+            """[{"productId":3,"quantity":24,"unitCost":1.15}]""",
+            supplierOrderId,
+            fingerprint);
+
+        if (!expectDecision)
+        {
+            Assert.Null(captured);
+            return;
+        }
+
+        Assert.NotNull(captured);
+        Assert.Equal((9, "fingerprint-from-the-preview"), (captured!.SupplierOrderId, captured.DecisionFingerprint));
     }
 
     [Fact]
@@ -341,9 +417,107 @@ public class PurchasesControllerTests
         Assert.Equal("This purchase cannot be deleted.", Assert.IsType<BadRequestObjectResult>(result).Value);
     }
 
+    /// <summary>
+    /// The attach action's four answers (issue #976), mapped from the use case's outcomes. The use
+    /// case itself is <c>AttachPurchaseDocumentTests</c>; what is pinned here is the status codes
+    /// and that a conflict carries the rule's own sentence.
+    /// </summary>
+    [Fact]
+    public async Task AddFile_returns_the_purchase_when_the_document_is_attached()
+    {
+        var store = new Mock<IPurchaseStore>();
+        store.Setup(s => s.AttachDocumentAsync(
+                7,
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.Attached, Record()));
+        var documents = new Mock<IDocumentStorage>();
+
+        var result = await CreateController(store.Object, documents.Object).AddFile(7, CreateFile("scan.jpg"));
+
+        var envelope = Assert.IsType<PurchaseResponseDto>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(7, envelope.Purchase.Id);
+        documents.Verify(
+            d => d.SaveAsync(DocumentCategory.PurchaseDocument, It.IsAny<string>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task AddFile_returns_conflict_when_the_purchase_already_has_a_document()
+    {
+        var store = new Mock<IPurchaseStore>();
+        store.Setup(s => s.AttachDocumentAsync(
+                7,
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.AlreadyHasDocument, null));
+
+        var result = await CreateController(store.Object).AddFile(7, CreateFile("scan.jpg"));
+
+        Assert.Equal(
+            Inventory.Domain.Purchases.PurchaseDocumentPolicy.AlreadyHasDocumentMessage,
+            Assert.IsType<ConflictObjectResult>(result.Result).Value);
+    }
+
+    [Fact]
+    public async Task AddFile_returns_not_found_for_a_purchase_that_is_not_the_callers()
+    {
+        var store = new Mock<IPurchaseStore>();
+        store.Setup(s => s.AttachDocumentAsync(
+                7,
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PurchaseDocumentAttachment(PurchaseDocumentAttachOutcome.PurchaseNotFound, null));
+
+        var result = await CreateController(store.Object).AddFile(7, CreateFile("scan.jpg"));
+
+        Assert.IsType<NotFoundResult>(result.Result);
+    }
+
+    /// <summary>
+    /// Asking to attach nothing is a request that cannot be carried out, which is a different answer
+    /// from creating a purchase with no document - and the store is never asked.
+    /// </summary>
+    [Fact]
+    public async Task AddFile_returns_bad_request_when_no_file_was_posted()
+    {
+        var store = new Mock<IPurchaseStore>();
+
+        var result = await CreateController(store.Object).AddFile(7, file: null);
+
+        Assert.Equal(
+            Inventory.Domain.Purchases.PurchaseDocumentPolicy.MissingDocumentMessage,
+            Assert.IsType<BadRequestObjectResult>(result.Result).Value);
+        store.Verify(
+            s => s.AttachDocumentAsync(
+                It.IsAny<int>(),
+                It.IsAny<PurchaseFileMetadata>(),
+                It.IsAny<Inventory.Application.Attachments.AttachmentUploadReservation?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>A store that accepts whatever the create path validates, so a test can drive it to the write.</summary>
+    private static Mock<IPurchaseStore> AcceptingStore()
+    {
+        var store = new Mock<IPurchaseStore>();
+        store.Setup(s => s.SupplierExistsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        store.Setup(s => s.AllProductsExistAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        store.Setup(s => s.FindConflictingCostTransitionBaselineAsync(
+                It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(((long, string?, DateTime)?)null);
+        return store;
+    }
+
     private static Task<ActionResult<PurchaseResponseDto>> UploadThrough(
-        PurchasesController controller, IFormFile file, string? items = null) =>
-        controller.Upload(file, "Weekly restock", null, 30m, 5m, null, 2m, null, null, 4, items);
+        PurchasesController controller, IFormFile? file, string? items = null) =>
+        controller.Upload(
+            file, "Weekly restock", null, 30m, 5m, null, 2m, null, null, 4, items,
+            completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
 
     private static IFormFile CreateFile(string fileName, byte[]? bytes = null)
     {
@@ -356,7 +530,7 @@ public class PurchasesControllerTests
         return file.Object;
     }
 
-    private static PurchaseRecord Record(decimal? totalAmount = 30m) => new(
+    private static PurchaseRecord Record(decimal? totalAmount = 30m, bool withDocument = true) => new(
         7,
         BusinessId: 1,
         "Weekly restock",
@@ -372,9 +546,10 @@ public class PurchasesControllerTests
         4,
         new PurchaseSupplierRecord(4, "Acme", null, null, null, null, null),
         [new PurchaseItemRecord(11, 7, 3, 24m, 1.15m, GstClassification.Unknown, GstClassificationSource.Unknown, Product: null)],
-        "scan.jpg",
-        "abc-def.jpg",
-        "image/jpeg",
-        3,
+        // All four together, or all four null (issue #976): there is no half-documented purchase.
+        withDocument ? "scan.jpg" : null,
+        withDocument ? "abc-def.jpg" : null,
+        withDocument ? "image/jpeg" : null,
+        withDocument ? 3 : null,
         new DateTime(2026, 3, 1, 10, 5, 0, DateTimeKind.Utc));
 }

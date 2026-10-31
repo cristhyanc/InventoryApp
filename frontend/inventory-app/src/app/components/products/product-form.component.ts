@@ -10,6 +10,7 @@ import { ProductPriceHistoryComponent } from './product-price-history/product-pr
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
 import { ProductCreateGstRuleComponent } from './product-create-gst-rule/product-create-gst-rule.component';
 import { ProductCategoryPickerComponent } from './product-category-picker/product-category-picker.component';
+import { ProductPriceTrackingComponent } from './product-price-tracking/product-price-tracking.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 
@@ -23,7 +24,8 @@ import { apiErrorMessage } from '../shared/api-error-message';
     ProductPriceHistoryComponent,
     ProductGstRuleComponent,
     ProductCreateGstRuleComponent,
-    ProductCategoryPickerComponent
+    ProductCategoryPickerComponent,
+    ProductPriceTrackingComponent
   ],
   templateUrl: './product-form.component.html'
 })

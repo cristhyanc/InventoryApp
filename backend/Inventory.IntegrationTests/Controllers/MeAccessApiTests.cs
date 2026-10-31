@@ -106,6 +106,11 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
             [
                 "businessName",
                 "capabilities",
+                // What the business has bought (issue #966), beside what this member may do. Part of
+                // the asserted shape rather than an extra field a client may or may not find, and
+                // never a capability either: every capability list above is identical whatever the
+                // plan says.
+                "entitlement",
                 // The shared switchable option visibility (issue #873): what the application offers,
                 // beside what this member may do. It is part of the asserted shape rather than an
                 // extra field a client may or may not find, and it is never a capability - every
@@ -118,6 +123,7 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
             json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         // Nothing has been switched off in this deployment, so the option is offered.
         Assert.True(json.GetProperty("historicalGstClassificationVisible").GetBoolean());
+        AssertNothingIsEnforced(json);
         Assert.Equal(expectedRole, json.GetProperty("role").GetString());
         // A member is in no support session, and the field is an explicit null rather than omitted
         // so the shape is stable for a client (issue #551).
@@ -244,6 +250,34 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
         Assert.Contains(
             "Reports.View",
             after.GetProperty("capabilities").EnumerateArray().Select(value => value.GetString()));
+    }
+
+    /// <summary>
+    /// The shipped state of issue #966, which is what this host is in: the rollout setting is
+    /// absent, so nothing is enforced, no plan is claimed, and every business behaves exactly as it
+    /// did before plans existed. What the entitlement reports once a deployment switches the setting
+    /// on is <c>MeAccessEntitlementApiTests</c>.
+    /// </summary>
+    private static void AssertNothingIsEnforced(JsonElement json)
+    {
+        var entitlement = json.GetProperty("entitlement");
+
+        Assert.Equal(
+            ["attachmentStorage", "connectedMachines", "endsAtUtc", "enforced", "plan", "source"],
+            entitlement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.False(entitlement.GetProperty("enforced").GetBoolean());
+        // Null rather than a plan name: "unrestricted" is not a plan anybody is on.
+        Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("plan").ValueKind);
+        Assert.Equal("EnforcementDisabled", entitlement.GetProperty("source").GetString());
+        Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("endsAtUtc").ValueKind);
+        // And no connected-machine answer at all (issue #978): there is no plan to report an
+        // allowance against, so nothing about the business's machines is read or published while
+        // nothing is enforced.
+        Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("connectedMachines").ValueKind);
+
+        // And null attachment storage (issue #968): with no plan enforced there is no allowance to
+        // report a percentage of, nothing is counted, and no upload is refused.
+        Assert.Equal(JsonValueKind.Null, entitlement.GetProperty("attachmentStorage").ValueKind);
     }
 
     private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response) =>

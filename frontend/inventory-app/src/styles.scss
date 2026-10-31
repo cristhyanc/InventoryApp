@@ -413,6 +413,27 @@
   .value-muted {
     color: var(--md-muted-text, theme('colors.md-gray.500'));
   }
+
+  /* ---- Public landing page (issue #954) ----------------------------------------------- */
+
+  /*
+   * The landing page's buttons, from the approved Restockroo design: teal primary, white
+   * secondary, and a borderless ghost. The public landing page uses the `rr-` classes and, since
+   * issue #972, so do the Dashboard's own actions and, since issue #1029, the Add and Edit Purchase actions; no other authenticated page does. Each is at
+   * least 44px tall for touch. Each class carries the
+   * whole shared base itself, so the generated stylesheet declares every selector once.
+   */
+  .rr-button-primary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-semibold no-underline motion-safe:transition-colors bg-rr-teal text-white hover:bg-rr-teal-hover active:bg-rr-teal-active;
+  }
+
+  .rr-button-secondary {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-semibold no-underline motion-safe:transition-colors border border-rr-line bg-white text-rr-navy hover:border-rr-line-strong hover:bg-rr-canvas;
+  }
+
+  .rr-button-ghost {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-4 text-sm font-semibold no-underline motion-safe:transition-colors text-rr-navy hover:bg-rr-teal-tint hover:text-rr-teal;
+  }
 }
 
 * { box-sizing: border-box; }

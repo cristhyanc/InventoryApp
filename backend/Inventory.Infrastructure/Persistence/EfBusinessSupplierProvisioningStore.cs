@@ -1,4 +1,5 @@
 using Inventory.Application.PlatformAdmin;
+using Inventory.Domain.Suppliers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -11,10 +12,19 @@ namespace Inventory.Infrastructure.Persistence;
 /// <see cref="AppDbContext"/> and the persistence models it reads and writes.
 ///
 /// <para><strong>Three tables, in one direction.</strong> It reads the business row being approved,
-/// reads the enabled presets once, and inserts one <see cref="Supplier"/> per preset. Nothing is
-/// read back out of the business - no existing supplier is examined, compared or changed - and
-/// nothing is written to <c>SupplierPresets</c>: the copy goes one way, and what lands in the
-/// business is an ordinary tenant-owned row that business owns outright from that moment on.</para>
+/// reads the enabled presets once, and inserts one <see cref="Supplier"/> per preset that serves
+/// that business. Nothing is read back out of the business - no existing supplier is examined,
+/// compared or changed - and nothing is written to <c>SupplierPresets</c>: the copy goes one way, and
+/// what lands in the business is an ordinary tenant-owned row that business owns outright from that
+/// moment on.</para>
+///
+/// <para><strong>Which records serve it is the state rule of issue #935</strong>, and the business's
+/// state is read from the very row this method already loaded to check the marker: the nationwide
+/// records and the ones naming that state, and nothing for a record whose market was never
+/// recorded. A business with no recorded state - a legacy one - receives the nationwide records
+/// only. The rule itself is <c>SupplierPresetMarketPolicy</c>, shared with the state-change top-up
+/// and the "Available to add" list, so the three cannot disagree about what a business is entitled
+/// to; the limits of this write are unchanged by it.</para>
 ///
 /// <para><strong>Why it may write at all, and how narrowly.</strong> The request it serves is the
 /// platform administrator's, who is a member of no business, so it carries a <em>denied</em>
@@ -73,11 +83,31 @@ public sealed class EfBusinessSupplierProvisioningStore : IBusinessSupplierProvi
             // database's.
             .OrderBy(preset => preset.NormalisedName)
             .ThenBy(preset => preset.Id)
-            .Select(preset => new { preset.Name, preset.Url })
+            .Select(preset => new
+            {
+                preset.Id,
+                preset.Name,
+                preset.Url,
+                preset.ServesNationwide,
+                preset.ServedStates,
+            })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        foreach (var preset in presets)
+        // And then the state rule (issue #935), applied in memory rather than in SQL: the market a
+        // record claims is one stored comma-separated list of codes, and a LIKE over it would match
+        // a code inside another's text. SupplierPresetMarketPolicy is the one rule, read here with
+        // the state on the business row this transaction holds - the business's own recorded state
+        // and never a value a request supplied. A business with none receives the nationwide records
+        // only, and a record with no recorded market is received by nobody.
+        var serving = presets
+            .Where(preset => SupplierPresetMarketPolicy.ServesState(
+                preset.ServesNationwide,
+                preset.ServedStates,
+                business.State))
+            .ToList();
+
+        foreach (var preset in serving)
         {
             _db.Suppliers.Add(new Supplier
             {
@@ -89,6 +119,17 @@ public sealed class EfBusinessSupplierProvisioningStore : IBusinessSupplierProvi
                 // (AGENTS.md § Product GST rules and supplier defaults).
                 Name = preset.Name,
                 Url = preset.Url,
+
+                // And, since issue #934, which preset this copy is of. It is the one thing the
+                // copy records about the master, and it is what makes the name and the website
+                // above read-only on this row from the moment it exists: without it a copy was
+                // indistinguishable from a supplier the business typed in. It changes nothing
+                // about what is copied - no served states, no price basis, no connector - and
+                // nothing is written back to SupplierPresets.
+                SupplierPresetId = preset.Id,
+
+                // IsHidden is left at its default of false: a business receives every enabled
+                // suggestion in use, and "Not used" is its own later decision.
 
                 // BusinessId is deliberately left unset: the lease below is what stamps it, through
                 // the same central enforcer every ordinary insert goes through, so this adapter

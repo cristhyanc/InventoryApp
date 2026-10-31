@@ -54,7 +54,7 @@ namespace Inventory.Infrastructure.Nayax;
 /// nor write either cache. That matters: the pair being tested may belong to a different Nayax
 /// account entirely, and neither its fleet nor its machines' selections are the business's.</para>
 /// </summary>
-public sealed class CachingNayaxLynxClient : INayaxLynxClient
+public sealed class CachingNayaxLynxClient : INayaxFleetProvenanceClient
 {
     private readonly INayaxLynxCachedReadClient _inner;
     private readonly INayaxRequestCredentialProvider _credentials;
@@ -92,11 +92,15 @@ public sealed class CachingNayaxLynxClient : INayaxLynxClient
     }
 
     /// <inheritdoc />
-    public async Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default)
+    public async Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
+        (await ReadFleetFreshAsync(ct).ConfigureAwait(false)).Machines;
+
+    /// <inheritdoc />
+    public async Task<NayaxFleetReadResult> ReadFleetFreshAsync(CancellationToken ct = default)
     {
         var (businessId, credential) = await ResolveAsync(ct).ConfigureAwait(false);
 
-        return businessId is { } business
+        var machines = businessId is { } business
             ? await _machineLists
                 .ReadFreshAsync(
                     new NayaxMachineListCacheKey(business, credential.CredentialRevision),
@@ -104,6 +108,12 @@ public sealed class CachingNayaxLynxClient : INayaxLynxClient
                     ct)
                 .ConfigureAwait(false)
             : await _inner.ReadMachinesAsync(credential, ct).ConfigureAwait(false);
+
+        // The series of the one credential this call resolved, gated and sent the request with
+        // (issue #978). A caller that joined another caller's in-flight read shares that caller's
+        // credential and therefore its revision, and the series moves only when the revision does,
+        // so the key it joined on already names the same account.
+        return new NayaxFleetReadResult(machines, credential.AccountSeries);
     }
 
     /// <inheritdoc />

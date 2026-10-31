@@ -18,9 +18,34 @@ namespace Inventory.Application.Sites;
 /// The two <see cref="ISiteFactsStore"/> reads are awaited one at a time and the completed-sale facts
 /// for every site are loaded by one scoped read and distributed per machine in memory (issue #313),
 /// because the scoped store's EF adapter shares a single <c>AppDbContext</c>, which supports only one
-/// operation at a time. Its today/week-to-date/previous-comparable-week periods come from the
-/// business day rather than the host's local clock (issue #310; see
-/// <see cref="MachineDashboardWindow"/>, shared with the machine dashboard).
+/// operation at a time. Its periods come from the business day rather than the host's local clock
+/// (issue #310; see <see cref="MachineDashboardWindow"/>, shared with the machine dashboard).
+///
+/// <para><b>Four published sales periods, and no period arithmetic of its own</b> (issue #1012). A
+/// summary publishes today, week-to-date, last week and month-to-date revenue, plus the
+/// previous-comparable-week baseline of the one comparison these figures carry. Each is
+/// <see cref="MachineDashboardWindow"/>'s own period of that name, compared against the same
+/// persisted instants with the same inclusive bounds the machine rows use, which is what makes a
+/// site's figure the sum of the gross revenue of the machine rows grouped under it for every one of
+/// the four. Membership is the machine's current <c>CustomerID</c> in every period, as it already
+/// was for today and week-to-date: a sale is counted at the site its machine stands at now, never at
+/// the site it stood at when the sale happened. The completed-sales read's lower bound is derived
+/// from the window too (see <see cref="EarliestPublishedPeriodStartUtc"/>) rather than from a fixed
+/// day count, so every published period is read in full from its own first instant.</para>
+///
+/// <para><b>Each machine's own stock percentage</b> (issue #1013). The per-machine selections this
+/// use case already fetches for the site percentage were previously flattened and the split
+/// discarded; they are now also published per machine, as
+/// <see cref="SiteSummary.MachineStocks"/>, through
+/// <see cref="SiteStockPolicy.CalculateMachineStockPercentage"/> - the site rule over one machine's
+/// selections, with <see langword="null"/> for a machine that reports no capacity at all. No
+/// additional Nayax request is made for them: they come from the same one cached
+/// <see cref="INayaxLynxClient.GetMachineProductsAsync"/> call per machine the fan-out above already
+/// makes, so the request volume and the 60-second cache freshness are the site figure's own. Each
+/// machine's figure is attributed to the machine its request was made <em>for</em>, not to the
+/// <c>MachineID</c> a selection echoes back, and the site percentage and alert counts are built from
+/// the same facts concatenated in machine order, so they are unchanged for the same provider
+/// data.</para>
 ///
 /// <para>A mapping's <c>NayaxProductID</c> is resolved to a local product through
 /// <see cref="INayaxProductLinkStore"/> (issue #733) before the stock facts are built, instead of
@@ -32,7 +57,7 @@ namespace Inventory.Application.Sites;
 ///
 /// <para><b>The revenue figures depend on what the request may see (issue #697).</b> Sites is part of
 /// the day-to-day inventory work, so the endpoint requires <c>Inventory.Operate</c> and every role
-/// keeps reaching it; the three revenue figures additionally need
+/// keeps reaching it; the revenue figures additionally need
 /// <c>Dashboard.ViewFinancials</c>. For a request that does not hold it
 /// <see cref="ISiteFactsStore.GetRecentCompletedSalesAsync"/> is not called at all and each figure is
 /// <see langword="null"/> - withheld because it was never calculated, not stripped on the way out,
@@ -138,11 +163,16 @@ public sealed class GetSiteSummaries
                     await _nayax.GetMachineProductsAsync(request.MachineID, machineCancellationToken);
             });
 
+        // The per-machine lists are kept rather than flattened here (issue #1013): each machine's own
+        // stock percentage is that machine's selections alone, and the slot a request wrote to is the
+        // machine it was made *for*, so an echoed-back MachineID cannot attribute a selection to
+        // another machine's row. The site figures are built from the same lists concatenated in that
+        // order below, which is exactly the sequence this step used to hand over.
         var sitesWithProducts = sites
             .Select((site, siteIndex) => (
                 site.SiteId,
                 site.Machines,
-                Products: productsByMachine[siteIndex].SelectMany(products => products).ToList()))
+                ProductsByMachine: productsByMachine[siteIndex]))
             .ToList();
 
         // One link read for the whole fleet, awaited after the fan-out and before the completed-sales
@@ -150,17 +180,23 @@ public sealed class GetSiteSummaries
         // operation at a time.
         var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
             sitesWithProducts
-                .SelectMany(site => site.Products)
+                .SelectMany(site => site.ProductsByMachine)
+                .SelectMany(products => products)
                 .Where(mp => mp.NayaxProductID.HasValue)
                 .Select(mp => mp.NayaxProductID!.Value)
                 .Distinct()
                 .ToList(),
             cancellationToken);
 
-        // One scoped read covers every site's machines over the same 16-day lookback the former
-        // per-site reads each requested, instead of one overlapping read per site; the facts carry
-        // their machine id, so each site's own sales are selected from the result in memory. The
-        // lookback counts back from the current UTC instant, the time base the sale facts are stored in.
+        // One scoped read covers every site's machines, instead of one overlapping read per site;
+        // the facts carry their machine id, so each site's own sales are selected from the result in
+        // memory. Its lower bound is derived from the window - the first instant of the earliest
+        // period a summary publishes - rather than from a day count (issue #1012), so the read
+        // always covers every published period in full. A fixed count cannot: a 16-day lookback
+        // covered last week but reached only part of month to date, which after about the sixteenth
+        // of a month silently shortened that figure. The bound is in UTC, the time base the sale
+        // facts are stored in, and inclusive, so a sale at exactly a period's start is counted by
+        // the read and by RevenueIn alike.
         //
         // It is not read at all for a request that may not be shown the revenue (issue #697): there
         // is no completed-sales query in that request, which is also why a withheld figure below is
@@ -169,7 +205,7 @@ public sealed class GetSiteSummaries
         var salesByMachine = mayViewFinancials
             ? (await _facts.GetRecentCompletedSalesAsync(
                     sitesWithProducts.SelectMany(site => site.Machines).Select(machine => machine.MachineID).Distinct().ToList(),
-                    window.NowUtc.AddDays(-16),
+                    EarliestPublishedPeriodStartUtc(window),
                     cancellationToken))
                 .GroupBy(sale => sale.MachineId)
                 .ToDictionary(group => group.Key, group => group.ToList())
@@ -179,7 +215,7 @@ public sealed class GetSiteSummaries
             .Select(site => BuildSummary(
                 site.SiteId,
                 site.Machines,
-                site.Products,
+                site.ProductsByMachine,
                 SalesFor(site.Machines, salesByMachine),
                 localProductIdByNayaxId,
                 productActivity,
@@ -188,6 +224,25 @@ public sealed class GetSiteSummaries
 
         return summaries.OrderBy(summary => summary.SiteName).ToList();
     }
+
+    /// <summary>
+    /// The first instant any period a summary publishes begins at, which is how far back the
+    /// completed-sales read has to reach (issue #1012). It is a minimum over the published periods
+    /// rather than a period of its own, because which of them starts earliest depends on the date:
+    /// month to date is the earliest for most of a month, and last week - which the previous
+    /// comparable week shares a start with - is earlier in the first half of one.
+    /// <see cref="MachineDashboardWindow.TwoWeeksAgo"/> is deliberately absent: a site row publishes
+    /// no figure for it, so reading it would be reading sales nothing reports.
+    /// </summary>
+    private static DateTime EarliestPublishedPeriodStartUtc(MachineDashboardWindow window) =>
+        new[]
+        {
+            window.Today.StartUtc,
+            window.CurrentWeek.StartUtc,
+            window.PreviousComparableWeek.StartUtc,
+            window.LastWeek.StartUtc,
+            window.MonthToDate.StartUtc,
+        }.Min();
 
     /// <summary>
     /// A site's own completed sales, or <see langword="null"/> when none were read because the
@@ -204,32 +259,50 @@ public sealed class GetSiteSummaries
                 .SelectMany(machineId => salesByMachine.GetValueOrDefault(machineId, []))
                 .ToList();
 
+    /// <summary>
+    /// One site's row. <paramref name="productsByMachine"/> holds the selections of each machine in
+    /// <paramref name="machines"/>, in the same order and by the same index, which is what lets each
+    /// machine's own percentage be attributed to the machine its request was made for (issue #1013).
+    /// </summary>
     private SiteSummary BuildSummary(
         long siteId,
         List<NayaxMachine> machines,
-        IReadOnlyList<NayaxMachineProduct> machineProducts,
+        IReadOnlyList<List<NayaxMachineProduct>> productsByMachine,
         IReadOnlyList<SiteCompletedSaleFact>? sales,
         IReadOnlyDictionary<long, long> localProductIdByNayaxId,
         IReadOnlyDictionary<long, bool> productActivity,
         MachineDashboardWindow window)
     {
-        var stockFacts = machineProducts
-            .Select(mp =>
-            {
-                var productId = mp.NayaxProductID is long nayaxProductId
-                    && localProductIdByNayaxId.TryGetValue(nayaxProductId, out var localProductId)
-                        ? localProductId
-                        : (long?)null;
+        var stockFactsByMachine = productsByMachine
+            .Select(products => products
+                .Select(mp =>
+                {
+                    var productId = mp.NayaxProductID is long nayaxProductId
+                        && localProductIdByNayaxId.TryGetValue(nayaxProductId, out var localProductId)
+                            ? localProductId
+                            : (long?)null;
 
-                return new SiteMachineProductStockFact(
-                    productId,
-                    productId.HasValue && productActivity.GetValueOrDefault(productId.Value),
-                    mp.PAR ?? 0,
-                    mp.MissingStockByMDB ?? 0,
-                    mp.VendOutAlertThreshold ?? 0);
-            })
+                    return new SiteMachineProductStockFact(
+                        productId,
+                        productId.HasValue && productActivity.GetValueOrDefault(productId.Value),
+                        mp.PAR ?? 0,
+                        mp.MissingStockByMDB ?? 0,
+                        mp.VendOutAlertThreshold ?? 0);
+                })
+                .ToList())
             .ToList();
+
+        // The site's facts are its machines' facts concatenated in machine order, which is the
+        // sequence the site figures were always built from: the split below is published beside them
+        // rather than instead of them, so no site figure changes for the same provider data.
+        var stockFacts = stockFactsByMachine.SelectMany(facts => facts).ToList();
         var (lowProductCount, emptyProductCount) = SiteStockPolicy.CalculateAlertCounts(stockFacts);
+
+        var machineStocks = machines
+            .Select((machine, index) => new SiteMachineStock(
+                machine.MachineID,
+                SiteStockPolicy.CalculateMachineStockPercentage(stockFactsByMachine[index])))
+            .ToList();
 
         return new SiteSummary(
             siteId,
@@ -240,7 +313,10 @@ public sealed class GetSiteSummaries
             emptyProductCount,
             RevenueIn(sales, window.Today),
             RevenueIn(sales, window.CurrentWeek),
-            RevenueIn(sales, window.PreviousComparableWeek));
+            RevenueIn(sales, window.PreviousComparableWeek),
+            RevenueIn(sales, window.LastWeek),
+            RevenueIn(sales, window.MonthToDate),
+            machineStocks);
     }
 
     /// <summary>

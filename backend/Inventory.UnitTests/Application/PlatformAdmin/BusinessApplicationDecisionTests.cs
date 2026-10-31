@@ -1,6 +1,7 @@
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
@@ -532,8 +533,10 @@ public class BusinessApplicationDecisionTests
             DecidedAtUtc: null,
             ContactEmail: null,
             Abn: null,
+            State: "NSW",
             ActiveMemberCount: 1,
-            NayaxConfigured: false);
+            NayaxConfigured: false,
+            NayaxConnectionStatus: NayaxConnectionStatus.NotConfigured);
 
     #endregion
 

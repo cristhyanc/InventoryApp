@@ -5,6 +5,7 @@ using Inventory.Application.SupportSessions;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using Moq;
 using Xunit;
 
@@ -49,6 +50,24 @@ public class GetSiteCommissionReportProviderOptionalTests
 
         Assert.False(report.IsAvailable);
         Assert.Equal(SiteCommissionUnavailableReason.NayaxNotConnected, report.UnavailableReason);
+    }
+
+    /// <summary>
+    /// Issue #967: a business whose plan does not include the sales provider gets the same
+    /// unavailable report under its own reason, and the period it asked about is still reported.
+    /// Nothing stored is touched: the agreements and payments are exactly as they were.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_without_the_provider_is_unavailable_with_its_own_reason()
+    {
+        var report = await Handle(
+            FleetRefusing(NayaxNotConnectedException.PlanRequired(SubscriptionPlan.Pro)));
+
+        Assert.False(report.IsAvailable);
+        Assert.Equal(SiteCommissionUnavailableReason.PlanRequired, report.UnavailableReason);
+        Assert.Empty(report.Rows);
+        Assert.Equal(From, report.From);
+        Assert.Equal(To, report.To);
     }
 
     [Fact]

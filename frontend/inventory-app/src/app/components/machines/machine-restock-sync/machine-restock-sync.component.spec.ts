@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
+import { SimpleChange } from '@angular/core';
 import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
@@ -471,6 +472,167 @@ describe('MachineRestockSyncComponent sync', () => {
 
     expect(component.fromDate$.value).toBe('2026-06-15');
     jest.useRealTimers();
+  });
+
+  /**
+   * The Dashboard reminder's link (issue #948) hands over the oldest pending date it counted; the
+   * dialog opens there only when that is a real date earlier than its own default.
+   */
+  describe('the pending From date the Dashboard reminder links with', () => {
+    afterEach(() => jest.useRealTimers());
+
+    function openedFromDate(pendingFromDate: string | null): string {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T01:00:00Z')); // 28 Oct in Sydney
+      const { component } = createHarness(jest.fn(() => of(preview([]))));
+      component.pendingFromDate = pendingFromDate;
+      component.syncRestock();
+      return component.fromDate$.value;
+    }
+
+    it('opens at an earlier pending date and asks for that window', () => {
+      const syncRestock: jest.Mock = jest.fn(() => of(preview([])));
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T01:00:00Z'));
+      const { component } = createHarness(syncRestock);
+      component.pendingFromDate = '2026-10-16';
+
+      component.syncRestock();
+
+      expect(component.fromDate$.value).toBe('2026-10-16');
+      const [, fromDateIso] = syncRestock.mock.calls[0];
+      expect(fromDateIso).toBe(startOfDayUtc(2026, 10, 16, BUSINESS_TIME_ZONE).toISOString());
+    });
+
+    it('keeps the three-day default when there is no pending date', () => {
+      expect(openedFromDate(null)).toBe('2026-10-25');
+    });
+
+    it('keeps the three-day default when the pending date is not earlier than it', () => {
+      expect(openedFromDate('2026-10-25')).toBe('2026-10-25');
+      expect(openedFromDate('2026-10-27')).toBe('2026-10-25');
+    });
+
+    it('ignores a malformed or impossible pending date', () => {
+      expect(openedFromDate('16/10/2026')).toBe('2026-10-25');
+      expect(openedFromDate('2026-02-30')).toBe('2026-10-25');
+      expect(openedFromDate('')).toBe('2026-10-25');
+    });
+
+    it('still lets the operator change the date after opening at it', () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-28T01:00:00Z'));
+      const { component } = createHarness(jest.fn(() => of(preview([]))));
+      component.pendingFromDate = '2026-10-16';
+      component.syncRestock();
+
+      component.onFromDateChange('');
+
+      expect(component.fromDate$.value).toBe('');
+    });
+  });
+});
+
+/**
+ * Superseded Sync Restock responses (issue #1011): the page reuses this panel when it moves between
+ * machines, so a response for a machine the panel has since left - or a request a newer one
+ * replaced - must change nothing: not the loading state, preview, error, selection or toasts.
+ */
+describe('MachineRestockSyncComponent superseded sync responses (issue #1011)', () => {
+  function moveTo(component: MachineRestockSyncComponent, machineId: number): void {
+    const previous = component.machineId;
+    component.machineId = machineId;
+    component.ngOnChanges({ machineId: new SimpleChange(previous, machineId, false) });
+  }
+
+  function requests() {
+    const responses: Subject<NayaxMachineStockSyncPreview>[] = [];
+    const syncRestock: jest.Mock = jest.fn((_machineId: number) => {
+      const response = new Subject<NayaxMachineStockSyncPreview>();
+      responses.push(response);
+      return response.asObservable();
+    });
+    return { responses, syncRestock };
+  }
+
+  it('ignores machine A\'s late answer while machine B\'s newer request is outstanding', () => {
+    const { responses, syncRestock } = requests();
+    const { component, toast } = createHarness(syncRestock);
+
+    component.syncRestock(); // machine 7
+    moveTo(component, 8);
+    component.syncRestock(); // machine 8
+    expect(syncRestock).toHaveBeenCalledTimes(2);
+    expect(syncRestock.mock.calls[1][0]).toBe(8);
+
+    responses[0].next(preview([event({ id: 70 })]));
+    responses[0].error(new Error('late failure for machine 7'));
+
+    expect(component.syncing$.value).toBe(true);
+    expect(component.syncPreview$.value).toBeNull();
+    expect(component.syncError$.value).toBeNull();
+    expect(component.selectedEventIds.size).toBe(0);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+
+    responses[1].next(preview([event({ id: 80, machineId: 8 })]));
+
+    expect(component.syncing$.value).toBe(false);
+    expect(component.syncPreview$.value?.events.map((e) => e.id)).toEqual([80]);
+    expect([...component.selectedEventIds]).toEqual([80]);
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an obsolete answer for machine A after moving A to B and back to A', () => {
+    const { responses, syncRestock } = requests();
+    const { component, toast } = createHarness(syncRestock);
+
+    component.syncRestock(); // first request for machine 7
+    moveTo(component, 8);
+    moveTo(component, 7);
+    component.syncRestock(); // the current request for machine 7
+
+    responses[0].error(new Error('obsolete failure'));
+    responses[0].next(preview([event({ id: 1 })]));
+
+    expect(component.syncing$.value).toBe(true);
+    expect(component.syncError$.value).toBeNull();
+    expect(component.syncPreview$.value).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+
+    responses[1].next(preview([event({ id: 2 })]));
+
+    expect(component.syncing$.value).toBe(false);
+    expect(component.syncPreview$.value?.events.map((e) => e.id)).toEqual([2]);
+  });
+
+  it('cancels the in-flight request when the machine changes or the panel is destroyed', () => {
+    const { responses, syncRestock } = requests();
+    const { component } = createHarness(syncRestock);
+
+    component.syncRestock();
+    expect(responses[0].observed).toBe(true);
+    moveTo(component, 8);
+    expect(responses[0].observed).toBe(false);
+    expect(component.syncing$.value).toBe(false);
+
+    component.syncRestock();
+    component.ngOnDestroy();
+    expect(responses[1].observed).toBe(false);
+  });
+
+  it('lets only the newest request answer when a filter change replaces one in flight', () => {
+    const { responses, syncRestock } = requests();
+    const { component } = createHarness(syncRestock);
+
+    component.syncRestock();
+    component.onShowReconciledChange(true);
+
+    responses[0].next(preview([event({ id: 1 })]));
+    expect(component.syncPreview$.value).toBeNull();
+    expect(component.syncing$.value).toBe(true);
+
+    responses[1].next(preview([event({ id: 2 })]));
+    expect(component.syncPreview$.value?.events.map((e) => e.id)).toEqual([2]);
+    expect(component.syncing$.value).toBe(false);
   });
 });
 

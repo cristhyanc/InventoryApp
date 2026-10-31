@@ -2,7 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Inventory.Domain.Nayax;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace InventoryApi.Tests.Controllers;
@@ -45,6 +48,33 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     public async Task Every_endpoint_refuses_a_caller_who_is_not_the_configured_administrator(string objectId)
     {
         var client = _factory.Authenticated(objectId);
+
+        foreach (var response in await AllEndpointsAsync(client))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        await AssertNothingWasDecidedAsync();
+    }
+
+    /// <summary>
+    /// The same answer for an Operator, the weakest business role there is (issue #983). The theory
+    /// above covers an Owner and a Manager; an Operator of a trading business is refused every
+    /// endpoint of this surface too, so nothing the directory reports - the Nayax connection status
+    /// included - becomes readable to a business role.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_of_a_business_reaches_no_endpoint_of_this_surface()
+    {
+        const string OperatorObjectId = "66666666-6666-6666-6666-666666666666";
+        await _factory.SeedMembershipAsync(
+            _factory.TradingBusinessId,
+            OperatorObjectId,
+            BusinessRole.Operator,
+            isActive: true);
+        await _factory.SeedNayaxConnectionAsync(_factory.TradingBusinessId, NayaxConnectionStatus.Ready);
+
+        var client = _factory.Authenticated(OperatorObjectId);
 
         foreach (var response in await AllEndpointsAsync(client))
         {
@@ -107,7 +137,7 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     #region The directory
 
     /// <summary>
-    /// The list: every business, pending applications first, with the ten declared fields and the
+    /// The list: every business, pending applications first, with the twelve declared fields and the
     /// application detail read off the rows.
     /// </summary>
     [Fact]
@@ -125,6 +155,15 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
             SuperAdminBusinessesApiFactory.PendingContactEmail,
             businesses[0].GetProperty("contactEmail").GetString());
         Assert.Equal(SuperAdminBusinessesApiFactory.PendingAbn, businesses[0].GetProperty("abn").GetString());
+        // The state the application recorded is shown when it is reviewed (issue #933), and a
+        // business that recorded none reports it as unrecorded rather than as a guess.
+        Assert.Equal(SuperAdminBusinessesApiFactory.PendingState, businesses[0].GetProperty("state").GetString());
+        Assert.Equal(
+            JsonValueKind.Null,
+            businesses
+                .Single(business => business.GetProperty("businessId").GetInt32() == _factory.RejectedBusinessId)
+                .GetProperty("state")
+                .ValueKind);
         Assert.Equal(1, businesses[0].GetProperty("activeMemberCount").GetInt32());
         Assert.False(businesses[0].GetProperty("nayaxConfigured").GetBoolean());
         Assert.Equal(
@@ -146,9 +185,13 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
 
     /// <summary>
     /// The acceptance criterion "no tenant data in responses", asserted structurally and by value:
-    /// the response objects carry exactly the ten declared properties, and a seeded product name and
-    /// Nayax token ciphertext appear nowhere in the body - while the connection's existence is
-    /// still reported as the yes/no it is meant to be.
+    /// the response objects carry exactly the twelve declared properties, and a seeded product name and
+    /// Nayax token ciphertext appear nowhere in the body - while the connection's existence and its
+    /// stored status are still reported as the yes/no and the status name they are meant to be.
+    ///
+    /// <para>The credential half is what the property list is really for (issue #983): the operator
+    /// id, the encryption key id, the credential revision and the instant the connection was last
+    /// tested are all on the row the status was read from, and none of them may travel with it.</para>
     /// </summary>
     [Fact]
     public async Task The_directory_reports_no_tenant_data_and_no_credential()
@@ -164,6 +207,9 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         Assert.DoesNotContain(ProductName, raw, StringComparison.Ordinal);
         Assert.DoesNotContain(Ciphertext, raw, StringComparison.Ordinal);
         Assert.DoesNotContain("2002736764", raw, StringComparison.Ordinal);
+        // "2026-10" is both the seeded encryption key id and the month the connection was last tested
+        // in, and neither the key nor that instant is part of this contract.
+        Assert.DoesNotContain("2026-10", raw, StringComparison.Ordinal);
 
         foreach (var business in body.RootElement.EnumerateArray())
         {
@@ -178,6 +224,8 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
                     "decidedAtUtc",
                     "name",
                     "nayaxConfigured",
+                    "nayaxConnectionStatus",
+                    "state",
                     "status",
                 ],
                 business.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
@@ -188,6 +236,76 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
                 .Single(business => business.GetProperty("businessId").GetInt32() == _factory.TradingBusinessId)
                 .GetProperty("nayaxConfigured")
                 .GetBoolean());
+    }
+
+    /// <summary>
+    /// The stored connection status of each business, reported as the published name (issue #983).
+    /// All four values, because the whole point of the field is that the two "saved but not working"
+    /// states stay apart from each other and from "nothing stored": a business with no connection row
+    /// reads <c>NotConfigured</c>, which is exactly what the absence of that row means.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionStatus.PendingPermissions)]
+    [InlineData(NayaxConnectionStatus.Ready)]
+    [InlineData(NayaxConnectionStatus.NeedsAttention)]
+    public async Task The_directory_reports_each_businesss_stored_nayax_connection_status(
+        NayaxConnectionStatus stored)
+    {
+        await _factory.SeedNayaxConnectionAsync(_factory.TradingBusinessId, stored);
+
+        var body = await ReadJsonAsync(await _factory.AsAdministrator().GetAsync(ListUrl));
+        var businesses = body.RootElement.EnumerateArray().ToList();
+
+        var trading = businesses.Single(business =>
+            business.GetProperty("businessId").GetInt32() == _factory.TradingBusinessId);
+        Assert.Equal(stored.ToString(), trading.GetProperty("nayaxConnectionStatus").GetString());
+        Assert.True(trading.GetProperty("nayaxConfigured").GetBoolean());
+
+        // Every other business has no connection row at all, which is what NotConfigured is.
+        Assert.All(
+            businesses.Where(business =>
+                business.GetProperty("businessId").GetInt32() != _factory.TradingBusinessId),
+            business =>
+            {
+                Assert.Equal(
+                    nameof(NayaxConnectionStatus.NotConfigured),
+                    business.GetProperty("nayaxConnectionStatus").GetString());
+                Assert.False(business.GetProperty("nayaxConfigured").GetBoolean());
+            });
+    }
+
+    /// <summary>
+    /// The status is the stored result of the business's last test, and reading the directory makes no
+    /// Nayax call (issue #983) - the host these tests run on has no Nayax client configured to reach,
+    /// and the list is answered from the rows alone, for a business whose last test failed as readily
+    /// as for one whose passed.
+    /// </summary>
+    [Fact]
+    public async Task The_directory_reports_the_stored_status_without_testing_the_connection()
+    {
+        await _factory.SeedNayaxConnectionAsync(
+            _factory.TradingBusinessId,
+            NayaxConnectionStatus.NeedsAttention);
+
+        var body = await ReadJsonAsync(await _factory.AsAdministrator().GetAsync(ListUrl));
+
+        Assert.Equal(
+            nameof(NayaxConnectionStatus.NeedsAttention),
+            body.RootElement.EnumerateArray()
+                .Single(business => business.GetProperty("businessId").GetInt32() == _factory.TradingBusinessId)
+                .GetProperty("nayaxConnectionStatus")
+                .GetString());
+
+        // The stored row is exactly as it was seeded: no status was rewritten, no revision bumped and
+        // no last-tested instant recorded by reading the list.
+        await using var db = _factory.Database();
+        var connection = await db.BusinessNayaxConnections
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.BusinessId == _factory.TradingBusinessId);
+        Assert.Equal(NayaxConnectionStatus.NeedsAttention, connection.Status);
+        Assert.Equal(1, connection.CredentialRevision);
+        Assert.Equal(SuperAdminBusinessesApiFactory.LastTestedAt, connection.LastTestedAtUtc);
     }
 
     [Fact]
@@ -420,9 +538,14 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     }
 
     /// <summary>
-    /// The copies are ordinary suppliers of that business from the moment it starts trading: its
-    /// Owner lists, edits and deletes them through the ordinary supplier endpoints, under the
-    /// ordinary supplier permission - and another business's Owner sees none of them.
+    /// The copies are that business's own suppliers from the moment it starts trading: its Owner
+    /// lists them through the ordinary supplier endpoints, under the ordinary supplier permission -
+    /// and another business's Owner sees none of them.
+    ///
+    /// <para>Since issue #934 they are also <em>linked</em> copies, so what the Owner may do to one
+    /// is narrower than it was: the contact details save, and the name, the website and the delete
+    /// are refused with <c>400</c>. The list says so on each row, which is what this test pins at
+    /// the HTTP boundary.</para>
     /// </summary>
     [Fact]
     public async Task The_copies_are_ordinary_suppliers_of_the_approved_business_and_nobody_elses()
@@ -442,15 +565,53 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
             SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
             names);
 
-        var ids = listed.RootElement.EnumerateArray()
-            .Select(supplier => supplier.GetProperty("id").GetInt32())
+        // Every copy reports itself as linked, locked against a rename and a delete, and in use.
+        Assert.All(
+            listed.RootElement.EnumerateArray(),
+            supplier => Assert.Equal(
+                (true, false, false, false),
+                (supplier.GetProperty("isLinked").GetBoolean(),
+                    supplier.GetProperty("isHidden").GetBoolean(),
+                    supplier.GetProperty("canRename").GetBoolean(),
+                    supplier.GetProperty("canDelete").GetBoolean())));
+
+        var rows = listed.RootElement.EnumerateArray()
+            .Select(supplier => (Id: supplier.GetProperty("id").GetInt32(), Name: supplier.GetProperty("name").GetString()!))
             .ToArray();
 
-        var renamed = await owner.PutAsJsonAsync($"/api/suppliers/{ids[0]}", new { name = "Renamed by the business" });
-        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync($"/api/suppliers/{ids[1]}")).StatusCode);
+        // The name and the website are the master's, and the copy cannot be removed.
+        var renamed = await owner.PutAsJsonAsync(
+            $"/api/suppliers/{rows[0].Id}", new { name = "Renamed by the business" });
+        Assert.Equal(HttpStatusCode.BadRequest, renamed.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await owner.DeleteAsync($"/api/suppliers/{rows[1].Id}")).StatusCode);
 
-        // The platform's own list is untouched by either: the copying goes one way.
+        // The contact details are the business's own and still save, submitted with the stored name
+        // as the Suppliers form sends them.
+        var contacted = await owner.PutAsJsonAsync(
+            $"/api/suppliers/{rows[0].Id}", new { name = rows[0].Name, phone = "0400 000 000" });
+        Assert.Equal(HttpStatusCode.NoContent, contacted.StatusCode);
+
+        // And "Not used" takes a copy out of the pickers without removing it.
+        Assert.Equal(
+            HttpStatusCode.NoContent,
+            (await owner.PutAsJsonAsync($"/api/suppliers/{rows[1].Id}/not-used", new { isHidden = true })).StatusCode);
+
+        var pickerList = await ReadJsonAsync(await owner.GetAsync("/api/suppliers"));
+        Assert.DoesNotContain(
+            rows[1].Id,
+            pickerList.RootElement.EnumerateArray().Select(supplier => supplier.GetProperty("id").GetInt32()));
+
+        var pageList = await ReadJsonAsync(await owner.GetAsync("/api/suppliers?includeHidden=true"));
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Length,
+            pageList.RootElement.EnumerateArray().Count());
+
+        // Every copy is still there: nothing above removed a row.
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId)).Select(supplier => supplier.Name).Order());
+
+        // The platform's own list is untouched by any of it: the copying goes one way.
         Assert.Equal(
             SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
             (await _factory.SupplierPresetsAsync()).Select(preset => preset.Name).Order());
@@ -460,6 +621,30 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         var otherOwner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
         var otherList = await ReadJsonAsync(await otherOwner.GetAsync("/api/suppliers"));
         Assert.Empty(otherList.RootElement.EnumerateArray());
+    }
+
+    /// <summary>
+    /// <c>IsHidden</c> is a <c>bool</c>, so a body that omits it would otherwise bind to
+    /// <c>false</c> indistinguishably from an explicit <c>isHidden: false</c> and silently leave a
+    /// linked copy in the pickers instead of refusing the request.
+    /// <c>JsonRequiredAttribute</c> refuses the under-posted body instead.
+    /// </summary>
+    [Fact]
+    public async Task Not_used_without_the_isHidden_field_is_refused_and_changes_nothing()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.ApplicantObjectId);
+        var listed = await ReadJsonAsync(await owner.GetAsync("/api/suppliers"));
+        var supplierId = listed.RootElement.EnumerateArray().First().GetProperty("id").GetInt32();
+
+        var response = await owner.PutAsJsonAsync($"/api/suppliers/{supplierId}/not-used", new { });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var reread = await ReadJsonAsync(await owner.GetAsync($"/api/suppliers/{supplierId}"));
+        Assert.False(reread.RootElement.GetProperty("isHidden").GetBoolean());
     }
 
     /// <summary>
@@ -483,6 +668,123 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
             SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
             copies.Select(supplier => supplier.Name).Order());
         Assert.All(copies, supplier => Assert.Null(supplier.Url));
+    }
+
+    #endregion
+
+    #region Supplier records by business state, and "Available to add" (issue #935)
+
+    /// <summary>
+    /// The outcome issue #935 is about, at the HTTP boundary: the approval copies the records that
+    /// serve the approved business's own recorded state - the nationwide ones and the ones naming
+    /// that state - and not a record that serves somewhere else.
+    ///
+    /// <para>The pending application recorded <c>QLD</c>, so a Queensland record is copied and a
+    /// Western Australian one is not, from the same platform list.</para>
+    /// </summary>
+    [Fact]
+    public async Task Approving_copies_only_the_records_that_serve_the_business_s_state()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        await _factory.SeedSupplierPresetAsync(
+            "Brisbane Wholesale", servesNationwide: false, servedStates: SuperAdminBusinessesApiFactory.PendingState);
+        await _factory.SeedSupplierPresetAsync("Perth Wholesale", servesNationwide: false, servedStates: "WA");
+        await _factory.SeedSupplierPresetAsync(
+            "Disabled Queensland",
+            isEnabled: false,
+            servesNationwide: false,
+            servedStates: SuperAdminBusinessesApiFactory.PendingState);
+
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        Assert.Equal(
+            ["Big W", "Brisbane Wholesale", "Coles", "Costco", "Woolworths"],
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId))
+                .Select(supplier => supplier.Name)
+                .Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The "Available to add" section and its one-click add, end to end as the business's own Owner:
+    /// a record enabled after the approval is <strong>not</strong> pushed into the business, is
+    /// offered to it, and becomes a linked copy when the Owner adds it. Adding it again is a
+    /// <c>409</c> with one copy, and a record that serves another state is not offered and cannot be
+    /// added by id.
+    /// </summary>
+    [Fact]
+    public async Task A_record_enabled_later_is_offered_to_the_business_and_added_with_one_request()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        // The platform adds two records afterwards. Neither reaches the business by itself.
+        var brisbane = await _factory.SeedSupplierPresetAsync(
+            "Brisbane Wholesale",
+            "https://brisbane.example",
+            servesNationwide: false,
+            servedStates: SuperAdminBusinessesApiFactory.PendingState);
+        var perth = await _factory.SeedSupplierPresetAsync(
+            "Perth Wholesale", servesNationwide: false, servedStates: "WA");
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.ApplicantObjectId);
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Length,
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId)).Count);
+
+        // It is offered instead, with its id, name and website - and the Western Australian record
+        // is not offered at all.
+        var offered = await ReadJsonAsync(await owner.GetAsync("/api/suppliers/available-presets"));
+        var row = Assert.Single(offered.RootElement.EnumerateArray());
+        Assert.Equal(
+            (brisbane, "Brisbane Wholesale", "https://brisbane.example"),
+            (row.GetProperty("id").GetInt32(),
+                row.GetProperty("name").GetString(),
+                row.GetProperty("url").GetString()));
+
+        // One click adds it, as this business's own linked copy.
+        var added = await owner.PostAsync($"/api/suppliers/available-presets/{brisbane}", null);
+        Assert.Equal(HttpStatusCode.Created, added.StatusCode);
+        var copy = await ReadJsonAsync(added);
+        Assert.Equal("Brisbane Wholesale", copy.RootElement.GetProperty("name").GetString());
+        Assert.True(copy.RootElement.GetProperty("isLinked").GetBoolean());
+        Assert.False(copy.RootElement.GetProperty("canRename").GetBoolean());
+        Assert.False(copy.RootElement.GetProperty("canDelete").GetBoolean());
+
+        var suppliers = await _factory.SuppliersOfAsync(_factory.PendingBusinessId);
+        Assert.Equal(
+            brisbane,
+            suppliers.Single(supplier => supplier.Name == "Brisbane Wholesale").SupplierPresetId);
+
+        // It is no longer on offer, a second add is refused as already added, and there is one copy.
+        Assert.Empty(
+            (await ReadJsonAsync(await owner.GetAsync("/api/suppliers/available-presets")))
+                .RootElement.EnumerateArray());
+
+        var again = await owner.PostAsync($"/api/suppliers/available-presets/{brisbane}", null);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+        Assert.Equal(SupplierPresetMarketPolicy.AlreadyAddedMessage, await DetailAsync(again));
+
+        // A record that serves another state cannot be added by id either.
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await owner.PostAsync($"/api/suppliers/available-presets/{perth}", null)).StatusCode);
+
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Length + 1,
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId)).Count);
+
+        // And nothing of this reached the other business: it is offered the nationwide records it
+        // has no copy of - it has none at all - and holds no supplier of its own.
+        var otherOwner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
+            (await ReadJsonAsync(await otherOwner.GetAsync("/api/suppliers/available-presets")))
+                .RootElement.EnumerateArray()
+                .Select(preset => preset.GetProperty("name").GetString()!)
+                .Order());
+        Assert.Empty(await _factory.SuppliersOfAsync(_factory.TradingBusinessId));
     }
 
     #endregion

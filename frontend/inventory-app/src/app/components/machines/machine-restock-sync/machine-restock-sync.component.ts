@@ -1,4 +1,15 @@
-import { Component, ElementRef, EventEmitter, HostListener, Input, OnDestroy, Output, ViewChild } from '@angular/core';
+import {
+  Component,
+  ElementRef,
+  EventEmitter,
+  HostListener,
+  Input,
+  OnChanges,
+  OnDestroy,
+  Output,
+  SimpleChanges,
+  ViewChild
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { BehaviorSubject, Subscription } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
@@ -155,8 +166,28 @@ import {
     `
   ]
 })
-export class MachineRestockSyncComponent implements OnDestroy {
+export class MachineRestockSyncComponent implements OnChanges, OnDestroy {
   @Input() machineId: number | null | undefined = null;
+
+  /**
+   * The oldest pending restock date the Dashboard's restock-sync reminder linked here with
+   * (`?restockFrom=yyyy-MM-dd`, issue #948). When it is a real date earlier than the usual From
+   * default, the dialog opens at it instead, so every event the reminder counted is on screen
+   * without editing the date. Anything else - absent, malformed, or not earlier - leaves the
+   * default exactly as it was, and the operator can still change or clear the date. Since issue
+   * #1011 that link also opens the dialog by itself (see `openOnArrivalFor`).
+   */
+  @Input() pendingFromDate: string | null | undefined = null;
+
+  /**
+   * The machine the Dashboard reminder's "Open Sync Restock" link asked this panel to open for
+   * (`?syncRestock=open`, issue #1011), or `null` for an ordinary visit. The dialog opens by
+   * itself, through the same `syncRestock()` the button uses, once `machineId` is that machine and
+   * the business time zone is known - never for another machine, never during a support session,
+   * and at most once per request, so a later page update, or the operator closing it, never
+   * reopens it.
+   */
+  @Input() openOnArrivalFor: number | null | undefined = null;
 
   /** Emitted only after at least one event was actually applied, so the page can reload products. */
   @Output() readonly restockApplied = new EventEmitter<void>();
@@ -171,6 +202,21 @@ export class MachineRestockSyncComponent implements OnDestroy {
   sessionActive = false;
 
   private readonly sessionActiveSubscription: Subscription;
+  private readonly timeZoneSubscription: Subscription;
+
+  /** The `openOnArrivalFor` request already acted on (issue #1011), so it is acted on only once. */
+  private openOnArrivalHandledFor: number | null = null;
+
+  /**
+   * The current preview request (issue #1011). Every new request, a move to another machine and
+   * the component's destruction supersede the one before - cancelling it and bumping
+   * `previewGeneration` - and a response is applied only while its own generation is still the
+   * current one. So a superseded response can never clear a newer request's loading state or show
+   * a preview, error, selection or toast, even after the page has moved back to the machine it was
+   * asked for.
+   */
+  private previewSubscription?: Subscription;
+  private previewGeneration = 0;
 
   modalOpen$ = new BehaviorSubject(false);
   syncPreview$ = new BehaviorSubject<NayaxMachineStockSyncPreview | null>(null);
@@ -216,11 +262,62 @@ export class MachineRestockSyncComponent implements OnDestroy {
     private readonly businessTimeZone: BusinessTimeZoneService,
     supportSession: SupportSessionService
   ) {
-    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => {
+      this.sessionActive = active;
+      this.openOnArrivalIfRequested();
+    });
+    // A requested open waits for the zone rather than opening into "Loading the business time
+    // zone" (issue #1011): the From date default is a day in that zone (issue #499).
+    this.timeZoneSubscription = businessTimeZone.timeZoneId$.subscribe(() => this.openOnArrivalIfRequested());
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    const machineChange = changes['machineId'];
+    if (machineChange && !machineChange.firstChange && machineChange.previousValue !== machineChange.currentValue) {
+      // The page is reused when the route moves to another machine, so the previous machine's
+      // dialog and preview are dropped here rather than shown under the new machine (issue #1011).
+      this.supersedePreviewRequest();
+      this.resetDialog();
+    }
+    if (changes['openOnArrivalFor']) {
+      this.openOnArrivalHandledFor = null;
+    }
+    this.openOnArrivalIfRequested();
   }
 
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
+    this.timeZoneSubscription.unsubscribe();
+    this.supersedePreviewRequest();
+  }
+
+  /** Cancels the preview request in flight, if any, so nothing it answers is applied (issue #1011). */
+  private supersedePreviewRequest(): void {
+    this.previewGeneration++;
+    this.previewSubscription?.unsubscribe();
+    this.previewSubscription = undefined;
+    this.syncing$.next(false);
+  }
+
+  /**
+   * Opens the dialog for the Dashboard reminder's "Open Sync Restock" link (issue #1011) once the
+   * page can: the request names this panel's machine and the business time zone is known. A
+   * support session consumes the request without opening anything, because Sync Restock is not
+   * available in one (issue #658).
+   */
+  private openOnArrivalIfRequested(): void {
+    const requestedFor = this.openOnArrivalFor;
+    if (!requestedFor || requestedFor !== this.machineId || this.openOnArrivalHandledFor === requestedFor) {
+      return;
+    }
+    if (!this.sessionActive && this.businessTimeZone.timeZoneId === null) {
+      return;
+    }
+
+    this.openOnArrivalHandledFor = requestedFor;
+    if (!this.sessionActive && !this.modalOpen$.value) {
+      this.syncRestock();
+    }
   }
 
   /**
@@ -299,13 +396,18 @@ export class MachineRestockSyncComponent implements OnDestroy {
       return;
     }
 
+    this.resetDialog();
+    this.syncTrigger?.nativeElement.focus();
+  }
+
+  /** Closes the dialog and drops its preview, errors and selection. */
+  private resetDialog(): void {
     this.modalOpen$.next(false);
     this.syncPreview$.next(null);
     this.syncError$.next(null);
     this.applyError$.next(null);
     this.resolvingEventId$.next(null);
     this.selectedEventIds.clear();
-    this.syncTrigger?.nativeElement.focus();
   }
 
   /**
@@ -368,10 +470,18 @@ export class MachineRestockSyncComponent implements OnDestroy {
       this.fromDate$.next(this.defaultFromDate());
     }
 
+    this.supersedePreviewRequest();
+    const generation = this.previewGeneration;
+    const isCurrent = () => generation === this.previewGeneration;
+
     this.syncing$.next(true);
     const fromDateIso = this.toUtcInstant(this.fromDate$.value);
-    this.machineService.syncRestock(machineId, fromDateIso, this.showReconciled$.value).subscribe({
+    const request$ = this.machineService.syncRestock(machineId, fromDateIso, this.showReconciled$.value);
+    this.previewSubscription = request$.subscribe({
       next: (preview) => {
+        if (!isCurrent()) {
+          return;
+        }
         this.syncing$.next(false);
         this.syncPreview$.next(preview);
         this.selectedEventIds = new Set(
@@ -384,6 +494,9 @@ export class MachineRestockSyncComponent implements OnDestroy {
         }
       },
       error: () => {
+        if (!isCurrent()) {
+          return;
+        }
         this.syncing$.next(false);
         this.syncError$.next('Failed to sync Nayax stock-adjustment alerts.');
         this.toastService.error('Failed to sync Nayax stock-adjustment alerts.');
@@ -393,7 +506,8 @@ export class MachineRestockSyncComponent implements OnDestroy {
 
   /**
    * Three calendar days before the operator's current business date (issue #206; timezone
-   * corrected by issue #218; shortened from seven days by issue #242), as `yyyy-MM-dd`. Empty
+   * corrected by issue #218; shortened from seven days by issue #242), as `yyyy-MM-dd` - or the
+   * earlier `pendingFromDate` the Dashboard reminder linked here with (issue #948). Empty
    * while the business timezone is still unknown (issue #499), which is the loading state
    * `refreshPreview` reports rather than dating the filter in a zone nobody confirmed.
    */
@@ -405,7 +519,11 @@ export class MachineRestockSyncComponent implements OnDestroy {
     const today = currentDateInTimeZone(new Date(), timeZone);
     const { year, month, day } = shiftCalendarDate(today, -3);
     const pad = (value: number) => value.toString().padStart(2, '0');
-    return `${year}-${pad(month)}-${pad(day)}`;
+    const standardDefault = `${year}-${pad(month)}-${pad(day)}`;
+
+    // `yyyy-MM-dd` strings order the same way as the dates they name.
+    const pendingFrom = this.pendingFromDate;
+    return isCalendarDate(pendingFrom) && pendingFrom < standardDefault ? pendingFrom : standardDefault;
   }
 
   /**
@@ -531,4 +649,14 @@ export class MachineRestockSyncComponent implements OnDestroy {
       }
     });
   }
+}
+
+/** Whether a value is a real calendar date written as `yyyy-MM-dd` (so not `2026-02-30`). */
+function isCalendarDate(value: string | null | undefined): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }

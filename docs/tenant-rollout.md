@@ -247,8 +247,11 @@ migrated database describe the existing business identically.
 This command stays the legacy path, and that is deliberate. It adopts one specific history — the
 single Australian vending operation — so it never creates a pending application, never records an
 application or decision instant, and leaves every profile column the application form collects
-(contact email, GST registration, ABN, applied/decided instants, rejection reason) empty rather than
-inventing a value for a business that predates the form. The self-service application that creates a
+(contact email, GST registration, ABN, state or territory, applied/decided instants, rejection
+reason) empty rather than inventing a value for a business that predates the form. The state
+(issue #933) is no exception and is not derived from the business's time zone: the Owner records it
+in Business settings, where the legacy-profile prompt asks for it, and nothing is blocked until
+they do. The self-service application that creates a
 `Pending` business is issue #541's, behind the flag described in
 [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541) below, and
 approving, rejecting, deactivating or reactivating one is the Super Admin businesses API of issues

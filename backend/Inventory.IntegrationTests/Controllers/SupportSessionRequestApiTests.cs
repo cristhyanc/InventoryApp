@@ -114,7 +114,14 @@ public class SupportSessionRequestApiTests
     [InlineData("Inventory.Operate", "/api/products")]
     [InlineData("Inventory.Operate", "/api/categories")]
     [InlineData("Inventory.Operate", "/api/stock-history")]
+    // The tracked-products list of issue #938. A supporter may read which of the business's products
+    // it has asked supplier prices for; the switch itself is refused below.
+    [InlineData("Inventory.Operate", "/api/products/price-tracking")]
     [InlineData("Purchasing.Operate", "/api/suppliers")]
+    // The "Available to add" list of issue #935. A platform record is about no business, so a
+    // supporter reading it learns nothing about the business they are looking at beyond which
+    // suggestions it has not taken up - and the add beside it is refused below.
+    [InlineData("Purchasing.Operate", "/api/suppliers/available-presets")]
     [InlineData("Purchasing.Operate", "/api/purchases")]
     [InlineData("Expenses.Manage", "/api/operating-expenses")]
     [InlineData("SiteCommissions.Manage", "/api/site-commissions/agreements")]
@@ -136,6 +143,10 @@ public class SupportSessionRequestApiTests
     /// </summary>
     [Theory]
     [InlineData("Inventory.Operate", "POST", "/api/products/1/inventory-count/apply")]
+    // The "Track supplier prices" switch of issue #938, which declares no rule of its own: the method
+    // rule refuses it under the capability the session does grant, so somebody from outside the
+    // business cannot decide which of its products get sent to the price collector.
+    [InlineData("Inventory.Operate", "PUT", "/api/products/999999/price-tracking")]
     // The pick list's two refill writes (issues #743 and #897). Neither carries a rule of its own:
     // the method rule is what refuses them, which is why a multi-machine batch needed no support
     // session handling when it was added.
@@ -145,6 +156,17 @@ public class SupportSessionRequestApiTests
     // the central refusal is what stops it, not an eligibility check it might have passed.
     [InlineData("Inventory.Operate", "DELETE", "/api/local-machines/999999")]
     [InlineData("Purchasing.Operate", "POST", "/api/supplierorders")]
+    // The supplier-order completion preview of issue #974, which declares no rule of its own and
+    // changes nothing: it is a POST because the purchase being projected is a body, so the method
+    // rule refuses it exactly as it refuses the cheapest-supplier summary.
+    [InlineData("Purchasing.Operate", "POST", "/api/supplierorders/999999/completion-preview")]
+    // The supplier "Not used" switch of issue #934, which declares no rule of its own: the method
+    // rule refuses it under the capability the session does grant, so a supporter cannot take a
+    // business's supplier out of its pickers while looking at it.
+    [InlineData("Purchasing.Operate", "PUT", "/api/suppliers/999999/not-used")]
+    // The "Available to add" add of issue #935, on the same terms: it declares no rule of its own,
+    // so the method rule is what stops somebody from outside the business giving it a supplier.
+    [InlineData("Purchasing.Operate", "POST", "/api/suppliers/available-presets/999999")]
     [InlineData("Expenses.Manage", "POST", "/api/operating-expenses")]
     [InlineData("Expenses.Manage", "PUT", "/api/operating-expenses/999999")]
     [InlineData("Expenses.Manage", "DELETE", "/api/operating-expenses/999999")]
@@ -164,6 +186,31 @@ public class SupportSessionRequestApiTests
         Assert.True(
             response.StatusCode == HttpStatusCode.Forbidden,
             $"{method} {route} ({capability}) answered {(int)response.StatusCode} in a support session.");
+        Assert.Equal(SupportSessionErrorCodes.ReadOnly, await CodeAsync(response));
+    }
+
+    /// <summary>
+    /// The same criterion for the two purchase writes that take a <c>multipart/form-data</c> body
+    /// (issue #976's "add a document" and the purchase create it exists beside). They are tested
+    /// separately rather than as rows above because the body's content type is part of reaching the
+    /// endpoint at all: a JSON body is answered <c>415</c> during action selection, before any
+    /// authorization runs, which would prove nothing about the session.
+    ///
+    /// <para>Neither declares a rule of its own: the central <c>GET</c>/<c>HEAD</c> method rule is
+    /// what refuses them, under the capability the session <em>does</em> grant. The purchase named
+    /// is not one of either business's, so a refusal that reached the endpoint would be a
+    /// <c>404</c>.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("/api/purchases")]
+    [InlineData("/api/purchases/999999/file")]
+    public async Task A_multipart_purchase_write_is_refused_as_read_only(string route)
+    {
+        var client = await _factory.InSupportSessionAsync();
+
+        var response = await client.PostAsync(route, MultipartDocument());
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(SupportSessionErrorCodes.ReadOnly, await CodeAsync(response));
     }
 
@@ -779,6 +826,20 @@ public class SupportSessionRequestApiTests
     /// is about the access decision, which is taken before an action binds a body, so nothing here
     /// may be a request the endpoint would act on.
     /// </summary>
+    /// <summary>
+    /// A minimal <c>multipart/form-data</c> body carrying one document part, which is what the
+    /// purchase create and the "add a document" write of issue #976 accept.
+    /// </summary>
+    private static MultipartFormDataContent MultipartDocument()
+    {
+        var content = new MultipartFormDataContent();
+        var file = new ByteArrayContent([1, 2, 3]);
+        file.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+        content.Add(file, "file", "scan.jpg");
+        content.Add(new StringContent("Weekly restock"), "title");
+        return content;
+    }
+
     private static HttpRequestMessage Request(string method, string route)
     {
         var request = new HttpRequestMessage(new HttpMethod(method), route);

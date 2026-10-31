@@ -59,9 +59,18 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     public const string PendingContactEmail = "owner@coastal.example.com";
     public const string PendingAbn = "51824753556";
 
+    /// <summary>The state the pending application recorded (issue #933).</summary>
+    public const string PendingState = "QLD";
+
     public static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
     public static readonly DateTime AppliedAt = new(2026, 9, 1, 6, 0, 0, DateTimeKind.Utc);
     public static readonly DateTime RejectedAt = new(2026, 9, 20, 7, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>
+    /// The instant a seeded Nayax connection was last tested at (issue #983). It exists so a test can
+    /// assert the directory does <em>not</em> report when a test ran.
+    /// </summary>
+    public static readonly DateTime LastTestedAt = new(2026, 10, 25, 2, 15, 0, DateTimeKind.Utc);
 
     private readonly SqliteConnection _connection = new("Data Source=:memory:");
     private readonly RecordingLoggerProvider _logs = new();
@@ -197,6 +206,8 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
             ContactEmail = PendingContactEmail,
             Abn = PendingAbn,
             GstRegistered = true,
+            // The state the application recorded (issue #933), which the review has to show.
+            State = PendingState,
             AppliedAtUtc = AppliedAt,
             CreatedAtUtc = AppliedAt,
         };
@@ -235,6 +246,48 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         TradingManagerMembershipId = tradingManager.Id;
 
         ClearLog();
+    }
+
+    /// <summary>
+    /// Puts the shared price catalogue back to empty (issue #928), in the order its restricted
+    /// references allow: a held reading, a recorded result row, then the listings' own pointers into
+    /// the accepted observations, then the observations, the listings, the issued work, the match
+    /// suggestions, the master products and the runs.
+    ///
+    /// <para>It is deliberately not part of <see cref="ResetAsync"/>, like
+    /// <see cref="ResetSupplierPresetsAsync"/>: most tests on this factory never touch the catalogue,
+    /// and a reset that deleted rows nothing had created would be work every test paid for. It runs
+    /// <strong>before</strong> the preset reset, because a listing's supplier master record is
+    /// restricted on delete.</para>
+    /// </summary>
+    public async Task ResetPriceCatalogueAsync()
+    {
+        await using var db = Database();
+
+        db.SupplierListingPendingObservations.RemoveRange(
+            await db.SupplierListingPendingObservations.ToListAsync());
+        db.PriceCollectorResultRows.RemoveRange(await db.PriceCollectorResultRows.ToListAsync());
+        await db.SaveChangesAsync();
+
+        foreach (var listing in await db.SupplierListings.ToListAsync())
+        {
+            listing.LatestObservationId = null;
+            listing.LastCheckedAtUtc = null;
+            listing.LastPriceChangeAtUtc = null;
+        }
+
+        await db.SaveChangesAsync();
+
+        db.SupplierPriceObservations.RemoveRange(await db.SupplierPriceObservations.ToListAsync());
+        db.SupplierListings.RemoveRange(await db.SupplierListings.ToListAsync());
+        db.PriceCollectorWorkItems.RemoveRange(await db.PriceCollectorWorkItems.ToListAsync());
+        db.ProductMatchSuggestions.RemoveRange(await db.ProductMatchSuggestions.ToListAsync());
+        db.ProductPriceTrackings.RemoveRange(await db.ProductPriceTrackings.ToListAsync());
+        await db.SaveChangesAsync();
+
+        db.MasterProducts.RemoveRange(await db.MasterProducts.ToListAsync());
+        db.PriceCollectorRuns.RemoveRange(await db.PriceCollectorRuns.ToListAsync());
+        await db.SaveChangesAsync();
     }
 
     /// <summary>
@@ -361,14 +414,22 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>
-    /// Puts the platform supplier presets back to exactly the four rows the <c>AddSupplierPresets</c>
-    /// migration inserts (issue #848), so each test starts from the same world rather than from
-    /// whatever its predecessor created, renamed or disabled.
+    /// Puts the platform supplier presets back to one known four-row baseline, so each test starts
+    /// from the same world rather than from whatever its predecessor created, renamed or disabled.
+    ///
+    /// <para><strong>It is a baseline, not a copy of what the migrations seed.</strong> Issue #848's
+    /// <c>AddSupplierPresets</c> inserted four rows and issue #931's
+    /// <c>AddSupplierPresetMasterFields</c> inserted five more, with real served states, GST bases and
+    /// price connectors; this helper deliberately replaces all nine with the four names below,
+    /// nationwide, GST-inclusive and with no connector at all. A fixture that mirrored the shipped
+    /// list would make every test that creates a preset depend on nine names it must not collide
+    /// with, and would quietly break the next time the platform ships another supplier. What the
+    /// migrations actually seed is proved where it belongs - <c>AddSupplierPresetsMigrationTests</c>,
+    /// <c>AddSupplierPresetMasterFieldsMigrationTests</c> and <c>EfSupplierPresetStoreTests</c> -
+    /// against databases this helper never writes to.</para>
     ///
     /// <para>It is deliberately <em>not</em> part of <see cref="ResetAsync"/>: presets are about no
-    /// business at all, so a test about businesses has no reason to touch them, and the migration's
-    /// own seed behaviour is proved by <c>AddSupplierPresetsMigrationTests</c> against a database
-    /// this helper never writes to.</para>
+    /// business at all, so a test about businesses has no reason to touch them.</para>
     /// </summary>
     public async Task ResetSupplierPresetsAsync()
     {
@@ -383,6 +444,14 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
                 Name = name,
                 NormalisedName = SupplierPresetPolicy.NormalisedName(name),
                 IsEnabled = true,
+                // A valid supplier-master claim, and the least interesting one there is: nationwide,
+                // GST-inclusive, collected by nobody (issue #931). A test that is about one of these
+                // fields seeds its own preset or edits one of these.
+                ServesNationwide = true,
+                ServedStates = string.Empty,
+                PricesIncludeGst = true,
+                PriceConnector = null,
+                PriceConnectorKey = null,
                 CreatedAtUtc = CreatedAt,
                 UpdatedAtUtc = CreatedAt,
             });
@@ -392,7 +461,11 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         ClearLog();
     }
 
-    /// <summary>The four suggestions the platform ships with (issue #848).</summary>
+    /// <summary>
+    /// The four names the baseline above holds. They are the four issue #848 shipped, and this list
+    /// is the fixture's own baseline rather than the platform's current suggestions - see
+    /// <see cref="ResetSupplierPresetsAsync"/>.
+    /// </summary>
     public static readonly string[] ShippedSupplierPresetNames =
         ["Coles", "Woolworths", "Big W", "Costco"];
 
@@ -481,8 +554,20 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
             .ToListAsync();
     }
 
-    /// <summary>One more preset in whichever state a test needs (issue #848).</summary>
-    public async Task<int> SeedSupplierPresetAsync(string name, string? url = null, bool isEnabled = true)
+    /// <summary>
+    /// One more preset in whichever state a test needs (issues #848 and #931). The supplier-master
+    /// values default to the baseline's - nationwide, GST-inclusive, no connector - so a test states
+    /// only the field it is about.
+    /// </summary>
+    public async Task<int> SeedSupplierPresetAsync(
+        string name,
+        string? url = null,
+        bool isEnabled = true,
+        bool servesNationwide = true,
+        string servedStates = "",
+        bool pricesIncludeGst = true,
+        SupplierPriceConnector? priceConnector = null,
+        string? priceConnectorKey = null)
     {
         await using var db = Database();
         var preset = new SupplierPreset
@@ -491,6 +576,11 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
             NormalisedName = SupplierPresetPolicy.NormalisedName(name),
             Url = url,
             IsEnabled = isEnabled,
+            ServesNationwide = servesNationwide,
+            ServedStates = servedStates,
+            PricesIncludeGst = pricesIncludeGst,
+            PriceConnector = priceConnector,
+            PriceConnectorKey = priceConnectorKey,
             CreatedAtUtc = CreatedAt,
             UpdatedAtUtc = CreatedAt,
         };
@@ -530,16 +620,38 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public async Task SeedTenantDataAsync(string productName, string tokenCiphertextMarker)
     {
+        await using (var db = Database())
+        {
+            db.Products.Add(new Product { BusinessId = TradingBusinessId, Name = productName });
+            await db.SaveChangesAsync();
+        }
+
+        await SeedNayaxConnectionAsync(TradingBusinessId, NayaxConnectionStatus.Ready, tokenCiphertextMarker);
+    }
+
+    /// <summary>
+    /// Stores one Nayax connection for one business in exactly one of its stored statuses, so a test
+    /// can prove what the directory reports for each of the four (issue #983). The credential columns
+    /// are filled because a stored row always has them; what the test is about is the status beside
+    /// them, and that none of them is ever served.
+    /// </summary>
+    public async Task SeedNayaxConnectionAsync(
+        int businessId,
+        NayaxConnectionStatus status,
+        string tokenCiphertextMarker = "ciphertext-marker-that-must-never-be-served")
+    {
         await using var db = Database();
-        db.Products.Add(new Product { BusinessId = TradingBusinessId, Name = productName });
         db.BusinessNayaxConnections.Add(new BusinessNayaxConnection
         {
-            BusinessId = TradingBusinessId,
+            BusinessId = businessId,
             OperatorId = "2002736764",
             AccessTokenCiphertext = tokenCiphertextMarker,
             EncryptionKeyId = "2026-10",
-            Status = NayaxConnectionStatus.Ready,
+            Status = status,
             CredentialRevision = 1,
+            // The instant a test must never find in a response: when the connection was last tested
+            // is deliberately not part of the directory.
+            LastTestedAtUtc = LastTestedAt,
             UpdatedAtUtc = CreatedAt,
         });
         await db.SaveChangesAsync();

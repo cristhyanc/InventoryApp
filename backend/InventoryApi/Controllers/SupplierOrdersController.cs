@@ -32,6 +32,7 @@ public class SupplierOrdersController : ControllerBase
     private readonly GetSupplierOrder _getSupplierOrder;
     private readonly CreateSupplierOrder _createSupplierOrder;
     private readonly CancelSupplierOrder _cancelSupplierOrder;
+    private readonly PreviewSupplierOrderCompletion _previewCompletion;
     private readonly CurrentCapabilities _capabilities;
 
     public SupplierOrdersController(
@@ -39,12 +40,14 @@ public class SupplierOrdersController : ControllerBase
         GetSupplierOrder getSupplierOrder,
         CreateSupplierOrder createSupplierOrder,
         CancelSupplierOrder cancelSupplierOrder,
+        PreviewSupplierOrderCompletion previewCompletion,
         CurrentCapabilities capabilities)
     {
         _listActiveSupplierOrders = listActiveSupplierOrders;
         _getSupplierOrder = getSupplierOrder;
         _createSupplierOrder = createSupplierOrder;
         _cancelSupplierOrder = cancelSupplierOrder;
+        _previewCompletion = previewCompletion;
         _capabilities = capabilities;
     }
 
@@ -93,4 +96,49 @@ public class SupplierOrdersController : ControllerBase
     [HttpPost("{id:int}/cancel")]
     public async Task<IActionResult> Cancel(int id) =>
         await _cancelSupplierOrder.Handle(id, CancellationToken.None) ? NoContent() : NotFound();
+
+    /// <summary>
+    /// What this order would still be owed once the purchase currently on the form is applied, and
+    /// the fingerprint the purchase save compares against (issue #974).
+    ///
+    /// <para>It is a <c>POST</c> because the purchase being projected is a body rather than a query
+    /// string, and it <strong>changes nothing</strong>: a read-only support session refuses it by
+    /// its own method rule rather than by anything written for it, exactly as the cheapest-supplier
+    /// summary is refused. It grants no authority either - the save re-reads the order, re-checks
+    /// its eligibility and recomputes this fingerprint inside its own transaction - so a client that
+    /// skips this call simply has no decision to submit.</para>
+    /// </summary>
+    [HttpPost("{id:int}/completion-preview")]
+    public async Task<ActionResult<SupplierOrderCompletionPreviewResponse>> CompletionPreview(
+        int id, SupplierOrderCompletionPreviewDto dto)
+    {
+        ArgumentNullException.ThrowIfNull(dto);
+
+        var preview = await _previewCompletion.Handle(
+            id,
+            dto.SupplierId,
+            dto.PurchaseDate ?? DateTime.UtcNow,
+            (dto.Lines ?? []).Select(line => new PurchaseLineToReceive(line.ProductId, line.Quantity)).ToList(),
+            CancellationToken.None);
+
+        return preview is null
+            ? NotFound()
+            : Ok(new SupplierOrderCompletionPreviewResponse(
+                preview.SupplierOrderId,
+                preview.Status,
+                preview.EligibleForCompletion,
+                preview.OutstandingLines.Count > 0,
+                preview.DecisionFingerprint,
+                preview.OutstandingLines
+                    .Select(line => new SupplierOrderOutstandingLineResponse(
+                        line.SupplierOrderLineId,
+                        line.ProductId,
+                        line.ProductName,
+                        line.Unit,
+                        line.QuantityOrdered,
+                        line.QuantityAlreadyReceived,
+                        line.QuantityOnThisPurchase,
+                        line.OutstandingQuantity))
+                    .ToList()));
+    }
 }

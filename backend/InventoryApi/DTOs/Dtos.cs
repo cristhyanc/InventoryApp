@@ -158,6 +158,61 @@ public record SupplierDto(string Name, string? ContactName, string? Phone, strin
 public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
 /// <summary>
+/// A supplier as the <c>/api/suppliers</c> endpoints publish it (issue #934): the seven fields of
+/// <see cref="SupplierResponse"/> in the same order and under the same names, plus the four that
+/// say what this business may do to this row.
+///
+/// <para>It is a separate record rather than four fields added to <see cref="SupplierResponse"/>
+/// because that type is schema-identical to the legacy <c>Supplier</c> component every nested
+/// <c>supplier</c> object in a purchase, a supplier order and an operating expense references;
+/// widening it would change all three of those contracts to carry a lock state that is about the
+/// Suppliers page. Here the four fields are additive, so a client reading the seven it already
+/// knew is unaffected.</para>
+///
+/// <para>All four come from <c>Inventory.Domain.Suppliers.SupplierPresetLinkPolicy</c> and are
+/// published rather than left to the client to derive: <c>isLinked</c> is the fact, and
+/// <c>canRename</c>/<c>canDelete</c> are that one policy's answers, so a page cannot offer a write
+/// the API will refuse. They are eligibility, never authorization - the endpoints refuse a linked
+/// copy's rename and delete whatever a client renders.</para>
+/// </summary>
+public record SupplierDetailResponse(
+    int Id,
+    string Name,
+    string? ContactName,
+    string? Phone,
+    string? Email,
+    string? Address,
+    string? Url,
+    bool IsLinked,
+    bool IsHidden,
+    bool CanRename,
+    bool CanDelete);
+
+/// <summary>
+/// One platform supplier record this business may add, as <c>GET /api/suppliers/available</c>
+/// publishes it (issue #935): the id an add names, the name somebody reads, and the website that
+/// tells two similarly named suppliers apart.
+///
+/// <para>Three fields, deliberately. This is the one member-facing read of a platform table besides
+/// issue #873's single boolean, and what a record claims about its market, its price basis and its
+/// collection route (issue #931) is platform configuration a business has no use for - see
+/// docs/architecture.md § Tenant ownership. It carries no business id either: the business is the
+/// caller's own, resolved from their membership.</para>
+/// </summary>
+public record AvailableSupplierPresetResponse(int Id, string Name, string? Url);
+
+/// <summary>
+/// The body of <c>PUT /api/suppliers/{id}/not-used</c> (issue #934): the state the "Not used"
+/// switch is being set to. It carries nothing else - no name, no supplier id, no business - because
+/// this request decides one boolean about one row the route already named.
+///
+/// <c>IsHidden</c> is <see cref="JsonRequiredAttribute"/> rather than a plain <c>bool</c>: a bool
+/// defaults to <c>false</c> on under-posting, which would otherwise make an empty body silently
+/// mean "bring it back" instead of being refused.
+/// </summary>
+public record SupplierNotUsedDto([property: JsonRequired] bool IsHidden);
+
+/// <summary>
 /// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).
 /// <c>gstClassification</c> is optional: omitting it leaves a new line unclassified and an edited
 /// line's stored classification untouched. The classification's provenance is never submitted -
@@ -217,12 +272,27 @@ public record PurchaseResponseDto(
     PurchaseGstSummaryDto? Gst = null
 );
 
-// One row of GET /api/sites. The three revenue figures are nullable since issue #697: a caller
+// One row of GET /api/sites. Every revenue figure is nullable since issue #697: a caller
 // without Dashboard.ViewFinancials - today an Operator - is sent null for each of them, never 0,
 // and GetSiteSummaries does not read the site's completed sales for that caller at all. Null here
 // means "not this caller's to see"; a period a caller may see that holds no completed sale is an
 // honest 0. Every other field, the route and the status codes are unchanged, and a Manager's and an
 // Owner's response is what it always was.
+//
+// lastWeekRevenue and monthToDateRevenue are additive (issue #1012): a site row now publishes the
+// same four sales periods a machine row does, resolved from the same MachineDashboardWindow, so the
+// combined dashboard card needs no period a site is silent about. todayRevenue, currentWeekRevenue
+// and previousComparableWeekRevenue keep their existing meaning and values, and the comparison
+// baseline is still the previous comparable week alone.
+//
+// machineStocks is additive too (issue #1013): one entry per machine standing at the site, carrying
+// the provider's machine id - the same MachineID GET api/machines publishes - and that machine's own
+// stock percentage. The percentage is the site rule over that machine's selections alone, taken from
+// selections this endpoint already fetches for totalStockPercentage, so it costs no extra provider
+// request. A null stockPercentage means the machine reports no capacity at all, which is neither 0
+// nor the 100 the site rule answers for a site with no capacity; it is a stock figure rather than a
+// financial one, so no role is sent a different value. Every other field, the route and the status
+// codes are unchanged.
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
@@ -232,8 +302,15 @@ public record SiteSummaryDto(
     int EmptyProductCount,
     decimal? TodayRevenue,
     decimal? CurrentWeekRevenue,
-    decimal? PreviousComparableWeekRevenue
+    decimal? PreviousComparableWeekRevenue,
+    decimal? LastWeekRevenue,
+    decimal? MonthToDateRevenue,
+    IReadOnlyList<SiteMachineStockDto> MachineStocks
 );
+
+// One machine on a GET /api/sites row (issue #1013); see SiteSummaryDto above and
+// Inventory.Application.Sites.SiteMachineStock for the rule behind the figure.
+public record SiteMachineStockDto(long MachineId, decimal? StockPercentage);
 
 // One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id
 // a filter submits, the name it shows, and the number of machines the fleet has at that site. It is

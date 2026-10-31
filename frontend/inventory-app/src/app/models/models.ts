@@ -19,6 +19,63 @@ export interface ProductGstRule {
 }
 
 /**
+ * Where one of the business's products has got to in the shared supplier price catalogue (backend
+ * `Inventory.Domain.PriceCatalogue.ProductPriceTrackingStatus`, issue #938 of parent #817). The five
+ * states are answers, never labels on each other: `NotFound` is "looked for and not found", which is
+ * a recorded outcome rather than a gap, and `AwaitingProductDetails` is a mapping paused because the
+ * product's own name or unit label can no longer be searched for - it names no catalogue product and
+ * nothing is searched for it until the product is corrected.
+ */
+export enum ProductPriceTrackingStatus {
+  Requested = 1,
+  AutoMatched = 2,
+  Matched = 3,
+  NotFound = 4,
+  AwaitingProductDetails = 5
+}
+
+/**
+ * The matched master product, as `/api/products/{id}/price-tracking` publishes it (issue #938): its
+ * name and its size, and nothing else at all.
+ *
+ * The catalogue is shared across every business, so what a business endpoint may say about one of its
+ * products was decided on that issue - the name and the size of a *matched* mapping's master product.
+ * `sizeUnit` is the published code (`ml`, `l`, `g`, `kg`, `each`), not an enum member name.
+ */
+export interface MatchedMasterProduct {
+  name: string;
+  sizeValue: number;
+  sizeUnit: string;
+}
+
+/**
+ * The product's price-tracking state, from `/api/products/{id}/price-tracking` (issue #938).
+ *
+ * `canTrack` and `trackRefusal` are the server's own eligibility answer about the stored product -
+ * the same rule that refuses the write - so the switch never words the unit-label rule a second time.
+ * The same shape the product's `canDelete`/`deletionRefusal` already has.
+ */
+export interface ProductPriceTracking {
+  productId: number;
+  tracked: boolean;
+  status: ProductPriceTrackingStatus | null;
+  searchName: string | null;
+  unitLabel: string | null;
+  masterProduct: MatchedMasterProduct | null;
+  canTrack: boolean;
+  trackRefusal: string | null;
+}
+
+/**
+ * One tracked product in `/api/products/price-tracking` (issue #938), which is what the catalogue
+ * listing's Tracked column is built from. A product id and a status, and deliberately nothing else.
+ */
+export interface TrackedProduct {
+  productId: number;
+  status: ProductPriceTrackingStatus;
+}
+
+/**
  * A supplier's explicitly configured GST defaults (issue #430), from
  * `/api/suppliers/{id}/gst-defaults`. The delivery and package defaults are separate from the
  * product-line default because a charge never inherits a product line's classification, and a
@@ -61,6 +118,41 @@ export interface Supplier {
    * absolute http(s) address the server accepted. Render it only through `isSafeSupplierUrl`.
    */
   url?: string | null;
+
+  /**
+   * Whether this supplier came from the platform's supplier list (issue #934). A linked copy's
+   * name and website are the master's and it cannot be deleted; the business hides one it does not
+   * buy from with `isHidden` instead.
+   *
+   * The four fields below are optional because this same shape is also the nested `supplier` of a
+   * purchase, a supplier order and an operating expense, which is the legacy payload and carries
+   * none of them. Only `/api/suppliers` publishes them, so treat an absent value as "not stated"
+   * and never as `false`: the Suppliers page reads them from its own request.
+   */
+  isLinked?: boolean;
+
+  /** Whether the business has marked this supplier "Not used" (issue #934). */
+  isHidden?: boolean;
+
+  /** Whether the server will accept a change to this supplier's name (issue #934). */
+  canRename?: boolean;
+
+  /** Whether the server will accept a delete of this supplier (issue #934). */
+  canDelete?: boolean;
+}
+
+/**
+ * One supplier from the platform's supplier list this business may add, as
+ * `GET /api/suppliers/available-presets` publishes it (issue #935).
+ *
+ * Three fields, which is the whole of what that endpoint sends: the id an add names, the name
+ * somebody reads and the website that tells two similarly named suppliers apart. It is not a
+ * {@link Supplier} and must not be rendered as one - nothing here belongs to this business yet.
+ */
+export interface AvailableSupplierPreset {
+  id: number;
+  name: string;
+  url: string | null;
 }
 
 export interface Product {
@@ -447,6 +539,27 @@ export interface Machine {
   monthToDateGrossRevenue?: number | null;
   monthToDateDirectProfit: number | null;
   profitabilityStatus?: string | null;
+  /**
+   * The site the machine stands at - the same id `GET api/sites` answers as `siteId` - or
+   * `null`/absent when it is at none (issue #980). The Dashboard lists each site's machines under it.
+   */
+  siteId?: number | null;
+}
+
+/**
+ * One machine standing at a site, with that machine's own stock percentage (issue #1013). It is the
+ * same rule as the site's `totalStockPercentage` applied to that machine's selections alone - the
+ * server's figure, from selections `GET api/sites` already fetches - so a machine row never repeats
+ * its site's percentage and nothing derives one in the browser.
+ *
+ * `stockPercentage` is `null` for a machine whose selections report **no capacity at all**: nothing
+ * is known about how full it is, which is neither 0% nor the 100% the site rule answers for a site
+ * with no capacity. It is a stock figure rather than a financial one, so it is never withheld by
+ * role.
+ */
+export interface SiteMachineStock {
+  machineId: number;
+  stockPercentage?: number | null;
 }
 
 /**
@@ -463,6 +576,21 @@ export interface Site {
   todayRevenue?: number | null;
   currentWeekRevenue?: number | null;
   previousComparableWeekRevenue?: number | null;
+  /**
+   * The remaining two of the four sales periods a site row shows (issue #1012), published on the
+   * same terms as the three above: the server's own sums over the same dashboard window, `null` for
+   * a member without `Dashboard.ViewFinancials`, and an honest `0` for a period with no completed
+   * sale. `previousComparableWeekRevenue` stays the baseline of the one comparison the response
+   * carries, which belongs to the current week.
+   */
+  lastWeekRevenue?: number | null;
+  monthToDateRevenue?: number | null;
+  /**
+   * The machines standing at this site and each one's own stock percentage (issue #1013), in the
+   * order the fleet read returned them. Absent or empty means the response published none, which a
+   * machine row shows as unavailable rather than as a figure of its own; see {@link SiteMachineStock}.
+   */
+  machineStocks?: readonly SiteMachineStock[];
 }
 
 /**
@@ -522,13 +650,37 @@ export interface ProductUpdateDto {
   isActive: boolean;
 }
 
+/**
+ * A supplier order's fulfillment state, as the API publishes it. The numbers are the persisted
+ * ones, so a reordered member would be a breaking contract change rather than a refactor.
+ */
+export enum SupplierOrderStatus {
+  Ordered = 0,
+  PartiallyReceived = 1,
+  Received = 2,
+  Cancelled = 3,
+  /**
+   * Explicitly completed with part of the order never delivered (issue #974). Neither a
+   * cancellation - goods really were delivered and are recorded - nor a full receipt.
+   */
+  ClosedPartiallyDelivered = 4
+}
+
 export interface SupplierOrderLine {
   id: number;
   productId: number;
   product?: Product | null;
   quantityOrdered: number;
   quantityReceived: number;
+  /** How much of this line is still expected to arrive; `0` once the order is closed. */
   outstandingQuantity: number;
+  /**
+   * How much of this line was ordered and will never be delivered (issue #974), from the server's
+   * one authoritative policy. `0` on every order that was not explicitly completed with an
+   * undelivered balance, so this and {@link outstandingQuantity} are never both the same figure.
+   * Absent from an older response.
+   */
+  undeliveredQuantity?: number;
   unitPrice?: number | null;
   notes?: string | null;
 }
@@ -542,7 +694,47 @@ export interface SupplierOrder {
   reference?: string | null;
   notes?: string | null;
   status: number;
+  /**
+   * When an operator decided no more of this order would arrive (issue #974); `null` for every
+   * order carrying no such decision. Who decided is deliberately not published.
+   */
+  completedWithUndeliveredAt?: string | null;
   lines: SupplierOrderLine[];
+}
+
+/** One line of the purchase being entered, as the completion preview is asked about it (issue #974). */
+export interface SupplierOrderCompletionPreviewRequest {
+  supplierId?: number | null;
+  purchaseDate?: string | null;
+  lines: Array<{ productId: number; quantity: number }>;
+}
+
+/**
+ * What a supplier order would still be owed once the purchase on the form is applied (issue #974),
+ * with the fingerprint the save compares its own authoritative read against.
+ *
+ * Every quantity here is the server's: the allocation and the remaining balance are its own
+ * authoritative rules. The purchase form formats them and calculates nothing.
+ */
+export interface SupplierOrderCompletionPreview {
+  supplierOrderId: number;
+  status: number;
+  eligibleForCompletion: boolean;
+  hasOutstandingBalance: boolean;
+  decisionFingerprint: string;
+  outstandingLines: SupplierOrderOutstandingLine[];
+}
+
+/** One product the order would still be owed, with the quantity and the unit it was ordered in. */
+export interface SupplierOrderOutstandingLine {
+  supplierOrderLineId: number;
+  productId: number;
+  productName: string;
+  unit?: string | null;
+  quantityOrdered: number;
+  quantityAlreadyReceived: number;
+  quantityOnThisPurchase: number;
+  outstandingQuantity: number;
 }
 
 export interface SupplierOrderCreateDto {
@@ -728,6 +920,11 @@ export interface MachineRestockSyncReminderMachine {
   isFetchOverdue: boolean;
   knownPendingEventCount: number;
   oldestKnownPendingEventAtUtc: string | null;
+  /**
+   * The business calendar date (`yyyy-MM-ddT00:00:00`) of that oldest counted event, or `null`
+   * (issue #948). The machine link hands its date part to Sync Restock as `restockFrom`.
+   */
+  oldestKnownPendingEventBusinessDate: string | null;
   /** Some of that pending work predates the Sync Restock dialog's default From date. */
   hasPendingWorkBeforeDefaultFrom: boolean;
 }
@@ -748,6 +945,10 @@ export interface MachineRestockSyncReminder {
   overdueAfterDays: number;
   /** The From date the Sync Restock dialog will default to, in the business's own timezone. */
   defaultFromBusinessDate: string;
+  /** How many business calendar days back pending events are counted (issue #948). */
+  pendingLookbackDays: number;
+  /** The first business calendar date whose pending events are counted (issue #948). */
+  pendingFromBusinessDate: string;
   syncAvailability: MachineRestockSyncAvailability;
   machines: MachineRestockSyncReminderMachine[];
 }
@@ -908,10 +1109,16 @@ export interface Purchase {
   purchaseDate: string;
   supplierId?: number | null;
   supplier?: Supplier | null;
-  fileName: string;
-  storedFileName: string;
-  contentType: string;
-  fileSizeBytes: number;
+  /**
+   * The supporting document's metadata, or `null` on all four when the purchase has none (issue
+   * #976). They are never half present: the API reports all four or none, so a single `null` check
+   * is the whole question "does this purchase have a document?". A purchase with none shows
+   * "No document" and can be given one later.
+   */
+  fileName: string | null;
+  storedFileName: string | null;
+  contentType: string | null;
+  fileSizeBytes: number | null;
   createdAt: string;
   items?: PurchaseItem[];
 }

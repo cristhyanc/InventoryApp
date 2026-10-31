@@ -49,8 +49,13 @@ public class SupplierPresetConcurrencyTests : IDisposable
     private const string Tid = "99999999-9999-9999-9999-999999999999";
     private const string Oid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
-    /// <summary>A name no shipped preset holds, so both pre-checks legitimately find nothing.</summary>
-    private const string Name = "Aldi";
+    /// <summary>
+    /// A name no shipped preset holds, so both pre-checks legitimately find nothing. It is
+    /// deliberately not one of the nine the migrations insert - "Aldi" stopped being available the
+    /// day issue #931 seeded ALDI, and a name that collides would make both requests lose for the
+    /// wrong reason.
+    /// </summary>
+    private const string Name = "Harris Farm Markets";
 
     /// <summary>
     /// Long enough that a loaded CI runner does not fail this test for being slow, and short enough
@@ -70,7 +75,7 @@ public class SupplierPresetConcurrencyTests : IDisposable
     {
         _connectionString = new SqliteConnectionStringBuilder { DataSource = _databasePath }.ToString();
 
-        // The real migration history, so the table, its unique index and the four shipped rows are
+        // The real migration history, so the table, its unique index and the nine shipped rows are
         // the ones production gets.
         using var db = TestAppDbContext.Unrestricted(Options());
         db.Database.Migrate();
@@ -101,8 +106,8 @@ public class SupplierPresetConcurrencyTests : IDisposable
         await using var host = BuildHost(audit, barrier);
 
         var attempts = await Task.WhenAll(
-            CreateAsync(host, "  Aldi  "),
-            CreateAsync(host, "aldi"));
+            CreateAsync(host, $"  {Name}  "),
+            CreateAsync(host, Name.ToLowerInvariant()));
 
         var created = Assert.Single(attempts.Where(attempt => attempt.Preset is not null)).Preset!;
         var refused = Assert.Single(attempts.Where(attempt => attempt.Failure is not null)).Failure!;
@@ -117,14 +122,20 @@ public class SupplierPresetConcurrencyTests : IDisposable
         Assert.Equal(created.Id, stored.Id);
         Assert.Equal(created.Name, stored.Name);
         Assert.True(stored.IsEnabled);
-        // The four shipped rows and exactly one new one: the loser left nothing behind, not even a
+        // The nine shipped rows and exactly one new one: the loser left nothing behind, not even a
         // row the index happened to accept under a different normalised value.
-        Assert.Equal(5, presets.Count);
+        Assert.Equal(10, presets.Count);
 
         var entry = Assert.Single(audit.Entries);
         Assert.Equal(created.Id, entry.PresetId);
         Assert.Equal(SupplierPresetChange.Created, entry.Change);
         Assert.True(entry.IsEnabled);
+        // The supplier-master fields the winning create submitted reached the trail too (issue #931).
+        Assert.True(entry.ServesNationwide);
+        Assert.Equal(string.Empty, entry.ServedStates);
+        Assert.True(entry.PricesIncludeGst);
+        Assert.Null(entry.PriceConnector);
+        Assert.Null(entry.PriceConnectorKey);
         Assert.Equal(CreatedAt, entry.OccurredAtUtc);
         // The actor as ActorIdentity normalises it, which is how every other audit records one.
         Assert.Equal(Actor().DirectoryTenantId, entry.ActorDirectoryTenantId);
@@ -144,7 +155,16 @@ public class SupplierPresetConcurrencyTests : IDisposable
 
             try
             {
-                return new Attempt(await create.Handle(name, null, CancellationToken.None), null);
+                var submitted = new SupplierPresetSubmission(
+                    name,
+                    null,
+                    ServesNationwide: true,
+                    ServedStates: null,
+                    PricesIncludeGst: true,
+                    PriceConnector: null,
+                    PriceConnectorKey: null);
+
+                return new Attempt(await create.Handle(submitted, CancellationToken.None), null);
             }
             catch (Exception exception)
             {

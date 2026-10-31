@@ -55,12 +55,23 @@ const ACCOUNT_STATE_PROBE_PATH = 'me/account-state';
  *   `{id}`. It names no business at all, so a `403` from it says nothing about a membership or a
  *   business role, and it must not carry the role-preview or support-session header any more than
  *   the three above do.
+ * - `super-admin/price-catalogue-review` - the shared price catalogue's review of issue #928: the
+ *   queue, a listing's decision, a waiting product's match and an automatic match's confirm or undo.
+ *   It names no business either - a waiting product is a search name, a unit label and a count - so a
+ *   `403` from it says nothing about a membership or a business role.
+ * - `super-admin/master-products` - the shared catalogue's own master products of issue #1023: the
+ *   searchable, paged listing and one product with its supplier listings. Both are reads of platform
+ *   data about products and suppliers, they name no business at all, and like the four above they
+ *   must carry no role-preview or support-session header - so a `403` from either says nothing about
+ *   a membership or a business role.
  */
 const PLATFORM_ADMIN_PREFIXES = [
   'admin/diagnostics',
   'super-admin/businesses',
   'super-admin/support-sessions',
-  'super-admin/supplier-presets'
+  'super-admin/supplier-presets',
+  'super-admin/price-catalogue-review',
+  'super-admin/master-products'
 ];
 
 /** Static and runtime-configuration assets (`/assets/config.json`), which are not API calls. */

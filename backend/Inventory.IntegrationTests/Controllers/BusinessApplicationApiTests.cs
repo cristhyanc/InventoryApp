@@ -62,6 +62,8 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
         Assert.Equal(ValidAbn, business.Abn);
         Assert.True(business.GstRegistered);
         Assert.Equal("Australia/Brisbane", business.TimeZoneId);
+        // The state the application recorded (issue #933), stored on the pending business.
+        Assert.Equal("NSW", business.State);
         Assert.NotNull(business.AppliedAtUtc);
 
         // Nobody has decided anything yet.
@@ -220,6 +222,10 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
     [InlineData("abn-blank", AustralianBusinessNumber.InvalidMessage)]
     [InlineData("abn-checksum", AustralianBusinessNumber.InvalidMessage)]
     [InlineData("zone-missing", BusinessSettingsPolicy.TimeZoneRequiredMessage)]
+    [InlineData("state-missing", AustralianStates.InvalidMessage)]
+    [InlineData("state-blank", AustralianStates.InvalidMessage)]
+    [InlineData("state-long-name", AustralianStates.InvalidMessage)]
+    [InlineData("state-unknown", AustralianStates.InvalidMessage)]
     public async Task An_incomplete_or_malformed_application_is_refused_and_writes_nothing(
         string kind,
         string expectedDetail)
@@ -235,6 +241,36 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
         Assert.Single(await _factory.BusinessesAsync());
         Assert.Empty(await _factory.MembershipsOfAsync(applicant));
         Assert.Equal("NoMembership", await _factory.AccountStateOfAsync(applicant));
+    }
+
+    /// <summary>
+    /// Each of the eight states and territories is accepted and stored on the pending business,
+    /// and a value typed in lower case is stored as its canonical abbreviation (issue #933). The
+    /// refusals - a missing, blank, long-named or unrecognised state - are theory rows of
+    /// <see cref="An_incomplete_or_malformed_application_is_refused_and_writes_nothing"/> above.
+    /// </summary>
+    [Theory]
+    [InlineData("NSW", "NSW")]
+    [InlineData("VIC", "VIC")]
+    [InlineData("QLD", "QLD")]
+    [InlineData("SA", "SA")]
+    [InlineData("WA", "WA")]
+    [InlineData("TAS", "TAS")]
+    [InlineData("ACT", "ACT")]
+    [InlineData("NT", "NT")]
+    [InlineData(" nt ", "NT")]
+    public async Task An_application_records_the_state_it_was_submitted_with(string submitted, string stored)
+    {
+        await _factory.ResetAsync();
+        var applicant = BusinessApplicationApiFactory.NewApplicantObjectId();
+
+        var response = await _factory.Authenticated(applicant)
+            .PostAsJsonAsync(Uri, Application() with { State = submitted });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var business = await _factory.BusinessAsync("Coastal Vending");
+        Assert.Equal(stored, business.State);
+        Assert.Equal(BusinessStatus.Pending, business.Status);
     }
 
     /// <summary>
@@ -795,7 +831,7 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
     #endregion
 
     private static BusinessApplicationBody Application() =>
-        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane");
+        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "NSW");
 
     /// <summary>
     /// One of the ways an application can be incomplete or malformed. They are collected here so the
@@ -816,6 +852,10 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
         "abn-blank" => Application() with { Abn = "" },
         "abn-checksum" => Application() with { Abn = "51824753557" },
         "zone-missing" => Application() with { TimeZoneId = null },
+        "state-missing" => Application() with { State = null },
+        "state-blank" => Application() with { State = "   " },
+        "state-long-name" => Application() with { State = "New South Wales" },
+        "state-unknown" => Application() with { State = "NZ" },
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown invalid-application case."),
     };
 
@@ -833,5 +873,6 @@ public sealed class BusinessApplicationApiTests : IClassFixture<BusinessApplicat
         string? ContactEmail,
         string? Abn,
         bool? GstRegistered,
-        string? TimeZoneId);
+        string? TimeZoneId,
+        string? State);
 }

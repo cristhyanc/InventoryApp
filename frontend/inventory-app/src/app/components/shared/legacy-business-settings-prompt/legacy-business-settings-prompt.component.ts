@@ -8,8 +8,10 @@ import { BusinessSettings, BusinessSettingsService, isLegacyBusinessProfile } fr
 /**
  * The dismissible "complete your business profile" prompt (issue #549), composed into the
  * Dashboard and the Business Settings page: it asks an Owner to finish the business's contact
- * email and GST registration, which the migrated business predating the application form (issue
- * #540) never recorded.
+ * email, GST registration and state or territory, which the migrated business predating the
+ * application form (issue #540, and issue #933 for the state) never recorded. Nothing else is
+ * blocked while any of them is unset - the prompt asks, and the Business Settings page is where
+ * they are recorded.
  *
  * **It decides nothing about who may see it.** `Business.Manage` is the capability only an Owner
  * holds, and the same one that gates `GET /api/business/settings` itself - the request this
@@ -40,7 +42,7 @@ import { BusinessSettings, BusinessSettingsService, isLegacyBusinessProfile } fr
       <div class="alert alert-warning mb-4" role="status" data-testid="legacy-business-settings-prompt">
         <p class="alert-title">Finish setting up this business.</p>
         <p class="mt-1">
-          This business is missing its contact email or its GST registration.
+          This business is missing its contact email, its GST registration or its state or territory.
           <a
             routerLink="/admin/business-settings"
             class="btn-link"

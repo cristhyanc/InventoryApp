@@ -5,13 +5,41 @@ import { Subject, takeUntil } from 'rxjs';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { ToastService } from '../../../services/toast.service';
 import { SuperAdminBusiness, SuperAdminBusinessesService } from '../../../services/super-admin-businesses.service';
+import type { NayaxConnectionStatusName } from '../../../services/nayax-connection.service';
 import { BusinessMembersDialogComponent } from './business-members-dialog.component';
+import { BusinessPlanGrantDialogComponent } from './business-plan-grant-dialog.component';
 import { BusinessRejectDialogComponent } from './business-reject-dialog.component';
 import { ViewAsBusinessDialogComponent } from './view-as-business-dialog.component';
 
 /** The filterable statuses, matching `Inventory.Domain.Tenancy.BusinessStatus`'s published names. */
 export const SUPER_ADMIN_BUSINESS_STATUS_FILTERS = ['All', 'Pending', 'Active', 'Rejected', 'Deactivated'] as const;
 export type SuperAdminBusinessStatusFilter = (typeof SUPER_ADMIN_BUSINESS_STATUS_FILTERS)[number];
+
+/**
+ * How each stored Nayax connection status is shown beside a business's name (issue #983): a dot
+ * colour, and the sentence that is its tooltip and its screen-reader label.
+ *
+ * Green is the one verified state. Both states that mean "credentials are stored and are not known
+ * to work" are orange, because neither is a working connection and neither is nothing at all - and
+ * each keeps its **own sentence**, so the colour they share never makes "saved, never tested" and
+ * "the last test failed" look like the same thing. Red is the business that has not started.
+ *
+ * The sentence is always rendered, never only hovered: colour alone is not a signal somebody who
+ * cannot distinguish these three hues, or who is reading with a screen reader, can use.
+ */
+const NAYAX_STATUS_PRESENTATION: Record<NayaxConnectionStatusName, { dotClass: string; label: string }> = {
+  Ready: { dotClass: 'bg-rr-ok-text', label: 'Nayax verified at last test' },
+  PendingPermissions: { dotClass: 'bg-rr-warn-text', label: 'Nayax token saved, not tested yet' },
+  NeedsAttention: { dotClass: 'bg-rr-warn-text', label: 'Nayax last test failed' },
+  NotConfigured: { dotClass: 'bg-rr-danger-text', label: 'Nayax not set up' }
+};
+
+/**
+ * What a status name this code does not declare is shown as. The API publishes the stored value as
+ * it is, so an undeclared one is reported as unknown rather than presented as one of the four - the
+ * same restraint the members list shows about a role nobody granted.
+ */
+const UNKNOWN_NAYAX_STATUS = { dotClass: 'bg-rr-line-strong', label: 'Nayax status unknown' } as const;
 
 type PendingBusinessAction =
   | { readonly kind: 'approve'; readonly business: SuperAdminBusiness }
@@ -32,9 +60,18 @@ type PendingBusinessAction =
  * Members (its own load, release confirmation and error) are dedicated feature components
  * composed through `[businessId]`/`[businessName]` and their outputs.
  *
+ * The Nayax dot beside each business name (issue #983) is presentation only in the same sense: the
+ * status it colours is the one the API already stored from that business's own last permission test,
+ * this page neither tests nor re-tests anything, and loading the list makes no Nayax call.
+ *
  * "View as this business" (issue #553, a slice of #513) is the one dedicated feature component
  * composed the same way Reject and Members are: its own reason text, submission state and error,
  * reached through `[businessId]`/`[businessName]` and reacting only to `(started)`/`(canceled)`.
+ *
+ * "Plan" (issue #982) is composed the same way again: the manual grant a Super Admin may create,
+ * change or end lives entirely in its own dialog, with its own load, form, revision and error. This
+ * page neither reads nor decides a plan - the businesses list carries none, because the grant is read
+ * through its own endpoint rather than by widening the directory this table shows.
  */
 @Component({
   selector: 'app-super-admin-businesses',
@@ -46,6 +83,7 @@ type PendingBusinessAction =
     ConfirmationDialogComponent,
     BusinessRejectDialogComponent,
     BusinessMembersDialogComponent,
+    BusinessPlanGrantDialogComponent,
     ViewAsBusinessDialogComponent
   ],
   templateUrl: './super-admin-businesses.component.html'
@@ -62,6 +100,7 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
   rejectTarget: SuperAdminBusiness | null = null;
   membersTarget: SuperAdminBusiness | null = null;
   viewAsTarget: SuperAdminBusiness | null = null;
+  planGrantTarget: SuperAdminBusiness | null = null;
 
   private readonly destroying$ = new Subject<void>();
 
@@ -103,6 +142,16 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
       });
   }
 
+  /** The dot colour for one business's stored Nayax connection status (issue #983). */
+  nayaxDotClass(business: SuperAdminBusiness): string {
+    return this.nayaxPresentation(business).dotClass;
+  }
+
+  /** That status in words - the dot's tooltip and the label a screen reader reads (issue #983). */
+  nayaxStatusLabel(business: SuperAdminBusiness): string {
+    return this.nayaxPresentation(business).label;
+  }
+
   requestApprove(business: SuperAdminBusiness): void {
     this.pendingAction = { kind: 'approve', business };
   }
@@ -129,6 +178,23 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
 
   requestViewAs(business: SuperAdminBusiness): void {
     this.viewAsTarget = business;
+  }
+
+  openPlanGrant(business: SuperAdminBusiness): void {
+    this.planGrantTarget = business;
+  }
+
+  closePlanGrant(): void {
+    this.planGrantTarget = null;
+  }
+
+  /**
+   * A committed grant, change or end. The dialog stays open showing what was stored - its own answer
+   * carries the new revision - and this page only reports it, because the businesses table shows no
+   * plan to refresh.
+   */
+  onPlanGrantSaved(): void {
+    this.toast.success('The plan grant was saved.');
   }
 
   onViewAsStarted(): void {
@@ -217,6 +283,10 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
       default:
         return '';
     }
+  }
+
+  private nayaxPresentation(business: SuperAdminBusiness): { dotClass: string; label: string } {
+    return NAYAX_STATUS_PRESENTATION[business.nayaxConnectionStatus] ?? UNKNOWN_NAYAX_STATUS;
   }
 
   private onActionSucceeded(message: string): void {

@@ -9,9 +9,11 @@ import {
   ProductCreateDto,
   ProductGstRule,
   ProductPriceComparison,
+  ProductPriceTracking,
   ProductUpdateDto,
   ReorderAlertListing,
-  ReorderMode
+  ReorderMode,
+  TrackedProduct
 } from '../models/models';
 import { nayaxUnavailabilityOfReason } from '../provider/nayax-availability';
 import { ConfigService } from './config.service';
@@ -121,6 +123,29 @@ export class ProductService {
 
   setGstRule(id: number, gstRule: GstClassification): Observable<void> {
     return this.http.put<void>(`${this.baseUrl}/${id}/gst-rule`, { gstRule });
+  }
+
+  /**
+   * Where this product has got to in the shared supplier price catalogue (issue #938): whether the
+   * business tracks it, the mapping's status, and - only while it is matched - the master product's
+   * name and size. Its own resource, not a catalogue field, for the reason the GST rule is one.
+   */
+  getPriceTracking(id: number): Observable<ProductPriceTracking> {
+    return this.http.get<ProductPriceTracking>(`${this.baseUrl}/${id}/price-tracking`);
+  }
+
+  /**
+   * Turns the "Track supplier prices" switch on or off (issue #938). The body carries one boolean:
+   * the search text is the product's own name and unit label, read by the server, and no status or
+   * master product is submittable at all.
+   */
+  setPriceTracking(id: number, tracked: boolean): Observable<void> {
+    return this.http.put<void>(`${this.baseUrl}/${id}/price-tracking`, { tracked });
+  }
+
+  /** The business's tracked products, for the catalogue listing's Tracked column (issue #938). */
+  getTrackedProducts(): Observable<TrackedProduct[]> {
+    return this.http.get<TrackedProduct[]>(`${this.baseUrl}/price-tracking`);
   }
 
   delete(id: number): Observable<void> {

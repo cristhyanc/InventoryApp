@@ -58,11 +58,18 @@ public sealed class GetSiteCommissionReport : IGetSiteCommissionReport
         {
             fleet = await _nayax.GetMachinesAsync(cancellationToken);
         }
-        catch (NayaxNotConnectedException)
+        catch (NayaxNotConnectedException exception)
         {
-            // No usable connection for this business, and no request reached Nayax: the credential
-            // provider refuses before the stored connection is read.
-            return SiteCommissionReport.Unavailable(from, to, SiteCommissionUnavailableReason.NayaxNotConnected);
+            // No usable connection for this business, or a plan that does not include the provider
+            // at all (issue #967), and no request reached Nayax either way: the credential provider
+            // refuses before the stored connection is read. The two are reported distinctly, because
+            // only one of them asks an operator to reconnect anything.
+            return SiteCommissionReport.Unavailable(
+                from,
+                to,
+                exception.RequiredPlan is not null
+                    ? SiteCommissionUnavailableReason.PlanRequired
+                    : SiteCommissionUnavailableReason.NayaxNotConnected);
         }
         catch (NayaxPermissionNotGrantedException)
         {

@@ -1,3 +1,4 @@
+using Inventory.Application.Attachments;
 using Inventory.Application.Expenses;
 
 namespace InventoryApi.Tests.Application.Expenses;
@@ -14,6 +15,21 @@ public sealed class FakeOperatingExpenseStore : IOperatingExpenseStore
 
     public bool ThrowOnAdd { get; set; }
     public bool ThrowOnUpdate { get; set; }
+
+    /// <summary>
+    /// Makes the write refuse the upload the way a commit does when it finds its reservation
+    /// expired and the quota no longer satisfied (issue #968).
+    /// </summary>
+    public bool QuotaExceededOnWrite { get; set; }
+
+    /// <summary>
+    /// Makes the update refuse the way a commit does when another replacement of the same
+    /// attachment committed first (issue #968).
+    /// </summary>
+    public bool ReplacementConflictOnUpdate { get; set; }
+
+    /// <summary>The storage reservation the last write was handed, or <c>null</c> when it was handed none.</summary>
+    public AttachmentUploadReservation? LastReservation { get; private set; }
 
     public Task<IReadOnlyList<OperatingExpenseListItem>> ListAsync(OperatingExpenseFilter filter, CancellationToken cancellationToken)
     {
@@ -38,8 +54,14 @@ public sealed class FakeOperatingExpenseStore : IOperatingExpenseStore
     public Task<OperatingExpenseRecord?> FindByIdAsync(int id, CancellationToken cancellationToken) =>
         Task.FromResult(_records.GetValueOrDefault(id));
 
-    public Task<OperatingExpenseRecord> AddAsync(OperatingExpenseFields fields, OperatingExpenseAttachmentMetadata? attachment, CancellationToken cancellationToken)
+    public Task<OperatingExpenseRecord> AddAsync(
+        OperatingExpenseFields fields,
+        OperatingExpenseAttachmentMetadata? attachment,
+        AttachmentUploadReservation? attachmentReservation,
+        CancellationToken cancellationToken)
     {
+        LastReservation = attachmentReservation;
+        if (QuotaExceededOnWrite) throw new AttachmentStorageQuotaExceededException();
         if (ThrowOnAdd) throw new InvalidOperationException("store failure");
 
         var id = _nextId++;
@@ -48,9 +70,17 @@ public sealed class FakeOperatingExpenseStore : IOperatingExpenseStore
         return Task.FromResult(record);
     }
 
-    public Task<OperatingExpenseRecord?> UpdateAsync(int id, OperatingExpenseFields fields, OperatingExpenseAttachmentMetadata? newAttachment, CancellationToken cancellationToken)
+    public Task<OperatingExpenseRecord?> UpdateAsync(
+        int id,
+        OperatingExpenseFields fields,
+        OperatingExpenseAttachmentMetadata? newAttachment,
+        AttachmentUploadReservation? attachmentReservation,
+        CancellationToken cancellationToken)
     {
+        LastReservation = attachmentReservation;
         if (!_records.TryGetValue(id, out var existing)) return Task.FromResult<OperatingExpenseRecord?>(null);
+        if (ReplacementConflictOnUpdate) throw new AttachmentReplacementConflictException();
+        if (QuotaExceededOnWrite) throw new AttachmentStorageQuotaExceededException();
         if (ThrowOnUpdate) throw new InvalidOperationException("store failure");
 
         var attachment = newAttachment ?? (existing.AttachmentStoredFileName is null

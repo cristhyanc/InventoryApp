@@ -1,4 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { SiteService } from '../../services/site.service';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
@@ -20,6 +21,7 @@ import { ToastService } from '../../services/toast.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
+import { providePlanPicksStore } from './plan-picks-store.spec-helpers';
 
 function product(overrides: Partial<Product>): Product {
   return {
@@ -75,11 +77,13 @@ async function render(
         provide: PickListService,
         useValue: { get: jest.fn(() => of({ products: [] })), recordRefill, recordMultiMachineRefill }
       },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of(options.localMachines ?? [])) } },
       { provide: ToastService, useValue: toast },
       { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
-      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
+      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
+      providePlanPicksStore()
     ]
   }).compileComponents();
 
@@ -126,9 +130,13 @@ async function render(
     click(trigger);
   };
 
+  /** Record refill's one primary action; the view toggle shares its words, so it is found by its test id. */
+  const recordButton = () => host.querySelector<HTMLButtonElement>('[data-testid="manual-pick-list-record"]')!;
+
   return {
     fixture,
     host,
+    recordButton,
     click,
     type,
     button,
@@ -155,17 +163,17 @@ function refillResponse(): PickListRefillResponse {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('PickListComponent + ManualPickListComponent rendering (issue #744)', () => {
-  it('offers both the Calculated and Enter quantities taken toggle when the provider is fine', async () => {
+  it('offers both the Plan picks and Record refill toggle when the provider is fine', async () => {
     const { button } = await render();
 
-    expect(button('Calculated')).toBeDefined();
-    expect(button('Enter quantities taken')).toBeDefined();
+    expect(button('Plan picks')?.getAttribute('aria-pressed')).toBe('true');
+    expect(button('Record refill')?.getAttribute('aria-pressed')).toBe('false');
   });
 
   it('switches to the manual entry table and lists the active products with their storage quantity', async () => {
     const { host, requireButton, click } = await render();
 
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     const rows = Array.from(host.querySelectorAll('tbody tr'));
     expect(rows).toHaveLength(2);
@@ -175,7 +183,7 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
 
   it('filters the manual entry list by a typed search term', async () => {
     const { host, requireButton, click, type } = await render();
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     const search = host.querySelector<HTMLInputElement>('input[aria-label="Search products"]')!;
     type(search, 'chip');
@@ -186,7 +194,7 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
 
   it('names the manual entry filters: the category select has its own visible, associated label', async () => {
     const { host, requireButton, click } = await render();
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     const select = host.querySelector<HTMLSelectElement>('select#manual-pick-list-category');
     expect(select).not.toBeNull();
@@ -208,18 +216,18 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
     expect(host.querySelector('[data-testid="pick-list-provider-unavailable"]')?.textContent).toContain(
       'The pick list is unavailable because Nayax is not connected.'
     );
-    expect(button('Calculated')).toBeUndefined();
+    expect(button('Plan picks')).toBeUndefined();
     expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
   });
 
   it('records a manual save and shows the Save button disabled until a quantity is entered', async () => {
     const recordRefill = jest.fn(() => of(refillResponse()));
-    const { host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
-    click(requireButton('Enter quantities taken'));
-    const saveButton = requireButton('Save');
+    const { recordButton, host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
+    click(requireButton('Record refill'));
+    const saveButton = recordButton();
     expect(saveButton.disabled).toBe(true);
 
-    const takenInput = host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!;
+    const takenInput = host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke"]')!;
     type(takenInput, '2');
 
     expect(saveButton.disabled).toBe(false);
@@ -230,14 +238,50 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
 
   it('shows an inline validation message for a malformed "Taken" entry', async () => {
     const { host, requireButton, click, type } = await render();
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
-    const takenInput = host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!;
+    const takenInput = host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke"]')!;
     type(takenInput, 'abc');
 
     expect(host.querySelector('[data-testid="manual-pick-list-row-error"]')?.textContent?.trim()).toBe(
       'Enter a whole number greater than 0.'
     );
+  });
+});
+
+/**
+ * `.page`'s `flex flex-col gap-6` spaces only its direct children, and `<app-manual-pick-list>` is
+ * one of them, so the gap between manual entry's own filter and quantities cards has to come from
+ * a wrapper inside the component. The host itself must carry no display utility: the parent hides
+ * it with `[hidden]`, and a `flex` class on the host would compete with that rule.
+ */
+describe('PickListComponent manual entry card spacing', () => {
+  const marginUtility = /\b(m[tbxy]?-\d|space-y-\d)\b/;
+
+  it('spaces the filter and quantities cards with one gap-6 wrapper, leaving the host display-free', async () => {
+    const { host, requireButton, click } = await render();
+
+    click(requireButton('Record refill'));
+
+    const manual = host.querySelector('app-manual-pick-list') as HTMLElement;
+    expect(manual.className).not.toMatch(/\b(flex|grid|block)\b/);
+    expect(manual.children).toHaveLength(1);
+    const wrapper = manual.firstElementChild as HTMLElement;
+    expect(wrapper.classList).toContain('flex');
+    expect(wrapper.classList).toContain('flex-col');
+    expect(wrapper.classList).toContain('gap-6');
+    const cards = Array.from(wrapper.children).filter((child) => child.classList.contains('card'));
+    expect(cards).toHaveLength(3); // machines and filters, quantities taken, totals and actions
+    cards.forEach((card) => expect(card.className).not.toMatch(marginUtility));
+  });
+
+  it('keeps the manual view hidden after switching back to the calculated view', async () => {
+    const { host, requireButton, click } = await render();
+
+    click(requireButton('Record refill'));
+    click(requireButton('Plan picks'));
+
+    expect((host.querySelector('app-manual-pick-list') as HTMLElement).hidden).toBe(true);
   });
 });
 
@@ -254,29 +298,30 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
     };
   }
 
-  it('renders one labelled quantity column per selected machine, with Total Taken before them', async () => {
+  it('renders one labelled quantity column per selected machine, with the row total after them', async () => {
     const { host, requireButton, click, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
       localMachines: machines()
     });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     selectMachineColumn('Front Lobby');
     selectMachineColumn('Back Room');
 
     const headers = Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.replace(/\s+/g, ' ').trim());
-    // Each machine header carries its own remove control beside the machine's name.
-    expect(headers).toEqual(['Product', 'Category', 'Storage Qty', 'Total Taken', 'Front Lobby×', 'Back Room×']);
-    expect(host.querySelector('input[aria-label="Taken: Coke at Front Lobby"]')).not.toBeNull();
-    expect(host.querySelector('input[aria-label="Taken: Chips at Back Room"]')).not.toBeNull();
+    expect(headers).toEqual(['Product', 'Storage available', 'Front Lobby', 'Back Room', 'Total quantity taken']);
+    // Each selected machine is a chip with its own remove control.
+    expect(host.querySelector('button[aria-label="Remove machine column: Front Lobby"]')).not.toBeNull();
+    expect(host.querySelector('input[aria-label="Quantity taken: Coke at Front Lobby"]')).not.toBeNull();
+    expect(host.querySelector('input[aria-label="Quantity taken: Chips at Back Room"]')).not.toBeNull();
     // The single No machine column is gone: a quantity now belongs to a machine.
-    expect(host.querySelector('input[aria-label="Taken: Coke"]')).toBeNull();
+    expect(host.querySelector('input[aria-label="Quantity taken: Coke"]')).toBeNull();
   });
 
   it('keeps the matrix inside one bounded scroll container, so a wide selection never widens the page', async () => {
     const { host, requireButton, click, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
       localMachines: machines()
     });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
     selectMachineColumn('Front Lobby');
 
     const scroll = host.querySelector('[data-testid="manual-pick-list-table-scroll"]');
@@ -289,13 +334,13 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
     const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
       localMachines: machines()
     });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
     selectMachineColumn('Front Lobby');
     selectMachineColumn('Back Room');
 
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Back Room"]')!, '4');
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Chips at Front Lobby"]')!, '2');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!, '3');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Back Room"]')!, '4');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Chips at Front Lobby"]')!, '2');
 
     expect(host.querySelector('[data-testid="manual-pick-list-row-total"]')?.textContent?.trim()).toBe('7');
     expect(host.querySelector('[data-testid="manual-pick-list-total-required"]')?.textContent?.replace(/\s+/g, ' ')).toContain('9');
@@ -311,19 +356,19 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
 
   it('saves the whole matrix as one batch request and reports it', async () => {
     const recordMultiMachineRefill = jest.fn((request: MultiMachinePickListRefillRequest) => of(batchResponse(request)));
-    const { host, requireButton, click, type, selectMachineColumn, recordRefill, toast } = await render(
+    const { recordButton, host, requireButton, click, type, selectMachineColumn, recordRefill, toast } = await render(
       undefined,
       'Ready',
       undefined,
       { localMachines: machines(), recordMultiMachineRefill }
     );
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
     selectMachineColumn('Front Lobby');
     selectMachineColumn('Back Room');
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Chips at Back Room"]')!, '2');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!, '3');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Chips at Back Room"]')!, '2');
 
-    click(requireButton('Save'));
+    click(recordButton());
 
     expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
     expect(recordRefill).not.toHaveBeenCalled();
@@ -335,13 +380,13 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
   });
 
   it('shows a cell’s own error and blocks Save until it is fixed, naming the product and the machine', async () => {
-    const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+    const { recordButton, host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
       localMachines: machines()
     });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
     selectMachineColumn('Front Lobby');
 
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, 'abc');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!, 'abc');
 
     expect(host.querySelector('[data-testid="manual-pick-list-cell-error"]')?.textContent?.trim()).toBe(
       'Enter a whole number greater than 0.'
@@ -349,7 +394,7 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
     expect(host.querySelector('[data-testid="manual-pick-list-invalid-entries"]')?.textContent?.replace(/\s+/g, ' ')).toContain(
       'Coke at Front Lobby: Enter a whole number greater than 0.'
     );
-    expect(requireButton('Save').disabled).toBe(true);
+    expect(recordButton().disabled).toBe(true);
   });
 
   it('asks before removing a machine column that holds quantities, and keeps everything on Cancel', async () => {
@@ -357,20 +402,20 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
     const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
       localMachines: machines()
     });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
     selectMachineColumn('Front Lobby');
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!, '3');
 
     const remove = host.querySelector<HTMLButtonElement>('button[aria-label="Remove machine column: Front Lobby"]')!;
     click(remove);
 
     expect(confirmSpy).toHaveBeenCalled();
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!.value).toBe('3');
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!.value).toBe('3');
 
     confirmSpy.mockReturnValue(true);
     click(host.querySelector<HTMLButtonElement>('button[aria-label="Remove machine column: Front Lobby"]')!);
 
-    expect(host.querySelector('input[aria-label="Taken: Coke at Front Lobby"]')).toBeNull();
+    expect(host.querySelector('input[aria-label="Quantity taken: Coke at Front Lobby"]')).toBeNull();
     confirmSpy.mockRestore();
   });
 
@@ -382,22 +427,26 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
         ? throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }))
         : of(batchResponse(request));
     });
-    const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+    const { fixture, recordButton, host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
       localMachines: machines(),
       recordMultiMachineRefill
     });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
     selectMachineColumn('Front Lobby');
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!, '3');
 
-    click(requireButton('Save'));
+    click(recordButton());
 
     expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')?.textContent).toContain(
       "Couldn't confirm whether this refill was recorded."
     );
 
-    // An edit while the outcome is unknown must not change what the retry sends.
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '9');
+    // The entries are locked while the outcome is unknown, and the one action offered is Retry save:
+    // an attempted edit must not change what the retry sends.
+    await fixture.whenStable();
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!.disabled).toBe(true);
+    expect(host.querySelector('[data-testid="manual-pick-list-record"]')).toBeNull();
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke at Front Lobby"]')!, '9');
     click(requireButton('Retry save'));
 
     expect(requests).toHaveLength(2);
@@ -407,35 +456,32 @@ describe('PickListComponent + ManualPickListComponent machine matrix rendering (
   });
 });
 
-describe('PickListComponent inventory-impact description per mode (issue #744)', () => {
+describe('PickListComponent inventory-impact description per mode (issues #744, #996)', () => {
   const impact = (host: HTMLElement) =>
     host.querySelector('[data-testid="pick-list-inventory-impact"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 
   it('describes the calculated view as planning only that saves nothing', async () => {
     const { host } = await render();
 
-    expect(impact(host)).toBe(
-      'Planning only. This is a read-only view: it never changes requested quantities or inventory, and nothing selected or picked here is saved.'
-    );
+    expect(impact(host)).toBe('Planning only. Editing quantities and checking picks does not change inventory.');
   });
 
   it('describes manual entry as saving a refill and reducing storage, never as read-only', async () => {
     const { host, requireButton, click } = await render();
 
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
-    expect(impact(host)).toBe(
-      "Entry mode. Nothing is saved until you click Save; Save then records one machine refill per quantity you entered and reduces that product's storage quantity."
-    );
-    expect(impact(host)).not.toContain('read-only');
-    expect(impact(host)).not.toContain('nothing selected or picked here is saved');
+    expect(impact(host)).toBe('Recording this refill reduces storage stock by the quantities entered.');
+    expect(impact(host)).not.toContain('Planning only');
+    // No promise of a write to Nayax or of updated remote machine levels.
+    expect(impact(host)).not.toContain('Nayax');
   });
 
   it('describes manual entry as saving when there is no usable provider and manual is the only view', async () => {
     const { host } = await render(undefined, 'NotConfigured');
 
-    expect(impact(host)).toContain("reduces that product's storage quantity");
-    expect(impact(host)).not.toContain('read-only');
+    expect(impact(host)).toContain('reduces storage stock by the quantities entered');
+    expect(impact(host)).not.toContain('Planning only');
   });
 });
 
@@ -448,29 +494,29 @@ describe('PickListComponent keeps an unresolved manual submission across mode sw
         ? throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }))
         : of(refillResponse());
     });
-    const { fixture, host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
+    const { recordButton, fixture, host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
 
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
     // ngModel writes the initial value back in a microtask; let it finish before typing over it, so
     // the input's own value is real evidence rather than a race with that write.
     await fixture.whenStable();
     fixture.detectChanges();
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
-    click(requireButton('Save'));
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke"]')!, '2');
+    click(recordButton());
 
     // The outcome is unknown, so it is reported where the operator can act on it, not only as a toast.
     expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')?.textContent).toContain(
       "Couldn't confirm whether this refill was recorded."
     );
 
-    click(requireButton('Calculated'));
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Plan picks'));
+    click(requireButton('Record refill'));
 
     // The entry and the unconfirmed attempt both survived the round trip, so Save is a retry of the
     // same pick rather than a second one under a new key.
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!.value).toBe('2');
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke"]')!.value).toBe('2');
     expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')).not.toBeNull();
-    click(requireButton('Save'));
+    click(requireButton('Retry save'));
 
     expect(requests).toHaveLength(2);
     expect(requests[1].idempotencyKey).toBe(requests[0].idempotencyKey);
@@ -480,24 +526,24 @@ describe('PickListComponent keeps an unresolved manual submission across mode sw
   it('refuses to leave manual entry while its save is still in flight, and releases the toggle once it lands', async () => {
     const pending = new Subject<PickListRefillResponse>();
     const recordRefill = jest.fn(() => pending);
-    const { fixture, host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
+    const { recordButton, fixture, host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
     const component = fixture.componentInstance;
 
-    click(requireButton('Enter quantities taken'));
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
-    click(requireButton('Save'));
+    click(requireButton('Record refill'));
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke"]')!, '2');
+    click(recordButton());
 
-    expect(requireButton('Calculated').disabled).toBe(true);
+    expect(requireButton('Plan picks').disabled).toBe(true);
     expect(host.querySelector('[data-testid="pick-list-save-in-flight"]')).not.toBeNull();
 
-    click(requireButton('Calculated'));
+    click(requireButton('Plan picks'));
     expect(component.mode).toBe('manual');
 
     pending.next(refillResponse());
     pending.complete();
     fixture.detectChanges();
 
-    expect(requireButton('Calculated').disabled).toBe(false);
+    expect(requireButton('Plan picks').disabled).toBe(false);
     expect(host.querySelector('[data-testid="pick-list-save-in-flight"]')).toBeNull();
   });
 });
@@ -505,14 +551,14 @@ describe('PickListComponent keeps an unresolved manual submission across mode sw
 describe('PickListComponent manual entry during a read-only support session (issue #744)', () => {
   it('offers no Taken boxes and no Save, and sends no refill, while a support session is active', async () => {
     const recordRefill = jest.fn(() => of(refillResponse()));
-    const { host, requireButton, click, button, toast } = await render(undefined, 'Ready', recordRefill, { sessionActive: of(true) });
+    const { recordButton, host, requireButton, click, toast } = await render(undefined, 'Ready', recordRefill, { sessionActive: of(true) });
 
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     expect(host.querySelector('[data-testid="manual-pick-list-support-session"]')?.textContent).toContain('A support session is active');
     expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
-    expect(host.querySelector('input[aria-label^="Taken:"]')).toBeNull();
-    expect(button('Save')).toBeUndefined();
+    expect(host.querySelector('input[aria-label^="Quantity taken:"]')).toBeNull();
+    expect(recordButton()).toBeNull();
     expect(recordRefill).not.toHaveBeenCalled();
     expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')).toBeNull();
     expect(toast.error).not.toHaveBeenCalled();
@@ -521,16 +567,16 @@ describe('PickListComponent manual entry during a read-only support session (iss
   it('withdraws the Taken boxes and Save when a support session starts after the page opened', async () => {
     const session = new BehaviorSubject(false);
     const recordRefill = jest.fn(() => of(refillResponse()));
-    const { host, requireButton, click, type, button, fixture } = await render(undefined, 'Ready', recordRefill, { sessionActive: session });
-    click(requireButton('Enter quantities taken'));
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
-    expect(requireButton('Save').disabled).toBe(false);
+    const { recordButton, host, requireButton, click, type, fixture } = await render(undefined, 'Ready', recordRefill, { sessionActive: session });
+    click(requireButton('Record refill'));
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke"]')!, '2');
+    expect(recordButton().disabled).toBe(false);
 
     session.next(true);
     fixture.detectChanges();
 
-    expect(host.querySelector('input[aria-label^="Taken:"]')).toBeNull();
-    expect(button('Save')).toBeUndefined();
+    expect(host.querySelector('input[aria-label^="Quantity taken:"]')).toBeNull();
+    expect(recordButton()).toBeNull();
     expect(recordRefill).not.toHaveBeenCalled();
     expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')).toBeNull();
   });
@@ -542,7 +588,7 @@ describe('PickListComponent manual entry catalogue load state (issue #744)', () 
   it('says the products are loading, not that there are none, while the first read is outstanding', async () => {
     const pending = new Subject<Product[]>();
     const { host, requireButton, click, fixture } = await render(undefined, 'Ready', undefined, { getAllProducts: jest.fn(() => pending) });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     expect(host.querySelector('[data-testid="manual-pick-list-catalogue-loading"]')).not.toBeNull();
     expect(host.textContent).not.toContain(emptyMessage);
@@ -561,7 +607,7 @@ describe('PickListComponent manual entry catalogue load state (issue #744)', () 
       .mockImplementationOnce(() => throwError(() => new HttpErrorResponse({ status: 500 })))
       .mockImplementation(() => of([product({ id: 1, name: 'Coke' })]));
     const { host, requireButton, click } = await render(undefined, 'Ready', undefined, { getAllProducts });
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     expect(host.querySelector('[data-testid="manual-pick-list-catalogue-failed"]')?.textContent).toContain('could not be loaded');
     expect(host.textContent).not.toContain(emptyMessage);
@@ -575,7 +621,7 @@ describe('PickListComponent manual entry catalogue load state (issue #744)', () 
 
   it('keeps the empty-catalogue message for a successful read that returned no products', async () => {
     const { host, requireButton, click } = await render([], 'Ready');
-    click(requireButton('Enter quantities taken'));
+    click(requireButton('Record refill'));
 
     expect(host.textContent).toContain(emptyMessage);
     expect(host.querySelector('[data-testid="manual-pick-list-catalogue-failed"]')).toBeNull();
@@ -588,11 +634,11 @@ describe('PickListComponent manual entry catalogue load state (issue #744)', () 
       .mockImplementationOnce(() => throwError(() => new HttpErrorResponse({ status: 0 })))
       .mockImplementation(() => of([product({ id: 1, name: 'Coke', quantityInStock: 18 })]));
     const recordRefill = jest.fn(() => of(refillResponse()));
-    const { host, requireButton, click, type, toast } = await render(undefined, 'Ready', recordRefill, { getAllProducts });
-    click(requireButton('Enter quantities taken'));
-    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
+    const { recordButton, host, requireButton, click, type, toast } = await render(undefined, 'Ready', recordRefill, { getAllProducts });
+    click(requireButton('Record refill'));
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Quantity taken: Coke"]')!, '2');
 
-    click(requireButton('Save'));
+    click(recordButton());
 
     expect(host.querySelector('[data-testid="manual-pick-list-refresh-failed"]')?.textContent).toContain('may be out of date');
     expect(toast.error).toHaveBeenCalledWith('Failed to refresh the product list.');

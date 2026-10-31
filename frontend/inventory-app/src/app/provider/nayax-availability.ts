@@ -17,14 +17,27 @@ import { HttpErrorResponse } from '@angular/common/http';
  * is per feature: in `PendingPermissions` the connection as a whole is usable and Nayax has simply
  * not granted this one read, so one page can carry a permission message for one card and real
  * figures beside it.
+ *
+ * **Since issue #967 the backend publishes a third reason, `PlanRequired`** (issue #979 adds it
+ * here), for a business whose plan does not include the sales provider, beside the unchanged
+ * `nayax_not_connected` error code and in the same per-feature reason fields. It is the one of the
+ * three that names no connection problem at all - the business's saved credentials, if it has any,
+ * are untouched - so it reads as "needs the Pro plan" rather than "Nayax is not connected", which
+ * would be untrue of a business whose credentials are stored and working. Every feature this file
+ * answers about is this business's sales-provider connection or its site commissions, and both are
+ * the `Pro` plan (`PlanFeaturePolicy.RequiredPlan`), so the sentence below names it directly rather
+ * than looking it up in `access/plan-feature.ts`.
  */
-export type NayaxUnavailability = 'NayaxNotConnected' | 'PermissionNotGranted';
+export type NayaxUnavailability = 'NayaxNotConnected' | 'PermissionNotGranted' | 'PlanRequired';
 
 /** The business has no Nayax credentials an ordinary operation may use. */
 export const NAYAX_NOT_CONNECTED_REASON = 'NayaxNotConnected';
 
 /** The credentials are usable and Nayax refused this feature's read for lack of permission. */
 export const PERMISSION_NOT_GRANTED_REASON = 'PermissionNotGranted';
+
+/** The business's plan does not include the sales provider at all (issue #967). */
+export const PLAN_REQUIRED_REASON = 'PlanRequired';
 
 /**
  * `UnavailableDashboardSectionDto.SupportViewReason`: the section was not computed because a
@@ -52,6 +65,8 @@ export function nayaxUnavailabilityOfReason(reason: string | null | undefined): 
       return NAYAX_NOT_CONNECTED_REASON;
     case PERMISSION_NOT_GRANTED_REASON:
       return PERMISSION_NOT_GRANTED_REASON;
+    case PLAN_REQUIRED_REASON:
+      return PLAN_REQUIRED_REASON;
     default:
       return null;
   }
@@ -59,9 +74,15 @@ export function nayaxUnavailabilityOfReason(reason: string | null | undefined): 
 
 /**
  * The availability answer a failed request carries, or `null` when the failure is not one of the
- * two - a transport failure, a `502` from a real Nayax outage, a `403` about the caller's own
+ * three - a transport failure, a `502` from a real Nayax outage, a `403` about the caller's own
  * access. Only the exact `409` codes count: a request that failed for any other reason is an
  * error, and reporting it as "Nayax is not connected" would describe a connection nobody tested.
+ *
+ * **The connection and the plan refusal share one code** (`NayaxNotConnectedException.ErrorCode`,
+ * issue #967, deliberately unchanged so a client that has not learnt about plans yet keeps
+ * degrading exactly as it did before): `nayaxUnavailableReason` on the response body is what tells
+ * them apart, and a value this build has never heard of is read as the connection refusal, which is
+ * every refusal there was before issue #967.
  */
 export function nayaxUnavailabilityOfError(error: unknown): NayaxUnavailability | null {
   if (!(error instanceof HttpErrorResponse) || error.status !== 409) {
@@ -71,8 +92,13 @@ export function nayaxUnavailabilityOfError(error: unknown): NayaxUnavailability 
   const body: unknown = error.error;
   const code = typeof body === 'object' && body !== null ? (body as { code?: unknown }).code : null;
   switch (code) {
-    case NAYAX_NOT_CONNECTED_CODE:
-      return NAYAX_NOT_CONNECTED_REASON;
+    case NAYAX_NOT_CONNECTED_CODE: {
+      const reason =
+        typeof body === 'object' && body !== null
+          ? (body as { nayaxUnavailableReason?: unknown }).nayaxUnavailableReason
+          : null;
+      return reason === PLAN_REQUIRED_REASON ? PLAN_REQUIRED_REASON : NAYAX_NOT_CONNECTED_REASON;
+    }
     case NAYAX_PERMISSION_NOT_GRANTED_CODE:
       return PERMISSION_NOT_GRANTED_REASON;
     default:
@@ -81,14 +107,19 @@ export function nayaxUnavailabilityOfError(error: unknown): NayaxUnavailability 
 }
 
 /**
- * The sentence for one feature being unavailable for one of the two reasons. `feature` is the
+ * The sentence for one feature being unavailable for one of the three reasons. `feature` is the
  * feature's own name as the screen calls it, so the message is about that card or section and not
  * about the application as a whole.
  */
 export function nayaxUnavailableMessage(unavailability: NayaxUnavailability, feature: string): string {
-  return unavailability === NAYAX_NOT_CONNECTED_REASON
-    ? `${feature} is unavailable because Nayax is not connected.`
-    : `${feature} is unavailable because Nayax has not granted this application permission to read it.`;
+  switch (unavailability) {
+    case NAYAX_NOT_CONNECTED_REASON:
+      return `${feature} is unavailable because Nayax is not connected.`;
+    case PERMISSION_NOT_GRANTED_REASON:
+      return `${feature} is unavailable because Nayax has not granted this application permission to read it.`;
+    default:
+      return `${feature} needs the Pro plan. Any Nayax credentials this business has saved are unchanged.`;
+  }
 }
 
 /**
@@ -104,6 +135,8 @@ export function storageOnlyReorderLabel(reason: NayaxUnavailability | null): str
       return `${scope}, because Nayax is not connected.`;
     case PERMISSION_NOT_GRANTED_REASON:
       return `${scope}, because Nayax has not granted this application permission to read the machines.`;
+    case PLAN_REQUIRED_REASON:
+      return `${scope}, because this business's plan does not include the Nayax connection.`;
     default:
       return `${scope}.`;
   }

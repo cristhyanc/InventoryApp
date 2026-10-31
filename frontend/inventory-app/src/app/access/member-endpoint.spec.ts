@@ -98,12 +98,48 @@ describe('classifyMemberRequest (issue #602)', () => {
       expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
     });
 
+    /**
+     * The shared price catalogue's review of issue #928: the queue, a listing's decision, a waiting
+     * product's match and an automatic match's confirm or undo. Class-2 platform-admin authorization
+     * again, and it names no business either - a waiting product is a search name, a unit label and a
+     * count - so a `403` from it says nothing about a membership or a business role.
+     */
+    it.each([
+      '/api/super-admin/price-catalogue-review',
+      '/api/super-admin/price-catalogue-review/',
+      '/api/super-admin/price-catalogue-review/listings/7/decision',
+      '/api/super-admin/price-catalogue-review/matches',
+      '/api/super-admin/price-catalogue-review/automatic-matches/7/confirm',
+      '/api/super-admin/price-catalogue-review/automatic-matches/7/undo',
+      '/api/Super-Admin/Price-Catalogue-Review/matches'
+    ])('classifies %s as the platform-admin surface (issue #928)', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
+    });
+
+    /**
+     * The shared catalogue's own master products of issue #1023: the searchable, paged listing and one
+     * product with its supplier listings. Class-2 platform-admin authorization again, and both are
+     * reads of platform data that names no business - so a `403` from either says nothing about a
+     * membership or a business role, and neither may carry a role-preview or support-session header.
+     */
+    it.each([
+      '/api/super-admin/master-products',
+      '/api/super-admin/master-products/',
+      '/api/super-admin/master-products?search=cola&page=2',
+      '/api/super-admin/master-products/7',
+      '/api/Super-Admin/Master-Products/7'
+    ])('classifies %s as the platform-admin surface (issue #1023)', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
+    });
+
     it.each([
       // A segment that merely begins with the same letters is a different endpoint, and the
       // default for anything the exclusions do not name has to stay `member`.
       '/api/super-admin/businesses-archive',
       '/api/super-admin-businesses/pending-count',
       '/api/super-admin/supplier-presets-archive',
+      '/api/super-admin/price-catalogue-review-archive',
+      '/api/super-admin/master-products-archive',
       // The business's own suppliers are an ordinary member endpoint and must stay one.
       '/api/suppliers',
       '/api/suppliers/7'

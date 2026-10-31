@@ -19,6 +19,9 @@ namespace InventoryApi.Tests.Application.MachineStockSync;
 /// <c>MachineRestockSyncCoverageTests</c>; nothing that passes against this double may be read as
 /// evidence about it.</para>
 ///
+/// <para>It does not reproduce the "nothing left to sync" condition (issue #1018) either: that is
+/// a query over the imported events, proven relationally in <c>MachineRestockSyncCoverageTests</c>.</para>
+///
 /// <para>It records every attempt in <see cref="Attempts"/>, including the refused ones, because
 /// several of the properties under test are about a write that must <em>not</em> happen: a failed
 /// fetch records nothing at all, and an operation that completed under replaced credentials must not
@@ -42,6 +45,9 @@ internal sealed class FakeMachineRestockSyncCoverageStore : IMachineRestockSyncC
     /// <summary>How many times the aggregate read was made.</summary>
     public int Reads { get; private set; }
 
+    /// <summary>The pending window start the last aggregate read was asked for (issue #948).</summary>
+    public DateTime? LastPendingFromUtc { get; private set; }
+
     /// <summary>Declares what the aggregate read returns, replacing anything declared before.</summary>
     public FakeMachineRestockSyncCoverageStore WithMachines(params MachineRestockSyncCoverageRecord[] machines)
     {
@@ -55,7 +61,12 @@ internal sealed class FakeMachineRestockSyncCoverageStore : IMachineRestockSyncC
         _coverage.TryGetValue(localMachineId, out var stored) ? stored : null;
 
     public Task<bool> TryRecordSuccessfulSyncAsync(
-        long localMachineId, DateTime startedAtUtc, int credentialRevision, CancellationToken cancellationToken)
+        long localMachineId,
+        DateTime startedAtUtc,
+        int credentialRevision,
+        long nayaxMachineId,
+        DateTime pendingFromUtc,
+        CancellationToken cancellationToken)
     {
         if (WriteFailure is not null)
         {
@@ -77,9 +88,10 @@ internal sealed class FakeMachineRestockSyncCoverageStore : IMachineRestockSyncC
     }
 
     public Task<IReadOnlyList<MachineRestockSyncCoverageRecord>> GetProviderMachineCoverageAsync(
-        CancellationToken cancellationToken)
+        DateTime pendingFromUtc, CancellationToken cancellationToken)
     {
         Reads++;
+        LastPendingFromUtc = pendingFromUtc;
 
         if (ReadFailure is not null)
         {

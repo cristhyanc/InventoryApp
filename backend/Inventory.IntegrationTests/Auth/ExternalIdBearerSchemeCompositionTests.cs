@@ -1,5 +1,6 @@
 using Inventory.Infrastructure.Data;
 using InventoryApi.Auth.ExternalIdentity;
+using InventoryApi.Auth.PriceCollector;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
@@ -90,7 +91,16 @@ public sealed class ExternalIdBearerSchemeCompositionTests
         var schemes = factory.Services.GetRequiredService<IAuthenticationSchemeProvider>();
         var names = (await schemes.GetAllSchemesAsync()).Select(scheme => scheme.Name).ToArray();
 
-        Assert.Equal([JwtBearerDefaults.AuthenticationScheme], names);
+        // The workforce scheme and no second *issuer*. The collector scheme is also registered -
+        // always, since issue #924 - because the collector endpoints name it and an endpoint naming
+        // an unregistered scheme faults the request instead of refusing it; with no collector
+        // configured it is given no authority and accepts nothing, which
+        // PriceCollectorTokenValidationTests asserts through the real pipeline. It is deliberately
+        // not an issuer this API trusts: it is never the default, it is not in the policy scheme's
+        // selector, and no endpoint outside the collector surface may name it.
+        Assert.Equal(
+            [JwtBearerDefaults.AuthenticationScheme, PriceCollectorBearerScheme.Name],
+            names);
         Assert.Equal(
             JwtBearerDefaults.AuthenticationScheme,
             (await schemes.GetDefaultAuthenticateSchemeAsync())?.Name);
@@ -108,7 +118,7 @@ public sealed class ExternalIdBearerSchemeCompositionTests
         var schemes = factory.Services.GetRequiredService<IAuthenticationSchemeProvider>();
 
         Assert.Equal(
-            [JwtBearerDefaults.AuthenticationScheme],
+            [JwtBearerDefaults.AuthenticationScheme, PriceCollectorBearerScheme.Name],
             (await schemes.GetAllSchemesAsync()).Select(scheme => scheme.Name).ToArray());
     }
 

@@ -140,6 +140,10 @@ public sealed class OperatingExpensesController : ControllerBase
     private ActionResult<OperatingExpenseResponse> ToActionResult(UpdateOperatingExpenseResult result)
     {
         if (result.IsNotFound) return NotFound();
+        // Another replacement of this expense's attachment committed first (issue #968): nothing
+        // about the request was wrong, so it is a conflict rather than a validation failure - the
+        // same answer the purchase attach gives the loser of its own race.
+        if (result.IsConflict) return Conflict(result.ConflictError);
         if (!result.IsValid) return BadRequest(result.ValidationError);
         return Ok(ToResponse(result.Record!));
     }

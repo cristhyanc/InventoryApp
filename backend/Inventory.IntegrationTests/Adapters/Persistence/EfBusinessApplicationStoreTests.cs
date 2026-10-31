@@ -408,7 +408,7 @@ public class EfBusinessApplicationStoreTests
     #endregion
 
     private static BusinessSettings Settings() =>
-        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane");
+        new("Coastal Vending", "owner@coastal.example.com", ValidAbn, true, "Australia/Brisbane", "QLD");
 
     private static ActorIdentity Actor(string objectId = ApplicantOid)
     {

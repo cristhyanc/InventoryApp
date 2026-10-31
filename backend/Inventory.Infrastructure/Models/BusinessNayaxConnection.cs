@@ -88,6 +88,28 @@ public class BusinessNayaxConnection : IBusinessOwned
     /// </summary>
     public bool MachineChecksPending { get; set; }
 
+    /// <summary>
+    /// Which Nayax <strong>account</strong> the stored credentials belong to, as this business's own
+    /// internal series (issue #978): <c>1</c> for the first account stored, and one higher each time
+    /// a <em>different</em> operator id is saved. Re-saving or re-testing the same account leaves it
+    /// alone.
+    ///
+    /// <para>It is deliberately not <see cref="CredentialRevision"/>, which counts every save: a new
+    /// token for the same Nayax account is the same fleet, and the connected-machine evidence of
+    /// issue #978 must not be split by an operator pasting a fresh token. And it is deliberately not
+    /// the operator id: a snapshot names the series, so billing evidence can say which account it
+    /// belongs to while carrying no part of a credential.</para>
+    /// </summary>
+    public int AccountSeries { get; set; } = 1;
+
+    /// <summary>
+    /// When <see cref="AccountSeries"/> last changed, or <see langword="null"/> when it never has -
+    /// which is every connection stored before issue #978 and every one that has only ever held one
+    /// account. It records the account change with its time, which is what lets a day holding two
+    /// series' snapshots be explained.
+    /// </summary>
+    public DateTime? AccountSeriesChangedAtUtc { get; set; }
+
     /// <summary>When this record last changed, for either reason.</summary>
     public DateTime UpdatedAtUtc { get; set; }
 }

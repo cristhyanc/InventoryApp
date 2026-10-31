@@ -25,7 +25,7 @@ namespace InventoryApi.Auth.E2ETesting;
 ///   tenant-owned row is written through a <see cref="BusinessScope"/> resolved to exactly one
 ///   business, which is the same mechanism a request uses, so
 ///   <c>BusinessOwnershipEnforcer</c> stamps and checks ownership here too.
-///   <c>UnscopedBusinessScope</c> stays reserved for the three human-invoked commands
+///   <c>UnscopedBusinessScope</c> stays reserved for the four human-invoked commands
 ///   (AGENTS.md § Tenant ownership and data isolation).</item>
 ///   <item><b>It fabricates no costing history.</b> The products start with no costing quantity
 ///   and no average cost, and the one seeded Nayax sale is deliberately left uncosted, which is

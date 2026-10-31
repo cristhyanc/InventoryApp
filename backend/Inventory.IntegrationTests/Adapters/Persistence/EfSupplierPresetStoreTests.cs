@@ -28,6 +28,13 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
 {
     private static readonly DateTime Now = new(2026, 10, 23, 2, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>
+    /// A name no shipped preset holds, so a create of it is a create and not a duplicate. It is
+    /// deliberately not one of the nine the migrations insert - "Aldi" stopped being available the
+    /// day issue #931 seeded ALDI, which is exactly the kind of collision a fixed name hides.
+    /// </summary>
+    private const string UnusedName = "Harris Farm Markets";
+
     private readonly SqliteConnection _connection = new("Data Source=:memory:");
 
     public async Task InitializeAsync()
@@ -56,15 +63,100 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
         await using var db = Context();
         var store = new EfSupplierPresetStore(db);
 
-        var created = await store.AddAsync(
-            new NewSupplierPreset("Aldi", SupplierPresetPolicy.NormalisedName("Aldi"), null, Now),
-            CancellationToken.None);
+        var created = await store.AddAsync(NewPreset(UnusedName), CancellationToken.None);
 
         Assert.True(created.Id > 0);
         Assert.True(created.IsEnabled);
         Assert.Contains(
             await store.ListOrderedByNameAsync(CancellationToken.None),
             preset => preset.Id == created.Id);
+    }
+
+    /// <summary>
+    /// The supplier-master fields of issue #931 survive the round trip, and the served states come
+    /// back as the list the resource publishes rather than as the string the column holds: the
+    /// adapter is the one place that translation happens, in both directions.
+    /// </summary>
+    [Fact]
+    public async Task The_supplier_master_fields_are_stored_and_read_back()
+    {
+        await using var db = Context();
+        var store = new EfSupplierPresetStore(db);
+
+        var created = await store.AddAsync(
+            NewPreset(
+                UnusedName,
+                servesNationwide: false,
+                servedStates: "NSW,ACT",
+                pricesIncludeGst: false,
+                connector: SupplierPriceConnector.Varnmill,
+                connectorKey: "harris"),
+            CancellationToken.None);
+
+        Assert.False(created.ServesNationwide);
+        Assert.Equal(["NSW", "ACT"], created.ServedStates);
+        Assert.False(created.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.Varnmill, created.PriceConnector);
+        Assert.Equal("harris", created.PriceConnectorKey);
+
+        // Read back through the list's own projection, which is a different code path from the write's
+        // answer and must not disagree with it. The fields are compared one by one rather than as
+        // whole records, because a record holding a list compares that list by reference.
+        var listed = (await store.ListOrderedByNameAsync(CancellationToken.None))
+            .Single(preset => preset.Id == created.Id);
+        Assert.Equal(created.ServesNationwide, listed.ServesNationwide);
+        Assert.Equal(created.ServedStates, listed.ServedStates);
+        Assert.Equal(created.PricesIncludeGst, listed.PricesIncludeGst);
+        Assert.Equal(created.PriceConnector, listed.PriceConnector);
+        Assert.Equal(created.PriceConnectorKey, listed.PriceConnectorKey);
+
+        var edited = await store.UpdateAsync(
+            created.Id,
+            new SupplierPresetEdit(
+                UnusedName,
+                SupplierPresetPolicy.NormalisedName(UnusedName),
+                null,
+                IsEnabled: true,
+                ServesNationwide: true,
+                ServedStates: string.Empty,
+                PricesIncludeGst: true,
+                PriceConnector: null,
+                PriceConnectorKey: null,
+                Now),
+            CancellationToken.None);
+
+        Assert.NotNull(edited);
+        Assert.True(edited.ServesNationwide);
+        Assert.Empty(edited.ServedStates);
+        Assert.True(edited.PricesIncludeGst);
+        Assert.Null(edited.PriceConnector);
+        Assert.Null(edited.PriceConnectorKey);
+    }
+
+    /// <summary>
+    /// The nine records the migrations seed are readable through the adapter with their stored
+    /// supplier-master values - the half of issue #931's migration that only an adapter read proves,
+    /// because the migration test reads the columns with SQL rather than through this projection.
+    /// </summary>
+    [Fact]
+    public async Task The_seeded_master_list_is_readable_through_the_adapter()
+    {
+        await using var db = Context();
+        var presets = await new EfSupplierPresetStore(db).ListOrderedByNameAsync(CancellationToken.None);
+
+        var coles = presets.Single(preset => preset.Name == "Coles");
+        Assert.True(coles.ServesNationwide);
+        Assert.Empty(coles.ServedStates);
+        Assert.True(coles.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.Varnmill, coles.PriceConnector);
+        Assert.Equal("coles", coles.PriceConnectorKey);
+
+        var jbMetro = presets.Single(preset => preset.Name == "JB Metro SA & NT");
+        Assert.False(jbMetro.ServesNationwide);
+        Assert.Equal(["SA", "NT"], jbMetro.ServedStates);
+        Assert.False(jbMetro.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.JbMetro, jbMetro.PriceConnector);
+        Assert.Null(jbMetro.PriceConnectorKey);
     }
 
     [Fact]
@@ -77,7 +169,10 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
             .Single(preset => preset.Name == "Coles");
 
         Assert.True(await store.ExistsWithNormalisedNameAsync("COLES", null, CancellationToken.None));
-        Assert.False(await store.ExistsWithNormalisedNameAsync("ALDI", null, CancellationToken.None));
+        Assert.False(await store.ExistsWithNormalisedNameAsync(
+            SupplierPresetPolicy.NormalisedName(UnusedName),
+            null,
+            CancellationToken.None));
 
         // Excluding the row itself is what lets an edit keep its own name.
         Assert.False(await store.ExistsWithNormalisedNameAsync("COLES", coles.Id, CancellationToken.None));
@@ -92,7 +187,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
         var store = new EfSupplierPresetStore(db);
 
         var error = await Assert.ThrowsAnyAsync<Exception>(() => store.AddAsync(
-            new NewSupplierPreset("coles", SupplierPresetPolicy.NormalisedName("coles"), null, Now),
+            NewPreset("coles"),
             CancellationToken.None));
 
         Assert.True(
@@ -139,7 +234,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
             new FixedClock(Now));
 
         var error = await Assert.ThrowsAsync<DomainConflictException>(() =>
-            create.Handle("  COLES  ", null, CancellationToken.None));
+            create.Handle(Submission("  COLES  "), CancellationToken.None));
 
         Assert.Equal(SupplierPresetPolicy.DuplicateNameMessage, error.Message);
 
@@ -166,7 +261,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
             new FixedClock(Now));
 
         var error = await Assert.ThrowsAsync<DomainConflictException>(() =>
-            update.Handle(woolworths.Id, "coles", null, isEnabled: true, CancellationToken.None));
+            update.Handle(woolworths.Id, Submission("coles"), isEnabled: true, CancellationToken.None));
 
         Assert.Equal(SupplierPresetPolicy.DuplicateNameMessage, error.Message);
         Assert.Empty(audit.Entries);
@@ -176,6 +271,43 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
             "Woolworths",
             (await verify.SupplierPresets.AsNoTracking().SingleAsync(p => p.Id == woolworths.Id)).Name);
     }
+
+    /// <summary>
+    /// A storable preset with the supplier-master values already through their policy, which is the
+    /// state the port takes them in. Nationwide, GST-inclusive and with no connector by default,
+    /// because these tests are about the index and the conflict rather than about a market.
+    /// </summary>
+    private static NewSupplierPreset NewPreset(
+        string name,
+        bool servesNationwide = true,
+        string servedStates = "",
+        bool pricesIncludeGst = true,
+        SupplierPriceConnector? connector = null,
+        string? connectorKey = null) =>
+        new(
+            name,
+            SupplierPresetPolicy.NormalisedName(name),
+            null,
+            servesNationwide,
+            servedStates,
+            pricesIncludeGst,
+            connector,
+            connectorKey,
+            Now);
+
+    /// <summary>
+    /// What a Super Admin submits, before any rule has run. Nationwide and GST-inclusive, so a test
+    /// about the duplicate-name race is refused for the name and never for its market.
+    /// </summary>
+    private static SupplierPresetSubmission Submission(string? name) =>
+        new(
+            name,
+            null,
+            ServesNationwide: true,
+            ServedStates: null,
+            PricesIncludeGst: true,
+            PriceConnector: null,
+            PriceConnectorKey: null);
 
     /// <summary>
     /// The real adapter with a blind pre-check: every other call is delegated, so the insert, the

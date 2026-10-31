@@ -69,6 +69,157 @@ public class EfBusinessSupplierProvisioningStoreTests
     }
 
     /// <summary>
+    /// Only the records that serve the business's own state are copied (issue #935): a nationwide
+    /// record and a record naming that state, and not a record naming another state, a record with
+    /// no recorded market at all, or a disabled record however well its market matches.
+    ///
+    /// <para>The two businesses hold different states, which is the only way to state the property:
+    /// the same platform list produces a different supplier list in Canberra and in Perth.</para>
+    /// </summary>
+    [Fact]
+    public async Task Copying_takes_only_the_records_that_serve_the_business_s_state()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.SetBusinessStateAsync(fixture.ApprovedBusinessId, "ACT");
+        await fixture.SetBusinessStateAsync(fixture.OtherBusinessId, "WA");
+
+        await fixture.ReplacePresetsAsync(
+            ("Coles", null, true),
+            ("JB Metro South Coast & ACT", null, true),
+            ("JB Metro NSW", null, true),
+            ("Perth Wholesale", null, true),
+            ("Disabled nationwide", null, false),
+            ("No market recorded", null, true));
+        await fixture.SetMarketAsync("Coles", servesNationwide: true, servedStates: string.Empty);
+        await fixture.SetMarketAsync(
+            "JB Metro South Coast & ACT", servesNationwide: false, servedStates: "NSW,ACT");
+        await fixture.SetMarketAsync("JB Metro NSW", servesNationwide: false, servedStates: "NSW");
+        await fixture.SetMarketAsync("Perth Wholesale", servesNationwide: false, servedStates: "WA");
+        await fixture.SetMarketAsync("Disabled nationwide", servesNationwide: true, servedStates: string.Empty);
+        await fixture.SetMarketAsync("No market recorded", servesNationwide: false, servedStates: string.Empty);
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+        await fixture.CopyAsync(fixture.OtherBusinessId);
+
+        Assert.Equal(
+            ["Coles", "JB Metro South Coast & ACT"],
+            (await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId))
+                .Select(supplier => supplier.Name)
+                .Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["Coles", "Perth Wholesale"],
+            (await fixture.SuppliersOfAsync(fixture.OtherBusinessId))
+                .Select(supplier => supplier.Name)
+                .Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A business with no recorded state - a legacy one, since both write paths require a state now -
+    /// receives the nationwide records and nothing else. Its state is never guessed from its time
+    /// zone, and the marker is still set, because the copy was made.
+    /// </summary>
+    [Fact]
+    public async Task A_business_without_a_state_receives_only_the_nationwide_records()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.ReplacePresetsAsync(("Coles", null, true), ("JB Metro NSW", null, true));
+        await fixture.SetMarketAsync("Coles", servesNationwide: true, servedStates: string.Empty);
+        await fixture.SetMarketAsync("JB Metro NSW", servesNationwide: false, servedStates: "NSW");
+
+        Assert.Null((await fixture.BusinessAsync(fixture.ApprovedBusinessId)).State);
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+
+        Assert.Equal(
+            ["Coles"],
+            (await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId)).Select(supplier => supplier.Name));
+        Assert.Equal(
+            CopiedAt,
+            (await fixture.BusinessAsync(fixture.ApprovedBusinessId)).SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
+    /// A business no enabled record serves is approved normally with no supplier at all, and still
+    /// gets the marker - the same rule as an empty platform list, for the same reason: the copy was
+    /// made, and what served this business was nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_business_no_record_serves_gets_no_supplier_and_still_gets_the_marker()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.SetBusinessStateAsync(fixture.ApprovedBusinessId, "NT");
+        await fixture.ReplacePresetsAsync(("JB Metro NSW", null, true));
+        await fixture.SetMarketAsync("JB Metro NSW", servesNationwide: false, servedStates: "NSW");
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+
+        Assert.Empty(await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId));
+        Assert.Equal(
+            CopiedAt,
+            (await fixture.BusinessAsync(fixture.ApprovedBusinessId)).SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
+    /// The supplier-master fields of issue #931 are <strong>not</strong> copied, and could not be: a
+    /// <c>Supplier</c> has no served states, no price basis and no connector. What a preset claims
+    /// about a market and how the platform collects its prices is platform configuration, and a
+    /// business's own supplier row is a record of who it buys from - giving one the other's fields
+    /// would be a separate decision, which #931 excludes explicitly.
+    ///
+    /// <para>The assertion is made on the schema rather than only on the copied values, because
+    /// "the column does not exist" is the claim that cannot regress quietly: a copy that started
+    /// carrying a connector would need a column to carry it in.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_supplier_master_fields_are_not_copied_into_the_business_s_supplier()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+
+        // Trading in New South Wales, so the JB Metro NSW record below is one this business
+        // receives (issue #935): what this test is about is which of its fields travel with it.
+        await fixture.SetBusinessStateAsync(fixture.ApprovedBusinessId, "NSW");
+        await fixture.ReplacePresetsAsync(
+            ("JB Metro NSW", "https://www.jbmetro.com.au", true),
+            ("Coles", null, true));
+        await fixture.SetPresetMasterFieldsAsync(
+            "JB Metro NSW",
+            servesNationwide: false,
+            servedStates: "NSW",
+            pricesIncludeGst: false,
+            priceConnector: SupplierPriceConnector.JbMetro);
+        await fixture.SetPresetMasterFieldsAsync(
+            "Coles",
+            servesNationwide: true,
+            servedStates: "",
+            pricesIncludeGst: true,
+            priceConnector: SupplierPriceConnector.Varnmill,
+            priceConnectorKey: "coles");
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+
+        // The name and the website came across, and the copies are ordinary suppliers.
+        var copies = await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId);
+        Assert.Equal(["Coles", "JB Metro NSW"], copies.Select(supplier => supplier.Name));
+        Assert.Equal("https://www.jbmetro.com.au", copies[1].Url);
+
+        // And the suppliers table holds none of the supplier-master columns at all.
+        var columns = await fixture.SupplierColumnNamesAsync();
+        Assert.All(
+            ["ServesNationwide", "ServedStates", "PricesIncludeGst", "PriceConnector", "PriceConnectorKey"],
+            column => Assert.DoesNotContain(column, columns));
+
+        // The presets themselves are untouched by the copy, supplier-master fields included: the
+        // copying goes one way.
+        var presets = await fixture.PresetsAsync();
+        var jbMetro = presets.Single(preset => preset.Name == "JB Metro NSW");
+        Assert.False(jbMetro.ServesNationwide);
+        Assert.Equal("NSW", jbMetro.ServedStates);
+        Assert.False(jbMetro.PricesIncludeGst);
+        Assert.Equal(SupplierPriceConnector.JbMetro, jbMetro.PriceConnector);
+        Assert.Equal("coles", presets.Single(preset => preset.Name == "Coles").PriceConnectorKey);
+    }
+
+    /// <summary>
     /// The marker is stamped with the instant it was given - the approval's decision instant - in the
     /// same save as the suppliers.
     /// </summary>
@@ -108,8 +259,12 @@ public class EfBusinessSupplierProvisioningStoreTests
     /// <summary>
     /// The marker is the whole of the idempotency rule: a second call copies nothing and does not
     /// rewrite the instant, however many presets are enabled by then. Names are deliberately not
-    /// consulted - the business has renamed its copy here, which a name-based rule would read as "no
-    /// copy exists" and duplicate.
+    /// consulted - the copy carries a name no preset has here, which a name-based rule would read as
+    /// "no copy exists" and duplicate.
+    ///
+    /// <para>The rename is made directly in the database rather than through a supplier endpoint,
+    /// which refuses to rename a linked copy since issue #934. It is still the case this test is
+    /// about: the provisioning rule must not depend on a name, whatever a name happens to be.</para>
     /// </summary>
     [Fact]
     public async Task A_second_copy_writes_nothing_even_after_the_business_renamed_its_own_copies()
@@ -119,7 +274,7 @@ public class EfBusinessSupplierProvisioningStoreTests
 
         await fixture.CopyAsync(fixture.ApprovedBusinessId);
         await fixture.RenameSupplierAsync(fixture.ApprovedBusinessId, "Coles", "The corner shop");
-        await fixture.ReplacePresetsAsync(("Coles", null, true), ("Woolworths", null, true));
+        await fixture.AddPresetAsync("Woolworths");
 
         await fixture.CopyAsync(fixture.ApprovedBusinessId, copiedAtUtc: CopiedAt.AddDays(1));
 
@@ -178,9 +333,11 @@ public class EfBusinessSupplierProvisioningStoreTests
     }
 
     /// <summary>
-    /// The copy is a copy, not a link. Editing or disabling a preset afterwards changes no existing
-    /// copy, and a business editing its own copy changes neither the preset nor the other business's
-    /// copy of the same preset - which is only expressible with two businesses.
+    /// The copy is a copy of the preset's <em>values</em>, even though issue #934 made it record
+    /// which preset it came from. Editing or disabling a preset afterwards changes no existing copy,
+    /// and a business editing the part of its copy it still owns - the contact details - changes
+    /// neither the preset nor the other business's copy of the same preset, which is only
+    /// expressible with two businesses.
     /// </summary>
     [Fact]
     public async Task Editing_a_preset_or_a_copy_afterwards_changes_nothing_on_the_other_side()
@@ -191,21 +348,26 @@ public class EfBusinessSupplierProvisioningStoreTests
         await fixture.CopyAsync(fixture.ApprovedBusinessId);
         await fixture.CopyAsync(fixture.OtherBusinessId);
 
-        // The platform edits and disables the preset.
-        await fixture.ReplacePresetsAsync(("Colesworth", "https://www.colesworth.example", false));
+        // The platform edits and disables the preset. It is edited in place rather than replaced:
+        // two businesses now hold a copy linked to this row, and the restricted key of issue #934
+        // refuses to delete a preset somebody has a copy of - which is the point, because a preset
+        // is disabled rather than removed.
+        await fixture.EditPresetAsync(
+            "Coles", newName: "Colesworth", newUrl: "https://www.colesworth.example", isEnabled: false);
 
-        // And one business edits its own copy, through an ordinary scoped write.
+        // And one business edits its own copy, through an ordinary scoped write. The name and the
+        // website are the master's since issue #934, so what it edits is a contact detail.
         await using (var scoped = fixture.ScopedContext(fixture.ApprovedBusinessId))
         {
             var supplier = await scoped.Suppliers.SingleAsync();
-            supplier.Name = "Coles (Marrickville)";
             supplier.Phone = "0400 000 000";
             await scoped.SaveChangesAsync();
         }
 
         var edited = Assert.Single(await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId));
-        Assert.Equal("Coles (Marrickville)", edited.Name);
+        Assert.Equal("Coles", edited.Name);
         Assert.Equal("https://www.coles.com.au", edited.Url);
+        Assert.Equal("0400 000 000", edited.Phone);
 
         // The other business's copy is exactly as it was copied - neither the preset's edit nor the
         // other business's edit reached it.
@@ -218,6 +380,50 @@ public class EfBusinessSupplierProvisioningStoreTests
         var preset = Assert.Single(await fixture.PresetsAsync());
         Assert.Equal("Colesworth", preset.Name);
         Assert.False(preset.IsEnabled);
+
+        // Both copies still point at that one preset row, which is what a later price comparison
+        // follows back and what issue #935 counts as "this business already has it" - a rename of
+        // the master does not break the link.
+        Assert.Equal([preset.Id, preset.Id], new[] { edited.SupplierPresetId, untouched.SupplierPresetId });
+    }
+
+    /// <summary>
+    /// The copies carry the preset they came from (issue #934), which is what the lock rules and a
+    /// later price comparison read. One copy per preset per business, and the other business's copy
+    /// of the same preset is its own row carrying the same link.
+    /// </summary>
+    [Fact]
+    public async Task Each_copy_records_the_preset_it_came_from()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.ReplacePresetsAsync(
+            ("Coles", "https://www.coles.com.au", true),
+            ("Woolworths", null, true),
+            ("Disabled Co", null, false));
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+        await fixture.CopyAsync(fixture.OtherBusinessId);
+
+        var presetIds = (await fixture.PresetsAsync())
+            .Where(preset => preset.IsEnabled)
+            .ToDictionary(preset => preset.Name, preset => preset.Id, StringComparer.Ordinal);
+
+        var copies = await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId);
+        Assert.Equal(
+            [(presetIds["Coles"], "Coles"), (presetIds["Woolworths"], "Woolworths")],
+            copies
+                .OrderBy(supplier => supplier.Name, StringComparer.Ordinal)
+                .Select(supplier => (supplier.SupplierPresetId, supplier.Name)));
+
+        // None of them arrives hidden: a business receives every enabled suggestion in use.
+        Assert.All(copies, supplier => Assert.False(supplier.IsHidden));
+
+        // The other business holds its own rows, linked to the very same presets.
+        Assert.Equal(
+            copies.Select(supplier => supplier.SupplierPresetId).Order(),
+            (await fixture.SuppliersOfAsync(fixture.OtherBusinessId))
+                .Select(supplier => supplier.SupplierPresetId)
+                .Order());
     }
 
     #endregion
@@ -360,7 +566,13 @@ public class EfBusinessSupplierProvisioningStoreTests
 
         /// <summary>
         /// Replaces the platform's preset list with exactly the rows given, so each test states the
-        /// suggestions it is about rather than inheriting the four the migration shipped.
+        /// suggestions it is about rather than inheriting the nine the migrations shipped.
+        ///
+        /// <para>Every row is seeded <strong>nationwide</strong>, because a market is now part of
+        /// what decides whether a record is copied at all (issue #935) and a record with none serves
+        /// nobody. Nationwide is the market that keeps a test about something else - what is copied,
+        /// the marker, the boundary - saying what it says; a test about the state rule states its own
+        /// markets with <see cref="SetMarketAsync"/>.</para>
         /// </summary>
         public async Task ReplacePresetsAsync(params (string Name, string? Url, bool IsEnabled)[] presets)
         {
@@ -376,6 +588,8 @@ public class EfBusinessSupplierProvisioningStoreTests
                     NormalisedName = SupplierPresetPolicy.NormalisedName(preset.Name),
                     Url = preset.Url,
                     IsEnabled = preset.IsEnabled,
+                    ServesNationwide = true,
+                    ServedStates = string.Empty,
                     CreatedAtUtc = CreatedAt,
                     UpdatedAtUtc = CreatedAt,
                 });
@@ -384,11 +598,110 @@ public class EfBusinessSupplierProvisioningStoreTests
             await db.SaveChangesAsync();
         }
 
+        /// <summary>
+        /// Records what market one preset claims, in the canonical stored form
+        /// <c>SupplierPresetMasterPolicy.NormaliseServedStates</c> writes: the empty string for a
+        /// nationwide record, and the declared codes in that policy's order otherwise.
+        /// </summary>
+        public async Task SetMarketAsync(string name, bool servesNationwide, string servedStates)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+
+            preset.ServesNationwide = servesNationwide;
+            preset.ServedStates = servedStates;
+
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Records the state a business trades in (issue #933), which is the other half of the
+        /// state-matching rule. Written directly rather than through the settings endpoint, because
+        /// what these tests are about is the copy the approval makes.
+        /// </summary>
+        public async Task SetBusinessStateAsync(int businessId, string state)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            (await db.Businesses.SingleAsync(business => business.Id == businessId)).State = state;
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Edits one preset in place, as the Super Admin surface does. Separate from
+        /// <see cref="ReplacePresetsAsync"/> because a preset a business holds a copy of cannot be
+        /// deleted at all since issue #934 - and because keeping the row's id is what makes "the
+        /// link survived the edit" a thing a test can state.
+        /// </summary>
+        public async Task EditPresetAsync(string name, string newName, string? newUrl, bool isEnabled)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+
+            preset.Name = newName;
+            preset.NormalisedName = SupplierPresetPolicy.NormalisedName(newName);
+            preset.Url = newUrl;
+            preset.IsEnabled = isEnabled;
+
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Adds one more suggestion, leaving the existing ones - and so any copy linked to them -
+        /// exactly as they are.
+        /// </summary>
+        public async Task AddPresetAsync(string name, string? url = null, bool isEnabled = true)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            db.SupplierPresets.Add(new SupplierPreset
+            {
+                Name = name,
+                NormalisedName = SupplierPresetPolicy.NormalisedName(name),
+                Url = url,
+                IsEnabled = isEnabled,
+                ServesNationwide = true,
+                ServedStates = string.Empty,
+                CreatedAtUtc = CreatedAt,
+                UpdatedAtUtc = CreatedAt,
+            });
+            await db.SaveChangesAsync();
+        }
+
         public async Task<IReadOnlyList<SupplierPreset>> PresetsAsync()
         {
             await using var db = TestAppDbContext.Unrestricted(_options);
             return await db.SupplierPresets.AsNoTracking().OrderBy(preset => preset.Id).ToListAsync();
         }
+
+        /// <summary>
+        /// Records what one preset claims about its market, its price basis and its collection route
+        /// (issue #931), so a test can prove those values do not travel into a business's copy.
+        /// </summary>
+        public async Task SetPresetMasterFieldsAsync(
+            string name,
+            bool servesNationwide,
+            string servedStates,
+            bool pricesIncludeGst,
+            SupplierPriceConnector? priceConnector = null,
+            string? priceConnectorKey = null)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+
+            preset.ServesNationwide = servesNationwide;
+            preset.ServedStates = servedStates;
+            preset.PricesIncludeGst = pricesIncludeGst;
+            preset.PriceConnector = priceConnector;
+            preset.PriceConnectorKey = priceConnectorKey;
+
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Every column of <c>Suppliers</c>, so a test can assert that a supplier-master column is
+        /// not among them - the schema's own answer to "is this copied".
+        /// </summary>
+        public Task<List<string>> SupplierColumnNamesAsync() =>
+            MigrationSchemaProbe.ColumnNamesAsync(_connection, "Suppliers");
 
         public async Task<int> SeedBusinessAsync(string name, BusinessStatus status)
         {

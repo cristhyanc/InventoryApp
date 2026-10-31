@@ -1,9 +1,12 @@
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { Capability, CapabilitySet } from '../access/capabilities';
+import { Entitlement } from '../access/entitlement';
 import { OptionVisibility } from '../access/option-visibility';
+import { PlanFeature } from '../access/plan-feature';
+import { planLockOf, planLockSummary } from '../access/plan-lock';
 import { ProviderAvailability } from '../provider/provider-availability.service';
 import { ProviderFeature } from '../provider/provider-feature-permissions';
-import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/provider-lock';
+import { ProviderLock, providerLockOf, providerLockSummary, providerToolsOffered } from '../provider/provider-lock';
 
 /**
  * The application shell's primary navigation (issue #391, parent #383).
@@ -57,6 +60,13 @@ import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/
  * deliberately declares nothing and is never locked (the user's decision of 24 October 2026): it
  * makes no Nayax call at all, reading the Nayax cost already stored on imported sales, so a
  * disconnected business with imported history can still recover those costs.
+ *
+ * Issue #972 brings section headings back, as the owner-approved Restockroo design's four groups:
+ * **Operations** (Dashboard, Pick List, Sites, Machines), **Inventory & purchasing** (the Inventory
+ * and Purchases groups), **Finance & reports** (Expenses and Reports) and **Settings** (the Admin
+ * group). They only label what follows them: every destination, its route, its capability, its
+ * provider dependency and its order are exactly what they were, and the Super Admin group keeps its
+ * own **Super admin** heading, appended with it only for the platform administrator.
  */
 
 /**
@@ -90,21 +100,33 @@ export interface NavLink {
    * a locked entry would offer a tool for data that does not exist.
    */
   readonly hiddenWithoutProvider?: boolean;
+
+  /**
+   * The plan feature this destination's page needs (issue #979), in the same shape
+   * {@link lockedWithout} declares a Nayax dependency. While the business's entitlement does not
+   * include it the entry is shown **locked**, exactly as a provider-locked one is, and its route
+   * redirects to the "needs a plan" page instead of the "needs a provider" one - checked **first**,
+   * because a business that has not bought the feature is told to upgrade rather than to connect a
+   * Nayax account upgrading would make usable anyway.
+   */
+  readonly planLockedWithout?: PlanFeature;
 }
 
 /**
- * A heading over the entries that follow it, with no page and no action of its own (issue #729).
- * It held the live provider destinations together as one "Needs Nayax" section until issue #868
- * removed that section, so nothing declares one today; the type and the sidebar's rendering of it
- * are kept, like {@link NavPlaceholder}, for the next menu that needs a heading. `navigationFor`
- * drops a heading when every entry under it was left out - a heading over nothing says a section
- * exists that this member does not have.
+ * A heading over the entries that follow it, up to the next heading, with no page and no action of
+ * its own (issue #729). It held the live provider destinations together as one "Needs Nayax"
+ * section until issue #868 removed that section; issue #972 uses it for the Restockroo design's
+ * group headings. `navigationFor` drops a heading when every entry under it was left out - a
+ * heading over nothing says a section exists that this member does not have.
  */
 export interface NavSectionHeading {
   readonly kind: 'section';
   readonly label: string;
-  /** The one sentence the heading carries, so the section explains why its entries may be locked. */
-  readonly description: string;
+  /**
+   * An optional sentence under the heading. The issue #972 group headings carry none: their label
+   * is the whole statement, and none of them explains a lock.
+   */
+  readonly description?: string;
 }
 
 /**
@@ -156,6 +178,10 @@ export interface NavGroup {
 
 export type NavItem = NavLink | NavGroup | NavSectionHeading;
 
+function section(label: string): NavSectionHeading {
+  return { kind: 'section', label };
+}
+
 function link(label: string, route: string, capability: Capability): NavLink {
   return { kind: 'link', label, route, capability };
 }
@@ -166,12 +192,28 @@ function providerToolLink(label: string, route: string, capability: Capability):
 }
 
 /**
- * A report over sales this business recorded through Nayax (issue #868). It makes no live read, so
- * it declares `providerRecords`: it is locked only while the business has no Nayax connection at
- * all, and stays open for credentials that stopped working or a read Nayax refused.
+ * A report over sales this business recorded through Nayax (issue #868), and the `Pro` plan feature
+ * every one of them is since issue #967 (`PlanFeature.ProviderSalesReports`): each is a reading of
+ * the provider's sales, so the plan that includes the provider is the plan that includes them
+ * (issue #979). The plan is checked first - a business without the plan is told to upgrade rather
+ * than to connect a Nayax account upgrading would make usable anyway - and the provider dependency
+ * is unchanged: `providerRecords` locks the report only while the business has no Nayax connection
+ * at all, and leaves it open for credentials that stopped working or a read Nayax refused.
  */
 function providerRecordsReportLink(label: string, route: string): NavLink {
-  return { ...link(label, route, 'Reports.View'), lockedWithout: 'providerRecords' };
+  return {
+    ...link(label, route, 'Reports.View'),
+    planLockedWithout: 'ProviderSalesReports',
+    lockedWithout: 'providerRecords'
+  };
+}
+
+/**
+ * A report that needs no sales provider at all - Bookkeeping and the GST accounting aid - but does
+ * need the `Starter` plan since issue #967 (`PlanFeature.BookkeepingAndGstReports`, issue #979).
+ */
+function planOnlyReportLink(label: string, route: string): NavLink {
+  return { ...link(label, route, 'Reports.View'), planLockedWithout: 'BookkeepingAndGstReports' };
 }
 
 /**
@@ -219,18 +261,23 @@ export const adminNavGroup: NavGroup = {
 };
 
 export const primaryNavigation: readonly NavItem[] = [
+  section('Operations'),
   { kind: 'link', label: 'Dashboard', route: '/', icon: 'home', capability: 'Dashboard.View' },
   { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment', capability: 'PickList.View' },
   {
     // A site is known only from the live fleet read's `CustomerID`, so the site list needs that
     // read and has nothing local to fall back on (AGENTS.md § Site commissions). Manual sites are
     // deliberately out of scope of issue #740. It sits immediately above Machines since issue #868,
-    // which removed the "Needs Nayax" section it used to be the first entry of.
+    // which removed the "Needs Nayax" section it used to be the first entry of. Since issue #979 it
+    // also needs the `Pro` plan (`PlanFeature.SalesProviderIntegration`), checked first: a business
+    // without that plan is told to upgrade rather than to connect a Nayax account upgrading would
+    // make usable anyway.
     kind: 'link',
     label: 'Sites',
     route: '/sites',
     icon: 'location_on',
     capability: 'Inventory.Operate',
+    planLockedWithout: 'SalesProviderIntegration',
     lockedWithout: 'machineFleet'
   },
   {
@@ -244,6 +291,7 @@ export const primaryNavigation: readonly NavItem[] = [
     icon: 'refresh',
     capability: 'Inventory.Operate'
   },
+  section('Inventory & purchasing'),
   {
     // "Inventory" rather than "Products" since issue #729 (decision P11): the group holds the whole
     // of the business's own stock keeping, all of which works with no provider at all. The Products
@@ -272,6 +320,7 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Suppliers', '/suppliers', 'Purchasing.Operate')
     ]
   },
+  section('Finance & reports'),
   { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money', capability: 'Expenses.Manage' },
   {
     // Every report is here again since issue #868, which brought the site commission report back
@@ -279,12 +328,14 @@ export const primaryNavigation: readonly NavItem[] = [
     // provider is declared on the entry: Bookkeeping and GST need nothing, the five
     // `providerRecordsReportLink` entries need a Nayax connection to exist at all, and Site
     // Commissions needs the live fleet read. Each one still reports its own availability states
-    // inside the page (#730, #731).
+    // inside the page (#730, #731). Since issue #979 every report also declares the plan feature its
+    // own endpoint requires (`[RequirePlan]` on `ReportsController`), checked before the provider
+    // dependency above: Bookkeeping and GST need `Starter`, and the rest need `Pro`.
     kind: 'group',
     label: 'Reports',
     icon: 'bar_chart',
     children: [
-      link('Bookkeeping', '/reports/bookkeeping', 'Reports.View'),
+      planOnlyReportLink('Bookkeeping', '/reports/bookkeeping'),
       providerRecordsReportLink('Daily', '/reports/daily'),
       providerRecordsReportLink('Transactions', '/reports/transactions'),
       providerRecordsReportLink('Reconciliation', '/reports/reconciliation'),
@@ -295,16 +346,24 @@ export const primaryNavigation: readonly NavItem[] = [
         // no sites to report on and the API answers `isAvailable: false` (issue #731), so it keeps
         // the live fleet read it has always declared. The API puts it on SiteCommissions.Manage
         // rather than Reports.View, because it is the surface the agreements are maintained from
-        // (issue #526); its breadcrumb has always named Reports as its parent page.
+        // (issue #526); its breadcrumb has always named Reports as its parent page. Since issue #979
+        // it also needs the `Pro` plan (`PlanFeature.SiteCommissions`), checked first.
         kind: 'link',
         label: 'Site Commissions',
         route: '/reports/site-commissions',
         capability: 'SiteCommissions.Manage',
+        planLockedWithout: 'SiteCommissions',
         lockedWithout: 'machineFleet'
       },
-      link('GST', '/reports/gst', 'Reports.View')
+      planOnlyReportLink('GST', '/reports/gst')
     ]
   },
+  section('Settings'),
+  // The Plan page (issue #970): the business's plan, storage and connected machines. It declares
+  // Dashboard.View - every role and a support session hold it - because it is visible to every
+  // member rather than gated like the Admin group beside it, so it sits as its own top-level link
+  // under the same heading rather than one of Admin's children.
+  { kind: 'link', label: 'Plan', route: '/plan', icon: 'attach_money', capability: 'Dashboard.View' },
   adminNavGroup
 ];
 
@@ -348,6 +407,30 @@ export const supplierPresetsNavLink: NavLink = {
 };
 
 /**
+ * The Supplier price review page (issue #928): the shared supplier price catalogue's own review -
+ * waiting products, automatic matches and the listings waiting to be confirmed. Like the three links
+ * above it declares no capability, because no business role grants it: only the platform-admin probe
+ * below does.
+ */
+export const priceCatalogueReviewNavLink: NavLink = {
+  kind: 'link',
+  label: 'Supplier Price Review',
+  route: '/super-admin/price-catalogue-review'
+};
+
+/**
+ * The Master Products page (issue #1023): the shared supplier price catalogue itself - every master
+ * product, searchable, with its supplier listings - read only, beside the review above that decides
+ * anything about it. Like the four links above it declares no capability, because no business role
+ * grants it: only the platform-admin probe below does.
+ */
+export const masterProductsNavLink: NavLink = {
+  kind: 'link',
+  label: 'Master Products',
+  route: '/super-admin/master-products'
+};
+
+/**
  * The top-level Super Admin group (issue #546, parent #510 under #328): kept apart from the
  * business `Admin` group because neither of its destinations is granted by a business role.
  * `navigationFor` composes it in only while `GET /api/admin/diagnostics/access` confirms the
@@ -358,8 +441,22 @@ export const superAdminNavGroup: NavGroup = {
   kind: 'group',
   label: 'Super Admin',
   icon: 'settings',
-  children: [platformDiagnosticsNavLink, businessesNavLink, supplierPresetsNavLink]
+  children: [
+    platformDiagnosticsNavLink,
+    businessesNavLink,
+    supplierPresetsNavLink,
+    priceCatalogueReviewNavLink,
+    // Beside the review rather than inside it (issue #1023): the catalogue is browsed here and
+    // decided there.
+    masterProductsNavLink
+  ]
 };
+
+/**
+ * The heading over the Super Admin group (issue #972). It is appended with the group and only with
+ * it, so a member who is not the platform administrator is never shown a heading for it either.
+ */
+export const superAdminNavSection: NavSectionHeading = section('Super admin');
 
 /**
  * The navigation to render for a member, from the capabilities `GET /api/me/access` reported for
@@ -415,7 +512,7 @@ export function navigationFor(
   options?: OptionVisibility
 ): readonly NavItem[] {
   const business: readonly NavItem[] = businessNavigation === 'offered' ? primaryNavigation : [];
-  const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavGroup] : business;
+  const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavSection, superAdminNavGroup] : business;
 
   // A Super Admin is exempt from the switch, so nothing is withheld for them; neither is anything
   // withheld while the capability set itself is unknown, where the whole pass is skipped below.
@@ -483,23 +580,57 @@ function withProviderTools(items: readonly NavItem[], provider: ProviderAvailabi
   });
 }
 
-/** The same navigation without a section heading that has nothing left under it (issue #729). */
+/**
+ * The same navigation without a section heading that has nothing left under it (issue #729): no
+ * entry between it and the next heading, or the end of the menu (issue #972).
+ */
 function withOccupiedSections(items: readonly NavItem[]): readonly NavItem[] {
-  return items.filter(
-    (item, index) => item.kind !== 'section' || items.slice(index + 1).some((next) => next.kind !== 'section')
-  );
+  return items.filter((item, index) => item.kind !== 'section' || isOccupied(items, index));
 }
 
+function isOccupied(items: readonly NavItem[], headingIndex: number): boolean {
+  const next = items[headingIndex + 1];
+  return next !== undefined && next.kind !== 'section';
+}
+
+/** What a destination's lock is right now: a provider lock, unchanged, or a plan lock (issue #979). */
+export type NavLock = ProviderLock | 'plan';
+
 /**
- * How one destination is rendered right now (issue #729): `open` unless it declares a live provider
- * read the shared answer refuses. A destination with no `lockedWithout`, and every destination while
- * that answer has not settled, is `open`.
+ * How one destination is rendered right now: `open` unless it declares a plan feature the
+ * business's entitlement does not include, or a live provider read the shared answer refuses.
+ *
+ * **Plan is checked first** (issue #979's criterion that the order of checks is role, then plan,
+ * then Nayax connection - the capability check already happened in `navigationFor`, before this
+ * destination was even offered): a business whose plan does not include the feature is shown the
+ * plan lock whatever the provider answer is, because upgrading is what would actually open the
+ * page - a Nayax connection it does not yet need would not. A destination with no `planLockedWithout`,
+ * and every destination while the entitlement has not settled, is unaffected by this first check.
+ *
+ * Only once the plan allows it does the provider dependency matter, exactly as it always has: a
+ * destination with no `lockedWithout`, and every destination while that answer has not settled, is
+ * `open`.
  */
-export function navLockOf(navLink: NavLink, provider: ProviderAvailability | undefined): ProviderLock {
+export function navLockOf(
+  navLink: NavLink,
+  entitlement: Entitlement | undefined,
+  provider: ProviderAvailability | undefined
+): NavLock {
+  if (navLink.planLockedWithout !== undefined && planLockOf(entitlement, navLink.planLockedWithout) === 'locked') {
+    return 'plan';
+  }
   if (navLink.lockedWithout === undefined || provider === undefined) {
     return 'open';
   }
   return providerLockOf(provider.features[navLink.lockedWithout]);
+}
+
+/** The one sentence a locked entry carries - a plan lock's own wording, or the provider lock's. */
+export function navLockSummary(lock: NavLock, navLink: NavLink): string {
+  if (lock === 'plan') {
+    return navLink.planLockedWithout === undefined ? '' : planLockSummary(navLink.planLockedWithout, navLink.label);
+  }
+  return providerLockSummary(lock, navLink.label);
 }
 
 /** Every real destination in the navigation, top-level links first, then each group's children. */

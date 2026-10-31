@@ -251,6 +251,30 @@ public class CachingNayaxLynxClientTests
     }
 
     /// <summary>
+    /// A fresh fleet read reports the Nayax account it was authenticated as (issue #978), taken from
+    /// the one credential this decorator resolved and sent the request with - and resolving it still
+    /// costs exactly one connection read, which is the property the cache key already depends on.
+    ///
+    /// <para>That series is what the connected-machine snapshot is stamped with, so it has to come
+    /// from the credential the request carried rather than from a later look at the stored
+    /// connection: an Owner can save a different Nayax account while the request is in flight.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_fresh_fleet_read_reports_the_account_series_it_was_authenticated_as()
+    {
+        var client = new CountingNayaxLynxClient();
+        var credentials = Credentials();
+        var decorated = Decorate(client, credentials, Resolved(1));
+
+        var fleet = await decorated.ReadFleetFreshAsync(CancellationToken.None);
+
+        Assert.Equal(1, fleet.AccountSeries);
+        Assert.Equal(1L, Assert.Single(fleet.Machines).MachineID);
+        Assert.Equal(1, credentials.Resolutions);
+        Assert.Equal(1, client.MachineListCalls);
+    }
+
+    /// <summary>
     /// And the same for the selections' four declared fresh callers - the pick list, Sync Restock, the
     /// machine-stock observation source (the ledger and the stock counts) and the costing transition
     /// preview: each reaches Nayax with a warm cache, and the figures it read become what the cached

@@ -1,11 +1,13 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { SupplierService } from '../../services/supplier.service';
-import { Supplier } from '../../models/models';
+import { AvailableSupplierPreset, Supplier } from '../../models/models';
 import { SupplierGstDefaultsComponent } from './supplier-gst-defaults/supplier-gst-defaults.component';
 import { IconComponent } from '../shared/icon.component';
+import { RolePreviewService } from '../../role-preview/role-preview.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { SUPPLIER_URL_MAX_LENGTH, isSafeSupplierUrl, normalizeSupplierUrl } from './supplier-url';
 
@@ -17,6 +19,14 @@ import { SUPPLIER_URL_MAX_LENGTH, isSafeSupplierUrl, normalizeSupplierUrl } from
 })
 export class SupplierListComponent implements OnInit, OnDestroy {
   suppliers: Supplier[] = [];
+
+  /**
+   * The suppliers from the platform's list this business may add (issue #935): the ones that serve
+   * its state and that it has no copy of. The server decides both, and an empty list is the normal
+   * state - a business that has taken up every suggestion for its state is offered nothing.
+   */
+  availablePresets: AvailableSupplierPreset[] = [];
+
   editing: Supplier | null = null;
   form = { name: '', contactName: '', phone: '', email: '', address: '', url: '' };
 
@@ -27,6 +37,14 @@ export class SupplierListComponent implements OnInit, OnDestroy {
    */
   urlError: string | null = null;
 
+  /**
+   * What the server refused, verbatim, or `null` when nothing is being reported (issue #934). The
+   * refusals a linked supplier produces - its name, its website, a delete, a "Not used" switch it
+   * does not allow - are sentences written for the operator, so they are shown rather than
+   * replaced with a message of this page's own.
+   */
+  error: string | null = null;
+
   /** Mirrors the stored column's limit, so the input stops the operator at the same place. */
   readonly urlMaxLength = SUPPLIER_URL_MAX_LENGTH;
 
@@ -34,18 +52,28 @@ export class SupplierListComponent implements OnInit, OnDestroy {
    * Whether a support session is active (issue #657, extending #554): Create/Update and Delete
    * are hidden while it is, because a session grants `PurchasingOperate` - the capability this
    * page would otherwise gate those on - and the backend refuses the write itself only by its
-   * read-only method rule, never by withholding the capability. See
+   * read-only method rule, never by withholding the capability. The "Not used" switch of issue
+   * #934 is on the same capability and is hidden for exactly the same reason. See
    * `SupportSessionService.active$`.
    */
   sessionActive = false;
 
-  private readonly sessionActiveSubscription: Subscription;
+  /**
+   * Whether this tab is previewing the application as another role (issue #721). It hides the
+   * **Add** action of issue #935 for the same reason `sessionActive` hides the writes above: a
+   * previewed request is read-only server-side, so the action would render and then be refused.
+   */
+  previewActive = false;
+
+  private readonly subscriptions = new Subscription();
 
   constructor(
     private readonly supplierService: SupplierService,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    rolePreview: RolePreviewService
   ) {
-    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.subscriptions.add(supportSession.active$.subscribe((active) => (this.sessionActive = active)));
+    this.subscriptions.add(rolePreview.active$.subscribe((active) => (this.previewActive = active)));
   }
 
   ngOnInit(): void {
@@ -53,11 +81,28 @@ export class SupplierListComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.sessionActiveSubscription.unsubscribe();
+    this.subscriptions.unsubscribe();
   }
 
   load(): void {
-    this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
+    // The one request in the application that asks for the suppliers marked "Not used" (issue
+    // #934): this page is where one is switched back on, which is impossible if it is not shown.
+    this.supplierService.getAllIncludingHidden().subscribe((s) => (this.suppliers = s));
+
+    // And what the business may still add from the platform's list (issue #935). It is read on
+    // every load, so adding one - or acquiring one through a state change in another tab - leaves
+    // this section showing what is actually left.
+    this.supplierService.getAvailablePresets().subscribe((presets) => (this.availablePresets = presets));
+  }
+
+  /**
+   * Whether the **Add** action is offered (issue #935). It is hidden in a read-only support session
+   * and in a role preview, both of which grant the capability this page is gated on and then refuse
+   * every write by their own method rule - so the server refuses the add in both cases whatever
+   * this renders.
+   */
+  get canAddFromPlatformList(): boolean {
+    return !this.sessionActive && !this.previewActive;
   }
 
   /** Whether this supplier's stored website may be rendered as a link (issue #847). */
@@ -65,10 +110,39 @@ export class SupplierListComponent implements OnInit, OnDestroy {
     return isSafeSupplierUrl(supplier.url);
   }
 
+  /**
+   * The same rule for a platform record's website (issue #935). It is the one website rule this
+   * page has, asked of the other shape rather than copied: a value that is not an http(s) address
+   * is shown as plain text and is never clickable, wherever it came from.
+   */
+  canLinkToPreset(preset: AvailableSupplierPreset): boolean {
+    return isSafeSupplierUrl(preset.url);
+  }
+
+  /**
+   * Whether this supplier came from the platform's supplier list (issue #934). The server decides
+   * it; an older response that says nothing is treated as "not linked", which is what every
+   * supplier was before this issue.
+   */
+  isLinked(supplier: Supplier): boolean {
+    return supplier.isLinked === true;
+  }
+
+  /**
+   * Whether the name and website inputs are locked for the supplier being edited. It reads the
+   * server's own `canRename` rather than deriving a second rule from `isLinked`: the backend is the
+   * authority and refuses the write either way, and this is what keeps the form from offering one
+   * it will refuse.
+   */
+  get nameAndWebsiteLocked(): boolean {
+    return this.editing !== null && this.editing.canRename === false;
+  }
+
   startCreate(): void {
     this.editing = null;
     this.form = { name: '', contactName: '', phone: '', email: '', address: '', url: '' };
     this.urlError = null;
+    this.error = null;
   }
 
   startEdit(supplier: Supplier): void {
@@ -84,6 +158,7 @@ export class SupplierListComponent implements OnInit, OnDestroy {
       url: supplier.url ?? ''
     };
     this.urlError = null;
+    this.error = null;
   }
 
   save(): void {
@@ -96,24 +171,38 @@ export class SupplierListComponent implements OnInit, OnDestroy {
     this.urlError = url.error;
     if (url.error) return;
 
+    // A linked copy's name and website are the master's, so the stored values are sent back
+    // unchanged whatever the locked inputs hold. The server compares them and refuses a change;
+    // this makes an edit of the contact details below go through rather than being refused for a
+    // field the operator could not even type in.
+    const locked = this.editing !== null && this.editing.canRename === false;
+
     const payload = {
-      name: this.form.name.trim(),
+      name: locked ? this.editing!.name : this.form.name.trim(),
       contactName: this.form.contactName || null,
       phone: this.form.phone || null,
       email: this.form.email || null,
       address: this.form.address || null,
-      url: url.url
+      url: locked ? this.editing!.url ?? null : url.url
     };
 
+    this.error = null;
+
     if (this.editing) {
-      this.supplierService.update(this.editing.id, payload).subscribe(() => {
-        this.startCreate();
-        this.load();
+      this.supplierService.update(this.editing.id, payload).subscribe({
+        next: () => {
+          this.startCreate();
+          this.load();
+        },
+        error: (response: HttpErrorResponse) => (this.error = this.refusal(response, 'Failed to save the supplier.'))
       });
     } else {
-      this.supplierService.create(payload).subscribe(() => {
-        this.startCreate();
-        this.load();
+      this.supplierService.create(payload).subscribe({
+        next: () => {
+          this.startCreate();
+          this.load();
+        },
+        error: (response: HttpErrorResponse) => (this.error = this.refusal(response, 'Failed to save the supplier.'))
       });
     }
   }
@@ -122,11 +211,81 @@ export class SupplierListComponent implements OnInit, OnDestroy {
     // Checked here as well as hidden in the template, so the write is actually unavailable rather
     // than merely invisible - the endpoint refuses it either way.
     if (this.sessionActive) return;
+    if (supplier.canDelete === false) return;
     if (!confirm(`Delete supplier "${supplier.name}"?`)) return;
-    this.supplierService.delete(supplier.id).subscribe(() => this.load());
+
+    this.error = null;
+    this.supplierService.delete(supplier.id).subscribe({
+      next: () => this.load(),
+      error: (response: HttpErrorResponse) =>
+        (this.error = this.refusal(response, 'Failed to delete the supplier.'))
+    });
+  }
+
+  /**
+   * Sets or clears "Not used" on a linked supplier (issue #934). The row stays either way: what
+   * changes is whether a purchase, a supplier order or a product's order dialog offers it.
+   */
+  setNotUsed(supplier: Supplier, isHidden: boolean): void {
+    if (this.sessionActive) return;
+    if (!this.isLinked(supplier)) return;
+
+    this.error = null;
+    this.supplierService.setNotUsed(supplier.id, isHidden).subscribe({
+      next: () => this.load(),
+      error: (response: HttpErrorResponse) => {
+        this.error = this.refusal(response, 'Failed to change "Not used".');
+        // The switch shows the stored state, so a refused change must not leave it showing the
+        // state the server rejected.
+        this.load();
+      }
+    });
+  }
+
+  /**
+   * Adds one supplier from the platform's list as this business's own linked copy (issue #935).
+   *
+   * The request carries the record's id alone: its name and website are the platform's, and the
+   * business is the caller's own. A refusal is shown verbatim - the server's "already added"
+   * sentence for a record a second tab has just added - and the lists are reloaded either way, so
+   * what is offered afterwards is what the server says is offered.
+   */
+  addFromPreset(preset: AvailableSupplierPreset): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (!this.canAddFromPlatformList) return;
+
+    this.error = null;
+    this.supplierService.addFromPreset(preset.id).subscribe({
+      next: () => this.load(),
+      error: (response: HttpErrorResponse) => {
+        this.error = this.refusal(response, `Failed to add "${preset.name}".`);
+        this.load();
+      }
+    });
   }
 
   cancel(): void {
     this.startCreate();
+  }
+
+  /**
+   * The server's own refusal sentence when it sent one, and a fixed fallback otherwise. Both
+   * shapes the API uses are read: a field-level `errors` map (the website and name refusals) and a
+   * `ProblemDetails` `message`/`detail` (the delete and "Not used" refusals).
+   */
+  private refusal(response: HttpErrorResponse, fallback: string): string {
+    const body = response.error as
+      | { message?: string; detail?: string; errors?: Record<string, string[]> }
+      | null
+      | undefined;
+
+    const fieldMessage = body?.errors
+      ? Object.values(body.errors)
+          .flat()
+          .find((message) => !!message)
+      : undefined;
+
+    return fieldMessage ?? body?.message ?? body?.detail ?? fallback;
   }
 }

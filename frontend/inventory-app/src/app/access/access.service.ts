@@ -21,6 +21,8 @@ import {
 } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { Capability, CapabilitySet, capabilitySet } from './capabilities';
+import { Entitlement } from './entitlement';
+import { PlanFeature, planFeatureAllowed } from './plan-feature';
 import { OptionVisibility } from './option-visibility';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './signed-in-account';
 
@@ -36,6 +38,13 @@ interface MeAccessResponse {
    * does not report it is read as "not known", which hides nothing - see {@link OptionVisibility}.
    */
   historicalGstClassificationVisible?: boolean;
+
+  /**
+   * What the business has bought (issue #966). Optional on the same terms and for the same reason:
+   * an API that does not report it is read as "not known", which withholds nothing - see
+   * {@link Entitlement}.
+   */
+  entitlement?: Entitlement;
 }
 
 /** What the signed-in member may do, as `GET /api/me/access` reported it. */
@@ -58,6 +67,14 @@ export interface MemberAccess {
    * {@link OptionVisibility}.
    */
   readonly optionVisibility?: OptionVisibility;
+
+  /**
+   * What the business has bought (issue #966), or `undefined` when the API did not report it. It
+   * travels with the capabilities because the shell reads both from one answer, and it is **not**
+   * one of them: nothing in this release hides a feature because of a plan - enforcement is #967's,
+   * #977's and #979's work. See {@link Entitlement}.
+   */
+  readonly entitlement?: Entitlement;
 }
 
 /**
@@ -87,6 +104,22 @@ function grantedBy(state: MemberAccessState, capabilities: readonly Capability[]
       return undefined;
     case 'granted':
       return capabilities.some((capability) => state.access.capabilities.has(capability));
+    default:
+      return true;
+  }
+}
+
+/**
+ * Whether `state`'s entitlement includes `feature` (issue #979), or `undefined` while nothing has
+ * been read - the same "not known yet" distinction {@link grantedBy} makes, and the same fail-open
+ * answer for an entitlement nothing could be read about.
+ */
+function planFeatureGrantedBy(state: MemberAccessState, feature: PlanFeature): boolean | undefined {
+  switch (state.status) {
+    case 'unread':
+      return undefined;
+    case 'granted':
+      return planFeatureAllowed(state.access.entitlement, feature);
     default:
       return true;
   }
@@ -225,6 +258,23 @@ export class AccessService implements OnDestroy {
   }
 
   /**
+   * Whether the business's plan includes `feature` (issue #979), now and whenever the access
+   * changes - {@link planFeatureAllowed} over the entitlement the same `GET /api/me/access` answer
+   * carries, waiting for the first answer and failing open exactly as {@link allows} does for a
+   * capability: nothing is emitted while the entitlement has never been read, and one that could
+   * not be read, or an older API that did not report it, offers the feature rather than locking a
+   * legitimate member out of a feature their business may perfectly well have bought.
+   */
+  allowsPlanFeature(feature: PlanFeature): Observable<boolean> {
+    return this.access$.pipe(
+      map((state) => planFeatureGrantedBy(state, feature)),
+      skipWhile((granted) => granted === undefined),
+      map((granted) => granted ?? false),
+      distinctUntilChanged()
+    );
+  }
+
+  /**
    * Re-reads the capabilities, discarding whatever is cached, and emits the answer.
    *
    * This is the explicit refresh other work calls when it knows something relevant changed, and
@@ -321,7 +371,10 @@ export class AccessService implements OnDestroy {
                   ? undefined
                   : {
                       historicalGstClassificationVisible: response.historicalGstClassificationVisible
-                    }
+                    },
+              // Read as reported too, and never defaulted here: an absent field means "not known",
+              // and what that means is the one rule on `Entitlement` - nothing is withheld.
+              entitlement: response.entitlement ?? undefined
             }
           })
         ),

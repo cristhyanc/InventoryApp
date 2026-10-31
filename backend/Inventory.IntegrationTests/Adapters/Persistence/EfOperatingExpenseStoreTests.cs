@@ -35,9 +35,9 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
 
-            var record = await store.AddAsync(Fields(), null, CancellationToken.None);
+            var record = await store.AddAsync(Fields(), null, null, CancellationToken.None);
 
             Assert.Equal("Insurance", record.Description);
             Assert.Null(record.Supplier);
@@ -53,10 +53,10 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
             var attachment = new OperatingExpenseAttachmentMetadata("invoice.pdf", "abc.pdf", "application/pdf", 3);
 
-            var record = await store.AddAsync(Fields(), attachment, CancellationToken.None);
+            var record = await store.AddAsync(Fields(), attachment, null, CancellationToken.None);
 
             Assert.Equal("invoice.pdf", record.AttachmentFileName);
             Assert.Equal("abc.pdf", record.AttachmentStoredFileName);
@@ -72,7 +72,7 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
 
             Assert.Null(await store.FindByIdAsync(999, CancellationToken.None));
         }
@@ -87,8 +87,8 @@ public class EfOperatingExpenseStoreTests
             await using var db = TestAppDbContext.Unrestricted(options);
             db.Suppliers.Add(new Supplier { Id = 1, Name = "Acme" });
             await db.SaveChangesAsync();
-            var store = new EfOperatingExpenseStore(db);
-            var created = await store.AddAsync(Fields(supplierId: 1), null, CancellationToken.None);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
+            var created = await store.AddAsync(Fields(supplierId: 1), null, null, CancellationToken.None);
 
             var found = await store.FindByIdAsync(created.Id, CancellationToken.None);
 
@@ -104,9 +104,9 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
 
-            Assert.Null(await store.UpdateAsync(999, Fields(), null, CancellationToken.None));
+            Assert.Null(await store.UpdateAsync(999, Fields(), null, null, CancellationToken.None));
         }
     }
 
@@ -117,11 +117,11 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
             var attachment = new OperatingExpenseAttachmentMetadata("invoice.pdf", "abc.pdf", "application/pdf", 3);
-            var created = await store.AddAsync(Fields(), attachment, CancellationToken.None);
+            var created = await store.AddAsync(Fields(), attachment, null, CancellationToken.None);
 
-            var updated = await store.UpdateAsync(created.Id, Fields(category: ExpenseCategory.Software), null, CancellationToken.None);
+            var updated = await store.UpdateAsync(created.Id, Fields(category: ExpenseCategory.Software), null, null, CancellationToken.None);
 
             Assert.NotNull(updated);
             Assert.Equal(ExpenseCategory.Software, updated!.Category);
@@ -136,11 +136,19 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
-            var created = await store.AddAsync(Fields(), new OperatingExpenseAttachmentMetadata("old.pdf", "old.pdf", "application/pdf", 3), CancellationToken.None);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
+            var created = await store.AddAsync(
+                Fields(),
+                new OperatingExpenseAttachmentMetadata("old.pdf", "old.pdf", "application/pdf", 3),
+                null,
+                CancellationToken.None);
 
             var updated = await store.UpdateAsync(
-                created.Id, Fields(), new OperatingExpenseAttachmentMetadata("new.png", "new.png", "image/png", 5), CancellationToken.None);
+                created.Id,
+                Fields(),
+                new OperatingExpenseAttachmentMetadata("new.png", "new.png", "image/png", 5),
+                null,
+                CancellationToken.None);
 
             Assert.Equal("new.png", updated!.AttachmentFileName);
             Assert.Equal("new.png", updated.AttachmentStoredFileName);
@@ -161,12 +169,12 @@ public class EfOperatingExpenseStoreTests
         {
             await using var seed = TestAppDbContext.Unrestricted(options);
             seed.Suppliers.Add(new Supplier { Id = 1, Name = "Acme" });
-            var store = new EfOperatingExpenseStore(seed);
-            var created = await store.AddAsync(Fields(), null, CancellationToken.None);
+            var store = new EfOperatingExpenseStore(seed, TestClocks.Fixed);
+            var created = await store.AddAsync(Fields(), null, null, CancellationToken.None);
 
             await using var db = TestAppDbContext.Unrestricted(options);
-            var updateStore = new EfOperatingExpenseStore(db);
-            var updated = await updateStore.UpdateAsync(created.Id, Fields(supplierId: 1), null, CancellationToken.None);
+            var updateStore = new EfOperatingExpenseStore(db, TestClocks.Fixed);
+            var updated = await updateStore.UpdateAsync(created.Id, Fields(supplierId: 1), null, null, CancellationToken.None);
 
             Assert.NotNull(updated!.Supplier);
             Assert.Equal("Acme", updated.Supplier!.Name);
@@ -180,7 +188,7 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
 
             Assert.Null(await store.DeleteAsync(999, CancellationToken.None));
         }
@@ -193,9 +201,9 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
             var attachment = new OperatingExpenseAttachmentMetadata("invoice.pdf", "abc.pdf", "application/pdf", 3);
-            var created = await store.AddAsync(Fields(), attachment, CancellationToken.None);
+            var created = await store.AddAsync(Fields(), attachment, null, CancellationToken.None);
 
             var deleted = await store.DeleteAsync(created.Id, CancellationToken.None);
 
@@ -212,10 +220,10 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
-            await store.AddAsync(Fields(ExpenseCategory.Insurance, new DateTime(2026, 1, 1)), null, CancellationToken.None);
-            await store.AddAsync(Fields(ExpenseCategory.Software, new DateTime(2026, 2, 1)), null, CancellationToken.None);
-            await store.AddAsync(Fields(ExpenseCategory.Insurance, new DateTime(2026, 3, 1)), null, CancellationToken.None);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
+            await store.AddAsync(Fields(ExpenseCategory.Insurance, new DateTime(2026, 1, 1)), null, null, CancellationToken.None);
+            await store.AddAsync(Fields(ExpenseCategory.Software, new DateTime(2026, 2, 1)), null, null, CancellationToken.None);
+            await store.AddAsync(Fields(ExpenseCategory.Insurance, new DateTime(2026, 3, 1)), null, null, CancellationToken.None);
 
             var filter = new OperatingExpenseFilter(null, null, ExpenseCategory.Insurance, null, null, null);
             var result = await store.ListAsync(filter, CancellationToken.None);
@@ -233,11 +241,11 @@ public class EfOperatingExpenseStoreTests
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var store = new EfOperatingExpenseStore(db);
-            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 2, 28)), null, CancellationToken.None);
-            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 3, 1)), null, CancellationToken.None);
-            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 3, 31)), null, CancellationToken.None);
-            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 4, 1)), null, CancellationToken.None);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
+            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 2, 28)), null, null, CancellationToken.None);
+            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 3, 1)), null, null, CancellationToken.None);
+            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 3, 31)), null, null, CancellationToken.None);
+            await store.AddAsync(Fields(expenseDate: new DateTime(2026, 4, 1)), null, null, CancellationToken.None);
 
             var filter = new OperatingExpenseFilter(new DateTime(2026, 3, 1), new DateTime(2026, 3, 31), null, null, null, null);
             var result = await store.ListAsync(filter, CancellationToken.None);
@@ -257,8 +265,8 @@ public class EfOperatingExpenseStoreTests
             await using var db = TestAppDbContext.Unrestricted(options);
             db.Suppliers.Add(new Supplier { Id = 1, Name = "Acme" });
             await db.SaveChangesAsync();
-            var store = new EfOperatingExpenseStore(db);
-            await store.AddAsync(Fields(supplierId: 1), null, CancellationToken.None);
+            var store = new EfOperatingExpenseStore(db, TestClocks.Fixed);
+            await store.AddAsync(Fields(supplierId: 1), null, null, CancellationToken.None);
 
             var result = await store.ListAsync(new OperatingExpenseFilter(null, null, null, null, null, null), CancellationToken.None);
 

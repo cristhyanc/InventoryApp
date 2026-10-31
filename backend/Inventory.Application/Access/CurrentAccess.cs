@@ -1,3 +1,5 @@
+using Inventory.Application.Attachments;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.Access;
@@ -47,13 +49,46 @@ namespace Inventory.Application.Access;
 /// restores it only to a member whose capabilities already allowed it. The classification
 /// endpoints keep authorizing every request by <c>Data.Repair</c> whatever this says.</para>
 /// </param>
+/// <param name="Entitlement">
+/// What the business this request acts in has <em>bought</em> (issue #966), from
+/// <see cref="Subscriptions.GetEffectiveEntitlement"/>: the effective plan, where it came from and
+/// when it ends - or, while the rollout setting is off, that nothing is enforced at all, which is
+/// the shipped state and today's behaviour.
+///
+/// <para>It is reported here for the reason the option visibility above is: this is the one read the
+/// shell builds its menu from, so "what may I do", "what is on offer" and "what has this business
+/// bought" have to arrive together or a menu can be built from one without the others. It is
+/// computed per request with no server cache, and there is deliberately no second read endpoint and
+/// no caller-supplied business id.</para>
+///
+/// <para><strong>It is not a capability and never implies one.</strong>
+/// <see cref="Capabilities"/> is unchanged by it: a plan says what the business bought, a role says
+/// what this member may do with it, and the Nayax connection is a third, separate condition. Which
+/// features a plan withholds is the enforcement work of #967 and #977; this is the answer those
+/// tasks read.</para>
+/// </param>
+/// <param name="AttachmentStorage">
+/// How much of the business's attachment storage allowance it is using, what that allowance is and
+/// which warning state that puts it in (issue #968), or <see langword="null"/> when no plan is
+/// being enforced for it - in which case there is no allowance to be a percentage of, nothing is
+/// reserved and nothing is withheld.
+///
+/// <para>It is reported beside <paramref name="Entitlement"/> for the reason the entitlement itself
+/// is reported beside the capabilities: a page that warns at 80% and explains a refused upload at
+/// 100% has to read the figures and the plan in one answer, or it will show a percentage of a limit
+/// the same response contradicts. It is not a capability and implies none - at capacity, viewing,
+/// downloading and deleting attachments and recording purchases and expenses without one all keep
+/// working, and nothing is ever deleted automatically.</para>
+/// </param>
 public sealed record CurrentAccess(
     BusinessRole? Role,
     IReadOnlyList<Capability> Capabilities,
     string BusinessName,
     string TimeZoneId,
     CurrentSupportSession? SupportSession,
-    bool HistoricalGstClassificationVisible);
+    bool HistoricalGstClassificationVisible,
+    EffectiveEntitlement Entitlement,
+    AttachmentStorageStatus? AttachmentStorage);
 
 /// <summary>
 /// The support session a request is inside, as the caller's own access report describes it

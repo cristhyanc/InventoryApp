@@ -64,8 +64,9 @@
                       <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(c)">Edit</button>
                       <!-- Hidden rather than disabled while a support session is active (issue
                            #737, extending #554): a session grants InventoryOperate, so this write
-                           would otherwise still render. -->
-                      @if (!sessionActive) {
+                           would otherwise still render. Also hidden for a category the provider
+                           names (issue #1026): the API refuses that delete outright. -->
+                      @if (!sessionActive && !providerManaged(c)) {
                         <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(c)">Delete</button>
                       }
                     </div>

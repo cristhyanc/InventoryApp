@@ -1,7 +1,9 @@
+using System.Linq.Expressions;
 using Inventory.Application.MachineStockSync;
 using Inventory.Domain.Nayax;
 using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace Inventory.Infrastructure.Persistence;
@@ -28,6 +30,12 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     /// <c>WHERE</c> clause <em>is</em> both comparisons, so two concurrent syncs cannot read, judge
     /// and overwrite the stored coverage in a way that loses the newer of them, and no run can
     /// record coverage against credentials it cannot have used.
+    ///
+    /// <para><strong>Nothing left to sync</strong> (issue #1018) is a further condition of the same
+    /// statement: the machine's provider number <paramref name="nayaxMachineId"/> has no event that
+    /// <see cref="IsPendingSince"/> counts from <paramref name="pendingFromUtc"/>. Being part of the
+    /// <c>WHERE</c> clause rather than a read before it, an event imported by a concurrent sync
+    /// cannot land between the check and the write.</para>
     ///
     /// <para><strong>The credential fence.</strong> The statement's first condition is that the
     /// business's stored connection <em>still</em> holds exactly
@@ -67,12 +75,22 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     /// business could not be resolved matches no connection and no machine.</para>
     /// </summary>
     public async Task<bool> TryRecordSuccessfulSyncAsync(
-        long localMachineId, DateTime startedAtUtc, int credentialRevision, CancellationToken cancellationToken)
+        long localMachineId,
+        DateTime startedAtUtc,
+        int credentialRevision,
+        long nayaxMachineId,
+        DateTime pendingFromUtc,
+        CancellationToken cancellationToken)
     {
         SetBasedWriteEnforcer.RequireWritableScope(_db);
 
+        // Issue #1018: "synced" means nothing is left to sync, so the machine's pending events - by
+        // the very predicate the reminder counts with - are a third condition of the same statement.
+        var pendingEvents = _db.NayaxMachineStockEvents.Where(IsPendingSince(pendingFromUtc));
+
         var updated = await _db.Machines
             .Where(machine => machine.Id == localMachineId
+                && !pendingEvents.Any(stockEvent => stockEvent.MachineId == nayaxMachineId)
                 && _db.BusinessNayaxConnections.Any(
                     connection => connection.CredentialRevision == credentialRevision)
                 && (machine.LastSuccessfulRestockSyncCredentialRevision == null
@@ -103,8 +121,12 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     /// still <c>Unprocessed</c> and not explicitly reconciled as already recorded manually. A
     /// needs-review, an insufficient-stock and an unresolved possible-duplicate event therefore all
     /// count - each is work an operator still has to do - while an applied event and one reconciled
-    /// as already recorded manually do not. There is no date bound: work that ages out of the Sync
-    /// Restock dialog's default window is still work.</para>
+    /// as already recorded manually do not. Two further bounds come from issue #948: only events at
+    /// or after <paramref name="pendingFromUtc"/> count, and an event whose parsed quantity is zero
+    /// or negative never counts - that is a machine discrepancy, which
+    /// <c>NayaxMachineStockApplyPolicy</c> never applies, not a restock. An unparsed event has no
+    /// quantity and still counts, because it needs review. Nothing outside those bounds is changed:
+    /// it is simply not on the Dashboard, and Sync Restock still lists it.</para>
     ///
     /// <para>A machine whose stored external id is not text <see cref="NayaxExternalId"/> could have
     /// written resolves to no provider number, so its events cannot be found and it is reported with
@@ -112,7 +134,7 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     /// because that is recorded against the local machine.</para>
     /// </summary>
     public async Task<IReadOnlyList<MachineRestockSyncCoverageRecord>> GetProviderMachineCoverageAsync(
-        CancellationToken cancellationToken)
+        DateTime pendingFromUtc, CancellationToken cancellationToken)
     {
         var machines = await _db.Machines
             .AsNoTracking()
@@ -136,9 +158,7 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
 
         var pending = await _db.NayaxMachineStockEvents
             .AsNoTracking()
-            .Where(stockEvent =>
-                stockEvent.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
-                && stockEvent.DuplicateResolution != NayaxDuplicateResolution.ReconciledManually)
+            .Where(IsPendingSince(pendingFromUtc))
             .GroupBy(stockEvent => stockEvent.MachineId)
             .Select(group => new
             {
@@ -167,6 +187,20 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
             })
             .ToList();
     }
+
+    /// <summary>
+    /// What counts as pending restock work (issues #891 and #948), written once: still
+    /// <c>Unprocessed</c>, not reconciled as already recorded manually, dated at or after
+    /// <paramref name="pendingFromUtc"/>, and positive or unparsed. The reminder's counts and the
+    /// "nothing left to sync" condition of the coverage write (issue #1018) both use it, so the two
+    /// can never disagree about whether a machine has work left.
+    /// </summary>
+    private static Expression<Func<NayaxMachineStockEvent, bool>> IsPendingSince(DateTime pendingFromUtc) =>
+        stockEvent =>
+            stockEvent.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed
+            && stockEvent.DuplicateResolution != NayaxDuplicateResolution.ReconciledManually
+            && stockEvent.EventDateTimeGmt >= pendingFromUtc
+            && (stockEvent.ParsedQuantity == null || stockEvent.ParsedQuantity > 0);
 
     /// <summary>
     /// The grouped <c>MIN</c> above is computed by SQLite, so its value does not pass through the

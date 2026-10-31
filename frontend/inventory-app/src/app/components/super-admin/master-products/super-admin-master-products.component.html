@@ -1,0 +1,140 @@
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Master Products</h1>
+      <p class="page-subtitle">
+        Every product in the shared supplier price catalogue. Searching and paging happen on the server, and nothing on
+        this page changes the catalogue — a product is created or corrected in Supplier Price Review.
+      </p>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Catalogue</h2>
+      <form class="flex flex-wrap items-center gap-2" (ngSubmit)="search()">
+        <label class="text-sm" for="master-product-search">
+          Search
+          <input
+            id="master-product-search"
+            class="ml-2"
+            type="search"
+            name="search"
+            autocomplete="off"
+            placeholder="Brand or name"
+            [(ngModel)]="searchText"
+            data-testid="master-product-search"
+          />
+        </label>
+        <button type="submit" class="btn btn-secondary btn-sm" data-testid="master-product-search-submit">Search</button>
+        @if (appliedSearch) {
+          <button type="button" class="btn btn-secondary btn-sm" (click)="clearSearch()" data-testid="master-product-search-clear">
+            Clear
+          </button>
+        }
+      </form>
+    </div>
+    <div class="card-body">
+      @if (loading) {
+        <p class="text-sm value-muted">Loading master products…</p>
+      } @else if (loadError) {
+        <p class="text-sm text-red-600" role="alert" data-testid="master-product-error">
+          Unable to load master products.
+          <button type="button" class="btn btn-secondary btn-sm ml-2" (click)="load()">Try again</button>
+        </p>
+      } @else if (products.length === 0) {
+        <p class="text-sm value-muted" data-testid="master-product-empty">
+          @if (appliedSearch) {
+            No master product matches “{{ appliedSearch }}”.
+          } @else {
+            No master products yet.
+          }
+        </p>
+      } @else {
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Brand</th>
+              <th scope="col" class="table-cell">Name</th>
+              <th scope="col" class="table-cell">Size</th>
+              <!-- Counts of supplier listings, by what the catalogue thinks of each one. Refused
+                   listings are counted too: a refusal is kept rather than deleted, and a product
+                   with nothing but refusals is not a product nobody has looked up. -->
+              <th scope="col" class="table-cell">Listings</th>
+              <th scope="col" class="table-cell">Confirmed</th>
+              <th scope="col" class="table-cell">Needs review</th>
+              <th scope="col" class="table-cell">Added</th>
+              <th scope="col" class="table-cell">Last changed</th>
+              <th scope="col" class="table-cell">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (product of products; track product.id) {
+              <tr class="table-row">
+                <td class="table-cell">{{ product.brand }}</td>
+                <td class="table-cell">{{ product.name }}</td>
+                <td class="table-cell">{{ sizeLabel(product) }}</td>
+                <td class="table-cell">{{ product.listingCounts.total }}</td>
+                <td class="table-cell">{{ product.listingCounts.confirmed }}</td>
+                <td class="table-cell">
+                  @if (product.listingCounts.needsReview > 0) {
+                    <span class="badge badge-warning">{{ product.listingCounts.needsReview }}</span>
+                  } @else {
+                    {{ product.listingCounts.needsReview }}
+                  }
+                </td>
+                <td class="table-cell">{{ product.createdAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}</td>
+                <td class="table-cell">{{ product.updatedAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}</td>
+                <td class="table-cell">
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    (click)="toggleListings(product)"
+                    [attr.aria-expanded]="selectedProductId === product.id"
+                    [attr.data-testid]="'master-product-listings-' + product.id"
+                  >
+                    {{ selectedProductId === product.id ? 'Hide listings' : 'View listings' }}
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+
+        <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+          <p class="text-sm value-muted" data-testid="master-product-page-summary">
+            Showing {{ firstOnPage }}–{{ lastOnPage }} of {{ totalCount }}
+          </p>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              [disabled]="page <= 1"
+              (click)="previousPage()"
+              data-testid="master-product-previous"
+            >
+              Previous
+            </button>
+            <span class="text-sm value-muted">Page {{ page }}</span>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              [disabled]="!hasMore"
+              (click)="nextPage()"
+              data-testid="master-product-next"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      }
+    </div>
+  </section>
+
+  @if (selectedProductId !== null) {
+    <app-super-admin-master-product-detail
+      [productId]="selectedProductId"
+      (closed)="closeListings()"
+    ></app-super-admin-master-product-detail>
+  }
+</div>

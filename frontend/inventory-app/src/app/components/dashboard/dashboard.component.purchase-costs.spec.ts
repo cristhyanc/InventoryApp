@@ -11,6 +11,7 @@ import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -164,6 +165,7 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries } },
+      { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => doubles.financials ?? of(true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]
@@ -176,7 +178,7 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
 
 function alertsSection(host: HTMLElement): HTMLElement {
   const section = Array.from(host.querySelectorAll('section.card')).find((el) =>
-    el.textContent?.includes('Reorder Alerts')
+    el.textContent?.includes('Reorder priorities')
   );
   return section as HTMLElement;
 }
@@ -185,10 +187,16 @@ function alertHeaders(host: HTMLElement): (string | undefined)[] {
   return Array.from(alertsSection(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
 }
 
-/** One array of trimmed cell texts per rendered reorder-alert row. */
+/**
+ * One array of trimmed cell texts per rendered reorder-alert row, without the observed Cheapest
+ * supplier cell issue #981 appended: these tests are about the recorded purchase costs, and the
+ * supplier column has its own spec.
+ */
 function alertRows(host: HTMLElement): (string | undefined)[][] {
   return Array.from(alertsSection(host).querySelectorAll('tbody tr')).map((row) =>
-    Array.from(row.querySelectorAll('td')).map((cell) => cell.textContent?.trim())
+    Array.from(row.querySelectorAll('td'))
+      .filter((cell) => cell.querySelector('app-cheapest-supplier-cell') === null)
+      .map((cell) => cell.textContent?.trim())
   );
 }
 
@@ -202,20 +210,32 @@ function retryButton(host: HTMLElement): HTMLButtonElement | null {
 describe('Reorder Alerts purchase-cost columns (issue #789)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('adds Last purchase and Cheapest purchase after Need to Order and removes Stock after machine need', async () => {
+  it('shows Last purchase and Cheapest purchase after Need to Order, in the issue #972 overview columns', async () => {
     const { host } = await render();
 
     expect(alertHeaders(host)).toEqual([
       'Product',
-      'Stock',
-      'Low Stock Threshold',
+      'Storage stock',
       'Machine need',
-      'Restock To',
-      'On order',
       'Need to Order',
       'Last purchase',
-      'Cheapest purchase'
+      'Cheapest purchase',
+      'Cheapest supplier'
     ]);
+  });
+
+  /**
+   * Rewritten for issue #1016: the owner asked for the note above the table to go, and for the
+   * sentence not to be moved anywhere else on the dashboard. That is a requirement change, not a
+   * weakened test - so this now holds the removal, and the headings that say which figure each
+   * column is are asserted by the test above it.
+   */
+  it('carries no note row about the historical recorded costs (issue #1016)', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="purchase-cost-note"]')).toBeNull();
+    expect(alertsSection(host).textContent).not.toContain('historical costs');
+    expect(alertsSection(host).textContent).not.toContain('past purchases');
   });
 
   it('keeps the Unit Price column absent', async () => {
@@ -296,16 +316,11 @@ describe('Reorder Alerts purchase costs without Dashboard.ViewFinancials (issue 
   it('still shows the rest of the Reorder Alerts row', async () => {
     const { host } = await render({ financials: of(false) });
 
-    expect(alertHeaders(host)).toEqual([
-      'Product',
-      'Stock',
-      'Low Stock Threshold',
-      'Machine need',
-      'Restock To',
-      'On order',
-      'Need to Order'
-    ]);
-    expect(alertRows(host)[0]).toEqual(['Cola 375mL', '2', '5', '4', '30', '0', '28']);
+    // The observed Cheapest supplier column (issue #981) follows its endpoint's own Dashboard.View,
+    // exactly as on Needs Ordering; only the recorded purchase costs are withheld.
+    expect(alertHeaders(host)).toEqual(['Product', 'Storage stock', 'Machine need', 'Need to Order', 'Cheapest supplier']);
+    expect(alertRows(host)[0]).toEqual(['Cola 375mL', '2', '4', '28']);
+    expect(host.querySelector('[data-testid="purchase-cost-note"]')).toBeNull();
   });
 
   it('requests the costs once the capability answer arrives after the alert list', async () => {
@@ -333,7 +348,7 @@ describe('Reorder Alerts purchase costs when the request fails (issue #789)', ()
     expect(alertRows(host)[0].slice(-2)).toEqual(['Unavailable', 'Unavailable']);
     expect(retryButton(host)).not.toBeNull();
     // The dashboard around the two columns is untouched by their failure.
-    expect(alertRows(host)[0].slice(0, 7)).toEqual(['Cola 375mL', '2', '5', '4', '30', '0', '28']);
+    expect(alertRows(host)[0].slice(0, 4)).toEqual(['Cola 375mL', '2', '4', '28']);
     expect(host.textContent).toContain('Sales this week');
     expect(host.textContent).toContain('$1,234.56');
   });
@@ -431,5 +446,55 @@ describe('Reorder Alerts purchase costs across a changed product set (issue #789
 
     expect(alertRows(host)[0].slice(-2)).toEqual(['Acme · $1.25', 'Budget Wholesale · $0.95']);
     expect(retryButton(host)).toBeNull();
+  });
+});
+
+/**
+ * The Reorder priorities overview (issue #972): the first five products of the authoritative reorder
+ * list, in the backend's order, and a link to the full list that names its real length. The
+ * purchase costs are asked for only for the products the overview shows.
+ */
+describe('Reorder priorities overview (issue #972)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  const seven = Array.from({ length: 7 }, (_, index) =>
+    product({ id: index + 1, name: `Product ${index + 1}`, needToOrder: 30 - index, onOrderQuantity: index === 0 ? 6 : 0 })
+  );
+
+  it('shows the first five products in the order the list published them', async () => {
+    const { host } = await render({ alerts: [of(machineAwareAlerts(seven))] });
+
+    expect(alertRows(host).map((row) => row[0])).toEqual(['Product 1', 'Product 2', 'Product 3', 'Product 4', 'Product 5']);
+  });
+
+  it('links to the full list with its real length', async () => {
+    const { host } = await render({ alerts: [of(machineAwareAlerts(seven))] });
+    const link = host.querySelector<HTMLAnchorElement>('[data-testid="reorder-view-all"]');
+
+    expect(link?.textContent).toContain('View all 7 products needing ordering');
+    expect(link?.getAttribute('href')).toBe('/products/needs-ordering');
+  });
+
+  it('asks for the purchase costs of the five products shown only', async () => {
+    const { getSummaries } = await render({ alerts: [of(machineAwareAlerts(seven))] });
+
+    expect(getSummaries).toHaveBeenCalledWith([1, 2, 3, 4, 5]);
+  });
+
+  it('keeps the reorder quantities as published, with what is already on order beside the need', async () => {
+    const { host } = await render({ alerts: [of(machineAwareAlerts(seven))] });
+
+    expect(alertRows(host)[0][3]).toContain('30');
+    expect(alertRows(host)[0][3]).toContain('6 on order');
+  });
+
+  it('renders the same five products as cards for a narrow screen', async () => {
+    const { host } = await render({ alerts: [of(machineAwareAlerts(seven))] });
+    const cards = Array.from(host.querySelectorAll('[data-testid="reorder-cards"] > li'));
+
+    expect(cards).toHaveLength(5);
+    expect(cards[0].textContent).toContain('Last purchase:');
+    expect(cards[0].textContent).toContain('Cheapest purchase:');
+    expect(cards[0].textContent).toContain('Budget Wholesale · $0.95');
   });
 });

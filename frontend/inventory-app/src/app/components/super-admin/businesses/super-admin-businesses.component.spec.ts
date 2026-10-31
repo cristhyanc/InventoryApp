@@ -6,8 +6,24 @@ import {
   SuperAdminBusinessDecision,
   SuperAdminBusinessesService
 } from '../../../services/super-admin-businesses.service';
+import { SuperAdminPlanGrant, SuperAdminPlanGrantsService } from '../../../services/super-admin-plan-grants.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+
+/** A business that holds no manual grant, which is what the Plan dialog loads unless a test says otherwise. */
+const noPlanGrant: SuperAdminPlanGrant = {
+  businessId: 9,
+  name: 'Snack Co',
+  hasGrant: false,
+  plan: null,
+  startsAtUtc: null,
+  endsAtUtc: null,
+  endsOnUtc: null,
+  reason: null,
+  revision: 0,
+  grantedAtUtc: null,
+  active: false
+};
 
 function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusiness {
   return {
@@ -19,8 +35,10 @@ function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusine
     decidedAtUtc: null,
     contactEmail: 'owner@example.com',
     abn: '12345678901',
+    state: 'QLD',
     activeMemberCount: 1,
     nayaxConfigured: false,
+    nayaxConnectionStatus: 'NotConfigured',
     ...overrides
   };
 }
@@ -28,7 +46,8 @@ function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusine
 async function render(
   service: Partial<SuperAdminBusinessesService>,
   toast?: Partial<ToastService>,
-  supportSession?: Partial<SupportSessionService>
+  supportSession?: Partial<SupportSessionService>,
+  planGrants?: Partial<SuperAdminPlanGrantsService>
 ) {
   await TestBed.configureTestingModule({
     imports: [SuperAdminBusinessesComponent],
@@ -38,7 +57,11 @@ async function render(
         provide: ToastService,
         useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast }
       },
-      { provide: SupportSessionService, useValue: { start: jest.fn(), ...supportSession } }
+      { provide: SupportSessionService, useValue: { start: jest.fn(), ...supportSession } },
+      {
+        provide: SuperAdminPlanGrantsService,
+        useValue: { get: jest.fn(() => of(noPlanGrant)), set: jest.fn(), end: jest.fn(), ...planGrants }
+      }
     ]
   }).compileComponents();
 
@@ -72,6 +95,72 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).toContain('No');
   });
 
+  /**
+   * Issue #933: the state a business recorded is shown when its application is reviewed, and a
+   * business that recorded none shows that rather than a guess.
+   */
+  it('shows the state of each business, and an em dash for one with none', async () => {
+    const { host } = await render({
+      list: () => of([business(), business({ businessId: 10, name: 'Legacy Co', state: null })])
+    });
+
+    const states = Array.from(host.querySelectorAll('[data-testid="business-state"]')).map(
+      (cell) => cell.textContent?.trim()
+    );
+
+    expect(states).toEqual(['QLD', '—']);
+  });
+
+  /**
+   * Issue #983: a coloured dot next to each business name says how usable its Nayax connection was
+   * at its last test - green for `Ready`, orange for either state that is stored but not working,
+   * and red for one with nothing stored.
+   */
+  it.each<[SuperAdminBusiness['nayaxConnectionStatus'], string]>([
+    ['Ready', 'bg-rr-ok-text'],
+    ['PendingPermissions', 'bg-rr-warn-text'],
+    ['NeedsAttention', 'bg-rr-warn-text'],
+    ['NotConfigured', 'bg-rr-danger-text']
+  ])('shows a %s business with a %s dot', async (nayaxConnectionStatus, expectedClass) => {
+    const { host } = await render({ list: () => of([business({ nayaxConnectionStatus })]) });
+
+    const dot = rowFor(host, 'Snack Co').querySelector('[data-testid="nayax-connection-dot"]');
+
+    expect(dot).not.toBeNull();
+    expect(dot!.classList).toContain(expectedClass);
+  });
+
+  /**
+   * Issue #983: colour is never the only signal, and the two orange states stay distinct - each of
+   * the four has its own tooltip and its own screen-reader label.
+   */
+  it.each<[SuperAdminBusiness['nayaxConnectionStatus'], string]>([
+    ['Ready', 'Nayax verified at last test'],
+    ['PendingPermissions', 'Nayax token saved, not tested yet'],
+    ['NeedsAttention', 'Nayax last test failed'],
+    ['NotConfigured', 'Nayax not set up']
+  ])('describes a %s connection as "%s" in text as well as colour', async (nayaxConnectionStatus, expectedLabel) => {
+    const { host } = await render({ list: () => of([business({ nayaxConnectionStatus })]) });
+
+    const row = rowFor(host, 'Snack Co');
+
+    expect(row.querySelector('[data-testid="nayax-connection-dot"]')!.getAttribute('title')).toBe(expectedLabel);
+    expect(row.querySelector('[data-testid="nayax-connection-label"]')!.textContent?.trim()).toBe(expectedLabel);
+  });
+
+  /**
+   * Issue #983: the dot carries no text of its own, so the label beside it is the one thing a
+   * screen reader announces - the status is never read out twice.
+   */
+  it('hides the dot itself from assistive technology and keeps the label visually hidden', async () => {
+    const { host } = await render({ list: () => of([business({ nayaxConnectionStatus: 'Ready' })]) });
+
+    const row = rowFor(host, 'Snack Co');
+
+    expect(row.querySelector('[data-testid="nayax-connection-dot"]')!.getAttribute('aria-hidden')).toBe('true');
+    expect(row.querySelector('[data-testid="nayax-connection-label"]')!.classList).toContain('sr-only');
+  });
+
   it('shows an error state when the list fails to load', async () => {
     const { host } = await render({ list: () => throwError(() => new Error('boom')) });
 
@@ -101,7 +190,7 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
 
   it.each<[SuperAdminBusiness['status'], string[]]>([
     ['Pending', ['Approve', 'Reject']],
-    ['Active', ['View as this business', 'Deactivate']],
+    ['Active', ['View as this business', 'Plan', 'Deactivate']],
     ['Deactivated', ['Reactivate', 'Members']]
   ])('for a %s business, offers %s', async (status, expectedButtons) => {
     const list = jest.fn(() => of([business({ status })]));
@@ -296,5 +385,55 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
 
     expect(start).toHaveBeenCalledWith(9, 'Investigating a reported bug');
     expect(host.textContent).not.toContain('View as Snack Co');
+  });
+
+  /**
+   * Issue #982: the Plan action is offered for a trading business, opens the dedicated dialog, and
+   * the dialog reads that business's own grant - this table carries no plan of its own.
+   */
+  it('opens the plan grant dialog for an active business', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const get = jest.fn(() => of(noPlanGrant));
+    const { fixture, host } = await render({ list }, undefined, undefined, { get });
+
+    buttonWithText(host, 'Plan').click();
+    fixture.detectChanges();
+
+    expect(get).toHaveBeenCalledWith(9);
+    expect(host.textContent).toContain('Plan for Snack Co');
+  });
+
+  it('reports a saved grant and closes the dialog when it is dismissed (issue #982)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const set = jest.fn(() => of({ ...noPlanGrant, hasGrant: true, plan: 'Pro', revision: 1, active: true }));
+    const success = jest.fn();
+    const { fixture, host } = await render({ list }, { success }, undefined, { set });
+
+    buttonWithText(host, 'Plan').click();
+    fixture.detectChanges();
+
+    const reason = host.querySelector('#grant-reason') as HTMLTextAreaElement;
+    reason.value = 'Complimentary pilot';
+    reason.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    buttonWithText(host, 'Save grant').click();
+    fixture.detectChanges();
+
+    expect(set).toHaveBeenCalledWith(9, 'Starter', null, 'Complimentary pilot', 0);
+    expect(success).toHaveBeenCalledWith('The plan grant was saved.');
+
+    buttonWithText(host, 'Cancel').click();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Plan for Snack Co');
+  });
+
+  /** A pending application has no plan to grant yet, so the action is not offered on its row. */
+  it('offers no plan action for a business that is not trading (issue #982)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Pending' })]));
+    const { host } = await render({ list });
+
+    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="plan-grant"]')).toBeNull();
   });
 });

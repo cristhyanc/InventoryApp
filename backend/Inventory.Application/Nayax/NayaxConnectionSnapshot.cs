@@ -19,6 +19,12 @@ namespace Inventory.Application.Nayax;
 /// <see cref="Status"/>, because the store stops before the ciphertext in that case: a refused state
 /// never handles the secret at all. It is never <see langword="null"/> for a status the gate allowed
 /// while the row holds credentials.
+///
+/// <see cref="AccountSeries"/> is read in that same statement, for the same reason and one more
+/// (issue #978): it is the non-secret provenance of <em>which Nayax account</em> this snapshot's
+/// credentials belong to, so a call made with them can report what it was authenticated as instead of
+/// a later, separate read of the connection having to guess. A second read is not a weaker version of
+/// this - it is a different fact, because an Owner can save a different account in between.
 /// </summary>
 public sealed class NayaxConnectionSnapshot
 {
@@ -28,14 +34,29 @@ public sealed class NayaxConnectionSnapshot
     /// when the caller's gate refused <paramref name="status"/> and the token was therefore never
     /// decrypted.
     /// </param>
-    public NayaxConnectionSnapshot(NayaxConnectionStatus status, NayaxConnectionCredential? credential)
+    /// <param name="accountSeries">
+    /// The account series stored on that same row (issue #978), or <see langword="null"/> when the
+    /// snapshot's source cannot say. It carries no part of a credential.
+    /// </param>
+    public NayaxConnectionSnapshot(
+        NayaxConnectionStatus status,
+        NayaxConnectionCredential? credential,
+        int? accountSeries = null)
     {
         Status = status;
         Credential = credential;
+        AccountSeries = accountSeries;
     }
 
     /// <summary>The connection status this snapshot's credential belongs to.</summary>
     public NayaxConnectionStatus Status { get; }
+
+    /// <summary>
+    /// Which Nayax account the row this snapshot came from holds credentials for, as the business's
+    /// own internal series (issue #978), or <see langword="null"/> when the source cannot say. Never
+    /// the operator id, a token or any part of a credential.
+    /// </summary>
+    public int? AccountSeries { get; }
 
     /// <summary>
     /// The credential read with <see cref="Status"/>, or <see langword="null"/> when the status was

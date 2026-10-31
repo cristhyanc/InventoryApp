@@ -1,0 +1,12 @@
+{
+  "$comment": "The Apify MCP server the collector run is given (issue #926, parent #817), as a Claude Code --mcp-config document. The server is offered exactly the actors apify-limits.json allows - apify-guard.test.mjs asserts the two lists agree - so an actor nobody reviewed is neither offered nor callable. The token is ${APIFY_TOKEN}, expanded from the environment the scheduled workflow sets (#929): no Apify token, and no credential of any kind, is committed here. The actor ids marked actorIdConfirmed: false in apify-limits.json are to be confirmed in the owner's dry run, and this file is updated with them in the same change.",
+  "mcpServers": {
+    "apify": {
+      "type": "http",
+      "url": "https://mcp.apify.com?actors=varnmill/au-supermarket-prices,abotapi/kmart-au-scraper,axlymxp/bigw-product-scraper,dromb/big-w-au-product-scraper",
+      "headers": {
+        "Authorization": "Bearer ${APIFY_TOKEN}"
+      }
+    }
+  }
+}

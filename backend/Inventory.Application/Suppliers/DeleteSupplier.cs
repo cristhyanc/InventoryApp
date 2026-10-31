@@ -9,6 +9,12 @@ public sealed class DeleteSupplier
         _store = store;
     }
 
-    public Task<bool> Handle(int id, CancellationToken cancellationToken) =>
+    /// <summary>
+    /// Deletes a supplier the business created itself. A copy of a platform supplier preset is
+    /// refused instead (issue #934) - the store applies
+    /// <c>SupplierPresetLinkPolicy</c> to the row it read, so the decision and the delete are one
+    /// operation.
+    /// </summary>
+    public Task<SupplierCommandResult> Handle(int id, CancellationToken cancellationToken) =>
         _store.DeleteAsync(id, cancellationToken);
 }

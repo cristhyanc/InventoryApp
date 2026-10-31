@@ -18,6 +18,7 @@ import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -338,7 +339,9 @@ describe('DashboardComponent inventory card', () => {
 
     expect(component.inventoryValueDisplay(SUMMARY.inventory)).toBe('$1,234.56');
     expect(component.inventoryValueHelpText(SUMMARY.inventory)).toBe('Business-owned inventory at cost');
-    expect(component.inventoryScopeText(SUMMARY.inventory)).toBe('50 products · 320 units in storage (excludes machines)');
+    expect(component.inventoryScopeText(SUMMARY.inventory)).toBe('50 products · 320 units in storage');
+    // Said beside the count rather than folded into it (issue #972), and never as a storage-only value.
+    expect(component.storageUnitsNote).toBe('Storage units exclude stock in machines.');
   });
 
   it('shows unavailable, not $0.00, when any product has unknown cost', () => {
@@ -467,6 +470,7 @@ async function renderDashboard(
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
       // its own component with its own tests, and not what this page's own tests are about.
       // Issue #699's own `Dashboard.ViewFinancials` check reads this same stub, so it defaults
@@ -523,11 +527,24 @@ describe('DashboardComponent template rendering', () => {
     expect(host.textContent).not.toContain('Admin tools');
   });
 
-  it('renders exactly four headline cards in order: Sales this week, Needs refill, Needs ordering, Inventory', async () => {
+  it('renders exactly four headline cards in order, with the issue #972 names', async () => {
     const host = await renderDashboard();
 
     const labels = Array.from(host.querySelectorAll('.stat-card-label')).map((el) => el.textContent?.trim());
-    expect(labels).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
+    expect(labels).toEqual([
+      'Sales this week',
+      'Machines needing refill',
+      'Products needing ordering',
+      'Business-owned inventory at cost'
+    ]);
+  });
+
+  it('says beside the inventory card that its unit count excludes machines', async () => {
+    const host = await renderDashboard();
+
+    expect(host.querySelector('[data-testid="inventory-storage-note"]')?.textContent?.trim()).toBe(
+      'Storage units exclude stock in machines.'
+    );
   });
 
   it('renders the label/value content before the icon tile in every summary stat card, so the icon sits at the right', async () => {
@@ -538,7 +555,8 @@ describe('DashboardComponent template rendering', () => {
     for (const head of heads) {
       const children = Array.from(head.children);
       expect(children[0].classList.contains('stat-card-content')).toBe(true);
-      expect(children[children.length - 1].classList.contains('icon-tile')).toBe(true);
+      // The decorative icon (issue #972's Restockroo tile) is the head's last child.
+      expect(children[children.length - 1].getAttribute('aria-hidden')).toBe('true');
     }
   });
 
@@ -580,7 +598,7 @@ describe('DashboardComponent template rendering', () => {
     const host = await renderDashboard({ summary$: of(REDACTED_SUMMARY) });
 
     const labels = Array.from(host.querySelectorAll('.stat-card-label')).map((el) => el.textContent?.trim());
-    expect(labels).toEqual(['Needs refill', 'Needs ordering']);
+    expect(labels).toEqual(['Machines needing refill', 'Products needing ordering']);
   });
 
   it('renders no sales or inventory figure at all in a redacted summary', async () => {
@@ -603,31 +621,52 @@ describe('DashboardComponent template rendering', () => {
   });
 });
 
-describe('DashboardComponent Machines row navigation', () => {
+/**
+ * The machine rows now live in the combined Site and machine performance card (issue #987), which
+ * keeps issue #494's row link: the machine's name is the row's real anchor, and the rest of the row
+ * activates it. The card's own behaviour is
+ * `site-machine-performance/site-machine-performance.component.spec.ts`'s subject; these are the
+ * page's checks that the row link still resolves through the composed component.
+ */
+describe('DashboardComponent machine row navigation', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  function machinesTable(host: HTMLElement): HTMLElement {
-    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Machines'));
-    return section!.querySelector('table') as HTMLElement;
+  function performanceTable(host: HTMLElement): HTMLElement {
+    return host.querySelector('[data-testid="performance-table"]') as HTMLElement;
   }
 
-  it('renders the machine name as a native link to the existing machine details route, and no Details button', async () => {
+  function machineRow(host: HTMLElement): HTMLElement {
+    return performanceTable(host).querySelector('tbody[id^="site-machines-"] tr') as HTMLElement;
+  }
+
+  it('renders the machine name as a native link to the existing machine details route', async () => {
     const host = await renderDashboard({ machines: [MACHINE] });
 
-    const table = machinesTable(host);
-    const link = table.querySelector('tbody tr td a') as HTMLAnchorElement;
+    const link = machineRow(host).querySelector('a.table-row-anchor') as HTMLAnchorElement;
 
     expect(link).not.toBeNull();
     expect(link.getAttribute('href')).toBe('/machines/501');
     expect(link.textContent?.trim()).toBe('Machine A');
     expect(link.getAttribute('aria-label')).toBe('View details for Machine A');
-    expect(table.querySelector('.btn')).toBeNull();
+  });
+
+  /**
+   * Issue #987's Actions column is the one the owner asked for, and it holds the same existing
+   * destination the name link does - never a second, fabricated one.
+   */
+  it('offers a Details action on the same existing route', async () => {
+    const host = await renderDashboard({ machines: [MACHINE] });
+
+    const action = machineRow(host).querySelector('[data-testid="machine-details-501"]') as HTMLAnchorElement;
+
+    expect(action.getAttribute('href')).toBe('/machines/501');
+    expect(action.getAttribute('aria-label')).toBe('Details for Machine A');
   });
 
   it('leaves the row itself without an emulated link role', async () => {
     const host = await renderDashboard({ machines: [MACHINE] });
 
-    const row = machinesTable(host).querySelector('tbody tr') as HTMLElement;
+    const row = machineRow(host);
     expect(row.getAttribute('role')).toBeNull();
     expect(row.getAttribute('tabindex')).toBeNull();
     expect(row.classList.contains('table-row-link')).toBe(true);
@@ -637,8 +676,7 @@ describe('DashboardComponent Machines row navigation', () => {
     const host = await renderDashboard({ machines: [MACHINE] });
     const navigateByUrl = spyOnNavigateByUrl();
 
-    const row = machinesTable(host).querySelector('tbody tr') as HTMLElement;
-    row.click();
+    machineRow(host).click();
 
     expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/501']);
   });
@@ -647,7 +685,7 @@ describe('DashboardComponent Machines row navigation', () => {
     const host = await renderDashboard({ machines: [MACHINE] });
     const navigateByUrl = spyOnNavigateByUrl();
 
-    const link = machinesTable(host).querySelector('tbody tr td a') as HTMLAnchorElement;
+    const link = machineRow(host).querySelector('a.table-row-anchor') as HTMLAnchorElement;
     link.click();
 
     expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/501']);
@@ -657,8 +695,7 @@ describe('DashboardComponent Machines row navigation', () => {
     const host = await renderDashboard({ machines: [MACHINE] });
     const navigateByUrl = spyOnNavigateByUrl();
 
-    const row = machinesTable(host).querySelector('tbody tr') as HTMLElement;
-    row.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    machineRow(host).dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
 
     expect(navigateByUrl).not.toHaveBeenCalled();
   });
@@ -667,7 +704,7 @@ describe('DashboardComponent Machines row navigation', () => {
     const host = await renderDashboard({ machines: [MACHINE] });
     const navigateByUrl = spyOnNavigateByUrl();
 
-    const link = machinesTable(host).querySelector('tbody tr td a') as HTMLAnchorElement;
+    const link = machineRow(host).querySelector('a.table-row-anchor') as HTMLAnchorElement;
     link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     link.click(); // the browser's own activation of a focused anchor on Enter
 
@@ -809,52 +846,59 @@ describe('DashboardComponent Nayax sales sync in a support session (issue #661)'
 });
 
 /**
- * `Dashboard.ViewFinancials` hides the Sites/Machines tables' revenue, direct-profit, margin and
- * trend columns (issue #699) - not only the two headline cards #527/#528 already redact. A role
- * without it - an Operator - sees none of those columns, while a Manager or an Owner sees them
- * exactly as before.
+ * `Dashboard.ViewFinancials` hides the performance card's revenue, direct-profit, margin and trend
+ * columns (issue #699) - not only the two headline cards #527/#528 already redact. A role without
+ * it - an Operator - sees none of those columns, while a Manager or an Owner sees them exactly as
+ * before, now under the combined card's shared period control (issue #987).
  */
-describe('DashboardComponent Sites/Machines financial figures gated on Dashboard.ViewFinancials (issue #699)', () => {
+describe('DashboardComponent performance financial figures gated on Dashboard.ViewFinancials (issue #699)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  function sitesTable(host: HTMLElement): HTMLElement {
-    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Sites'));
-    return section!.querySelector('table') as HTMLElement;
+  function performanceTable(host: HTMLElement): HTMLElement {
+    return host.querySelector('[data-testid="performance-table"]') as HTMLElement;
   }
 
-  function machinesTableEl(host: HTMLElement): HTMLElement {
-    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Machines'));
-    return section!.querySelector('table') as HTMLElement;
+  function columnHeaders(host: HTMLElement): (string | undefined)[] {
+    return Array.from(performanceTable(host).querySelectorAll('thead th')).map((th) =>
+      th.textContent?.replace(/\s+/g, ' ').trim()
+    );
   }
 
   it('shows no revenue, profit, margin or trend column to an Operator', async () => {
     const host = await renderDashboard({ machines: [MACHINE], sites: [SITE], canViewFinancials: false });
 
-    const sitesHeaders = Array.from(sitesTable(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
-    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Products']);
-    expect(sitesTable(host).textContent).not.toContain('$');
-
-    const machinesHeaders = Array.from(machinesTableEl(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
-    expect(machinesHeaders).toEqual(['Machine']);
-    expect(machinesTableEl(host).textContent).not.toContain('$');
-    expect(machinesTableEl(host).querySelector('tfoot')).toBeNull();
+    expect(columnHeaders(host)).toEqual(['Site / machine', 'Stock', 'Low / empty', 'Actions']);
+    expect(performanceTable(host).textContent).not.toContain('$');
+    expect(host.querySelector('[data-testid="performance-period"]')).toBeNull();
+    expect(performanceTable(host).querySelector('tfoot')).toBeNull();
   });
 
-  it('keeps the Sites/Machines columns and totals exactly as today for a Manager or an Owner', async () => {
+  it('keeps the site and machine figures and the fleet totals for a Manager or an Owner', async () => {
     const host = await renderDashboard({ machines: [MACHINE], sites: [SITE], canViewFinancials: true });
 
-    const sitesHeaders = Array.from(sitesTable(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
-    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Today', 'This Week', 'vs Last Week', 'Products']);
-    expect(sitesTable(host).textContent).toContain('$12.00');
-
-    const machinesHeaders = Array.from(machinesTableEl(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
-    expect(machinesHeaders).toEqual(['Machine', 'Today', 'This Week', 'Last Week', 'vs Last Week', 'Month to Date']);
-    expect(machinesTableEl(host).textContent).toContain('$12.00 sales');
-    expect(machinesTableEl(host).querySelector('tfoot')).not.toBeNull();
+    expect(columnHeaders(host)).toEqual([
+      'Site / machine',
+      'Stock',
+      'Low / empty',
+      'Sales · This week',
+      'vs same time last week',
+      'Actions'
+    ]);
+    // The site's own week figure and the machine's own, under one column, for the same period.
+    expect((host.querySelector('[data-testid="site-row-1"]') as HTMLElement).textContent).toContain('$34.00');
+    expect(performanceTable(host).textContent).toContain('$34.00 sales');
+    expect(performanceTable(host).querySelector('tfoot')).not.toBeNull();
   });
 
   it('renders without error when a granted role is sent a site and machine with the figures absent', async () => {
-    const withheldSite: Site = { ...SITE, todayRevenue: null, currentWeekRevenue: null, previousComparableWeekRevenue: null };
+    const withheldSite: Site = {
+      ...SITE,
+      todayRevenue: null,
+      currentWeekRevenue: null,
+      previousComparableWeekRevenue: null,
+      lastWeekRevenue: null,
+      monthToDateRevenue: null
+    };
     const withheldMachine: Machine = {
       ...MACHINE,
       todayGrossRevenue: null,
@@ -865,8 +909,8 @@ describe('DashboardComponent Sites/Machines financial figures gated on Dashboard
     };
     const host = await renderDashboard({ machines: [withheldMachine], sites: [withheldSite], canViewFinancials: true });
 
-    expect(sitesTable(host).textContent).toContain('Unavailable');
-    expect(machinesTableEl(host).textContent).toContain('Unavailable');
+    expect((host.querySelector('[data-testid="site-row-1"]') as HTMLElement).textContent).toContain('Unavailable');
+    expect(performanceTable(host).querySelector('tbody[id="site-machines-other"]')?.textContent).toContain('Unavailable');
     expect(host.textContent).not.toContain('NaN');
     expect(host.textContent).not.toContain('$0.00');
   });

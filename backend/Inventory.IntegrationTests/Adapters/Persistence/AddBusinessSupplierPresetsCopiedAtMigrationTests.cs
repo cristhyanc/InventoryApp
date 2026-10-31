@@ -68,9 +68,23 @@ public class AddBusinessSupplierPresetsCopiedAtMigrationTests
                 await MigrationSchemaProbe.ColumnNamesAsync(connection, "Businesses"));
 
             // Nothing is backfilled: both businesses record no copy, the trading one included.
+            //
+            // The read projects the columns this test is about rather than whole entities, because
+            // the schema here is deliberately the one this migration produced: a column a *later*
+            // migration adds (issue #933's State, for example) exists in the model but not in this
+            // database, and selecting it would fail on a schema that is correct for this test.
             var businesses = await after.Businesses
                 .AsNoTracking()
                 .OrderBy(business => business.Id)
+                .Select(business => new
+                {
+                    business.Name,
+                    business.SupplierPresetsCopiedAtUtc,
+                    business.Status,
+                    business.ContactEmail,
+                    business.Abn,
+                    business.AppliedAtUtc,
+                })
                 .ToListAsync();
 
             Assert.Equal(["Vending Co", "Coastal Vending"], businesses.Select(business => business.Name));
@@ -85,16 +99,37 @@ public class AddBusinessSupplierPresetsCopiedAtMigrationTests
             Assert.Equal(new DateTime(2026, 9, 1, 6, 0, 0, DateTimeKind.Utc), businesses[1].AppliedAtUtc);
 
             // No supplier was invented for either business, and the one that existed is intact.
-            var supplier = Assert.Single(await after.Suppliers.AsNoTracking().ToListAsync());
+            // Projected for the same reason the businesses above are: a column a later migration
+            // adds (issue #934's link and "Not used" switch) is in the model and not in this
+            // database.
+            var supplier = Assert.Single(await after.Suppliers
+                .AsNoTracking()
+                .Select(row => new { row.Name, row.Url, row.BusinessId })
+                .ToListAsync());
             Assert.Equal(("Wholesale Co", "https://wholesale.invalid", 1), (supplier.Name, supplier.Url, supplier.BusinessId));
 
             // The platform's own suggestions are exactly the rows AddSupplierPresets seeded: this
-            // migration copies nothing and changes nothing about them.
+            // migration copies nothing and changes nothing about them. Read with SQL rather than
+            // through the entity, because this test stands on a schema that predates issue #931's
+            // supplier-master columns and the model that maps them would ask for them.
             Assert.Equal(
                 ["Big W", "Coles", "Costco", "Woolworths"],
-                (await after.SupplierPresets.AsNoTracking().ToListAsync())
-                    .Select(preset => preset.Name)
-                    .Order(StringComparer.Ordinal));
+                await PresetNamesAsync(connection));
         }
+    }
+
+    private static async Task<List<string>> PresetNamesAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Name FROM SupplierPresets ORDER BY Name;";
+        await using var reader = await command.ExecuteReaderAsync();
+
+        var names = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return names;
     }
 }

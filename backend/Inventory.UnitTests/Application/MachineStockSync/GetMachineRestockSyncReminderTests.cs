@@ -1,9 +1,12 @@
 using Inventory.Application.MachineStockSync;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -13,8 +16,8 @@ namespace InventoryApi.Tests.Application.MachineStockSync;
 /// The Dashboard's machine restock-sync reminder use case (issue #891).
 ///
 /// <para>The decisions under test are the ones that make the banner honest: a machine nobody can
-/// show a successful fetch for is reported rather than assumed healthy, pending work never ages
-/// out, coverage recorded under replaced credentials is not freshness, and the whole reminder is
+/// show a successful fetch for is reported rather than assumed healthy, pending work is counted
+/// over a fourteen-day window rather than the three-day one (issue #948), coverage recorded under replaced credentials is not freshness, and the whole reminder is
 /// withheld - with its reason - for a business it cannot apply to. None of it makes a Nayax
 /// request, which the fakes here would have no way to serve anyway.</para>
 /// </summary>
@@ -44,6 +47,45 @@ public class GetMachineRestockSyncReminderTests
         // the one request shape that resolves no Nayax credentials at all.
         Assert.Equal(0, coverage.Reads);
         Assert.Equal(0, connections.ConnectionReads);
+    }
+
+    /// <summary>
+    /// Issue #967: a business whose plan does not include the sales provider is shown no reminder
+    /// either, under its own reason - the Sync Restock it would be reminded to run is itself refused
+    /// by the credential gate. The connection seeded is the healthy one, so the answer cannot be the
+    /// status gate's, and nothing about it is read: the plan is asked first, and nothing here changes
+    /// a stored credential or its status.
+    /// </summary>
+    [Theory]
+    [InlineData(SubscriptionPlan.Free)]
+    [InlineData(SubscriptionPlan.Starter)]
+    public async Task A_plan_without_the_provider_is_shown_no_reminder_and_the_connection_is_not_read(
+        SubscriptionPlan plan)
+    {
+        var connections = new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready, CurrentRevision);
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(Overdue(AvenueHotelId, "Avenue Hotel"));
+
+        var result = await UseCase(connections, coverage, plan: TestCurrentPlan.On(plan))
+            .Handle(CancellationToken.None);
+
+        Assert.Equal(
+            MachineRestockSyncReminderHiddenReasons.PlanRequired,
+            Assert.IsType<HiddenMachineRestockSyncReminderDto>(result).Reason);
+        Assert.Equal(0, connections.ConnectionReads);
+        Assert.Equal(0, coverage.Reads);
+    }
+
+    /// <summary>And Pro is shown exactly the reminder an unenforced deployment shows.</summary>
+    [Fact]
+    public async Task A_pro_business_is_shown_the_reminder()
+    {
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(Overdue(AvenueHotelId, "Avenue Hotel"));
+
+        var result = await UseCase(
+                ReadyConnection(), coverage, plan: TestCurrentPlan.On(SubscriptionPlan.Pro))
+            .Handle(CancellationToken.None);
+
+        Assert.IsType<MachineRestockSyncReminderDto>(result);
     }
 
     [Fact]
@@ -176,8 +218,9 @@ public class GetMachineRestockSyncReminderTests
     }
 
     /// <summary>
-    /// Ageing out of the three-day window must not clear pending work, and the row has to say that
-    /// the dialog's default From date would hide it.
+    /// Ageing out of the three-day window must not clear pending work inside the fourteen-day
+    /// pending window, and the row has to say that the dialog's default From date would hide it -
+    /// with the business date the banner link opens the dialog at (issue #948).
     /// </summary>
     [Fact]
     public async Task Older_pending_events_stay_visible_and_are_flagged_as_hidden_by_the_default_from_date()
@@ -191,8 +234,51 @@ public class GetMachineRestockSyncReminderTests
 
         Assert.Equal(1, machine.KnownPendingEventCount);
         Assert.True(machine.HasPendingWorkBeforeDefaultFrom);
+        Assert.Equal(new DateTime(2026, 10, 16), machine.OldestKnownPendingEventBusinessDate);
         Assert.Equal(new DateTime(2026, 10, 22), reminder.DefaultFromBusinessDate);
         Assert.Equal(MachineRestockSyncReminderPolicy.OverdueAfterDays, reminder.OverdueAfterDays);
+    }
+
+    /// <summary>
+    /// The pending window (issue #948): the use case asks the store for events from the start of
+    /// the business day fourteen days before today - taken from the business calendar, not from the
+    /// UTC date - and publishes that window so the banner never restates it.
+    /// </summary>
+    [Fact]
+    public async Task The_store_is_asked_for_pending_events_from_the_start_of_the_pending_window()
+    {
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(Overdue(AvenueHotelId, "Avenue Hotel"));
+
+        var reminder = Assert.IsType<MachineRestockSyncReminderDto>(
+            await UseCase(ReadyConnection(), coverage, calendar: new ShiftedBusinessCalendar(shiftDays: 1))
+                .Handle(CancellationToken.None));
+
+        // Business today is 26 October, so the window starts on 12 October, whose business day
+        // begins at 11 October 00:00 UTC under this calendar.
+        Assert.Equal(14, reminder.PendingLookbackDays);
+        Assert.Equal(new DateTime(2026, 10, 12), reminder.PendingFromBusinessDate);
+        Assert.Equal(new DateTime(2026, 10, 11, 0, 0, 0, DateTimeKind.Utc), coverage.LastPendingFromUtc);
+    }
+
+    /// <summary>
+    /// A machine whose only unresolved events fell outside the window arrives with a zero count, so
+    /// it is not listed for pending work - while an overdue fetch still lists it on its own.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_with_no_pending_events_in_the_window_is_listed_only_when_its_fetch_is_overdue()
+    {
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
+            new MachineRestockSyncCoverageRecord(
+                AvenueHotelId, "Avenue Hotel", NowUtc.AddHours(-1), CurrentRevision, 0, null),
+            new MachineRestockSyncCoverageRecord(
+                StationCafeId, "Station Cafe", null, null, 0, null));
+
+        var machine = Assert.Single((await ApplicableReminder(coverage)).Machines);
+
+        Assert.Equal(StationCafeId, machine.LocalMachineId);
+        Assert.True(machine.IsFetchOverdue);
+        Assert.Equal(0, machine.KnownPendingEventCount);
+        Assert.Null(machine.OldestKnownPendingEventBusinessDate);
     }
 
     /// <summary>
@@ -293,11 +379,15 @@ public class GetMachineRestockSyncReminderTests
         FakeNayaxConnectionStore connections,
         FakeMachineRestockSyncCoverageStore coverage,
         IBusinessScope? businessScope = null,
-        IBusinessCalendar? calendar = null) =>
+        IBusinessCalendar? calendar = null,
+        CurrentPlan? plan = null) =>
         new(
             new FakeClock(NowUtc),
             calendar ?? new FakeBusinessCalendar(NowUtc),
             businessScope ?? ResolvedMember(),
+            // The shipped state unless a case says otherwise: plan enforcement is off, so the
+            // reminder behaves exactly as it did before issue #967.
+            plan ?? TestCurrentPlan.Unrestricted(),
             connections,
             coverage);
 

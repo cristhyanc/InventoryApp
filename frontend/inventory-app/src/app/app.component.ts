@@ -1,5 +1,5 @@
 import { ChangeDetectorRef, Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
-import { Router, RouterOutlet } from '@angular/router';
+import { NavigationCancel, NavigationError, Router, RouterOutlet, RoutesRecognized } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AuthenticationResult } from '@azure/msal-browser';
 import { Subject, Subscription, catchError, defer, filter, map, of, retry, switchMap, take, takeUntil, timer } from 'rxjs';
@@ -8,6 +8,7 @@ import { ToastContainerComponent } from "./components/shared/toast-container.com
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
+import { BottomNavComponent } from './layout/bottom-nav.component';
 import { RolePreviewBannerComponent } from './layout/role-preview-banner.component';
 import { RolePreviewMenuComponent } from './layout/role-preview-menu.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
@@ -24,6 +25,7 @@ import { isExternalIdConfigured, loginRequest } from './auth-config';
 import { SIGN_IN_ROUTE, clearIntendedDestination } from './auth/intended-destination';
 import { forgetSelectedAuthority } from './auth/selected-authority';
 import { SignInService } from './auth/sign-in.service';
+import { isPublicLayoutRoute } from './public/public-layout';
 
 /**
  * The application shell (issue #391): a collapsible left sidebar for the primary navigation, a
@@ -101,6 +103,15 @@ import { SignInService } from './auth/sign-in.service';
  * also passes the sidebar whether a preview is active, since the `Super Admin` group belongs to no
  * business role, and composes the **View as** entry into the user menu
  * (`RolePreviewMenuComponent`), which decides for itself whether it is offered.
+ *
+ * **A public route gets no shell at all** (issue #954). A route carrying `PUBLIC_LAYOUT_DATA` -
+ * the landing page at `/` for a signed-out visitor, and at `/home` for everyone - is rendered on
+ * its own: no banners, no header or user control, no sidebar, and no business-context gate. The
+ * decision is taken when the router has *recognised* the route, before any guard or page runs, so
+ * the landing page never appears inside the authenticated chrome and an authenticated page never
+ * appears outside it. Everything else this component owns - MSAL redirect handling, the account and
+ * business context - keeps running unchanged underneath, so returning to an authenticated page
+ * finds it exactly as it was.
  */
 @Component({
   selector: 'app-root',
@@ -108,6 +119,7 @@ import { SignInService } from './auth/sign-in.service';
   imports: [
     RouterOutlet,
     SidebarNavComponent,
+    BottomNavComponent,
     UserMenuComponent,
     IconComponent,
     ToastContainerComponent,
@@ -138,6 +150,9 @@ export class AppComponent implements OnInit, OnDestroy {
 
   isLoggedIn = false;
   userName = '';
+
+  /** Whether the current route asks for the public layout (issue #954), which renders no shell. */
+  isPublicLayout = false;
 
   /** Expanded on a wide layout; the drawer is visible on a narrow one. */
   isSidebarOpen = true;
@@ -220,6 +235,9 @@ export class AppComponent implements OnInit, OnDestroy {
 
   readonly sidebarId = PRIMARY_NAVIGATION_ID;
 
+  /** The control that opened the menu sheet, when it was not the top bar's (issue #972). */
+  private sidebarOpener: HTMLElement | null = null;
+
   /** Only rendered on a narrow layout, which is the only layout that returns focus to it. */
   @ViewChild('sidebarToggle') private readonly sidebarToggle?: ElementRef<HTMLButtonElement>;
 
@@ -294,6 +312,19 @@ export class AppComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.observeLayoutWidth();
+
+    // Recognition is the earliest point the destination's layout is known, and it precedes every
+    // guard and the page itself. A navigation that is then cancelled or fails leaves the router on
+    // the route it was already showing, so the layout returns to that route's own.
+    this.router.events
+      .pipe(takeUntil(this.destroying$))
+      .subscribe((event) => {
+        if (event instanceof RoutesRecognized) {
+          this.isPublicLayout = isPublicLayoutRoute(event.state.root);
+        } else if (event instanceof NavigationCancel || event instanceof NavigationError) {
+          this.isPublicLayout = isPublicLayoutRoute(this.router.routerState.snapshot.root);
+        }
+      });
 
     this.authService.handleRedirectObservable()
       .pipe(takeUntil(this.destroying$))
@@ -389,6 +420,7 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   toggleSidebar(): void {
+    this.sidebarOpener = null;
     this.isSidebarOpen = !this.isSidebarOpen;
   }
 
@@ -396,9 +428,26 @@ export class AppComponent implements OnInit, OnDestroy {
     this.isSidebarOpen = true;
   }
 
+  /**
+   * Opens the narrow layout's menu sheet from the bottom bar's More control (issue #972), and
+   * remembers that control so closing the sheet returns focus to it rather than to the top bar.
+   */
+  openSidebarFrom(opener: HTMLElement): void {
+    this.sidebarOpener = opener;
+    this.isSidebarOpen = true;
+  }
+
   closeSidebar(): void {
+    if (!this.isSidebarOpen) {
+      return;
+    }
     this.isSidebarOpen = false;
-    this.sidebarToggle?.nativeElement.focus();
+    const opener = this.sidebarOpener;
+    this.sidebarOpener = null;
+    // On a narrow layout the menu is a modal dialog (issue #972) that keeps the rest of the page
+    // inert while it is open, so it is removed first; only then can the opener take focus back.
+    this.changeDetector.detectChanges();
+    (opener ?? this.sidebarToggle?.nativeElement)?.focus();
   }
 
   /** A narrow drawer covers the page, so choosing a destination dismisses it. */

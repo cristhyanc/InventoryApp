@@ -30,7 +30,7 @@ public enum ReorderMode
 /// Why a reorder calculation could not account for the machines' current replenishment need, and so
 /// ran in <see cref="ReorderMode.StorageOnly"/> (issue #726).
 ///
-/// Availability is per feature (issue #329, decision P9): these are the two answers that say "this
+/// Availability is per feature (issue #329, decision P9): these are the answers that say "this
 /// feature is unavailable for this business right now", not "this request failed". A transport
 /// failure, a cancellation and the support-session refusal are none of them - they propagate, so a
 /// real outage is never published as a business with no machine need.
@@ -52,6 +52,15 @@ public enum MachineNeedUnavailableReason
     /// connection - which is why nothing here writes a status.
     /// </summary>
     PermissionNotGranted,
+
+    /// <summary>
+    /// The business's effective plan does not include the sales provider (issue #967), so the
+    /// credential gate refused before the stored connection was read and no Nayax request was made.
+    /// It is deliberately distinct from <see cref="NayaxNotConnected"/>: the credentials may be
+    /// perfectly valid and still saved, and what would change the answer is the plan rather than
+    /// reconnecting anything. Everything about storage is unaffected, exactly as it is above.
+    /// </summary>
+    PlanRequired,
 }
 
 /// <summary>
@@ -95,6 +104,13 @@ public static class MachineNeedUnavailableReasons
     /// <summary>The published code for <see cref="MachineNeedUnavailableReason.PermissionNotGranted"/>.</summary>
     public const string PermissionNotGranted = "PermissionNotGranted";
 
+    /// <summary>
+    /// The published code for <see cref="MachineNeedUnavailableReason.PlanRequired"/> (issue #967),
+    /// spelled as every other per-feature vocabulary spells the same answer and as
+    /// <c>NayaxNotConnectedException.PlanRequiredReason</c> publishes it on the HTTP boundary.
+    /// </summary>
+    public const string PlanRequired = "PlanRequired";
+
     /// <exception cref="ArgumentOutOfRangeException">
     /// A reason this vocabulary has never heard of - a value cast from an integer, which an enum
     /// cannot prevent. Refused rather than published under a guessed code.
@@ -103,6 +119,7 @@ public static class MachineNeedUnavailableReasons
     {
         MachineNeedUnavailableReason.NayaxNotConnected => NayaxNotConnected,
         MachineNeedUnavailableReason.PermissionNotGranted => PermissionNotGranted,
+        MachineNeedUnavailableReason.PlanRequired => PlanRequired,
         _ => throw new ArgumentOutOfRangeException(
             nameof(reason), reason, "Unknown machine-need unavailability reason."),
     };

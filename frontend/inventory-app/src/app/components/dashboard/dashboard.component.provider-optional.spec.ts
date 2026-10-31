@@ -17,9 +17,11 @@ import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { NayaxUnavailability, nayaxUnavailableMessage } from '../../provider/nayax-availability';
 
 /**
  * The Dashboard for a business whose Nayax connection is not usable, or whose Nayax account has not
@@ -92,6 +94,17 @@ const NOT_CONNECTED_SUMMARY: DashboardSummary = {
 const PERMISSION_NOT_GRANTED_SUMMARY: DashboardSummary = {
   ...CONNECTED_SUMMARY,
   needsRefill: { available: false, reason: 'PermissionNotGranted' },
+  needsOrdering: { productsNeedingOrdering: 4, productsEvaluated: 50, mode: 'StorageOnly' }
+};
+
+/**
+ * Issue #967's third refill reason, read since issue #979: the business's plan does not include
+ * the sales provider at all, so no fleet read was attempted - the same "nothing to show" fact as
+ * `NOT_CONNECTED_SUMMARY`, and distinguished from it only by the wording it must never share.
+ */
+const PLAN_REQUIRED_SUMMARY: DashboardSummary = {
+  ...CONNECTED_SUMMARY,
+  needsRefill: { available: false, reason: 'PlanRequired' },
   needsOrdering: { productsNeedingOrdering: 4, productsEvaluated: 50, mode: 'StorageOnly' }
 };
 
@@ -168,8 +181,8 @@ function product(overrides: Partial<Product> = {}): Product {
   };
 }
 
-function storageOnlyAlerts(products: Product[]): ReorderAlertListing {
-  return { products, mode: 'StorageOnly', machineNeedUnavailableReason: 'NayaxNotConnected' };
+function storageOnlyAlerts(products: Product[], reason: NayaxUnavailability = 'NayaxNotConnected'): ReorderAlertListing {
+  return { products, mode: 'StorageOnly', machineNeedUnavailableReason: reason };
 }
 
 function machineAwareAlerts(products: Product[]): ReorderAlertListing {
@@ -216,6 +229,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       { provide: SupportSessionService, useValue: { active$: doubles.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => of(doubles.canViewFinancials ?? true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]
@@ -243,16 +257,16 @@ describe('Dashboard without a usable provider (issue #727)', () => {
       alerts$: of(storageOnlyAlerts([product()]))
     });
 
-    expect(cardLabels(host)).toEqual(['Needs ordering', 'Inventory']);
+    expect(cardLabels(host)).toEqual(['Products needing ordering', 'Business-owned inventory at cost']);
   });
 
-  it('hides the Sites and Machines sections and leaves reorder alerts as the main section', async () => {
+  it('hides the Site and machine performance card and leaves reorder alerts as the main section', async () => {
     const host = await renderDashboard({
       summary$: of(NOT_CONNECTED_SUMMARY),
       alerts$: of(storageOnlyAlerts([product()]))
     });
 
-    expect(sectionTitles(host)).toEqual(['⚠️ Reorder Alerts']);
+    expect(sectionTitles(host)).toEqual(['Reorder priorities']);
     expect(host.textContent).not.toContain('No sites available yet');
     expect(host.textContent).not.toContain('No machines available yet');
   });
@@ -323,14 +337,84 @@ describe('Dashboard without a usable provider (issue #727)', () => {
   });
 });
 
+/**
+ * Issue #967's third refill reason, read since issue #979: a business whose plan does not include
+ * the sales provider. It hides the same two cards `NOT_CONNECTED_SUMMARY` does - no fleet read was
+ * attempted in either case - but must never say Nayax is not connected, because this business's
+ * saved credentials, if it has any, are untouched and reconnecting would not open these sections.
+ */
+describe('Dashboard for a business whose plan does not include the sales provider (issue #967/#979)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('hides the Sales this week and Needs refill cards exactly as a missing connection does', async () => {
+    const host = await renderDashboard({
+      summary$: of(PLAN_REQUIRED_SUMMARY),
+      alerts$: of(storageOnlyAlerts([product()], 'PlanRequired'))
+    });
+
+    expect(cardLabels(host)).toEqual(['Products needing ordering', 'Business-owned inventory at cost']);
+    expect(sectionTitles(host)).toEqual(['Reorder priorities']);
+  });
+
+  it('never calls the sales sync, asks for neither sites nor machines, and shows no connection warning', () => {
+    const syncLatest = jest.fn(() => of(SYNC_RAN));
+    const sites = jest.fn(() => of([SITE]));
+    const machines = jest.fn(() => of([MACHINE]));
+    const component = new DashboardComponent(
+      { getLowStock: () => of(storageOnlyAlerts([], 'PlanRequired')) } as unknown as ProductService,
+      { getAll: machines } as unknown as MachineService,
+      { getAll: sites } as unknown as SiteService,
+      { syncLatest } as unknown as NayaxSalesSyncService,
+      { getSummary: () => of(PLAN_REQUIRED_SUMMARY) } as unknown as DashboardService,
+      { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
+      { active$: of(false) } as unknown as SupportSessionService,
+      { allows: () => of(true) } as unknown as AccessService
+    );
+
+    component.ngOnInit();
+
+    expect(syncLatest).not.toHaveBeenCalled();
+    expect(sites).not.toHaveBeenCalled();
+    expect(machines).not.toHaveBeenCalled();
+  });
+
+  it('labels the storage-only Needs ordering count with the plan reason, never "Nayax is not connected"', async () => {
+    const host = await renderDashboard({
+      summary$: of(PLAN_REQUIRED_SUMMARY),
+      alerts$: of(storageOnlyAlerts([product()], 'PlanRequired'))
+    });
+
+    expect(host.textContent).toContain(
+      "Storage stock only: these figures do not include the machines' current replenishment need, "
+        + "because this business's plan does not include the Nayax connection."
+    );
+    expect(host.textContent).not.toContain('Nayax is not connected');
+  });
+
+  /**
+   * `GET /api/machines` is a read of the business's own stored records and never goes through the
+   * Nayax credential gate (issue #740), so it can never actually receive this refusal while
+   * `isLiveFleetShown` is false - hence this test asks for neither machines nor sites above. What
+   * `nayaxUnavailableMessage('PlanRequired', ...)` says for a call that *can* receive it - the
+   * shared function the dashboard's own `sectionUnavailableText` composes it from - is covered
+   * directly in `provider/nayax-availability.spec.ts`, and the shared load path's own handling of
+   * it in `provider/provider-list-load.spec.ts`.
+   */
+  it('words a genuine plan refusal as needing the Pro plan, not "not connected"', () => {
+    expect(nayaxUnavailableMessage('PlanRequired', 'The Machines section')).toBe(
+      'The Machines section needs the Pro plan. Any Nayax credentials this business has saved are unchanged.'
+    );
+  });
+});
+
 describe('Dashboard for a feature Nayax has not granted (issue #727)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   it('keeps every card and section, because the connection itself is usable', async () => {
     const host = await renderDashboard({ summary$: of(PERMISSION_NOT_GRANTED_SUMMARY) });
 
-    expect(cardLabels(host)).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(cardLabels(host)).toEqual(['Sales this week', 'Machines needing refill', 'Products needing ordering', 'Business-owned inventory at cost']);
+    expect(sectionTitles(host)).toEqual(['Site and machine performance', 'Reorder priorities']);
   });
 
   it('shows the permission message on the Needs refill card, not the support-view sentence', async () => {
@@ -422,7 +506,7 @@ describe('Dashboard failed requests are never an empty state (issue #727)', () =
     const host = await renderDashboard({
       summary$: throwError(() => new Error('network error')) as Observable<DashboardSummary>
     });
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(sectionTitles(host)).toEqual(['Site and machine performance', 'Reorder priorities']);
     expect(host.textContent).toContain('The Dashboard summary could not be loaded');
   });
 
@@ -440,8 +524,8 @@ describe('Dashboard in a support session keeps its existing behaviour (issue #72
   it('keeps every card and section and the support-view sentence', async () => {
     const host = await renderDashboard({ summary$: of(SUPPORT_VIEW_SUMMARY), sessionActive: of(true) });
 
-    expect(cardLabels(host)).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(cardLabels(host)).toEqual(['Sales this week', 'Machines needing refill', 'Products needing ordering', 'Business-owned inventory at cost']);
+    expect(sectionTitles(host)).toEqual(['Site and machine performance', 'Reorder priorities']);
     expect(host.textContent).toContain('Nayax is not available in support view');
   });
 
@@ -463,11 +547,11 @@ describe('Dashboard in a support session keeps its existing behaviour (issue #72
 describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('shows all four cards, all three sections and the machine-need column', async () => {
+  it('shows all four cards, both sections and the machine-need column', async () => {
     const host = await renderDashboard({ alerts$: of(machineAwareAlerts([product()])) });
 
-    expect(cardLabels(host)).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
-    expect(sectionTitles(host)).toEqual(['📍 Sites', '🛠️ Machines', '⚠️ Reorder Alerts']);
+    expect(cardLabels(host)).toEqual(['Sales this week', 'Machines needing refill', 'Products needing ordering', 'Business-owned inventory at cost']);
+    expect(sectionTitles(host)).toEqual(['Site and machine performance', 'Reorder priorities']);
 
     const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
     expect(headers).toContain('Machine need');

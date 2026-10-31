@@ -172,8 +172,11 @@ public class GetSiteSummariesTests
     }
 
     /// <summary>
-    /// The 16-day completed-sales lookback counts back from the current UTC instant, the time base
-    /// <c>MachineAuthorizationTime</c> is stored in.
+    /// The completed-sales lookback is a UTC instant, the time base
+    /// <c>MachineAuthorizationTime</c> is stored in, and since issue #1012 it is the first instant of
+    /// the earliest period a summary publishes rather than a fixed day count back from now. On this
+    /// business day - Thursday 12 March 2026 - that is the start of March, and the bound is the
+    /// business-day boundary of the first, not midnight UTC.
     /// </summary>
     [Fact]
     public async Task Handle_RequestsTheCompletedSalesLookbackInUtc()
@@ -183,7 +186,8 @@ public class GetSiteSummariesTests
         await UseCase(Fleet(), facts).Handle(CancellationToken.None);
 
         var request = Assert.Single(facts.CompletedSalesRequests);
-        Assert.Equal(Time.NowUtc.AddDays(-16), request.Since);
+        Assert.Equal(Time.Window.MonthToDate.StartUtc, request.FromUtc);
+        Assert.Equal(DateTimeKind.Utc, request.FromUtc.Kind);
     }
 
     private static GetSiteSummaries UseCase(

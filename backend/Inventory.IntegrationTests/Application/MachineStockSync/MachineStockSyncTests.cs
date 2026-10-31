@@ -132,7 +132,8 @@ public class MachineStockSyncTests
                 // here reads. MachineRestockSyncCoverageTests is where that claim is the subject.
                 new FakeClock(EventTime),
                 new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
-                new FakeMachineRestockSyncCoverageStore()),
+                new FakeMachineRestockSyncCoverageStore(),
+                new FakeBusinessCalendar(EventTime)),
             new ApplyMachineStockSync(store));
     }
 

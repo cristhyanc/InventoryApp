@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter, Router } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { PurchaseUploadComponent } from './purchase-upload.component';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
@@ -8,7 +8,13 @@ import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { PurchaseItemPayload, PurchaseUploadPayload } from '../../services/purchase.service';
-import { GstClassification, Purchase, SupplierOrder } from '../../models/models';
+import {
+  GstClassification,
+  Purchase,
+  SupplierOrder,
+  SupplierOrderCompletionPreview,
+  SupplierOrderStatus
+} from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 function supplierOrder(): SupplierOrder {
@@ -34,7 +40,40 @@ function supplierOrder(): SupplierOrder {
   };
 }
 
-function createHarness(supplierOrderId: string | null, sessionActive: Observable<boolean> = of(false)) {
+/**
+ * The server's own projection of what the order would still be owed (issue #974). The default is
+ * the headline case: 10 ordered, nothing received, 3 on this purchase, 7 left undelivered.
+ */
+function completionPreview(
+  overrides: Partial<SupplierOrderCompletionPreview> = {}
+): SupplierOrderCompletionPreview {
+  return {
+    supplierOrderId: 9,
+    status: SupplierOrderStatus.Ordered,
+    eligibleForCompletion: true,
+    hasOutstandingBalance: true,
+    decisionFingerprint: 'fingerprint-from-the-server',
+    outstandingLines: [
+      {
+        supplierOrderLineId: 1,
+        productId: 5,
+        productName: 'Coke 375mL',
+        unit: 'can',
+        quantityOrdered: 10,
+        quantityAlreadyReceived: 0,
+        quantityOnThisPurchase: 3,
+        outstandingQuantity: 7
+      }
+    ],
+    ...overrides
+  };
+}
+
+function createHarness(
+  supplierOrderId: string | null,
+  sessionActive: Observable<boolean> = of(false),
+  preview: Observable<SupplierOrderCompletionPreview> = of(completionPreview())
+) {
   const route = {
     queryParamMap: of(convertToParamMap(supplierOrderId ? { supplierOrderId } : {}))
   } as unknown as ActivatedRoute;
@@ -42,7 +81,11 @@ function createHarness(supplierOrderId: string | null, sessionActive: Observable
   const upload = jest.fn(() => of({} as Purchase));
   const purchaseService = { upload } as unknown as PurchaseService;
   const supplierService = { getAll: jest.fn(() => of([])) } as unknown as SupplierService;
-  const supplierOrderService = { getById: jest.fn(() => of(supplierOrder())) } as unknown as SupplierOrderService;
+  const completionPreviewRequest = jest.fn(() => preview);
+  const supplierOrderService = {
+    getById: jest.fn(() => of(supplierOrder())),
+    completionPreview: completionPreviewRequest
+  } as unknown as SupplierOrderService;
   const productService = { getAll: jest.fn(() => of([])) } as unknown as ProductService;
   const toastService = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
   const supportSession = { active$: sessionActive } as unknown as SupportSessionService;
@@ -59,7 +102,7 @@ function createHarness(supplierOrderId: string | null, sessionActive: Observable
   );
   component.ngOnInit();
 
-  return { component, navigate, purchaseService, toastService, upload };
+  return { component, navigate, purchaseService, toastService, upload, completionPreviewRequest };
 }
 
 /** The payload the component handed to `PurchaseService.upload`. */
@@ -78,8 +121,12 @@ function uploadedItems(upload: jest.Mock): PurchaseItemPayload[] {
  * which is the $2.00 unit cost the request carries. The line is filled through the component's own
  * change handlers, the way the template does it (issues #707 and #878).
  */
-function readyToUpload(supplierOrderId: string | null = null, sessionActive: Observable<boolean> = of(false)) {
-  const harness = createHarness(supplierOrderId, sessionActive);
+function readyToUpload(
+  supplierOrderId: string | null = null,
+  sessionActive: Observable<boolean> = of(false),
+  preview: Observable<SupplierOrderCompletionPreview> = of(completionPreview())
+) {
+  const harness = createHarness(supplierOrderId, sessionActive, preview);
   harness.component.selectedFile = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
   harness.component.form.title = 'Weekly restock';
   harness.component.addItem();
@@ -97,6 +144,9 @@ describe('PurchaseUploadComponent supplier-order receipt navigation (issue #387)
     component.form.title = 'Weekly restock';
 
     component.upload();
+    // The linked purchase asks about the order's outstanding balance first (issue #974); keeping
+    // the order open is the save that has always happened, and it still lands on this page.
+    component.keepSupplierOrderOpen();
 
     expect(navigate).toHaveBeenCalledWith(['/purchases/orders']);
   });
@@ -292,6 +342,7 @@ describe('PurchaseUploadComponent per-line price entry (issues #707, #878)', () 
     expect(component.items[0].unitCost).toBe(2);
 
     component.upload();
+    component.keepSupplierOrderOpen();
 
     expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 10, unitCost: 2 }]);
   });
@@ -507,7 +558,7 @@ describe('PurchaseUploadComponent write controls during a support session (issue
     expect(upload).toHaveBeenCalledTimes(1);
   });
 
-  it('disables the Add Purchase button while a session is active, and leaves it enabled while none is', async () => {
+  it('disables the Save purchase button while a session is active', async () => {
     const route = { queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
     const sessionActive$ = of(true);
 
@@ -529,7 +580,320 @@ describe('PurchaseUploadComponent write controls during a support session (issue
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
 
-    const submit = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Add Purchase') as HTMLButtonElement;
+    const submit = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Save purchase') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
+  });
+});
+
+/**
+ * Offering the keep-open / complete choice before a linked purchase is saved (issue #974).
+ *
+ * The projected outstanding balance is always the server's: this page asks
+ * `SupplierOrderService.completionPreview` and formats what comes back. What is asserted here is the
+ * decision flow around it - when the choice is offered at all, what each answer submits, and that
+ * cancelling and failing both leave the entered purchase on screen.
+ */
+describe('PurchaseUploadComponent supplier-order completion choice (issue #974)', () => {
+  /**
+   * A ready-to-save receipt for supplier order 9: its one outstanding line prefilled at the 10
+   * units ordered and the $2.00 the order agreed, with a document and a title. The order is still
+   * owed 10, so 10 received would complete it and anything less leaves a balance.
+   */
+  function readyToReceive(preview: Observable<SupplierOrderCompletionPreview> = of(completionPreview())) {
+    const harness = createHarness('9', of(false), preview);
+    harness.component.selectedFile = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
+    harness.component.form.title = 'Weekly restock';
+    // The final delivery is short: 3 of the 10 units ordered, at the $2.00 unit price the order
+    // agreed (entered as a unit price, so the line total follows rather than the other way round).
+    harness.component.onLineQuantityChange(harness.component.items[0], 3);
+    harness.component.onLineUnitCostChange(harness.component.items[0], 2);
+    return harness;
+  }
+
+  it('asks the server for the projected outstanding balance before saving a linked purchase', () => {
+    const { component, completionPreviewRequest, upload } = readyToReceive();
+
+    component.upload();
+
+    expect(completionPreviewRequest).toHaveBeenCalledTimes(1);
+    expect(completionPreviewRequest.mock.calls[0]).toEqual([
+      9,
+      expect.objectContaining({ supplierId: 1, lines: [{ productId: 5, quantity: 3 }] })
+    ]);
+    // Nothing is saved while the choice is open: the operator has not answered it yet.
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.completionChoice).not.toBeNull();
+    expect(component.saving).toBe(false);
+  });
+
+  it('keeps the order open by submitting no completion decision at all', () => {
+    const { component, upload, navigate } = readyToReceive();
+    component.upload();
+
+    component.keepSupplierOrderOpen();
+
+    const payload = uploadedPayload(upload);
+    expect(payload.completeSupplierOrderId ?? null).toBeNull();
+    expect(payload.completeSupplierOrderFingerprint ?? null).toBeNull();
+    expect(component.completionChoice).toBeNull();
+    expect(navigate).toHaveBeenCalledWith(['/purchases/orders']);
+  });
+
+  it('completes the order with the order id and the fingerprint the server issued, and nothing else', () => {
+    const { component, upload } = readyToReceive();
+    component.upload();
+
+    component.completeSupplierOrder();
+
+    const payload = uploadedPayload(upload);
+    expect(payload.completeSupplierOrderId).toBe(9);
+    expect(payload.completeSupplierOrderFingerprint).toBe('fingerprint-from-the-server');
+    // The quantities saved are the ones that were entered: completing invents no receipt.
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 3, unitCost: 2 }]);
+  });
+
+  it('returns to the form without saving, and without losing what was entered, when the choice is cancelled', () => {
+    const { component, upload, navigate } = readyToReceive();
+    component.upload();
+
+    component.cancelCompletionChoice();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.completionChoice).toBeNull();
+    expect(component.saving).toBe(false);
+    expect(component.form.title).toBe('Weekly restock');
+    expect(component.items).toHaveLength(1);
+    expect(component.items[0]).toMatchObject({ productId: 5, quantity: 3, unitCost: 2 });
+    expect(component.selectedFile).not.toBeNull();
+  });
+
+  it('saves straight through when the purchase leaves nothing outstanding', () => {
+    const { component, upload } = readyToReceive(
+      of(completionPreview({ hasOutstandingBalance: false, outstandingLines: [] }))
+    );
+
+    component.upload();
+
+    expect(component.completionChoice).toBeNull();
+    expect(uploadedPayload(upload).completeSupplierOrderId ?? null).toBeNull();
+  });
+
+  it('saves straight through when the order is no longer one that can be completed', () => {
+    const { component, upload } = readyToReceive(
+      of(completionPreview({ eligibleForCompletion: false, status: SupplierOrderStatus.Received }))
+    );
+
+    component.upload();
+
+    expect(component.completionChoice).toBeNull();
+    expect(uploadedPayload(upload).completeSupplierOrderId ?? null).toBeNull();
+  });
+
+  it('never asks about an order for a purchase that is not linked to one', () => {
+    const { component, completionPreviewRequest, upload } = readyToUpload();
+
+    component.upload();
+
+    expect(completionPreviewRequest).not.toHaveBeenCalled();
+    expect(component.completionChoice).toBeNull();
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the entered purchase and asks again when the save is refused as stale', () => {
+    const { component, upload, toastService } = readyToReceive();
+    (upload as jest.Mock).mockImplementation(() =>
+      throwError(() => ({ error: 'This supplier order changed after the completion choice was shown.' })));
+    component.upload();
+    component.completeSupplierOrder();
+
+    expect(component.error).toBe('This supplier order changed after the completion choice was shown.');
+    expect(component.saving).toBe(false);
+    expect(component.items).toHaveLength(1);
+    // Nothing claims the order was completed, because nothing was stored.
+    expect(toastService.success).not.toHaveBeenCalled();
+
+    // The next attempt re-previews rather than reusing a fingerprint the server already refused.
+    (upload as jest.Mock).mockImplementation(() => of({} as Purchase));
+    component.upload();
+
+    expect(component.completionChoice).not.toBeNull();
+  });
+
+  it('reports a failed preview and saves nothing', () => {
+    const { component, upload } = readyToReceive(throwError(() => new Error('offline')));
+
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.completionChoice).toBeNull();
+    expect(component.error).not.toBe('');
+    expect(component.saving).toBe(false);
+  });
+});
+
+/**
+ * Saving a purchase with no supporting document (issue #976, child of #965). A business with no
+ * receipt to attach - or no storage left to put one in - still has to be able to record what it
+ * bought, and the document can be added to the saved purchase afterwards.
+ */
+describe('PurchaseUploadComponent saving without a document (issue #976)', () => {
+  /** The same ready-to-submit form `readyToUpload` builds, with no file chosen. */
+  function readyWithoutDocument() {
+    const harness = createHarness(null);
+    harness.component.form.title = 'Weekly restock';
+    harness.component.addItem();
+    const item = harness.component.items[0];
+    item.productId = 5;
+    harness.component.onLineQuantityChange(item, 3);
+    harness.component.onLineTotalChange(item, 6);
+    return harness;
+  }
+
+  it('saves the purchase with no file and reports no error', () => {
+    const { component, upload, navigate } = readyWithoutDocument();
+
+    component.upload();
+
+    expect(component.error).toBe('');
+    expect(uploadedPayload(upload).file).toBeNull();
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 3, unitCost: 2 }]);
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+
+  it('still sends the chosen document when there is one', () => {
+    const { component, upload } = readyToUpload();
+
+    component.upload();
+
+    expect(uploadedPayload(upload).file).toBeInstanceOf(File);
+  });
+
+  it('still requires a title, which no file name can stand in for', () => {
+    const { component, upload } = readyWithoutDocument();
+    component.form.title = '   ';
+
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.error).toBe('Please enter a purchase title.');
+  });
+
+  it('asks about the supplier order it is receiving even with no document', () => {
+    const harness = createHarness('9');
+    harness.component.form.title = 'Weekly restock';
+
+    harness.component.upload();
+
+    expect(harness.component.completionChoice).not.toBeNull();
+    expect(harness.upload).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The redesigned Add Purchase (issue #1029): a suggested title the person's own typing always wins
+ * over, the compact receipt control, and a line that must name a product.
+ */
+describe('PurchaseUploadComponent redesigned form (issue #1029)', () => {
+  function todayLabel(): string {
+    const now = new Date();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${now.getDate()} ${months[now.getMonth()]} ${now.getFullYear()}`;
+  }
+
+  it('opens on today, with a title suggested from the date', () => {
+    const { component } = createHarness(null);
+
+    expect(component.form.title).toBe(`Purchase — ${todayLabel()}`);
+  });
+
+  it('follows the supplier and the date while the person has not typed a title', () => {
+    const { component } = createHarness(null);
+    component.suppliers = [{ id: 3, name: 'Costco Wholesale' }];
+
+    component.form.supplierId = 3;
+    component.form.purchaseDate = '2026-10-24';
+    component.refreshSuggestedTitle();
+
+    expect(component.form.title).toBe('Costco Wholesale — 24 Oct 2026');
+  });
+
+  it('never overwrites a title the person typed', () => {
+    const { component } = createHarness(null);
+    component.suppliers = [{ id: 3, name: 'Costco Wholesale' }];
+
+    component.form.title = 'Snacks for the gym';
+    component.onTitleEdited();
+    component.form.supplierId = 3;
+    component.refreshSuggestedTitle();
+
+    expect(component.form.title).toBe('Snacks for the gym');
+  });
+
+  it('names the supplier of the order it is receiving', () => {
+    const { component } = createHarness('9');
+    component.suppliers = [{ id: 1, name: 'Acme Supplies' }];
+    component.refreshSuggestedTitle();
+
+    expect(component.form.title).toBe(`Acme Supplies — ${todayLabel()}`);
+  });
+
+  it('starts a new line with no product chosen and refuses to save it until one is', () => {
+    const { component, upload } = createHarness(null);
+    component.addItem();
+    component.onLineQuantityChange(component.items[0], 3);
+    component.onLineTotalChange(component.items[0], 6);
+
+    expect(component.items[0].productId).toBe(0);
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.error).toBe('Choose a product for every item. 1 item(s) have no product.');
+
+    component.items[0].productId = 5;
+    component.upload();
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the attached receipt with the create, and nothing once it was removed again', () => {
+    const { component, upload } = readyToUpload();
+    const receipt = new File(['scan'], 'receipt.jpg', { type: 'image/jpeg' });
+
+    component.onReceiptChange(receipt);
+    component.onReceiptChange(null);
+    component.upload();
+
+    expect(uploadedPayload(upload).file).toBeNull();
+  });
+
+  it('sends a replaced receipt rather than the first one chosen', () => {
+    const { component, upload } = readyToUpload();
+    const replacement = new File(['scan 2'], 'receipt-2.pdf', { type: 'application/pdf' });
+
+    component.onReceiptChange(new File(['scan 1'], 'receipt-1.pdf', { type: 'application/pdf' }));
+    component.onReceiptChange(replacement);
+    component.upload();
+
+    expect(uploadedPayload(upload).file).toBe(replacement);
+  });
+
+  it('keeps an entered receipt total exactly as typed, whether or not it matches', () => {
+    const { component, upload } = readyToUpload();
+    component.form.totalAmount = 6.5;
+
+    component.upload();
+
+    expect(uploadedPayload(upload).totalAmount).toBe(6.5);
+  });
+
+  it('cancels back to where the purchase was started, saving nothing', () => {
+    const manual = createHarness(null);
+    manual.component.cancel();
+    expect(manual.navigate).toHaveBeenCalledWith(['/purchases']);
+    expect(manual.upload).not.toHaveBeenCalled();
+
+    const fromOrder = createHarness('9');
+    fromOrder.component.cancel();
+    expect(fromOrder.navigate).toHaveBeenCalledWith(['/purchases/orders']);
   });
 });

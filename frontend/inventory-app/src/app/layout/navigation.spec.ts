@@ -1,4 +1,5 @@
 import { capabilitySet } from '../access/capabilities';
+import { Entitlement } from '../access/entitlement';
 import { OptionVisibility } from '../access/option-visibility';
 import { routes } from '../app.routes';
 import { ProviderAvailability, providerFeatureAvailabilities, providerConnectionOf } from '../provider/provider-availability.service';
@@ -11,17 +12,22 @@ import {
   NavGroup,
   NavItem,
   NavLink,
+  NavSectionHeading,
   activeNavGroup,
   activeNavLink,
   activeNavRoute,
   businessesNavLink,
+  masterProductsNavLink,
   navLinks,
   navLockOf,
+  navLockSummary,
   navigationFor,
   optionSwitchedOff,
   platformDiagnosticsNavLink,
+  priceCatalogueReviewNavLink,
   primaryNavigation,
   superAdminNavGroup,
+  superAdminNavSection,
   supplierPresetsNavLink,
   switchableOptionRoute
 } from './navigation';
@@ -137,19 +143,27 @@ describe('primary navigation (issue #391)', () => {
    * `Reports`. A destination's provider dependency is now carried by the entry itself - its
    * `lockedWithout` - rather than by where it sits in the menu.
    */
-  it('declares the target navigation in order, with no provider section heading', () => {
+  it('declares the target navigation in order, under the Restockroo group headings (issue #972)', () => {
     expect(primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`)).toEqual([
+      'section:Operations',
       'link:Dashboard',
       'link:Pick List',
       'link:Sites',
       'link:Machines',
+      'section:Inventory & purchasing',
       'group:Inventory',
       'group:Purchases',
+      'section:Finance & reports',
       'link:Expenses',
       'group:Reports',
+      'section:Settings',
+      'link:Plan',
       'group:Admin'
     ]);
-    expect(primaryNavigation.some((entry) => entry.kind === 'section')).toBe(false);
+    // A heading only labels: there is no provider section heading and no heading sentence.
+    expect(
+      primaryNavigation.filter((entry): entry is NavSectionHeading => entry.kind === 'section').map((entry) => entry.description)
+    ).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   /**
@@ -191,6 +205,7 @@ describe('primary navigation (issue #391)', () => {
       route: '/sites',
       icon: 'location_on',
       capability: 'Inventory.Operate',
+      planLockedWithout: 'SalesProviderIntegration',
       lockedWithout: 'machineFleet'
     });
     expect(machines.route).toBe('/machines');
@@ -198,13 +213,14 @@ describe('primary navigation (issue #391)', () => {
     expect(machines.hiddenWithoutProvider).toBeUndefined();
   });
 
-  it('keeps Pick List, Sites, Machines and Expenses as top-level direct links', () => {
+  it('keeps Pick List, Sites, Machines, Expenses and Plan as top-level direct links', () => {
     expect(primaryNavigation.filter((entry) => entry.kind === 'link').map((entry) => (entry as NavLink).route)).toEqual([
       '/',
       '/pick-list',
       '/sites',
       '/machines',
-      '/expenses'
+      '/expenses',
+      '/plan'
     ]);
   });
 
@@ -332,8 +348,9 @@ describe('primary navigation (issue #391)', () => {
   });
 
   it('adds no Settings, profile or audit destination', () => {
+    // "Settings" is a group heading since issue #972 (over the existing Admin group), never a page.
     const labels = [
-      ...primaryNavigation.map((entry) => entry.label),
+      ...primaryNavigation.filter((entry) => entry.kind !== 'section').map((entry) => entry.label),
       ...navLinks(primaryNavigation).map((link) => link.label)
     ];
 
@@ -355,7 +372,8 @@ describe('primary navigation (issue #391)', () => {
 /**
  * The top-level Super Admin group (issue #546, parent #510 under #328), which took
  * `Platform Diagnostics` out of the business `Admin` group (issue #335) and added Businesses
- * (issue #547) and Supplier Presets (issue #848).
+ * (issue #547), Supplier Presets (issue #848), Supplier Price Review (issue #928) and Master
+ * Products (issue #1023).
  *
  * The group is presentation only. `GET /api/admin/diagnostics/access` decides whether it is
  * composed in, and the API is independently authorized on every request, so a navigation without
@@ -368,17 +386,20 @@ describe('navigationFor (issue #546)', () => {
     expect(childRoutes('Admin', ownerNavigation())).toEqual(adminChildRoutes);
   });
 
-  it('adds it last, holding its three destinations, once the API confirms access', () => {
+  it('adds it last, holding its five destinations, once the API confirms access', () => {
     expect(group('Super Admin', ownerNavigation(true)).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
   });
 
   it('changes nothing else: the same groups in the same order, with Super Admin appended last', () => {
     expect(ownerNavigation(true).map((entry) => `${entry.kind}:${entry.label}`)).toEqual([
       ...primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`),
+      'section:Super admin',
       'group:Super Admin'
     ]);
     expect(childRoutes('Admin', ownerNavigation(true))).toEqual(adminChildRoutes);
@@ -386,7 +407,9 @@ describe('navigationFor (issue #546)', () => {
       ...navLinks(primaryNavigation).map((link) => link.route),
       platformDiagnosticsNavLink.route,
       businessesNavLink.route,
-      supplierPresetsNavLink.route
+      supplierPresetsNavLink.route,
+      priceCatalogueReviewNavLink.route,
+      masterProductsNavLink.route
     ]);
   });
 
@@ -397,14 +420,19 @@ describe('navigationFor (issue #546)', () => {
 
     expect(childRoutes('Admin')).toEqual(adminChildRoutes);
     expect(primaryNavigation.map((entry) => entry.label)).toEqual([
+      'Operations',
       'Dashboard',
       'Pick List',
       'Sites',
       'Machines',
+      'Inventory & purchasing',
       'Inventory',
       'Purchases',
+      'Finance & reports',
       'Expenses',
       'Reports',
+      'Settings',
+      'Plan',
       'Admin'
     ]);
   });
@@ -444,7 +472,9 @@ describe('navigationFor (issue #546)', () => {
     expect(group('Super Admin', operator).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
     expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       platformDiagnosticsNavLink.route
@@ -467,6 +497,42 @@ describe('navigationFor (issue #546)', () => {
       supplierPresetsNavLink.route
     );
   });
+
+  it('declares Supplier Price Review with no capability either, for the same reason (#928)', () => {
+    expect(priceCatalogueReviewNavLink).toEqual({
+      kind: 'link',
+      label: 'Supplier Price Review',
+      route: '/super-admin/price-catalogue-review'
+    });
+    expect(superAdminNavGroup.children).toContain(priceCatalogueReviewNavLink);
+    expect(navLinks(navigationFor(OWNER, false, 'offered')).map((link) => link.route)).not.toContain(
+      priceCatalogueReviewNavLink.route
+    );
+  });
+
+  /**
+   * Master Products sits beside Supplier Price Review, declares no capability either, and is offered
+   * only to the configured platform administrator (issue #1023): the catalogue is shared by every
+   * business, so no business role grants a look at it - not even an Owner's.
+   */
+  it('declares Master Products with no capability either, next to Supplier Price Review (#1023)', () => {
+    expect(masterProductsNavLink).toEqual({
+      kind: 'link',
+      label: 'Master Products',
+      route: '/super-admin/master-products'
+    });
+
+    const children = superAdminNavGroup.children;
+    expect(children).toContain(masterProductsNavLink);
+    expect(children.indexOf(masterProductsNavLink)).toBe(children.indexOf(priceCatalogueReviewNavLink) + 1);
+
+    expect(navLinks(navigationFor(OWNER, false, 'offered')).map((link) => link.route)).not.toContain(
+      masterProductsNavLink.route
+    );
+    expect(navLinks(navigationFor(OWNER, true, 'offered')).map((link) => link.route)).toContain(
+      masterProductsNavLink.route
+    );
+  });
 });
 
 /**
@@ -476,8 +542,9 @@ describe('navigationFor (issue #546)', () => {
  * than protecting one.
  */
 describe('navigationFor capabilities (issue #528)', () => {
+  /** The destinations and groups, without the issue #972 headings over them. */
   function labels(items: readonly NavItem[]): string[] {
-    return items.map((entry) => entry.label);
+    return items.filter((entry) => entry.kind !== 'section').map((entry) => entry.label);
   }
 
   it('declares the capability its own page needs on every destination', () => {
@@ -488,10 +555,10 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(undeclared).toEqual([]);
   });
 
-  it('offers an Operator no Expenses, no Reports group and no Admin group', () => {
+  it('offers an Operator no Expenses, no Reports group and no Admin group, but keeps Plan', () => {
     const operator = navigationFor(OPERATOR, false, 'offered');
 
-    expect(labels(operator)).toEqual(['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases']);
+    expect(labels(operator)).toEqual(['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases', 'Plan']);
     expect(navLinks(operator).map((entry) => entry.route)).toEqual([
       '/',
       '/pick-list',
@@ -503,7 +570,8 @@ describe('navigationFor capabilities (issue #528)', () => {
       '/stock-history',
       '/purchases',
       '/purchases/orders',
-      '/suppliers'
+      '/suppliers',
+      '/plan'
     ]);
   });
 
@@ -519,6 +587,7 @@ describe('navigationFor capabilities (issue #528)', () => {
       'Purchases',
       'Expenses',
       'Reports',
+      'Plan',
       'Admin'
     ]);
     expect(childRoutes('Reports', manager).map((child) => child.route)).toEqual(
@@ -600,7 +669,9 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(group('Super Admin', navigationFor(undefined, true, 'offered')).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
   });
 
@@ -631,11 +702,13 @@ describe('navigationFor with the business navigation withheld (issue #676)', () 
   });
 
   it('keeps the separately authorized Super Admin group, and only it', () => {
-    expect(navigationFor(undefined, true, 'withheld')).toEqual([superAdminNavGroup]);
+    expect(navigationFor(undefined, true, 'withheld')).toEqual([superAdminNavSection, superAdminNavGroup]);
     expect(navLinks(navigationFor(OWNER, true, 'withheld'))).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
-      supplierPresetsNavLink
+      supplierPresetsNavLink,
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
   });
 
@@ -705,8 +778,9 @@ describe('activeNavGroup', () => {
  * does with it.
  */
 describe('navigationFor with the provider answer (issue #729)', () => {
+  /** The destinations and groups, without the issue #972 headings over them. */
   function labels(items: readonly NavItem[]): string[] {
-    return items.map((entry) => entry.label);
+    return items.filter((entry) => entry.kind !== 'section').map((entry) => entry.label);
   }
 
   /**
@@ -717,7 +791,9 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   function lockOf(route: string, provider: ProviderAvailability | undefined): string {
     const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === route);
     expect(entry).toBeDefined();
-    return navLockOf(entry!, provider);
+    // An unread entitlement fails open (issue #979), which is what isolates this helper's provider
+    // answer as the only thing under test here; the plan lock has its own describe block below.
+    return navLockOf(entry!, undefined, provider);
   }
 
   /** The five reports over stored provider records, locked only by a missing connection (#868). */
@@ -894,7 +970,7 @@ describe('navigationFor with the provider answer (issue #729)', () => {
 
   it('never locks a destination that declares no live provider read', () => {
     for (const entry of navLinks(ownerNavigation()).filter((candidate) => candidate.lockedWithout === undefined)) {
-      expect(navLockOf(entry, availability('NotConfigured'))).toBe('open');
+      expect(navLockOf(entry, undefined, availability('NotConfigured'))).toBe('open');
     }
   });
 
@@ -919,7 +995,7 @@ describe('navigationFor with the provider answer (issue #729)', () => {
     ]);
 
     const locked = navLinks([group('Reports', noProvider)])
-      .filter((report) => navLockOf(report, availability('NotConfigured')) !== 'open')
+      .filter((report) => navLockOf(report, undefined, availability('NotConfigured')) !== 'open')
       .map((report) => report.route);
     expect(locked).toEqual([
       '/reports/daily',
@@ -1020,6 +1096,106 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   it('withholds the business menu entirely whatever the provider answer says', () => {
     expect(navigationFor(OWNER, false, 'withheld', availability('Ready'))).toEqual([]);
     expect(navigationFor(OWNER, false, 'withheld', availability('NotConfigured'))).toEqual([]);
+  });
+});
+
+/** An entitlement as `GET /api/me/access` reports it, for exactly the fields `navLockOf` reads. */
+function entitlement(plan: string | null, enforced = true): Entitlement {
+  return { enforced, plan, source: 'BillingSubscription', endsAtUtc: null };
+}
+
+/**
+ * The plan lock (issue #979): the order of checks is role, then plan, then Nayax connection, so a
+ * plan lock is decided before the provider answer is even consulted.
+ */
+describe('navigationFor with the entitlement answer (issue #979)', () => {
+  function lockOf(route: string, plan: Entitlement | undefined, provider?: ProviderAvailability): string {
+    const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === route);
+    expect(entry).toBeDefined();
+    return navLockOf(entry!, plan, provider);
+  }
+
+  const PLAN_LOCKED_ROUTES = [
+    '/reports/bookkeeping',
+    '/reports/gst',
+    '/reports/daily',
+    '/reports/transactions',
+    '/reports/reconciliation',
+    '/reports/machines',
+    '/reports/products',
+    '/reports/site-commissions',
+    '/sites'
+  ];
+
+  it.each(PLAN_LOCKED_ROUTES)('locks %s for a Free business, whatever the connection is', (route) => {
+    for (const provider of [availability('Ready'), availability('NotConfigured'), undefined]) {
+      expect(lockOf(route, entitlement('Free'), provider)).toBe('plan');
+    }
+  });
+
+  it('locks the Pro-only destinations for a Starter business', () => {
+    const starter = entitlement('Starter');
+    for (const route of ['/reports/daily', '/reports/site-commissions', '/sites']) {
+      expect(lockOf(route, starter)).toBe('plan');
+    }
+  });
+
+  it('opens the Starter-only reports for a Starter business', () => {
+    const starter = entitlement('Starter');
+    expect(lockOf('/reports/bookkeeping', starter)).toBe('open');
+    expect(lockOf('/reports/gst', starter)).toBe('open');
+  });
+
+  it('opens every plan-locked destination for a Pro business', () => {
+    const pro = entitlement('Pro');
+    for (const route of PLAN_LOCKED_ROUTES) {
+      expect(lockOf(route, pro)).toBe('open');
+    }
+  });
+
+  it('is never enforced while the business carries no entitlement at all (issue #966)', () => {
+    for (const route of PLAN_LOCKED_ROUTES) {
+      expect(lockOf(route, entitlement('Free', false))).toBe('open');
+    }
+  });
+
+  /**
+   * `undefined` is "not known" - nothing has been read, the read failed, or an older API did not
+   * report it - and it fails open exactly as an unread capability or provider answer does: nothing
+   * is locked until the entitlement is actually known not to include the feature.
+   */
+  it('locks nothing on the plan check while the entitlement is not known, falling through to the provider answer', () => {
+    for (const route of PLAN_LOCKED_ROUTES) {
+      // A usable connection with nothing refused, so what is asserted is purely that the unread
+      // entitlement itself locked nothing - a provider-locked route's own answer is covered by the
+      // provider describe block above.
+      expect(lockOf(route, undefined, availability('Ready'))).toBe('open');
+    }
+  });
+
+  /**
+   * The ordering criterion itself: a Free business sees the plan lock even on a usable connection -
+   * reconnecting Nayax would not open the page, upgrading would - and a Pro business with no
+   * connection falls through to today's provider lock, which asks for the thing that actually opens
+   * it for a business that has already bought the feature.
+   */
+  it('checks the plan before the provider, so a Free business is never told to connect Nayax', () => {
+    expect(lockOf('/sites', entitlement('Free'), availability('Ready'))).toBe('plan');
+    expect(lockOf('/sites', entitlement('Pro'), availability('NotConfigured'))).toBe('connect');
+  });
+
+  it("names the destination and the plan it needs in the lock's own sentence", () => {
+    const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === '/sites')!;
+    expect(navLockSummary('plan', entry)).toBe('Sites needs the Pro plan.');
+
+    const bookkeeping = navLinks(ownerNavigation()).find((candidate) => candidate.route === '/reports/bookkeeping')!;
+    expect(navLockSummary('plan', bookkeeping)).toBe('Bookkeeping needs the Starter plan.');
+  });
+
+  it('never locks a destination that declares no plan feature', () => {
+    for (const entry of navLinks(ownerNavigation()).filter((candidate) => candidate.planLockedWithout === undefined)) {
+      expect(navLockOf(entry, entitlement('Free'), undefined)).toBe('open');
+    }
   });
 });
 
@@ -1138,5 +1314,53 @@ describe('switchable Admin option visibility (issue #873)', () => {
   it('names the one switchable destination', () => {
     expect(switchableOptionRoute).toBe(entry.route);
     expect(childRoutes('Admin')).toContainEqual(entry);
+  });
+});
+
+/**
+ * The Restockroo group headings (issue #972) only label the entries under them, so they follow the
+ * same capability, provider and platform-admin rules as those entries: a heading whose entries were
+ * all left out is left out with them, and the Super admin heading exists only with its group.
+ */
+describe('navigation group headings (issue #972)', () => {
+  function headings(items: readonly NavItem[]): string[] {
+    return items.filter((entry) => entry.kind === 'section').map((entry) => entry.label);
+  }
+
+  it('gives an Owner every business heading and no Super admin heading', () => {
+    expect(headings(ownerNavigation())).toEqual(['Operations', 'Inventory & purchasing', 'Finance & reports', 'Settings']);
+  });
+
+  it('keeps the Settings heading for an Operator, who still has Plan under it', () => {
+    expect(headings(navigationFor(OPERATOR, false, 'offered'))).toEqual(['Operations', 'Inventory & purchasing', 'Settings']);
+  });
+
+  it('keeps a heading for the one entry a capability set leaves under it', () => {
+    expect(headings(navigationFor(capabilitySet(['SiteCommissions.Manage']), false, 'offered'))).toEqual([
+      'Finance & reports',
+      'Settings'
+    ]);
+  });
+
+  it('appends the Super admin heading directly above its group, only for the platform administrator', () => {
+    const navigation = ownerNavigation(true);
+    expect(navigation.slice(-2)).toEqual([superAdminNavSection, superAdminNavGroup]);
+    expect(headings(navigationFor(OPERATOR, false, 'offered'))).not.toContain('Super admin');
+  });
+
+  it('never leaves a heading directly above another heading or at the end of the menu', () => {
+    for (const navigation of [
+      ownerNavigation(),
+      ownerNavigation(true),
+      navigationFor(OPERATOR, false, 'offered'),
+      navigationFor(capabilitySet(['Reports.View']), false, 'offered'),
+      navigationFor(OWNER, false, 'offered', availability('NotConfigured'))
+    ]) {
+      navigation.forEach((entry, index) => {
+        if (entry.kind === 'section') {
+          expect(navigation[index + 1]?.kind ?? 'end').not.toMatch(/section|end/);
+        }
+      });
+    }
   });
 });

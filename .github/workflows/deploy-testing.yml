@@ -1,0 +1,815 @@
+name: Deploy Testing
+
+# The hosted testing environment: every push to develop deploys the API and the frontend of exactly
+# that commit to separate Azure test resources (see docs/testing-environment.md). Production is not
+# touched: this workflow uses its own GitHub environment (testing), its own Entra deployment identity
+# through GitHub OIDC, and no stored secret at all. It never reads the production environment, its
+# variables or its Static Web Apps token, and Deploy Production stays the only way to production.
+#
+# A run validates the commit, builds both artifacts from it, deploys the API, waits for
+# /health/ready, records the healthy backend, then deploys the frontend pointed at the test API.
+# Runs share one non-cancelling queue, every upload is recorded before it starts, and a commit older
+# than the newest upload or healthy deployment is refused, so an older run can never overwrite a newer
+# deployment, even one that failed its health check after its migrations ran. A failure stops the run; it never reverts,
+# merges, relabels, retries or starts another deployment.
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions: {}
+
+# One testing deployment at a time, and never cancel one that is already running. GitHub keeps at most
+# one waiting run: a newer push replaces the waiting run, never the running one.
+concurrency:
+  group: deploy-testing
+  cancel-in-progress: false
+
+env:
+  TESTING_ENVIRONMENT: testing
+  # GitHub deployment records. An attempt record is written before every API upload, a backend
+  # record after each healthy deployment. A run for a commit older than the newest of either is
+  # refused, so an older commit never overwrites a newer upload, even one that failed afterwards.
+  TESTING_ATTEMPT_TASK: deploy:testing-attempt
+  TESTING_RECORD_TASK: deploy:testing-backend
+  API_PROJECT: ./backend/InventoryApi/InventoryApi.csproj
+  FRONTEND_DIR: frontend/inventory-app
+  FRONTEND_OUTPUT: frontend/inventory-app/dist/inventory-app/browser
+  # The production hosts. The test API and frontend must never be either of them.
+  PRODUCTION_API_HOST: vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net
+  PRODUCTION_FRONTEND_HOST: red-island-0c128c000.7.azurestaticapps.net
+
+jobs:
+  resolve:
+    name: Resolve testing commit
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: read
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      enabled: ${{ steps.switch.outputs.enabled }}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Refuse runs not started from develop
+        if: github.ref != 'refs/heads/develop'
+        env:
+          RUN_REF: ${{ github.ref }}
+        run: |
+          echo "::error::Deploy Testing deploys only develop; this run was started from $RUN_REF."
+          exit 1
+
+      - name: Check testing deployment is switched on
+        id: switch
+        env:
+          TESTING_DEPLOYMENT_ENABLED: ${{ vars.TESTING_DEPLOYMENT_ENABLED }}
+        run: |
+          if [ "$TESTING_DEPLOYMENT_ENABLED" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Testing deployment is switched on."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Testing deployment is switched off (repository variable TESTING_DEPLOYMENT_ENABLED is not true), so this run validates and deploys nothing. See docs/testing-environment.md."
+          fi
+
+      - name: Require verified runner isolation for credentialed jobs
+        # The deploy jobs receive Azure OIDC, so in self-hosted mode they are skipped until a human
+        # confirms those runners are reset or ephemeral per job. This step makes that refusal visible.
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
+        run: |
+          if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo "::error::Credentialed jobs are disabled in self-hosted mode (INVENTORY_AGENT_SELF_HOSTED_ALL is true) until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Require a verified tool baseline on every runner
+        # Same rule as Deploy Production: in self-hosted mode the deploy jobs wait for the runner
+        # diagnostic; in GitHub-hosted mode this fresh runner checks the deploy jobs' tools first.
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_BASELINE_VERIFIED: ${{ vars.INVENTORY_RUNNER_BASELINE_VERIFIED }}
+        run: |
+          if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then
+            echo "::error::Deployment is disabled in self-hosted mode (INVENTORY_AGENT_SELF_HOSTED_ALL is true) until a human runs the Inventory agent runner diagnostic on every self-hosted runner and sets the repository variable INVENTORY_RUNNER_BASELINE_VERIFIED to true. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+          if [ "$RUNNER_MODE" != "true" ]; then
+            missing=0
+            for tool in az jq curl docker; do
+              if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on GitHub-hosted runner $RUNNER_NAME."; missing=1; fi
+            done
+            if [ ! -x /usr/bin/gh ]; then echo "::error::/usr/bin/gh is not installed on GitHub-hosted runner $RUNNER_NAME."; missing=1; fi
+            docker info >/dev/null 2>&1 || { echo "::error::The Docker daemon is not reachable on GitHub-hosted runner $RUNNER_NAME."; missing=1; }
+            [ "$missing" -eq 0 ] || exit 1
+            echo "GitHub-hosted mode: runner $RUNNER_NAME has the deploy jobs' tools. INVENTORY_RUNNER_BASELINE_VERIFIED describes the self-hosted VM and is not required."
+          fi
+
+      # The commit is the one that triggered the run (github.sha), fixed when the run started. No job
+      # reads a newer develop head: every later job checks out or downloads artifacts named by it.
+      - name: Verify the commit is on develop and not older than the deployed one
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          sha="$GITHUB_SHA"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "The testing commit must be a full 40-character lowercase commit SHA."
+          contained="$(gh api "repos/$GITHUB_REPOSITORY/compare/$sha...develop" --jq '.status')" \
+            || fail "Could not compare $sha with develop. Nothing was deployed; re-run once the GitHub API is reachable."
+          case "$contained" in
+            identical|ahead) ;;
+            *) fail "Commit $sha is not contained in develop (compare status: $contained). Only develop commits are deployed to testing." ;;
+          esac
+          # Two records are compared: the newest upload attempt (written before every upload, so a
+          # deployment that failed its health check or its healthy record still counts) and the
+          # newest healthy deployment. The commit must be the same as or newer than both.
+          check_newest() {
+            local task="$1" label="$2" recorded order
+            recorded="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=$TESTING_ENVIRONMENT&task=$task&per_page=1" --jq '.[0].sha // empty')" \
+              || fail "Could not read the recorded testing deployments ($task). Nothing was deployed; re-run once the GitHub API is reachable."
+            if [ -z "$recorded" ]; then
+              echo "No $label testing deployment is recorded yet."
+              return 0
+            fi
+            [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] || fail "The newest $label testing deployment record '$recorded' is not a full commit SHA. See docs/testing-environment.md § Deployment records."
+            order="$(gh api "repos/$GITHUB_REPOSITORY/compare/$recorded...$sha" --jq '.status')" \
+              || fail "Could not compare $sha with the $label commit $recorded. Nothing was deployed."
+            case "$order" in
+              identical|ahead) echo "The newest $label testing deployment is $recorded; $sha is the same or newer." ;;
+              behind) fail "The newest $label testing deployment is $recorded, which is newer than $sha. An older commit never overwrites a newer testing deployment, even one that failed after its upload; push or dispatch develop again to deploy its head." ;;
+              *) fail "Commit $sha and the $label commit $recorded have diverged (compare status: $order). Nothing was deployed. See docs/testing-environment.md § Deployment records." ;;
+            esac
+          }
+          check_newest "$TESTING_ATTEMPT_TASK" attempted
+          check_newest "$TESTING_RECORD_TASK" healthy
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Testing commit: $sha"
+
+  validate:
+    name: Validate testing commit
+    needs: resolve
+    if: needs.resolve.outputs.enabled == 'true'
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Check out testing commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/inventory-app/package-lock.json
+
+      - name: Validate workflow contracts
+        run: |
+          node scripts/validate-runner-placement.mjs
+          node scripts/validate-deployment-workflows.mjs
+          node --test scripts/validate-deployment-workflows.test.mjs
+
+      - name: Validate repository
+        run: bash scripts/validate.sh
+
+  build:
+    name: Build testing artifacts
+    needs: resolve
+    if: needs.resolve.outputs.enabled == 'true'
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Check out testing commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/inventory-app/package-lock.json
+
+      - name: Publish API
+        run: dotnet publish "$API_PROJECT" --configuration Release --output "$RUNNER_TEMP/api"
+
+      # The publish output carries the scheduled database-backup WebJob for production. Testing runs no
+      # scheduled job, so it is removed from the test package and can never be registered there.
+      - name: Remove scheduled WebJobs from the test package
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/api/App_Data/jobs"
+          if [ -e "$RUNNER_TEMP/api/App_Data/jobs" ]; then echo "::error::The test package still contains App_Data/jobs."; exit 1; fi
+          echo "The test package contains no scheduled WebJob."
+
+      # Lifecycle scripts are not needed for the bundle, so a dependency cannot run code here.
+      - name: Build frontend
+        run: |
+          npm --prefix "$FRONTEND_DIR" ci --ignore-scripts
+          npm --prefix "$FRONTEND_DIR" run build
+
+      - name: Upload API package
+        uses: actions/upload-artifact@v4
+        with:
+          name: testing-api-${{ needs.resolve.outputs.sha }}
+          path: ${{ runner.temp }}/api
+          if-no-files-found: error
+
+      - name: Upload frontend bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: testing-frontend-${{ needs.resolve.outputs.sha }}
+          path: ${{ env.FRONTEND_OUTPUT }}
+          if-no-files-found: error
+
+  deploy-api:
+    name: Deploy test API
+    if: github.ref == 'refs/heads/develop' && needs.resolve.outputs.enabled == 'true' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true')
+    needs:
+      - resolve
+      - validate
+      - build
+    environment: testing
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
+    outputs:
+      api_base_url: ${{ steps.config.outputs.api_base_url }}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Check runner tools for the API deployment
+        run: |
+          missing=0
+          for tool in az jq curl; do
+            if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on runner $RUNNER_NAME."; missing=1; fi
+          done
+          if [ ! -x /usr/bin/gh ]; then echo "::error::/usr/bin/gh is not installed on runner $RUNNER_NAME."; missing=1; fi
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Runner $RUNNER_NAME has the tools the API deployment needs."
+
+      - name: Check the testing environment configuration
+        id: config
+        env:
+          AZURE_CLIENT_ID: ${{ vars.TESTING_AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.TESTING_AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.TESTING_AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ vars.TESTING_RESOURCE_GROUP }}
+          API_APP_NAME: ${{ vars.TESTING_API_APP_NAME }}
+          API_BASE_URL: ${{ vars.TESTING_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1 See docs/testing-environment.md."; exit 1; }
+          guid='^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+          [[ "$AZURE_CLIENT_ID" =~ $guid ]] || fail "The testing environment variable TESTING_AZURE_CLIENT_ID must be the test deployment identity's client id."
+          [[ "$AZURE_TENANT_ID" =~ $guid ]] || fail "The testing environment variable TESTING_AZURE_TENANT_ID must be a tenant GUID."
+          [[ "$AZURE_SUBSCRIPTION_ID" =~ $guid ]] || fail "The testing environment variable TESTING_AZURE_SUBSCRIPTION_ID must be a subscription GUID."
+          [[ "$RESOURCE_GROUP" =~ ^[A-Za-z0-9._()-]{1,90}$ ]] || fail "The testing environment variable TESTING_RESOURCE_GROUP must name the test resource group."
+          [[ "$API_APP_NAME" =~ ^[A-Za-z0-9-]{2,60}$ ]] || fail "The testing environment variable TESTING_API_APP_NAME must name the test App Service."
+          [ "$API_APP_NAME" != "vm-manager" ] || fail "TESTING_API_APP_NAME names the production App Service."
+          base="${API_BASE_URL%/}"
+          [[ "$base" =~ ^https://[A-Za-z0-9.-]+$ ]] || fail "The testing environment variable TESTING_API_BASE_URL must be the test API's https origin, without /api."
+          host="${base#https://}"
+          [ "${host,,}" != "${PRODUCTION_API_HOST,,}" ] || fail "TESTING_API_BASE_URL is the production API."
+          echo "api_base_url=$base" >> "$GITHUB_OUTPUT"
+          echo "Test API: $base (App Service $API_APP_NAME)."
+
+      # The run waited for the queue and for the earlier jobs, so the order is checked again
+      # immediately before Azure authentication, on the same github.sha (fixed for the run and its
+      # re-runs). Runs are serialized, so nothing deploys in between.
+      - name: Verify the commit is on develop and not older than the deployed one
+        id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          sha="$GITHUB_SHA"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || fail "The testing commit must be a full 40-character lowercase commit SHA."
+          contained="$(gh api "repos/$GITHUB_REPOSITORY/compare/$sha...develop" --jq '.status')" \
+            || fail "Could not compare $sha with develop. Nothing was deployed; re-run once the GitHub API is reachable."
+          case "$contained" in
+            identical|ahead) ;;
+            *) fail "Commit $sha is not contained in develop (compare status: $contained). Only develop commits are deployed to testing." ;;
+          esac
+          # Two records are compared: the newest upload attempt (written before every upload, so a
+          # deployment that failed its health check or its healthy record still counts) and the
+          # newest healthy deployment. The commit must be the same as or newer than both.
+          check_newest() {
+            local task="$1" label="$2" recorded order
+            recorded="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=$TESTING_ENVIRONMENT&task=$task&per_page=1" --jq '.[0].sha // empty')" \
+              || fail "Could not read the recorded testing deployments ($task). Nothing was deployed; re-run once the GitHub API is reachable."
+            if [ -z "$recorded" ]; then
+              echo "No $label testing deployment is recorded yet."
+              return 0
+            fi
+            [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] || fail "The newest $label testing deployment record '$recorded' is not a full commit SHA. See docs/testing-environment.md § Deployment records."
+            order="$(gh api "repos/$GITHUB_REPOSITORY/compare/$recorded...$sha" --jq '.status')" \
+              || fail "Could not compare $sha with the $label commit $recorded. Nothing was deployed."
+            case "$order" in
+              identical|ahead) echo "The newest $label testing deployment is $recorded; $sha is the same or newer." ;;
+              behind) fail "The newest $label testing deployment is $recorded, which is newer than $sha. An older commit never overwrites a newer testing deployment, even one that failed after its upload; push or dispatch develop again to deploy its head." ;;
+              *) fail "Commit $sha and the $label commit $recorded have diverged (compare status: $order). Nothing was deployed. See docs/testing-environment.md § Deployment records." ;;
+            esac
+          }
+          check_newest "$TESTING_ATTEMPT_TASK" attempted
+          check_newest "$TESTING_RECORD_TASK" healthy
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Testing commit: $sha"
+
+      - name: Download API package
+        uses: actions/download-artifact@v4
+        with:
+          name: testing-api-${{ needs.resolve.outputs.sha }}
+          path: ${{ runner.temp }}/api
+
+      - name: Isolate the Azure CLI profile to this job
+        run: |
+          set -euo pipefail
+          profile="$RUNNER_TEMP/azure-cli-profile"
+          rm -rf "$profile"
+          mkdir -m 700 "$profile"
+          echo "AZURE_CONFIG_DIR=$profile" >> "$GITHUB_ENV"
+
+      - name: Azure Login
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.TESTING_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.TESTING_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.TESTING_AZURE_SUBSCRIPTION_ID }}
+
+      # The deployed package replaces the site; the database and the uploaded documents must live
+      # outside it so a deployment preserves them. Values are compared, never printed.
+      - name: Check the test API keeps its data outside the package
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTING_RESOURCE_GROUP }}
+          API_APP_NAME: ${{ vars.TESTING_API_APP_NAME }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1 Nothing was deployed. See docs/testing-environment.md § Test API application settings."; exit 1; }
+          settings="$(az webapp config appsettings list --resource-group "$RESOURCE_GROUP" --name "$API_APP_NAME" --output json 2>/dev/null)" \
+            || fail "Could not read the test App Service settings with the testing deployment identity."
+          setting() { jq -r --arg name "$1" 'map(select(.name == $name)) | .[0].value // ""' <<<"$settings"; }
+          [ "$(setting ASPNETCORE_ENVIRONMENT)" = "Staging" ] || fail "ASPNETCORE_ENVIRONMENT on the test API must be Staging."
+          [ "$(setting Database__AllowAutomaticMigrationUnsafeOutsideDevelopment)" = "true" ] || fail "Database__AllowAutomaticMigrationUnsafeOutsideDevelopment on the test API must be true, so startup applies the migrations of each deployment."
+          [[ "$(setting ConnectionStrings__DefaultConnection)" =~ ^Data\ Source=/home/data/[A-Za-z0-9._-]+\.db$ ]] || fail "ConnectionStrings__DefaultConnection on the test API must be Data Source=/home/data/<file>.db, outside the deployed package."
+          [ "$(setting DocumentStorage__Provider)" = "AzureBlob" ] || fail "DocumentStorage__Provider on the test API must be AzureBlob, so uploaded documents live outside the deployed package."
+          [[ "$(setting DocumentStorage__BlobServiceUri)" =~ ^https://[a-z0-9]{3,24}\.blob\.core\.windows\.net/?$ ]] || fail "DocumentStorage__BlobServiceUri on the test API must be the test storage account's blob endpoint."
+          [ -n "$(setting DocumentStorage__ContainerName)" ] || fail "DocumentStorage__ContainerName on the test API must name the test documents container."
+          if [ -n "$(setting NayaxTokenProtection__ActiveKeyId)" ]; then
+            echo "::warning::Nayax token protection is configured on the test API, so a business there can store Nayax credentials and make real Nayax calls. Remove it unless that was deliberate."
+          fi
+          if [ -n "$(setting BackupStorage__BlobServiceUri)" ]; then
+            echo "::warning::BackupStorage is configured on the test API. Testing runs no scheduled backup; remove it unless that was deliberate."
+          fi
+          echo "The test API keeps its database under /home/data and its documents in Blob storage."
+
+      # Recorded before the upload, never after: once the package is uploaded its migrations may run,
+      # so from here on no older commit may deploy, even if this one fails its health check or its
+      # healthy record. If the attempt cannot be recorded, nothing is uploaded.
+      - name: Record the deployment attempt before upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTING_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          deployment_id="$(jq -n \
+            --arg ref "$TESTING_SHA" \
+            --arg task "$TESTING_ATTEMPT_TASK" \
+            --arg environment "$TESTING_ENVIRONMENT" \
+            '{ref: $ref, task: $task, environment: $environment, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: "Test backend upload started (Deploy Testing)"}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id')" \
+            || { echo "::error::The testing deployment attempt was not recorded, so nothing was uploaded."; exit 1; }
+          [[ "$deployment_id" =~ ^[0-9]+$ ]] || { echo "::error::The testing deployment attempt was not recorded, so nothing was uploaded."; exit 1; }
+          echo "Recorded the testing upload attempt for $TESTING_SHA (deployment $deployment_id)."
+
+      - name: Deploy to the test App Service
+        uses: azure/webapps-deploy@5cfb776471c748b351e1ebf5770e208a54ace016 # v2.2.19
+        with:
+          app-name: ${{ vars.TESTING_API_APP_NAME }}
+          package: ${{ runner.temp }}/api
+
+      - name: Azure Logout
+        if: always()
+        run: |
+          az logout || true
+          if [ -n "${AZURE_CONFIG_DIR:-}" ]; then rm -rf "$AZURE_CONFIG_DIR"; fi
+
+  verify-api:
+    name: Verify test API health
+    needs:
+      - resolve
+      - deploy-api
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    permissions: {}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Wait for /health/ready
+        env:
+          WEBAPP_URL: ${{ needs.deploy-api.outputs.api_base_url }}
+        run: |
+          set -uo pipefail
+          base="${WEBAPP_URL%/}"
+          [[ "$base" =~ ^https://[A-Za-z0-9.-]+$ ]] || { echo "::error::No usable HTTPS test API URL ('$base'); the API health cannot be verified."; exit 1; }
+
+          # Startup may be applying migrations, so allow up to about 15 minutes.
+          for attempt in $(seq 1 90); do
+            code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$base/health/ready" || true)"
+            if [ "$code" = "200" ]; then
+              echo "Test API is healthy: $base/health/ready returned 200 (attempt $attempt)."
+              exit 0
+            fi
+            echo "Attempt $attempt: $base/health/ready returned ${code:-no response}; retrying."
+            sleep 10
+          done
+
+          echo "::error::$base/health/ready did not return 200; the frontend will not be deployed."
+          exit 1
+
+  # Recorded only after /health/ready succeeded: the newest record is the commit the test API is
+  # known to run healthily, and the order check of every later run compares against it.
+  record-deployment:
+    name: Record testing backend deployment
+    # Without a status function this still runs only when every job it needs succeeded.
+    if: (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    needs:
+      - resolve
+      - deploy-api
+      - verify-api
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      deployments: write
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Record the deployed backend SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTING_SHA: ${{ needs.resolve.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          deployment_id="$(jq -n \
+            --arg ref "$TESTING_SHA" \
+            --arg task "$TESTING_RECORD_TASK" \
+            --arg environment "$TESTING_ENVIRONMENT" \
+            '{ref: $ref, task: $task, environment: $environment, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: "Test backend deployed and healthy (Deploy Testing)"}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id')"
+          [[ "$deployment_id" =~ ^[0-9]+$ ]] || { echo "::error::The testing deployment record was not created."; exit 1; }
+          jq -n --arg url "$RUN_URL" '{state: "success", log_url: $url, auto_inactive: false}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" --input - >/dev/null
+          echo "Recorded testing backend deployment $TESTING_SHA (deployment $deployment_id)."
+
+  deploy-frontend:
+    name: Deploy test frontend
+    if: github.ref == 'refs/heads/develop' && needs.resolve.outputs.enabled == 'true' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true')
+    needs:
+      - resolve
+      - build
+      - deploy-api
+      - verify-api
+      - record-deployment
+    environment: testing
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      url: ${{ steps.deploy.outputs.static_web_app_url }}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Check runner tools for the frontend deployment
+        run: |
+          missing=0
+          for tool in az jq docker curl; do
+            if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on runner $RUNNER_NAME."; missing=1; fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Runner $RUNNER_NAME has the tools the frontend deployment needs."
+
+      - name: Check the Docker daemon is reachable
+        run: docker info >/dev/null || { echo "::error::The Docker daemon is not reachable by the runner account on $RUNNER_NAME."; exit 1; }
+
+      - name: Check the testing frontend configuration
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTING_RESOURCE_GROUP }}
+          STATIC_WEB_APP_NAME: ${{ vars.TESTING_STATIC_WEB_APP_NAME }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1 See docs/testing-environment.md."; exit 1; }
+          [[ "$RESOURCE_GROUP" =~ ^[A-Za-z0-9._()-]{1,90}$ ]] || fail "The testing environment variable TESTING_RESOURCE_GROUP must name the test resource group."
+          [[ "$STATIC_WEB_APP_NAME" =~ ^[A-Za-z0-9-]{2,60}$ ]] || fail "The testing environment variable TESTING_STATIC_WEB_APP_NAME must name the test Static Web App."
+          echo "Test frontend: Static Web App $STATIC_WEB_APP_NAME."
+
+      - name: Download frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: testing-frontend-${{ needs.resolve.outputs.sha }}
+          path: testing-frontend
+
+      # The bundle is the one built from the testing commit; only its runtime configuration file is
+      # replaced, so the frontend calls the test API instead of the production API.
+      - name: Point the frontend at the test API
+        env:
+          API_BASE_URL: ${{ needs.deploy-api.outputs.api_base_url }}
+        run: |
+          set -euo pipefail
+          config="testing-frontend/assets/config.json"
+          [ -f "$config" ] || { echo "::error::The frontend bundle has no assets/config.json to replace."; exit 1; }
+          base="${API_BASE_URL%/}"
+          [[ "$base" =~ ^https://[A-Za-z0-9.-]+$ ]] || { echo "::error::No usable HTTPS test API URL ('$base')."; exit 1; }
+          [ "${base#https://}" != "$PRODUCTION_API_HOST" ] || { echo "::error::The test frontend must not call the production API."; exit 1; }
+          jq -n --arg url "$base/api" '{apiBaseUrl: $url}' > "$config"
+          echo "The test frontend calls $base/api."
+
+      - name: Isolate the Azure CLI profile to this job
+        run: |
+          set -euo pipefail
+          profile="$RUNNER_TEMP/azure-cli-profile"
+          rm -rf "$profile"
+          mkdir -m 700 "$profile"
+          echo "AZURE_CONFIG_DIR=$profile" >> "$GITHUB_ENV"
+
+      - name: Azure Login
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.TESTING_AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.TESTING_AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.TESTING_AZURE_SUBSCRIPTION_ID }}
+
+      # Static Web Apps uploads take a deployment token, not OIDC. The token is read for this run only
+      # from the test Static Web App with the testing identity, masked, and never stored in GitHub.
+      - name: Read the test Static Web App deployment token
+        id: swa-token
+        env:
+          RESOURCE_GROUP: ${{ vars.TESTING_RESOURCE_GROUP }}
+          STATIC_WEB_APP_NAME: ${{ vars.TESTING_STATIC_WEB_APP_NAME }}
+        run: |
+          set -euo pipefail
+          host="$(az staticwebapp show --resource-group "$RESOURCE_GROUP" --name "$STATIC_WEB_APP_NAME" --query defaultHostname --output tsv 2>/dev/null)" \
+            || { echo "::error::Could not read the test Static Web App with the testing deployment identity."; exit 1; }
+          [ "${host,,}" != "$PRODUCTION_FRONTEND_HOST" ] || { echo "::error::TESTING_STATIC_WEB_APP_NAME is the production Static Web App."; exit 1; }
+          token="$(az staticwebapp secrets list --resource-group "$RESOURCE_GROUP" --name "$STATIC_WEB_APP_NAME" --query properties.apiKey --output tsv 2>/dev/null)" \
+            || { echo "::error::Could not read the test Static Web App deployment token with the testing deployment identity."; exit 1; }
+          [ -n "$token" ] || { echo "::error::The test Static Web App returned no deployment token."; exit 1; }
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "Read the deployment token of $STATIC_WEB_APP_NAME ($host)."
+
+      - name: Azure Logout
+        if: always()
+        run: |
+          az logout || true
+          if [ -n "${AZURE_CONFIG_DIR:-}" ]; then rm -rf "$AZURE_CONFIG_DIR"; fi
+
+      # Deploys the bundle built from the testing commit as is; the action does not rebuild it.
+      - name: Deploy to the test Static Web App
+        id: deploy
+        uses: Azure/static-web-apps-deploy@1a947af9992250f3bc2e68ad0754c0b0c11566c9 # v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          action: upload
+          app_location: testing-frontend
+          output_location: ''
+          skip_app_build: true
+
+      - name: Verify the test frontend responds and calls the test API
+        env:
+          SITE_URL: ${{ steps.deploy.outputs.static_web_app_url }}
+          API_BASE_URL: ${{ needs.deploy-api.outputs.api_base_url }}
+        run: |
+          set -uo pipefail
+          base="${SITE_URL%/}"
+          base="${base/#http:\/\//https://}"
+          [[ "$base" =~ ^https://[A-Za-z0-9.-]+$ ]] || { echo "::error::No usable test frontend URL ('$base')."; exit 1; }
+          expected="${API_BASE_URL%/}/api"
+          for attempt in $(seq 1 12); do
+            code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "$base/" || true)"
+            configured="$(curl --silent --max-time 10 "$base/assets/config.json" | jq -r '.apiBaseUrl // empty' 2>/dev/null || true)"
+            if [ "$code" = "200" ] && [ "$configured" = "$expected" ]; then
+              echo "Test frontend responds: $base/ returned 200 and calls $expected."
+              exit 0
+            fi
+            echo "Attempt $attempt: $base/ returned ${code:-no response}; configured API '${configured:-none}'; retrying."
+            sleep 10
+          done
+          echo "::error::$base/ did not return 200 with the test API configured after deployment."
+          exit 1
+
+  summary:
+    name: Testing deployment summary
+    if: always()
+    needs:
+      - resolve
+      - validate
+      - build
+      - deploy-api
+      - verify-api
+      - record-deployment
+      - deploy-frontend
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions: {}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Publish deployment summary
+        env:
+          TESTING_SHA: ${{ needs.resolve.outputs.sha }}
+          ENABLED: ${{ needs.resolve.outputs.enabled }}
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          API_RESULT: ${{ needs.deploy-api.result }}
+          HEALTH_RESULT: ${{ needs.verify-api.result }}
+          RECORD_RESULT: ${{ needs.record-deployment.result }}
+          FRONTEND_RESULT: ${{ needs.deploy-frontend.result }}
+          FRONTEND_URL: ${{ needs.deploy-frontend.outputs.url }}
+        run: |
+          {
+            echo "## Deploy Testing"
+            echo
+            if [ "$ENABLED" != "true" ]; then
+              echo "Testing deployment is switched off (TESTING_DEPLOYMENT_ENABLED is not true); nothing was validated or deployed."
+              echo
+            fi
+            echo "| Item | Result |"
+            echo "| --- | --- |"
+            echo "| Testing commit | \`${TESTING_SHA:-not resolved}\` ($RESOLVE_RESULT) |"
+            echo "| Validation | $VALIDATE_RESULT |"
+            echo "| Build | $BUILD_RESULT |"
+            echo "| Test API deployment | $API_RESULT |"
+            echo "| Test API health (/health/ready) | $HEALTH_RESULT |"
+            echo "| Deployment record | $RECORD_RESULT |"
+            echo "| Test frontend deployment | $FRONTEND_RESULT ${FRONTEND_URL:+($FRONTEND_URL)} |"
+            echo
+            if [ "$API_RESULT" = "success" ] && [ "$HEALTH_RESULT" != "success" ]; then
+              echo "**The test API package was deployed but did not become healthy.** It was not recorded, and the frontend was not deployed."
+              echo
+            fi
+            echo "A failed run changes nothing else: it does not revert, merge, relabel, roll back the test database or start another deployment. Production is never touched by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

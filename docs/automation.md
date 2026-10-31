@@ -106,7 +106,7 @@ publishing (`validate.yml`), review (`agent-review.yml`), repair (`agent-repair.
 (`agent-review-transport-check.yml`), branch cleanup (`agent-branch-cleanup.yml`), Project status sync
 (`project-status-sync.yml`), the runner diagnostic (`inventory-agent-runner-diagnostic.yml`), the manual
 Docker validation (`inventoryapp-self-hosted-docker-validation.yml`), `vm-manager.yml` and **every job of
-Deploy Production** (`deploy-production.yml`, `deploy-production-recovery.yml` and the shared `deploy-production-release.yml`). Despite its name, `vm-manager.yml` ("Build and test API")
+Deploy Production** (`deploy-production.yml`, `deploy-production-recovery.yml` and the shared `deploy-production-release.yml`), and, added later, the manual price collector (`price-collector.yml`) and **Deploy Testing** (`deploy-testing.yml`), whose deploy jobs carry the same isolation and baseline gates as Deploy Production's. Despite its name, `vm-manager.yml` ("Build and test API")
 does not start or manage a VM: it builds and tests the backend on pushes to `develop` and `main`. It is
 named after the `vm-manager` App Service. The repository contains **no mechanism that wakes or starts
 the runner VM**; nothing in it powers a machine on.
@@ -511,7 +511,7 @@ This section is derived from the triggers, conditions, and jobs in `.github/work
 
 `.github/workflows/vm-manager.yml` ("Build and test API") triggers on `push` to `develop` and to `main`. Its only job restores, builds, and tests the backend solution `backend/InventoryApi/InventoryApi.slnx` in Release configuration, so both test projects (`backend/Inventory.UnitTests` and `backend/Inventory.IntegrationTests`, issue #311) run, with coverage collected. It has no publish, Azure login or deploy step, and only `contents: read`.
 
-A push to `develop` therefore runs backend build and tests but **does not deploy** the API or the frontend.
+`vm-manager.yml` itself deploys nothing. The same push also starts [Deploy Testing](#deploy-testing), which deploys that exact commit to the separate hosted testing environment, never to production.
 
 ### Push or merge to `main`
 
@@ -563,6 +563,12 @@ If the newest record is not a full SHA of a commit in `main` (for example after 
 **Re-run all jobs** or **Re-run failed jobs** repeats the same run: the same dispatch commit, or the same `sha` and `baseline_sha` for recovery, with the same entry point and fresh environment approvals. Re-running all jobs resolves the baseline again, so after a release was recorded its baseline is that release and the preflight reports no new migrations. Re-running only the failed jobs keeps the earlier resolved release and baseline, which is the usual way to retry a frontend upload after the API was already deployed, verified and recorded. A re-run never moves to a newer `main` commit; start a new run for that.
 
 Deploying the API restarts the process, and that restart applies its database schema (issue #54, revised by issue #201). **Normal Production startup applies pending migrations automatically**, the same as Development and `Testing`, and fails closed with a `DatabaseMigrationFailedException` naming the environment and the pending migrations if the attempt does not succeed — the API never starts and never serves requests against a schema its code does not match. A non-Production environment that is neither Development nor `Testing` (an ephemeral integration or Staging database, for example) still applies nothing by default and fails closed with a `PendingMigrationsException` instead, unless `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` is `true` for that disposable database. The explicit `migrate-database` command shipped inside the published application (`dotnet InventoryApi.dll migrate-database --dry-run`, then `--apply`, after taking a verified backup — see `docs/tenant-rollout.md`) remains available; it is no longer mandatory before a normal Production deployment, but is still how an operator inspects what a pending deployment will apply, or applies a high-risk migration ahead of a deployment window under review. Recovery from a failed or unwanted apply — automatic or manual — is a database restore from a verified backup, not a further automated migration: neither startup nor `migrate-database` ever rolls back a migration, and re-running either only applies what is still pending.
+
+### Deploy Testing
+
+`.github/workflows/deploy-testing.yml` ("Deploy Testing") deploys the hosted testing environment, a separate copy of the application with its own Azure resources, SQLite database, document storage, GitHub environment (`testing`, deployment branch `develop`, no reviewer) and Entra deployment identity federated to `repo:cristhyanc/InventoryApp:environment:testing`. It triggers on `push` to `develop` and on `workflow_dispatch` (no inputs) refused on any other ref. It does nothing while the repository variable `TESTING_DEPLOYMENT_ENABLED` is not `true`.
+
+It deploys exactly `github.sha`: resolve, validate (`bash scripts/validate.sh` plus the workflow contracts), build (the API package without `App_Data/jobs`, so no scheduled WebJob, and the frontend bundle), record the upload attempt as a `deploy:testing-attempt` deployment, deploy the test API, wait for `/health/ready`, record the healthy commit as a `deploy:testing-backend` deployment, then upload the bundle to the test Static Web App with `assets/config.json` pointed at the test API, and check the site. Runs share the non-cancelling `deploy-testing` concurrency group, and a commit older than the newest attempt record or the newest healthy record is refused, both when the run starts and immediately before Azure sign-in, so an older run never overwrites a newer deployment, even one that failed its health check or its healthy record after its migrations ran. Before deploying it refuses a test App Service whose database is not under `/home/data/`, whose documents are not in Blob storage or whose environment is not `Staging`. It holds no stored secret: the Static Web Apps token is read from the test resource with the testing identity for each run and masked. The usual runner-mode, isolation and baseline gates apply. See `docs/testing-environment.md` for the full setup guide.
 
 ### Implementation workflow
 
@@ -722,10 +728,14 @@ Documentation (`AGENTS.md`, `CLAUDE.md`, `docs/`, `README.md`, and the issue and
 | `agent-repair.yml` | Nothing | — |
 | `vm-manager.yml` | Nothing (backend build and tests on `push` to `develop` and `main`) | — |
 | `deploy-production.yml` | API to Azure App Service, then frontend to Azure Static Web Apps | `workflow_dispatch` started by a human from `main` only |
+| `deploy-testing.yml` | The **test** API to the test App Service, then the test frontend to the test Static Web App (never production) | `push` to `develop`, or `workflow_dispatch` on `develop` |
+| `price-collector.yml` | Nothing (manual collector test against a test API) | — |
 
 `scripts/validate-deployment-workflows.mjs` (run by `validate.yml`, with its tests) enforces this table: no workflow other than `deploy-production-release.yml` may contain an Azure login, App Service or Static Web Apps deploy step, the Static Web Apps token or the production environment; only the two entry points may call it, both must be manual-only, gated to `main`, share the non-cancelling `deploy-production` concurrency group and pass their entry point; the normal one may expose no inputs and the recovery one must require a full `sha`; and the release must keep its `workflow_call`-only trigger, dispatch-commit release SHA, recorded-baseline rules, single release SHA, job ordering and permission boundaries. Its tests also run the two resolve steps in bash against a throwaway repository and a fake `gh`, covering the dispatch commit after `main` advances, refused inputs, automatic, missing, invalid, unreadable and conflicting baselines.
 
-There is no staging environment and no automated path from an issue to `main`.
+The validator checks `deploy-testing.yml` as a separate path: push to `develop` and an input-free dispatch only, a ref gate to `develop`, every checkout at the resolved commit, validation and build before the API, health before the record and the frontend, the order check repeated before Azure sign-in, one non-cancelling `deploy-testing` group, OIDC only in the two deploy jobs with the `testing` environment, no `secrets.` reference and none of production's environment, identity, token, app name or release workflow; and no other workflow, production included, may use the `testing` environment or the testing identity. Its tests run the order, configuration, storage, frontend-configuration and token steps against a fake `gh` and `az`.
+
+The hosted testing environment is the only non-production environment. There is no automated path from an issue to `main`.
 
 ### Where agents stop today
 
@@ -850,7 +860,9 @@ CI (`validate.yml`) validates pull requests independently of the agent's own val
 
 ### Deployment workflows
 
-The only deployment workflow, `deploy-production.yml`, runs only when a human starts it from `main`. It is not invoked by agents, review steps, CI, or a push. Their credentials are repository/environment secrets and variables that are not available to the implementation or review agent.
+The only production deployment workflow, `deploy-production.yml`, runs only when a human starts it from `main`. It is not invoked by agents, review steps, CI, or a push. Their credentials are repository/environment secrets and variables that are not available to the implementation or review agent.
+
+`deploy-testing.yml` deploys every push to `develop` to the hosted testing environment. Merging into `develop` is a human action, so an agent still deploys nothing itself; the testing identity can reach only the test App Service and the test Static Web App.
 
 ## Task states and labels
 
@@ -957,7 +969,7 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 
 - Work branches start from the latest `develop`.
 - Normal feature and fix pull requests target `develop`.
-- `develop` is the integration branch. A push to `develop` runs backend build and tests (`vm-manager.yml` build job) but does not deploy.
+- `develop` is the integration branch. A push to `develop` runs backend build and tests (`vm-manager.yml` build job) and deploys that commit to the hosted testing environment ([Deploy Testing](#deploy-testing)); it never deploys production.
 - Production releases use a **separate** pull request from `develop` to `main`.
 - A merge or push to `main` deploys nothing: `main` is approved, releasable code. A human deploys it by starting [Deploy Production](#deploy-production) from `main`, which deploys the exact commit it was dispatched from: it deploys the API, verifies its health, then deploys the frontend from the same commit. The deployment workflow itself does not apply EF Core migrations; it reports the expected ones, and the API process applies them automatically on its next Production startup after the deploy (issue #201), failing closed if that attempt does not succeed. Outside Development, `Testing`, and Production, API startup still applies no schema change and fails closed if one is pending.
 - An agent may prepare or update a `develop` to `main` release pull request only when a human explicitly requests it. Permission to implement a feature never grants permission to create a release pull request. Agents never merge or deploy: a human reviews and merges the release pull request, and a human starts Deploy Production.
@@ -993,7 +1005,7 @@ Each phase is delivered as its own pull request and must be proven reliable befo
 | 1 | Automation documentation and templates: this document, the agent task issue form, the PR template, and `AGENTS.md`/`README.md` updates. | **Implemented** |
 | 2 | Issue label to implementation-agent PR creation: labels, an implementation agent connected to `agent-ready-claude` issues (since #340 also the `agent-ready-full-claude` fallback; the former Copilot coding agent route is retired), and `agent-working`/`agent-review`/`agent-blocked` transitions. No merge or deploy authority. | **Implemented** with Claude Code (`agent-implement.yml`, `CLAUDE.md`). Labels were created by a human in repository settings. After implementation PR creation, trusted `agent-architecture.yml` runs first; its successful finalizer dispatches exact-SHA validation from `main`; see [Workflow-token behaviour](#workflow-token-behaviour). |
 | 3 | Independent automated review and bounded repair: a separate review step, its written result, and the two-attempt repair limit enforced mechanically. | **Partially implemented.** The final review step exists (`agent-review.yml`) and its initial run is dispatched automatically once validation succeeds (`agent-architecture.yml`'s deterministic finalizer applies `agent-review` before exact-SHA validation); a human-invoked repair step exists (`agent-repair.yml`), and a pushed repair automatically receives exact-SHA validation followed by fresh review under the same label. The [documentation impact gate](#documentation-impact-gate) (templates, preflight, validation, review comparison) is **implemented**. Mechanical enforcement of the two-attempt limit is **not implemented**: repair attempts are requested and counted by a human. |
-| 4 | Staging deployment and smoke tests: a non-production environment deployed from `develop` with automated smoke checks. No staging environment exists today. | Proposed |
+| 4 | Staging deployment and smoke tests: a non-production environment deployed from `develop` with automated smoke checks. `deploy-testing.yml` deploys `develop` to the hosted testing environment with health and frontend checks once a human provisions it (`docs/testing-environment.md`); broader smoke tests remain proposed. | In progress |
 | 5 | Controlled release PR and production approval: a `develop` → `main` release PR process with human environment approval. | Proposed |
 | 6 | Production monitoring and proposed issue creation: monitoring that can draft issues for humans to review; it must not apply an `agent-ready-*` label. | Proposed |
 | 7 | Possible low-risk auto-merge, only after the earlier phases have proven reliable and only for `risk:low` tasks, with a human able to disable it at any time. Any such merge would be performed by repository automation configured by a human, never by the implementation or review agent, and would require an explicit update to this document. | Proposed, not committed |
@@ -1022,6 +1034,40 @@ Git pushes performed with freshly minted GitHub App installation tokens use a bo
 Rerunning the same workflow run selects the most recent checkpoint from an earlier attempt and continues on a fresh issue-specific feature branch at its exact SHA. Claude inspects existing work and completes validation and metadata instead of reimplementing it. Resume is allowed only when current `develop` is an ancestor of the saved commit; a changed base requiring integration returns to a human. A new label-triggered run has a different run ID and does not automatically adopt old or ambiguous recovery work: a maintainer must select and reconcile that branch explicitly.
 
 Runs for one issue are queued rather than cancelled by a newer invocation, so a new label event cannot interrupt the persistence boundary. Runner termination, hard timeout, credential/API/network failure, and work never committed can still prevent remote persistence; this is not an absolute guarantee against infrastructure loss. Persistence errors remain visible as workflow failures. Deterministic tests use real temporary repositories and a bare remote to exercise downstream failures, failed-agent recovery, no-commit behavior, SHA/ancestry rejection, protected history, collision rejection and exact-SHA resume.
+
+## Manual supplier price collector (#929, stage 1)
+
+`price-collector.yml` is a **manual test workflow**, with no schedule, no production API input and
+no deployment. It runs only reviewed `main` or reviewed `develop` (develop to test against the hosted
+testing API) in the protected `price-collector` environment, refuses the production API origin, shares
+one non-cancelling concurrency group, and uses only `contents: read` and `id-token: write`. The
+usual runner-mode selector and credentialed self-hosted isolation gate apply. Humans configure
+the environment and Entra federation; the workflow changes none of them.
+
+The trusted preparation step issues work once using OIDC, and Claude reads a bounded snapshot
+through `read-work.mjs` without receiving the API token or OIDC/GitHub credentials. A private
+temporary workspace/home, explicit environment allowlist, pinned CLI, exact helper/tool policy and
+fail-closed hook keep the model's authority separate from the finalizer's. The default 3-search
+sample is capped at 10; private run limits cap actor calls at 12, items at 5 (Dromb 1), and internal
+pages at 1. A manual checkbox can permit the previously verified retailer actors for that sample
+without enabling them in repository configuration. Claude has 40 turns, a US$1 budget and a
+14-minute deadline; the 45-minute job leaves a 15-minute finalisation step. The hook allows the
+free Apify result reads (`get-dataset-items` with a capped limit, `get-actor-run`,
+`abort-actor-run`) because actor calls return only storage ids, but only for runs this collector
+started, with bounded polls and reads; other Apify account tools are denied. The interruption test stops Claude after a chosen number of minutes (1 to 14).
+
+The `always()` finalizer fetches a fresh token and submits independently validated finished files,
+then completes the issued run even after Claude fails or is stopped. Unanswered work becomes
+`not_searched`. Whole-job cancellation, hard timeout or runner loss may skip finalisation and
+cleanup; backend run expiry and verified reset/ephemeral self-hosted isolation remain necessary.
+The public summary includes only allowlisted counts/statuses and reported Claude spend. No work,
+prices, product names, transcripts or raw provider errors are printed or uploaded. The cleanup step
+removes the private workspace, state and CLI installation.
+
+See [Manual collector test](price-collector-testing.md) for all environment variables/secrets,
+Entra setup, the normal and interruption tests, actual supplier cost evidence, and the later
+Sydney schedule/production rollout that remains under #929. Local tests use a stub API and fake
+CLI process; they are not evidence of a successful live OIDC or paid collector run.
 
 ## Retired Copilot routes
 

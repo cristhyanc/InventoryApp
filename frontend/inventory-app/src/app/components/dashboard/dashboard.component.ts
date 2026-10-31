@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
@@ -33,12 +33,21 @@ import {
   storageOnlyReorderLabel
 } from '../../provider/nayax-availability';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
-import { trendLabel, trendClass } from '../../formatting/revenue-trend';
-import { siteStockClass } from '../../formatting/site-stock-status';
+import {
+  CHEAPEST_SUPPLIERS_NOT_READ_YET,
+  CheapestSuppliers,
+  CheapestSuppliersComponent,
+  cheapestSupplierFor
+} from '../shared/cheapest-supplier/cheapest-suppliers.component';
+import { CheapestSupplierCellComponent } from '../shared/cheapest-supplier/cheapest-supplier-cell.component';
+import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
+import { plural } from '../../formatting/plural';
 import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
+import { HelpToggletipComponent } from '../shared/help-toggletip/help-toggletip.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
 import { MachineRestockSyncReminderComponent } from './machine-restock-sync-reminder/machine-restock-sync-reminder.component';
+import { SiteMachinePerformanceComponent } from './site-machine-performance/site-machine-performance.component';
 import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
@@ -54,12 +63,19 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  * `unknown` is the state before the summary has been read, and after a summary that failed: a
  * summary nobody read says nothing about the provider, so the page keeps its connected behaviour
  * rather than hiding a connected business's live sections on a transient failure.
+ *
+ * `planRequired` is issue #967's third refill reason, read since issue #979: the business's plan
+ * does not include the sales provider, so no fleet read was attempted at all - the same "nothing to
+ * show" fact as `notConnected`, and treated the same way by {@link isLiveFleetShown}, but never
+ * worded as "connect Nayax", because reconnecting would not open these sections and upgrading
+ * would.
  */
 export type DashboardProviderAvailability =
   | 'unknown'
   | 'usable'
   | 'notConnected'
   | 'permissionNotGranted'
+  | 'planRequired'
   | 'supportView';
 
 /**
@@ -73,6 +89,33 @@ export type DashboardProviderAvailability =
  */
 export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
 
+/**
+ * One alert in the Needs attention panel (issue #972), built only from figures the summary already
+ * published. The panel renders one of these per alert that actually applies, never a fixed set.
+ */
+export interface AttentionAlert {
+  readonly id: 'empty-selections' | 'machines-need-refill' | 'products-need-ordering';
+  readonly title: string;
+  readonly detail: string;
+  readonly icon: string;
+  readonly iconClass: string;
+}
+
+/** How many products the Reorder priorities overview shows before linking to the full list. */
+export const REORDER_PRIORITY_LIMIT = 5;
+
+/**
+ * What the Cheapest supplier column explains about itself (issue #1016). It is the sentence the row
+ * above the table used to carry, word for word, and it is held here once because the help button
+ * that opens it sits both in the desktop heading and on every narrow-screen card.
+ */
+export const CHEAPEST_SUPPLIER_HELP =
+  'Cheapest supplier is the lowest price your own suppliers currently list per unit - observed '
+  + 'prices for purchasing guidance, not costs you have paid.';
+
+/** The help button's accessible name, which has to say which column it explains. */
+export const CHEAPEST_SUPPLIER_HELP_LABEL = 'About Cheapest supplier';
+
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -82,19 +125,54 @@ export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
     IconComponent,
     LegacyBusinessSettingsPromptComponent,
     MachineRestockSyncReminderComponent,
-    BusinessDateTimePipe
+    BusinessDateTimePipe,
+    CheapestSuppliersComponent,
+    CheapestSupplierCellComponent,
+    HelpToggletipComponent,
+    SiteMachinePerformanceComponent
   ],
   templateUrl: './dashboard.component.html'
 })
 export class DashboardComponent implements OnInit, OnDestroy {
+  /**
+   * The restock-sync reminder (issue #891), which the Needs attention panel holds (issue #972). It
+   * is always mounted, so it is read statically: whether it currently has something to say decides
+   * whether the panel is shown, and how many alerts it counts.
+   */
+  @ViewChild(MachineRestockSyncReminderComponent, { static: true })
+  private readonly restockSyncReminder?: MachineRestockSyncReminderComponent;
+
+  /**
+   * Said beside the inventory card's unit count (issue #972): the card's value is every unit the
+   * business owns, but the unit count is storage only, so the two are never read as one figure.
+   */
+  readonly storageUnitsNote = 'Storage units exclude stock in machines.';
+
+  /** The Cheapest supplier column's explanation and the name of the button that opens it (#1016). */
+  readonly cheapestSupplierHelp = CHEAPEST_SUPPLIER_HELP;
+  readonly cheapestSupplierHelpLabel = CHEAPEST_SUPPLIER_HELP_LABEL;
+
   lowStock: Product[] = [];
   machines: Machine[] = [];
   sites: Site[] = [];
 
   /**
-   * The Sites and Machines sections start as loading, not as empty: whether they are loaded at all
-   * is decided by the summary (see {@link refreshSummary}), and an outstanding decision must not
-   * show as "No sites available yet".
+   * The ids of the products Reorder priorities shows, replaced only when the reorder list is, so
+   * the cheapest-supplier read (issue #981) is asked once per list rather than once per render.
+   */
+  reorderPriorityIds: readonly number[] = [];
+
+  /**
+   * The Cheapest supplier column's read for those products (issue #981, the shared component of
+   * issue #930). The dashboard lays the answers out and decides nothing about them.
+   */
+  cheapestSuppliers: CheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
+
+  /**
+   * The two reads behind the Site and machine performance card start as loading, not as empty:
+   * whether they are made at all is decided by the summary (see {@link refreshSummary}), and an
+   * outstanding decision must not show as "No sites available yet". They stay two separate states
+   * because the card reports them separately (issue #987).
    */
   isLoadingSites = true;
   isLoadingMachines = true;
@@ -298,7 +376,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * persisted figures are still loaded, flagged as not synchronized rather than as failed.
    *
    * For a business with no usable provider (issue #727) none of this runs: there is nothing to
-   * synchronize, the call could only be refused, and the two sections it refreshes are not
+   * synchronize, the call could only be refused, and the card its two reads feed is not
    * rendered. No notice is shown either - a sync that was never attempted neither failed nor
    * succeeded, and the page says what the business *does* have instead.
    *
@@ -381,9 +459,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
   refreshLowStock(): void {
     this.isLoadingLowStock = true;
     this.reorderAlertsError = null;
+    this.cheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
     this.productService.getLowStock().subscribe({
       next: (listing) => {
         this.lowStock = listing.products.filter((product) => product.isActive !== false);
+        this.reorderPriorityIds = this.reorderPriorities.map((product) => product.id);
         this.reorderMode = listing.mode;
         this.reorderMachineNeedUnavailableReason = listing.machineNeedUnavailableReason;
         this.isLoadingLowStock = false;
@@ -392,6 +472,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       },
       error: (error: unknown) => {
         this.lowStock = [];
+        this.reorderPriorityIds = [];
         // A mode nobody published must not survive the failure and label the next render.
         this.reorderMode = null;
         this.reorderMachineNeedUnavailableReason = null;
@@ -426,7 +507,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.purchaseCosts = new Map();
     this.purchaseCostState = 'idle';
 
-    const productIds = this.lowStock.map((product) => product.id);
+    // Only the products the overview actually shows (issue #972): the full list is a page of its own.
+    const productIds = this.reorderPriorities.map((product) => product.id);
     if (!this.arePurchaseCostColumnsShown || !this.isFinancialsAccessAnswered || productIds.length === 0) return;
 
     this.purchaseCostState = 'loading';
@@ -473,12 +555,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /**
    * Whether the business has a sales provider this page can show provider figures for (issue
-   * #727). Only an answered `NayaxNotConnected` makes it false: `PendingPermissions` with one read
+   * #727). `NayaxNotConnected` and, since issue #979, `planRequired` are the only answers that make
+   * it false - no fleet read was attempted in either - because `PendingPermissions` with one read
    * ungranted is a usable connection with one feature missing (decision P9 of issue #329), a
    * support session keeps its existing behaviour, and an unread summary claims nothing.
    */
   get isProviderUsable(): boolean {
-    return this.providerAvailability !== 'notConnected';
+    return this.providerAvailability !== 'notConnected' && this.providerAvailability !== 'planRequired';
   }
 
   /**
@@ -511,8 +594,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Whether to render the Sites and Machines sections and the "Needs refill" card - everything on
-   * this page whose every figure is a figure about machines. Without a provider they are not shown
+   * Whether to render the Site and machine performance card and the "Needs refill" card -
+   * everything on this page whose every figure is a figure about machines or the sites they stand
+   * at. Without a provider they are not shown
    * at all rather than shown as empty or unavailable: there is no fleet to report on, and the page
    * is about what the business does have.
    */
@@ -680,8 +764,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Whether the Reorder Alerts table carries the "Last purchase" and "Cheapest purchase" columns at
-   * all (issue #789). They are supplier purchasing figures, so they belong to
+   * Whether the Reorder priorities overview carries the "Last purchase" and "Cheapest purchase"
+   * columns at all (issue #789) - both historical recorded costs, never current supplier prices. They are supplier purchasing figures, so they belong to
    * `Dashboard.ViewFinancials` exactly as the endpoint behind them does: a role without it is shown
    * no column rather than a column of refusals, and nothing is requested on its behalf.
    */
@@ -760,132 +844,102 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return `${inventory.productsWithUnknownCost} of ${inventory.productCount} products missing cost data`;
   }
 
-  /** Makes explicit that storage quantity is home/storage stock only, not a whole-business count. */
+  /**
+   * The products and storage units behind the card. That the unit count leaves out machine stock is
+   * said by {@link storageUnitsNote} beside it, not folded into this line (issue #972).
+   */
   inventoryScopeText(inventory: DashboardInventorySummary): string {
-    return `${inventory.productCount} products · ${inventory.unitsInStorage} units in storage (excludes machines)`;
-  }
-
-  trendLabel(current: number | null | undefined, previous: number | null | undefined): string {
-    return trendLabel(current, previous);
-  }
-
-  trendClass(current: number | null | undefined, previous: number | null | undefined): string {
-    return trendClass(current, previous);
-  }
-
-  directMargin(directProfit: number, sales: number): number {
-    return this.margin(directProfit, sales);
-  }
-
-  get totalTodaySales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.todayGrossRevenue ?? 0), 0);
+    return `${inventory.productCount} products · ${inventory.unitsInStorage} units in storage`;
   }
 
   /**
-   * Whether every machine's today's gross revenue is known (issue #699): a fleet that includes a
-   * withheld/unknown figure must not have the Totals row read its `?? 0` fallback as a real zero
-   * and report a fabricated `$0.00`, the same rule {@link isTodayProfitComplete} already follows
-   * for direct profit.
+   * The Needs attention alerts (issue #972), from the summary's own refill and ordering sections and
+   * nothing else. A withheld or unavailable section raises no alert - its card already says it is
+   * unavailable - and a zero raises none either, so the panel lists only what actually applies.
    */
-  get isTodayRevenueComplete(): boolean {
-    return this.machines.every(m => m.todayGrossRevenue != null);
+  get attentionAlerts(): readonly AttentionAlert[] {
+    const alerts: AttentionAlert[] = [];
+    const refill = this.summary?.needsRefill;
+    if (this.isLiveFleetShown && refill !== undefined && !isDashboardSectionUnavailable(refill)) {
+      if (refill.emptySelectionCount > 0) {
+        alerts.push({
+          id: 'empty-selections',
+          title: plural(refill.emptySelectionCount, 'empty selection'),
+          detail: `Across ${plural(refill.machinesWithEmptySelections, 'machine')}`,
+          icon: 'error',
+          iconClass: 'text-rr-danger-text'
+        });
+      }
+      if (refill.machinesNeedingRefill > 0) {
+        alerts.push({
+          id: 'machines-need-refill',
+          title: `${plural(refill.machinesNeedingRefill, 'machine')} ${refill.machinesNeedingRefill === 1 ? 'needs' : 'need'} refill`,
+          detail: `${refill.lowSelectionCount} low · ${refill.emptySelectionCount} empty selections across ${refill.machinesEvaluated} machines evaluated`,
+          icon: 'assignment',
+          iconClass: 'text-rr-warn-text'
+        });
+      }
+    }
+
+    const ordering = this.summary?.needsOrdering;
+    if (ordering !== undefined && !isDashboardSectionUnavailable(ordering) && ordering.productsNeedingOrdering > 0) {
+      alerts.push({
+        id: 'products-need-ordering',
+        title: `${plural(ordering.productsNeedingOrdering, 'product')} ${ordering.productsNeedingOrdering === 1 ? 'needs' : 'need'} ordering`,
+        detail: this.orderingModeNote ?? `Of ${ordering.productsEvaluated} products in the catalogue`,
+        icon: 'local_shipping',
+        iconClass: 'text-rr-teal'
+      });
+    }
+    return alerts;
   }
 
-  get totalTodayDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.todayDirectProfit ?? 0), 0);
+  /** Whether the restock-sync reminder has something to show: pending work, or a failed read. */
+  private get isRestockSyncReminderShown(): boolean {
+    const reminder = this.restockSyncReminder;
+    return reminder !== undefined && (reminder.isShown || reminder.state === 'failed');
   }
 
-  get isTodayProfitComplete(): boolean {
-    return this.machines.every(m => m.todayDirectProfit != null);
+  /** The number of alerts the panel renders, counted from them rather than assumed. */
+  get attentionCount(): number {
+    return this.attentionAlerts.length + (this.isRestockSyncReminderShown ? 1 : 0);
   }
 
-  get totalCurrentWeekSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
+  get attentionCountLabel(): string {
+    return plural(this.attentionCount, 'item');
   }
 
-  get isCurrentWeekRevenueComplete(): boolean {
-    return this.machines.every(m => m.currentWeekGrossRevenue != null);
-  }
-
-  get totalCurrentWeekDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.currentWeekDirectProfit ?? 0), 0);
-  }
-
-  get isCurrentWeekProfitComplete(): boolean {
-    return this.machines.every(m => m.currentWeekDirectProfit != null);
-  }
-
-  get totalPreviousComparableWeekSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.previousComparableWeekGrossRevenue ?? m.lastWeekGrossRevenue ?? 0), 0);
-  }
-
-  get totalLastWeekSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.lastWeekGrossRevenue ?? 0), 0);
-  }
-
-  get isLastWeekRevenueComplete(): boolean {
-    return this.machines.every(m => m.lastWeekGrossRevenue != null);
-  }
-
-  get totalLastWeekDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.lastWeekDirectProfit ?? 0), 0);
-  }
-
-  get isLastWeekProfitComplete(): boolean {
-    return this.machines.every(m => m.lastWeekDirectProfit != null);
-  }
-
-  get totalMonthToDateSales(): number {
-    return this.machines.reduce((sum, m) => sum + (m.monthToDateGrossRevenue ?? 0), 0);
-  }
-
-  get isMonthToDateRevenueComplete(): boolean {
-    return this.machines.every(m => m.monthToDateGrossRevenue != null);
-  }
-
-  get totalMonthToDateDirectProfit(): number {
-    return this.machines.reduce((sum, m) => sum + (m.monthToDateDirectProfit ?? 0), 0);
-  }
-
-  get isMonthToDateProfitComplete(): boolean {
-    return this.machines.every(m => m.monthToDateDirectProfit != null);
-  }
-
-  get totalDirectMargin(): number {
-    return this.margin(this.totalCurrentWeekDirectProfit, this.totalCurrentWeekSales);
-  }
-
-  private margin(profit: number, sales: number): number {
-    return sales === 0 ? 0 : (profit / sales) * 100;
-  }
-
-  siteStockClass(site: Site): string {
-    return siteStockClass(site);
+  /** The panel is shown only while at least one alert applies. */
+  get hasAttention(): boolean {
+    return this.attentionCount > 0;
   }
 
   /**
-   * Extends the Machines row's real anchor link to the rest of the row (issue #494), the same
-   * pattern `SiteListComponent.followRowLink` already uses: the anchor - not the row - owns
-   * focus, Enter activation, and ctrl/cmd/middle-click, so this only activates it for a click or
-   * Enter elsewhere in the row. A click on a control inside the row - the anchor included, which
-   * would otherwise navigate twice - and a modified or non-primary click are left to the browser.
+   * The first {@link REORDER_PRIORITY_LIMIT} products of the reorder list, in the order the
+   * backend's reorder calculation published them: nothing here re-ranks the list.
    */
-  followMachineRowLink(rowEvent: Event): void {
-    const event = rowEvent as MouseEvent | KeyboardEvent;
-    const ownControl = (event.target as Element | null)?.closest(
-      'a, button, input, select, textarea, label, [role="button"]'
-    );
-    const browserHandlesIt =
-      event.defaultPrevented ||
-      (event instanceof MouseEvent && event.button !== 0) ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey;
-    if (ownControl || browserHandlesIt) return;
-
-    (event.currentTarget as Element).querySelector<HTMLAnchorElement>('a.table-row-anchor')?.click();
+  get reorderPriorities(): readonly Product[] {
+    return this.lowStock.slice(0, REORDER_PRIORITY_LIMIT);
   }
+
+  /** One product's cheapest-supplier answer, or `undefined` while the read has not settled it. */
+  cheapestSupplier(product: Product): CheapestSupplierProduct | undefined {
+    return cheapestSupplierFor(this.cheapestSuppliers, product.id);
+  }
+
+  /** The link to the full list, naming its real length once the list has been read. */
+  get reorderViewAllLabel(): string {
+    if (this.isLoadingLowStock || this.reorderAlertsError !== null || this.lowStock.length === 0) {
+      return 'View needs ordering';
+    }
+    return `View all ${plural(this.lowStock.length, 'product')} needing ordering`;
+  }
+
+  /** A storage figure of zero is the most urgent state, and says so by more than its colour. */
+  storageStockClass(product: Product): string {
+    return product.quantityInStock <= 0 ? 'badge-danger' : 'badge-warning';
+  }
+
 }
 
 /** What a purchase-cost cell says while its one request is outstanding or has not been issued. */
@@ -924,6 +978,8 @@ function providerAvailabilityOf(summary: DashboardSummary): DashboardProviderAva
       return 'notConnected';
     case 'PermissionNotGranted':
       return 'permissionNotGranted';
+    case 'PlanRequired':
+      return 'planRequired';
     default:
       return 'unknown';
   }

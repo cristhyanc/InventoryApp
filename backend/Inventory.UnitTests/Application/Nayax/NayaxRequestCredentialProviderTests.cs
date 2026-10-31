@@ -1,8 +1,11 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.Subscriptions;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Subscriptions;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -44,6 +47,24 @@ public class NayaxRequestCredentialProviderTests
         Assert.Equal(Token, credential.AccessToken);
         Assert.Equal(4, credential.CredentialRevision);
         Assert.Equal(status, credential.Status);
+    }
+
+    /// <summary>
+    /// The account series travels out with the credential, from the same snapshot (issue #978): a
+    /// call that is about to be made has to be able to say which Nayax <em>account</em> it is
+    /// authenticated as, because the connected-machine snapshot taken from a fleet read is stamped
+    /// with it. A series read separately, after the answer arrives, would name whichever account is
+    /// stored by then.
+    /// </summary>
+    [Fact]
+    public async Task The_account_series_of_the_same_snapshot_travels_with_the_credential()
+    {
+        var store = new FakeNayaxConnectionStore(
+            OperatorId, Token, NayaxConnectionStatus.Ready, accountSeries: 3);
+
+        var credential = await CreateProvider(store).GetForOperationAsync(CancellationToken.None);
+
+        Assert.Equal(3, credential.AccountSeries);
     }
 
     [Fact]
@@ -310,10 +331,135 @@ public class NayaxRequestCredentialProviderTests
         Assert.DoesNotContain(OperatorId, refusal.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The first criterion of issue #967: on a plan that does not include the sales provider, the
+    /// gate refuses before any Nayax request is made - exactly where it refuses an unusable
+    /// connection - and it does so with the distinct plan reason rather than with a connection
+    /// status.
+    ///
+    /// <para>The connection seeded here is the healthy one, and the statuses cover both usable
+    /// states, so the refusal cannot be the status gate's: a downgraded business with valid saved
+    /// credentials is the case this exists for.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionStatus.Ready)]
+    [InlineData(NayaxConnectionStatus.PendingPermissions)]
+    public async Task A_plan_without_the_provider_resolves_no_credentials_although_the_connection_is_usable(
+        NayaxConnectionStatus status)
+    {
+        var store = new FakeNayaxConnectionStore(OperatorId, Token, status);
+        var provider = CreateProvider(store, plan: TestCurrentPlan.Free());
+
+        var refusal = await Assert.ThrowsAsync<NayaxNotConnectedException>(
+            () => provider.GetForOperationAsync(CancellationToken.None));
+
+        Assert.Equal(SubscriptionPlan.Pro, refusal.RequiredPlan);
+        Assert.Equal(NayaxNotConnectedException.PlanRequiredReason, refusal.UnavailableReason);
+        // No connection was read, so there is no status to report and none is invented: a plan
+        // refusal is not "this business has nothing stored".
+        Assert.Null(refusal.Status);
+    }
+
+    /// <summary>
+    /// And the refusal is ahead of every read: nothing about the connection is read, so no token is
+    /// decrypted and - because the credential provider is the only way the Nayax client learns an
+    /// operator id - no request can leave the API.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_refusal_reads_nothing_about_the_connection_and_decrypts_no_token()
+    {
+        var store = new FakeNayaxConnectionStore(OperatorId, Token, NayaxConnectionStatus.Ready);
+
+        var refusal = await Assert.ThrowsAsync<NayaxNotConnectedException>(
+            () => CreateProvider(store, plan: TestCurrentPlan.Free()).GetForOperationAsync(
+                CancellationToken.None));
+
+        Assert.Equal(0, store.ConnectionReads);
+        Assert.Equal(0, store.CredentialReads);
+        Assert.DoesNotContain(Token, refusal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(OperatorId, refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Starter is a real plan and still does not include the provider, so the refusal is by the
+    /// catalogue's order rather than by "anything that is not Free".
+    /// </summary>
+    [Fact]
+    public async Task Starter_does_not_include_the_provider_either()
+    {
+        var store = new FakeNayaxConnectionStore(OperatorId, Token, NayaxConnectionStatus.Ready);
+
+        var refusal = await Assert.ThrowsAsync<NayaxNotConnectedException>(
+            () => CreateProvider(store, plan: TestCurrentPlan.On(SubscriptionPlan.Starter))
+                .GetForOperationAsync(CancellationToken.None));
+
+        Assert.Equal(SubscriptionPlan.Pro, refusal.RequiredPlan);
+    }
+
+    /// <summary>
+    /// The other side of the rule: Pro resolves credentials exactly as before, so enforcement
+    /// withholds nothing from a business that has bought the provider.
+    /// </summary>
+    [Fact]
+    public async Task Pro_resolves_the_credentials_exactly_as_an_unenforced_deployment_does()
+    {
+        var store = new FakeNayaxConnectionStore(OperatorId, Token, NayaxConnectionStatus.Ready);
+
+        var credential = await CreateProvider(store, plan: TestCurrentPlan.On(SubscriptionPlan.Pro))
+            .GetForOperationAsync(CancellationToken.None);
+
+        Assert.Equal(OperatorId, credential.OperatorId);
+        Assert.Equal(Token, credential.AccessToken);
+    }
+
+    /// <summary>
+    /// A Pro business whose connection is unusable keeps today's connection reason, which is the
+    /// criterion that the two refusals stay distinguishable in both directions.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionStatus.NotConfigured)]
+    [InlineData(NayaxConnectionStatus.NeedsAttention)]
+    public async Task A_pro_business_without_a_usable_connection_keeps_the_connection_reason(
+        NayaxConnectionStatus status)
+    {
+        var store = new FakeNayaxConnectionStore(OperatorId, Token, status);
+
+        var refusal = await Assert.ThrowsAsync<NayaxNotConnectedException>(
+            () => CreateProvider(store, plan: TestCurrentPlan.On(SubscriptionPlan.Pro))
+                .GetForOperationAsync(CancellationToken.None));
+
+        Assert.Null(refusal.RequiredPlan);
+        Assert.Equal(NayaxNotConnectedException.ConnectionUnavailableReason, refusal.UnavailableReason);
+        Assert.Equal(status, refusal.Status);
+        Assert.Equal(NayaxNotConnectedException.StableMessage, refusal.Message);
+    }
+
+    /// <summary>
+    /// The support-session refusal is still made first (issue #551). Both would refuse, and the one
+    /// reported has to be the one about the reader rather than about the business's plan: a support
+    /// view is refused Nayax on every plan, Pro included.
+    /// </summary>
+    [Fact]
+    public async Task A_support_session_is_refused_as_a_support_session_whatever_the_plan_says()
+    {
+        var store = new FakeNayaxConnectionStore(OperatorId, Token, NayaxConnectionStatus.Ready);
+        var provider = CreateProvider(store, SupportSessionScope(), TestCurrentPlan.Free());
+
+        await Assert.ThrowsAsync<SupportSessionNayaxUnavailableException>(
+            () => provider.GetForOperationAsync(CancellationToken.None));
+    }
+
     private static NayaxRequestCredentialProvider CreateProvider(
         INayaxConnectionStore store,
-        IBusinessScope? businessScope = null) =>
-        new(store, businessScope ?? ResolvedScope(), new FakeClock(Now));
+        IBusinessScope? businessScope = null,
+        CurrentPlan? plan = null) =>
+        new(
+            store,
+            businessScope ?? ResolvedScope(),
+            // The shipped state unless a case says otherwise: plan enforcement is off, so the gate
+            // behaves exactly as it did before issue #967.
+            plan ?? TestCurrentPlan.Unrestricted(),
+            new FakeClock(Now));
 
     /// <summary>
     /// An ordinary member's request scope - the state every case here but the support-session one
