@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
-import { BehaviorSubject, NEVER, Observable, of, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { PurchaseEditPageComponent } from './purchase-edit-page.component';
 import { PurchaseService, PurchaseUpdatePayload } from '../../../services/purchase.service';
 import { SupplierService } from '../../../services/supplier.service';
@@ -445,6 +445,163 @@ describe('PurchaseEditPageComponent receipt (issue #1029)', () => {
     expect(getFile).toHaveBeenCalledWith(42);
     expect(open).toHaveBeenCalledWith('blob:receipt', '_blank', 'noopener');
     open.mockRestore();
+  });
+});
+
+describe('PurchaseEditPageComponent save bound to the purchase it was started for (issue #1029)', () => {
+  const fileNamed = (name: string) => new File(['scan'], name, { type: 'application/pdf' });
+
+  /** An update and an attach that answer only when the test says so, one subject per call. */
+  function delayed() {
+    const updates: Subject<Purchase>[] = [];
+    const attaches: Subject<Purchase>[] = [];
+    const update = jest.fn(() => {
+      const answer = new Subject<Purchase>();
+      updates.push(answer);
+      return answer.asObservable();
+    });
+    const attachDocument = jest.fn(() => {
+      const answer = new Subject<Purchase>();
+      attaches.push(answer);
+      return answer.asObservable();
+    });
+    const page = createPage({ update, attachDocument });
+    return { ...page, updates, attaches };
+  }
+
+  function complete(answer: Subject<Purchase>): void {
+    answer.next(purchase());
+    answer.complete();
+  }
+
+  it('attaches the receipt submitted with A to A after the person moved to B and chose another file', () => {
+    const { component, paramMap, updates, attachDocument, navigate } = delayed();
+    const receiptA = fileNamed('a.pdf');
+    const receiptB = fileNamed('b.pdf');
+    component.pendingReceipt = receiptA;
+    component.onSave(PAYLOAD);
+
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.pendingReceipt = receiptB;
+    complete(updates[0]);
+
+    expect(attachDocument).toHaveBeenCalledTimes(1);
+    // Files compare equal by structure, so the one sent is checked by identity.
+    const [sentTo, sent] = attachDocument.mock.calls[0] as unknown as [number, File];
+    expect(sentTo).toBe(42);
+    expect(sent).toBe(receiptA);
+    expect(sent).not.toBe(receiptB);
+    expect(component.pendingReceipt).toBe(receiptB);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('opens B ready to save, rather than still saving A', () => {
+    const { component, paramMap } = delayed();
+    component.onSave(PAYLOAD);
+    expect(component.saving).toBe(true);
+
+    paramMap.next(convertToParamMap({ id: '43' }));
+
+    expect(component.saving).toBe(false);
+  });
+
+  it('leaves B alone when A\'s save succeeds, without navigating it away or ending B\'s own save', () => {
+    const { component, paramMap, updates, navigate } = delayed();
+    component.onSave(PAYLOAD);
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.onSave(PAYLOAD);
+
+    complete(updates[0]);
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.saving).toBe(true);
+
+    complete(updates[1]);
+
+    expect(navigate).toHaveBeenCalledWith(['/purchases']);
+  });
+
+  it('reports A\'s refused save by toast and never shows it as B\'s error', () => {
+    const logged = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { component, paramMap, updates, attachDocument, navigate, toastService } = delayed();
+    component.pendingReceipt = fileNamed('a.pdf');
+    component.onSave(PAYLOAD);
+    paramMap.next(convertToParamMap({ id: '43' }));
+
+    updates[0].error({ error: 'Rejected' });
+    logged.mockRestore();
+
+    expect(component.saveError).toBe('');
+    expect(component.saving).toBe(false);
+    expect(attachDocument).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(toastService.error).toHaveBeenCalledWith('Your changes to "Weekly restock" were not saved. Rejected');
+  });
+
+  it('reports A\'s refused attach by name, keeps A\'s saved edit, and leaves B\'s page as it is', () => {
+    const { component, paramMap, updates, attaches, navigate, toastService } = delayed();
+    const receiptB = fileNamed('b.pdf');
+    component.pendingReceipt = fileNamed('a.pdf');
+    component.onSave(PAYLOAD);
+    complete(updates[0]);
+
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.pendingReceipt = receiptB;
+    attaches[0].error({ error: 'The document is too large.' });
+
+    expect(toastService.error).toHaveBeenCalledWith(
+      '"Weekly restock" was saved, but its receipt was not attached. The document is too large. You can add it from the Purchases list.');
+    expect(component.pendingReceipt).toBe(receiptB);
+    expect(component.saving).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate or clear B\'s receipt when A\'s attach succeeds later', () => {
+    const { component, paramMap, updates, attaches, navigate } = delayed();
+    const receiptB = fileNamed('b.pdf');
+    component.pendingReceipt = fileNamed('a.pdf');
+    component.onSave(PAYLOAD);
+    complete(updates[0]);
+    paramMap.next(convertToParamMap({ id: '43' }));
+    component.pendingReceipt = receiptB;
+
+    complete(attaches[0]);
+
+    expect(component.pendingReceipt).toBe(receiptB);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('still attaches the submitted receipt after the page is destroyed, without navigating', () => {
+    const { component, updates, attaches, attachDocument, navigate } = delayed();
+    const receiptA = fileNamed('a.pdf');
+    component.pendingReceipt = receiptA;
+    component.onSave(PAYLOAD);
+
+    component.ngOnDestroy();
+    complete(updates[0]);
+    complete(attaches[0]);
+
+    const [sentTo, sent] = attachDocument.mock.calls[0] as unknown as [number, File];
+    expect(sentTo).toBe(42);
+    expect(sent).toBe(receiptA);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('ignores a read for A that answers after B was opened', () => {
+    const reads: Subject<Purchase>[] = [];
+    const get = jest.fn(() => {
+      const answer = new Subject<Purchase>();
+      reads.push(answer);
+      return answer.asObservable();
+    });
+    const { component, paramMap } = createPage({ get });
+    paramMap.next(convertToParamMap({ id: '43' }));
+
+    reads[1].next(purchase({ id: 43, title: 'B' }));
+    reads[0].next(purchase({ id: 42, title: 'A' }));
+
+    expect(component.purchase?.title).toBe('B');
+    expect(component.loading).toBe(false);
   });
 });
 

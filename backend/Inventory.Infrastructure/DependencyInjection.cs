@@ -284,6 +284,14 @@ public static class InfrastructureServiceCollectionExtensions
         // unscoped one. See EfPriceCatalogueReviewStore and docs/architecture.md § Super Admin review
         // of the supplier price catalogue.
         services.AddScoped<IPriceCatalogueReviewStore, EfPriceCatalogueReviewStore>();
+        // And the Super Admin's read-only view of the master products themselves (issue #1023): one
+        // bounded, searchable page of the shared catalogue and one product with its supplier listings.
+        // It writes nothing, takes no lease and makes no IgnoreQueryFilters statement, because every
+        // table it reads is a platform table that carries no business key at all - so a denied scope
+        // reads the whole catalogue and none of anybody's own rows. Scoped on the request's own
+        // context like every adapter above, so nothing can hand it an unscoped one. See
+        // EfMasterProductCatalogueStore and docs/architecture.md § Super Admin master products.
+        services.AddScoped<IMasterProductCatalogueStore, EfMasterProductCatalogueStore>();
         // The cheapest-supplier summary (issue #930): the read behind the Cheapest supplier column.
         // It reaches the platform catalogue only through the caller's own matched mappings and the
         // supplier records the caller holds a copy of, on the request's own scoped context like the

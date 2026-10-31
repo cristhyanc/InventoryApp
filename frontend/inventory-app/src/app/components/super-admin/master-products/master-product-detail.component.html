@@ -1,0 +1,107 @@
+<section class="card" data-testid="master-product-detail">
+  <div class="card-header">
+    <h2 class="card-title">
+      @if (detail) {
+        Supplier listings — {{ detail.product.brand }} {{ detail.product.name }}
+      } @else {
+        Supplier listings
+      }
+    </h2>
+    <button type="button" class="btn btn-secondary btn-sm" (click)="close()" data-testid="master-product-detail-close">
+      Close
+    </button>
+  </div>
+  <div class="card-body">
+    @if (loading) {
+      <p class="text-sm value-muted">Loading supplier listings…</p>
+    } @else if (loadError) {
+      <p class="text-sm text-red-600" role="alert" data-testid="master-product-detail-error">
+        Unable to load this master product.
+        <button type="button" class="btn btn-secondary btn-sm ml-2" (click)="load()">Try again</button>
+      </p>
+    } @else if (detail) {
+      @if (detail.listings.length === 0) {
+        <p class="text-sm value-muted" data-testid="master-product-detail-empty">
+          No supplier lists this product yet.
+        </p>
+      } @else {
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Supplier</th>
+              <th scope="col" class="table-cell">Supplier product id</th>
+              <th scope="col" class="table-cell">Title</th>
+              <th scope="col" class="table-cell">Size</th>
+              <th scope="col" class="table-cell">Units per pack</th>
+              <th scope="col" class="table-cell">Status</th>
+              <th scope="col" class="table-cell">Pack price</th>
+              <th scope="col" class="table-cell">Last checked</th>
+              <th scope="col" class="table-cell">Page</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (listing of detail.listings; track listing.id) {
+              <tr class="table-row">
+                <td class="table-cell">{{ listing.supplierName }}</td>
+                <!-- The supplier's own id and wording, as published: plain text, never markup. -->
+                <td class="table-cell">{{ listing.supplierProductId }}</td>
+                <td class="table-cell">
+                  @if (listing.title) {
+                    {{ listing.title }}
+                  } @else {
+                    <span class="value-muted">—</span>
+                  }
+                </td>
+                <td class="table-cell">
+                  @if (sizeLabel(listing)) {
+                    {{ sizeLabel(listing) }}
+                  } @else {
+                    <span class="value-muted">Not published</span>
+                  }
+                </td>
+                <!-- Unknown stays unknown (issue #923): a pack quantity nobody published is not 1,
+                     because a carton's price would then read as a single's. -->
+                <td class="table-cell">
+                  @if (listing.unitsPerPack !== null) {
+                    {{ listing.unitsPerPack }}
+                  } @else {
+                    <span class="value-muted">Unknown</span>
+                  }
+                </td>
+                <td class="table-cell">{{ statusLabel(listing) }}</td>
+                <!-- The pack price exactly as it was observed, with the basis it was read on. Never a
+                     per-unit figure: that comparison is the cheapest-supplier summary's. -->
+                <td class="table-cell">
+                  @if (listing.latestPrice) {
+                    {{ listing.latestPrice.packPrice | currency: listing.latestPrice.currency }}
+                    <span class="value-muted">{{ basisLabel(listing) }}</span>
+                  } @else {
+                    <span class="value-muted">Never checked</span>
+                  }
+                </td>
+                <td class="table-cell">
+                  @if (listing.lastCheckedAtUtc) {
+                    {{ listing.lastCheckedAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}
+                  } @else {
+                    <span class="value-muted">—</span>
+                  }
+                </td>
+                <!-- Only an http(s) address the client rule also accepts becomes a link (issue
+                     #847's helper); anything else shows as plain text. -->
+                <td class="table-cell">
+                  @if (canLinkTo(listing)) {
+                    <a [href]="listing.url" target="_blank" rel="noopener noreferrer">Open</a>
+                  } @else if (listing.url) {
+                    {{ listing.url }}
+                  } @else {
+                    <span class="value-muted">—</span>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    }
+  </div>
+</section>

@@ -330,6 +330,8 @@ public class EndpointPlanRequirementTests
         new("SuperAdminBusinessesController.Reactivate", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reactivate
         new("SuperAdminBusinessesController.Reject", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reject
         new("SuperAdminBusinessesController.ReleaseMember", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/members/{membershipId:int}/release
+        new("SuperAdminMasterProductsController.Get", PlanRequirementKind.None), // GET api/super-admin/master-products/{id:long}
+        new("SuperAdminMasterProductsController.List", PlanRequirementKind.None), // GET api/super-admin/master-products
         new("SuperAdminOptionVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/option-visibility
         new("SuperAdminPriceCatalogueReviewController.ConfirmAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm
         new("SuperAdminPriceCatalogueReviewController.DecideListing", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/listings/{supplierListingId:long}/decision

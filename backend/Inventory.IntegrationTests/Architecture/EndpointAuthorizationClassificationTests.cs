@@ -725,6 +725,11 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/price-catalogue-review/matches", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo", "POST")]
+    // Issue #1023's read-only view of the shared catalogue's master products: the searchable, paged
+    // listing and one product with its supplier listings. Class 2 again - the same marker and the same
+    // policy as the review beside it - and read only, so neither of them writes anything at all.
+    [InlineData("api/super-admin/master-products", "GET")]
+    [InlineData("api/super-admin/master-products/{id:long}", "GET")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);

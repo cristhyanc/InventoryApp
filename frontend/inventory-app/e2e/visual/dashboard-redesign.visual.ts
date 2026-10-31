@@ -16,7 +16,9 @@ import { join, resolve } from 'node:path';
  * pending restock sync - so no business data, account name or credential can appear in a capture.
  *
  * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule.
- * Issue #987's own interaction evidence is here too: a collapsed group at 1440 and 390px, the
+ * Issue #1016's evidence is here too - the Cheapest supplier help panel opened from the desktop
+ * heading at 1440px and from a narrow-screen card at 360px. Issue #987's own interaction evidence
+ * is here as well: a collapsed group at 1440 and 390px, the
  * shared period control switched to Last week, and the keyboard focus ring on a site expander with
  * the group toggled from the keyboard alone. The More sheet's modality is exercised in the browser
  * at 390px from both of its openers. It runs once, in the `desktop-1440` project, and sets each
@@ -359,6 +361,28 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       const height = await page.evaluate(() => document.documentElement.scrollHeight);
       await page.setViewportSize({ width, height });
       await page.screenshot({ path: join(screenshotDirectory, `dashboard-${width}px.png`) });
+    });
+  }
+
+  /**
+   * Issue #1016's own evidence: the Cheapest supplier explanation opened from its help button -
+   * the desktop heading's at 1440px and a narrow-screen card's at 360px. It is a real interaction
+   * too, and it is what shows the panel standing beside the button in the browser's top layer,
+   * clipped by neither the card nor the scrolling table and inside the narrow viewport.
+   */
+  for (const width of [1440, 360]) {
+    test(`Cheapest supplier help panel open at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+      await page.locator('section[aria-labelledby="reorder-priorities-title"]').scrollIntoViewIfNeeded();
+      await page.locator('button[aria-label="About Cheapest supplier"]:visible').first().click();
+
+      const panel = page.locator('[data-testid="help-toggletip-panel"]');
+      await expect(panel).toBeVisible();
+      await expect(panel).toHaveText(/not costs you have paid\.$/);
+      await expectNoHorizontalOverflow(page);
+      // The viewport, not the document: the panel is in the top layer, which a full-page capture
+      // stitched from a taller viewport would move away from the button it is anchored to.
+      await page.screenshot({ path: join(screenshotDirectory, `reorder-supplier-help-${width}px.png`) });
     });
   }
 

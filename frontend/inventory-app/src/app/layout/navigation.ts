@@ -419,6 +419,18 @@ export const priceCatalogueReviewNavLink: NavLink = {
 };
 
 /**
+ * The Master Products page (issue #1023): the shared supplier price catalogue itself - every master
+ * product, searchable, with its supplier listings - read only, beside the review above that decides
+ * anything about it. Like the four links above it declares no capability, because no business role
+ * grants it: only the platform-admin probe below does.
+ */
+export const masterProductsNavLink: NavLink = {
+  kind: 'link',
+  label: 'Master Products',
+  route: '/super-admin/master-products'
+};
+
+/**
  * The top-level Super Admin group (issue #546, parent #510 under #328): kept apart from the
  * business `Admin` group because neither of its destinations is granted by a business role.
  * `navigationFor` composes it in only while `GET /api/admin/diagnostics/access` confirms the
@@ -429,7 +441,15 @@ export const superAdminNavGroup: NavGroup = {
   kind: 'group',
   label: 'Super Admin',
   icon: 'settings',
-  children: [platformDiagnosticsNavLink, businessesNavLink, supplierPresetsNavLink, priceCatalogueReviewNavLink]
+  children: [
+    platformDiagnosticsNavLink,
+    businessesNavLink,
+    supplierPresetsNavLink,
+    priceCatalogueReviewNavLink,
+    // Beside the review rather than inside it (issue #1023): the catalogue is browsed here and
+    // decided there.
+    masterProductsNavLink
+  ]
 };
 
 /**

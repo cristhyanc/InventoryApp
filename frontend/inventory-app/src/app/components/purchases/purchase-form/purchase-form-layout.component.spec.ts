@@ -185,7 +185,7 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
   it('keeps the price and GST explanations in help buttons beside the column headings', async () => {
     await render({ items: [pricedLine()] });
 
-    const helpLabels = Array.from(host.querySelectorAll('[data-testid="help-toggletip-trigger"]')).map((b) => b.getAttribute('aria-label'));
+    const helpLabels = Array.from(host.querySelectorAll('app-help-toggletip button[aria-controls]')).map((b) => b.getAttribute('aria-label'));
     expect(helpLabels).toEqual(expect.arrayContaining(['About unit price', 'About line total', 'About GST', 'About receipt total']));
   });
 

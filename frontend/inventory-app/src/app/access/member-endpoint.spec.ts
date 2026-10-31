@@ -116,6 +116,22 @@ describe('classifyMemberRequest (issue #602)', () => {
       expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
     });
 
+    /**
+     * The shared catalogue's own master products of issue #1023: the searchable, paged listing and one
+     * product with its supplier listings. Class-2 platform-admin authorization again, and both are
+     * reads of platform data that names no business - so a `403` from either says nothing about a
+     * membership or a business role, and neither may carry a role-preview or support-session header.
+     */
+    it.each([
+      '/api/super-admin/master-products',
+      '/api/super-admin/master-products/',
+      '/api/super-admin/master-products?search=cola&page=2',
+      '/api/super-admin/master-products/7',
+      '/api/Super-Admin/Master-Products/7'
+    ])('classifies %s as the platform-admin surface (issue #1023)', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
+    });
+
     it.each([
       // A segment that merely begins with the same letters is a different endpoint, and the
       // default for anything the exclusions do not name has to stay `member`.
@@ -123,6 +139,7 @@ describe('classifyMemberRequest (issue #602)', () => {
       '/api/super-admin-businesses/pending-count',
       '/api/super-admin/supplier-presets-archive',
       '/api/super-admin/price-catalogue-review-archive',
+      '/api/super-admin/master-products-archive',
       // The business's own suppliers are an ordinary member endpoint and must stay one.
       '/api/suppliers',
       '/api/suppliers/7'

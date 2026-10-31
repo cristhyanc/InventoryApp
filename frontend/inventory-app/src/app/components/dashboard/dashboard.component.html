@@ -321,23 +321,15 @@
         <p class="p-4 text-md-body value-muted">No reorder alerts. Everything looks good! ✅</p>
       } @else {
         <!--
-          Observed supplier prices (issue #981, read by issue #930's shared component) and recorded
-          purchase costs are different kinds of figure, so each says what it is.
+          Observed supplier prices (issue #981, read by issue #930's shared component) are not the
+          recorded purchase costs beside them, and issue #1016 keeps that said in one place: a help
+          button on the Cheapest supplier heading and on each narrow-screen card, rather than the
+          two full-width note rows that used to stand here.
         -->
-        <p class="m-0 flex items-start gap-2 border-b border-md-gray-200 px-4 py-3 text-sm text-rr-muted" data-testid="supplier-price-note">
-          <span class="shrink-0" aria-hidden="true"><app-icon name="storefront" [size]="16" /></span>
-          Cheapest supplier is the lowest price your own suppliers currently list per unit - observed prices for purchasing guidance, not costs you have paid.
-        </p>
         <app-cheapest-suppliers
           [productIds]="reorderPriorityIds"
           (suppliersChange)="cheapestSuppliers = $event"
         ></app-cheapest-suppliers>
-        @if (arePurchaseCostColumnsShown) {
-          <p class="m-0 flex items-start gap-2 border-b border-md-gray-200 px-4 py-3 text-sm text-rr-muted" data-testid="purchase-cost-note">
-            <span class="shrink-0" aria-hidden="true"><app-icon name="info" [size]="16" /></span>
-            Last and cheapest purchase are unit costs recorded on this business's past purchases - historical costs, not current supplier prices.
-          </p>
-        }
         <!--
           The purchase costs failed on their own, so the table around them still renders (issue
           #789): the reorder figures are local data and were never part of that request.
@@ -362,7 +354,10 @@
                   <th scope="col" class="table-cell">Last purchase</th>
                   <th scope="col" class="table-cell">Cheapest purchase</th>
                 }
-                <th scope="col" class="table-cell">Cheapest supplier</th>
+                <th scope="col" class="table-cell">Cheapest supplier<app-help-toggletip
+                    class="ml-1"
+                    [label]="cheapestSupplierHelpLabel"
+                  >{{ cheapestSupplierHelp }}</app-help-toggletip></th>
               </tr>
             </thead>
             <tbody>
@@ -432,7 +427,10 @@
                 </dl>
               }
               <div class="mt-2 break-words text-sm" data-testid="reorder-card-cheapest-supplier">
-                <span class="text-rr-muted">Cheapest supplier:</span>
+                <span class="text-rr-muted">Cheapest supplier:</span><app-help-toggletip
+                  class="ml-1"
+                  [label]="cheapestSupplierHelpLabel"
+                >{{ cheapestSupplierHelp }}</app-help-toggletip>
                 <app-cheapest-supplier-cell
                   [product]="cheapestSupplier(p)"
                   [state]="cheapestSuppliers.state"

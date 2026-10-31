@@ -593,6 +593,19 @@ export const routes: Routes = [
       )
   },
   {
+    // The Super Admin Master products page (issue #1023): the shared supplier price catalogue itself,
+    // searchable and paged, with one product's supplier listings - read only, beside the review above
+    // that is the one place anything about it is decided. Platform-admin authority, not a business
+    // role, decides it - the same `platformAdminGuard` as the four super-admin routes above, and for
+    // the same reason.
+    path: 'super-admin/master-products',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/master-products/super-admin-master-products.component').then(
+        (m) => m.SuperAdminMasterProductsComponent
+      )
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Integration.Manage')],
     loadComponent: () =>
