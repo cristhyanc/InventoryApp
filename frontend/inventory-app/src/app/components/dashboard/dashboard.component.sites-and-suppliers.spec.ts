@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../access/access.service';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import {
@@ -26,7 +26,7 @@ import {
   CHEAPEST_SUPPLIERS_FAILED_MESSAGE,
   CHEAPEST_SUPPLIERS_SUPPORT_SESSION_MESSAGE
 } from '../shared/cheapest-supplier/cheapest-suppliers.component';
-import { DashboardComponent } from './dashboard.component';
+import { CHEAPEST_SUPPLIER_HELP, DashboardComponent } from './dashboard.component';
 
 /**
  * The two Dashboard follow-ups to issue #972: machines listed under their sites (issue #980, now
@@ -35,6 +35,12 @@ import { DashboardComponent } from './dashboard.component';
  * unchanged. The read itself, its batching and the cell's popup have their own specs, and the
  * combined card's own behaviour is `site-machine-performance/site-machine-performance.component.spec.ts`'s;
  * this file is about the dashboard page composing them.
+ *
+ * Issue #1016 moved the column's explanation into a help button beside the heading and on each
+ * narrow-screen card, using the shared `HelpToggletipComponent`. The toggletip's own interaction is
+ * tested in `shared/help-toggletip/help-toggletip.component.spec.ts`; what this file tests is where
+ * the dashboard puts it, which sentence it carries, and that neither of the two note rows above the
+ * table is left behind.
  */
 
 const SUMMARY: DashboardSummary = {
@@ -181,17 +187,20 @@ interface Options {
   getSummary?: jest.Mock;
   supportSession?: boolean;
   canViewFinancials?: boolean;
+  /** The reorder list this render answers with: pending, failed or a list of its own. */
+  alerts?: Observable<ReorderAlertListing>;
 }
 
 async function render(options: Options = {}): Promise<{ fixture: ComponentFixture<DashboardComponent>; host: HTMLElement }> {
   const listing: ReorderAlertListing = { products: REORDER, mode: 'MachineAware', machineNeedUnavailableReason: null };
+  const alerts = options.alerts ?? of(listing);
   const financials = options.canViewFinancials ?? true;
   const getSummary = options.getSummary ?? jest.fn((ids: readonly number[]) => of(cheapest(ids)));
   await TestBed.configureTestingModule({
     imports: [DashboardComponent],
     providers: [
       provideRouter([]),
-      { provide: ProductService, useValue: { getLowStock: () => of(listing) } },
+      { provide: ProductService, useValue: { getLowStock: () => alerts } },
       {
         provide: MachineService,
         useValue: {
@@ -226,6 +235,19 @@ function performanceSection(host: HTMLElement): HTMLElement {
 
 function reorderSection(host: HTMLElement): HTMLElement {
   return host.querySelector('section[aria-labelledby="reorder-priorities-title"]') as HTMLElement;
+}
+
+/** Every Cheapest supplier help button on the page, in rendered order: the header's, then the cards'. */
+function helpButtons(host: HTMLElement): HTMLButtonElement[] {
+  return Array.from(host.querySelectorAll<HTMLButtonElement>('button[aria-label="About Cheapest supplier"]'));
+}
+
+function helpPanels(host: HTMLElement): HTMLElement[] {
+  return Array.from(host.querySelectorAll<HTMLElement>('[data-testid="help-toggletip-panel"]'));
+}
+
+function press(key: string, target: EventTarget): void {
+  target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
 }
 
 /**
@@ -317,11 +339,23 @@ describe('Dashboard Reorder priorities Cheapest supplier column (issue #981)', (
     expect(cells[0].textContent).toContain('JB Metro');
   });
 
-  it('says the supplier prices are observed, apart from the recorded purchase costs', async () => {
-    const { host } = await render();
+  /**
+   * Rewritten for issue #1016, which is a requirement change rather than a weakened test: the owner
+   * asked for the observed-prices sentence to move behind the header's help button and for the
+   * purchase-cost sentence to be removed from the dashboard altogether. What the sentence says is
+   * unchanged, and the help button's own behaviour is tested below.
+   */
+  it('says the supplier prices are observed in the header help panel, not in a row above the table', async () => {
+    const { host, fixture } = await render();
 
-    expect(host.querySelector('[data-testid="supplier-price-note"]')?.textContent).toContain('not costs you have paid');
-    expect(host.querySelector('[data-testid="purchase-cost-note"]')?.textContent).toContain('historical costs');
+    expect(host.querySelector('[data-testid="supplier-price-note"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-cost-note"]')).toBeNull();
+
+    helpButtons(host)[0].click();
+    fixture.detectChanges();
+
+    expect(helpPanels(host)[0].textContent?.trim()).toBe(CHEAPEST_SUPPLIER_HELP);
+    expect(CHEAPEST_SUPPLIER_HELP).toContain('not costs you have paid');
   });
 
   it('shows the supplier on the narrow-screen cards too', async () => {
@@ -354,5 +388,117 @@ describe('Dashboard Reorder priorities Cheapest supplier column (issue #981)', (
 
     expect(headers).toContain('Cheapest supplier');
     expect(headers).not.toContain('Last purchase');
+  });
+});
+
+describe('Dashboard Cheapest supplier help button (issue #1016)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('sits in the Cheapest supplier header, named after the column, and leaves its text alone', async () => {
+    const { host } = await render();
+    const header = Array.from(reorderSection(host).querySelectorAll('thead th')).at(-1) as HTMLElement;
+    const button = header.querySelector<HTMLButtonElement>('button[aria-label="About Cheapest supplier"]');
+
+    expect(header.textContent?.trim()).toBe('Cheapest supplier');
+    expect(button).not.toBeNull();
+    expect(button?.textContent?.trim()).toBe('');
+    expect(button?.getAttribute('aria-expanded')).toBe('false');
+    expect(button?.getAttribute('aria-controls')).toBeTruthy();
+    expect(button?.getAttribute('title')).toBeNull();
+  });
+
+  it('opens the sentence on click and closes it again', async () => {
+    const { host, fixture } = await render();
+    const button = helpButtons(host)[0];
+
+    button.click();
+    fixture.detectChanges();
+    expect(helpPanels(host)[0].id).toBe(button.getAttribute('aria-controls'));
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+
+    button.click();
+    fixture.detectChanges();
+    expect(helpPanels(host)).toHaveLength(0);
+  });
+
+  it('opens on Enter and on Space, so it is reachable from the keyboard alone', async () => {
+    const { host, fixture } = await render();
+
+    press('Enter', helpButtons(host)[0]);
+    fixture.detectChanges();
+    expect(helpPanels(host)[0].textContent?.trim()).toBe(CHEAPEST_SUPPLIER_HELP);
+
+    press('Enter', helpButtons(host)[0]);
+    fixture.detectChanges();
+    press(' ', helpButtons(host)[0]);
+    fixture.detectChanges();
+    expect(helpPanels(host)[0].textContent?.trim()).toBe(CHEAPEST_SUPPLIER_HELP);
+  });
+
+  it('closes on Escape and returns focus to the header button', async () => {
+    const { host, fixture } = await render();
+    const button = helpButtons(host)[0];
+
+    button.focus();
+    button.click();
+    fixture.detectChanges();
+    press('Escape', document);
+    fixture.detectChanges();
+
+    expect(helpPanels(host)).toHaveLength(0);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('gives every narrow-screen card its own button, and opens one panel at a time', async () => {
+    const { host, fixture } = await render();
+    const cardButtons = Array.from(
+      reorderSection(host).querySelectorAll<HTMLButtonElement>(
+        '[data-testid="reorder-card-cheapest-supplier"] button[aria-label="About Cheapest supplier"]'
+      )
+    );
+    const ids = cardButtons.map((button) => button.getAttribute('aria-controls'));
+
+    expect(cardButtons).toHaveLength(5);
+    expect(new Set(ids).size).toBe(5);
+
+    cardButtons[0].click();
+    fixture.detectChanges();
+    cardButtons[3].click();
+    fixture.detectChanges();
+
+    expect(helpPanels(host)).toHaveLength(1);
+    expect(helpPanels(host)[0].textContent?.trim()).toBe(CHEAPEST_SUPPLIER_HELP);
+    expect(cardButtons.map((button) => button.getAttribute('aria-expanded'))).toEqual([
+      'false',
+      'false',
+      'false',
+      'true',
+      'false'
+    ]);
+  });
+
+  it('says nothing about the recorded purchase costs, with or without Dashboard.ViewFinancials', async () => {
+    for (const canViewFinancials of [true, false]) {
+      const { host } = await render({ canViewFinancials });
+
+      expect(host.querySelector('[data-testid="purchase-cost-note"]')).toBeNull();
+      expect(reorderSection(host).textContent).not.toContain('historical costs');
+      TestBed.resetTestingModule();
+    }
+  });
+
+  it('shows no help button at all while the list is loading, has failed, or is empty', async () => {
+    const pending = await render({ alerts: new Subject<ReorderAlertListing>() });
+    expect(helpButtons(pending.host)).toHaveLength(0);
+    TestBed.resetTestingModule();
+
+    const failed = await render({ alerts: throwError(() => new Error('down')) });
+    expect(helpButtons(failed.host)).toHaveLength(0);
+    TestBed.resetTestingModule();
+
+    const empty = await render({
+      alerts: of({ products: [], mode: 'MachineAware', machineNeedUnavailableReason: null } as ReorderAlertListing)
+    });
+    expect(helpButtons(empty.host)).toHaveLength(0);
   });
 });

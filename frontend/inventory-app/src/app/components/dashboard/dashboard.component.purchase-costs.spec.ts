@@ -224,12 +224,18 @@ describe('Reorder Alerts purchase-cost columns (issue #789)', () => {
     ]);
   });
 
-  it('labels both columns as historical recorded costs, not current supplier prices (issue #972)', async () => {
+  /**
+   * Rewritten for issue #1016: the owner asked for the note above the table to go, and for the
+   * sentence not to be moved anywhere else on the dashboard. That is a requirement change, not a
+   * weakened test - so this now holds the removal, and the headings that say which figure each
+   * column is are asserted by the test above it.
+   */
+  it('carries no note row about the historical recorded costs (issue #1016)', async () => {
     const { host } = await render();
 
-    expect(host.querySelector('[data-testid="purchase-cost-note"]')?.textContent).toContain(
-      'historical costs, not current supplier prices'
-    );
+    expect(host.querySelector('[data-testid="purchase-cost-note"]')).toBeNull();
+    expect(alertsSection(host).textContent).not.toContain('historical costs');
+    expect(alertsSection(host).textContent).not.toContain('past purchases');
   });
 
   it('keeps the Unit Price column absent', async () => {

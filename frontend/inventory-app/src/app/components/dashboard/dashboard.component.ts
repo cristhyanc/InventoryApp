@@ -44,6 +44,7 @@ import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
 import { plural } from '../../formatting/plural';
 import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
+import { HelpToggletipComponent } from '../shared/help-toggletip/help-toggletip.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
 import { MachineRestockSyncReminderComponent } from './machine-restock-sync-reminder/machine-restock-sync-reminder.component';
 import { SiteMachinePerformanceComponent } from './site-machine-performance/site-machine-performance.component';
@@ -103,6 +104,18 @@ export interface AttentionAlert {
 /** How many products the Reorder priorities overview shows before linking to the full list. */
 export const REORDER_PRIORITY_LIMIT = 5;
 
+/**
+ * What the Cheapest supplier column explains about itself (issue #1016). It is the sentence the row
+ * above the table used to carry, word for word, and it is held here once because the help button
+ * that opens it sits both in the desktop heading and on every narrow-screen card.
+ */
+export const CHEAPEST_SUPPLIER_HELP =
+  'Cheapest supplier is the lowest price your own suppliers currently list per unit - observed '
+  + 'prices for purchasing guidance, not costs you have paid.';
+
+/** The help button's accessible name, which has to say which column it explains. */
+export const CHEAPEST_SUPPLIER_HELP_LABEL = 'About Cheapest supplier';
+
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -115,6 +128,7 @@ export const REORDER_PRIORITY_LIMIT = 5;
     BusinessDateTimePipe,
     CheapestSuppliersComponent,
     CheapestSupplierCellComponent,
+    HelpToggletipComponent,
     SiteMachinePerformanceComponent
   ],
   templateUrl: './dashboard.component.html'
@@ -133,6 +147,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * business owns, but the unit count is storage only, so the two are never read as one figure.
    */
   readonly storageUnitsNote = 'Storage units exclude stock in machines.';
+
+  /** The Cheapest supplier column's explanation and the name of the button that opens it (#1016). */
+  readonly cheapestSupplierHelp = CHEAPEST_SUPPLIER_HELP;
+  readonly cheapestSupplierHelpLabel = CHEAPEST_SUPPLIER_HELP_LABEL;
 
   lowStock: Product[] = [];
   machines: Machine[] = [];

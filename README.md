@@ -607,7 +607,10 @@ changed, and every "Unavailable" still means unavailable, never zero.
   cheapest purchase, and **Cheapest supplier** (issue #981). Last and cheapest purchase are
   **historical costs from your own purchases**; Cheapest supplier is the lowest price your own
   suppliers **currently list** per unit - observed prices for purchasing guidance, not costs you have
-  paid - and the section says both. The supplier column is the same cell and popup as
+  paid. That last explanation is behind a small help button beside the **Cheapest supplier** heading,
+  and beside the same label on each narrow-screen card (issue #1016): press, tap or focus it to read
+  the sentence beside the column, and press Escape or click away to close it again. The supplier
+  column is the same cell and popup as
   [on Needs Ordering](#the-cheapest-supplier-on-needs-ordering): one request for the five products,
   shown to everyone who sees the dashboard, unavailable in a read-only support view, and a failed
   read says so with a **Retry** without affecting the rest of the dashboard.
