@@ -171,6 +171,12 @@ function pageLimit({ container, actor, actorId }) {
   return { value: asked, injected: false };
 }
 
+/** The input field a limit sets, or nothing for a limit the actor does not have. */
+const limitFields = (field, limit) => (field === undefined ? {} : { [field]: limit.value });
+
+/** How the reason names a limit: set by the guard, or the call's own accepted. */
+const describeLimit = (field, limit) => (limit.injected ? `${field} set to ${limit.value}` : `${field} ${limit.value} accepted`);
+
 /** The run's own caps, which a paid call is never allowed without. */
 function perRunCaps(limits) {
   const caps = limits.perRun;
@@ -233,7 +239,7 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
     ...container,
     [limits.chargeField]: charge.value,
     [actor.itemLimitField]: items.value,
-    ...(actor.pageLimitField === undefined ? {} : { [actor.pageLimitField]: pages.value }),
+    ...limitFields(actor.pageLimitField, pages),
     // Forced, not defaulted: an enrichment nothing reads must be off however the call asked for it.
     ...actor.forcedInput,
   };
@@ -241,12 +247,10 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
     containerField === null ? { ...toolInput, ...fixed } : { ...toolInput, [containerField]: fixed };
 
   const reasons = [
-    charge.injected ? `${limits.chargeField} set to ${charge.value}` : `${limits.chargeField} ${charge.value} accepted`,
-    items.injected ? `${actor.itemLimitField} set to ${items.value}` : `${actor.itemLimitField} ${items.value} accepted`,
+    describeLimit(limits.chargeField, charge),
+    describeLimit(actor.itemLimitField, items),
+    ...(actor.pageLimitField === undefined ? [] : [describeLimit(actor.pageLimitField, pages)]),
   ];
-  if (actor.pageLimitField !== undefined) {
-    reasons.push(pages.injected ? `${actor.pageLimitField} set to ${pages.value}` : `${actor.pageLimitField} ${pages.value} accepted`);
-  }
 
   return allow(
     {
