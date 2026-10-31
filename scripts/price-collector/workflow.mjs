@@ -12,15 +12,70 @@ import { runSubmission } from './submit-results.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const reviewedActors = new Set(['abotapi/kmart-au-scraper', 'axlymxp/bigw-product-scraper', 'dromb/big-w-au-product-scraper']);
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
+const ISSUED_WORK = 'issued-work.json';
 const save = (path, value) => writeFileSync(path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 
-export function sampleWork(work, count) {
-  if (!Number.isInteger(count) || count < 1 || count > 10) throw new Error('Sample size must be a whole number from 1 to 10.');
-  const searches = work.searches.slice(0, count);
+/**
+ * A production-sized run (#929 stage 2 dry run): every issued search with the production page sizes
+ * in apify-limits.json, worked through by one fresh Claude session per batch so no session's context
+ * grows with the whole catalogue. Each batch keeps its own turn and dollar cap; the batch count caps
+ * the run's Claude spend at maxBatches x maxBudgetUsdPerBatch, and the Apify actor call cap in
+ * apify-limits.json (perRun.maxActorCalls) is shared by every batch because the guard's state is the
+ * run's. Searches beyond the last batch, and batches the deadline does not reach, become not_searched.
+ */
+export const FULL_RUN = Object.freeze({
+  batchSize: 6, maxBatches: 15, maxTurnsPerBatch: 60, maxBudgetUsdPerBatch: 1, deadlineMinutes: 90, batchMinutes: 14,
+});
+export const SAMPLE_RUN = Object.freeze({ maxTurns: 40, maxBudgetUsd: 1 });
+
+/** The given searches of an issued run, with only the matching inputs those searches need. */
+export function selectWork(work, searches) {
   const waitingKeys = new Set(searches.filter(s => s.product.kind === 'waiting').map(s => s.product.waitingKey));
   const waitingProducts = work.matching.waitingProducts.filter(p => waitingKeys.has(p.waitingKey));
   return { ...work, searches, searchCount: searches.length,
     matching: { ...work.matching, required: waitingProducts.length > 0, waitingProducts } };
+}
+
+export function sampleWork(work, count) {
+  if (!Number.isInteger(count) || count < 1 || count > 10) throw new Error('Sample size must be a whole number from 1 to 10.');
+  return selectWork(work, work.searches.slice(0, count));
+}
+
+const productKey = search => (search.product.kind === 'waiting' ? `waiting:${search.product.waitingKey}` : `master:${search.product.masterProductId}`);
+
+/**
+ * The work split into batches of about batchSize searches, in issue order, never splitting one
+ * product's searches: its match file is written once, so a second session could not write it again.
+ */
+export function workBatches(work, batchSize = FULL_RUN.batchSize) {
+  const groups = new Map();
+  for (const search of work.searches) {
+    const key = productKey(search);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(search);
+  }
+  const batches = [];
+  let current = [];
+  for (const group of groups.values()) {
+    if (current.length > 0 && current.length + group.length > batchSize) { batches.push(current); current = []; }
+    current.push(...group);
+  }
+  if (current.length > 0) batches.push(current);
+  return batches.map(searches => selectWork(work, searches));
+}
+
+/** Everything the run may reach: the first maxBatches batches. The rest becomes not_searched. */
+export function fullRunWork(work) {
+  return selectWork(work, workBatches(work).slice(0, FULL_RUN.maxBatches).flatMap(batch => batch.searches));
+}
+
+/** The production limits unchanged, except that the reviewed retailers may be enabled for this run. */
+export function fullRunLimits(source, includeReviewed) {
+  const limits = structuredClone(source);
+  for (const [id, actor] of Object.entries(limits.actors)) {
+    if (includeReviewed && reviewedActors.has(id) && actor.schemaVerifiedAt === '2026-10-31') actor.actorIdConfirmed = true;
+  }
+  return limits;
 }
 
 export function sampleLimits(source, includeReviewed) {
@@ -59,8 +114,23 @@ const reportPatterns = [
   /^failed requests: \d+$/,
 ];
 
+/**
+ * A skipped file as the summary may show it: the work item number and the field the validator
+ * names, never its message, which can quote a supplier product id. A match file is not named,
+ * because its name carries the waiting product's key.
+ */
+export function publicSkipLine(line) {
+  const skipped = /^ {2}skipped (\S+): (.*)$/.exec(line);
+  if (!skipped) return null;
+  const file = /^[1-9]\d{0,9}\.json$/.test(skipped[1]) ? skipped[1] : 'a match file';
+  const field = /^(file(?:\.[A-Za-z]{1,40}|\[\d{1,4}\]){0,6})(?= )/.exec(skipped[2]);
+  return `skipped ${file}: ${field ? `field ${field[1]}` : 'a file-level rule'}`;
+}
+
 export function publicSubmissionReport(out) {
-  return String(out).split('\n').filter(line => reportPatterns.some(pattern => pattern.test(line))).join('\n');
+  return String(out).split('\n')
+    .map(line => (reportPatterns.some(pattern => pattern.test(line)) ? line : publicSkipLine(line)))
+    .filter(line => line !== null).join('\n');
 }
 
 /** Only files issued to this sample reach the existing independent schema/batch validator. */
@@ -114,7 +184,7 @@ export function toolUseReport(stateDir) {
 }
 
 export async function finaliseSample({ stateDir, outputDir, env, token, submit = runSubmission }) {
-  const work = json(join(stateDir, 'work.json'));
+  const work = json(join(stateDir, ISSUED_WORK));
   const status = existsSync(join(stateDir, 'collector-status.json')) ? json(join(stateDir, 'collector-status.json')) : { status: 'not_started', costUsd: null };
   const { dir, refused } = submissionFolder(stateDir, outputDir, work);
   const result = await submit({ argv: ['--dir', dir, '--run-id', String(work.runId)],
@@ -123,14 +193,16 @@ export async function finaliseSample({ stateDir, outputDir, env, token, submit =
   const label = allowedStatuses.includes(status.status) ? status.status : 'failed';
   const cost = typeof status.costUsd === 'number' && Number.isFinite(status.costUsd) && status.costUsd >= 0 ? status.costUsd.toFixed(6) : 'unknown';
   const turns = Number.isInteger(status.turns) ? status.turns : 'unknown';
+  const batches = Number.isInteger(status.batchesRun) && Number.isInteger(status.batchCount)
+    ? `Claude batches: ${status.batchesRun} of ${status.batchCount}\n` : '';
   const subtype = typeof status.subtype === 'string' && /^[a-z_]{1,40}$/.test(status.subtype) ? status.subtype : 'unknown';
-  const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${toolUseReport(stateDir)}Sample searches: ${work.searches.length}\nFiles refused before submission: ${refused}\n${publicSubmissionReport(result.out)}\nSubmission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
+  const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${batches}${toolUseReport(stateDir)}Searches given to Claude: ${work.searches.length}\nFiles refused before submission: ${refused}\n${publicSubmissionReport(result.out)}\nSubmission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
   save(join(stateDir, 'submission-status.json'), { ok: result.exitCode === 0 && refused === 0 });
   return report;
 }
 
 /** No raw CLI output or transcript is sent to stdout, stderr, Actions outputs or artifacts. */
-export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1000 }) {
+export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1000, maxTurns = SAMPLE_RUN.maxTurns, maxBudgetUsd = SAMPLE_RUN.maxBudgetUsd }) {
   // An absolute path to the job's own installation, never a `claude` looked up on PATH.
   if (typeof executable !== 'string' || !isAbsolute(executable)) {
     return Promise.reject(new Error('The collector needs the absolute path of the reviewed Claude CLI.'));
@@ -139,7 +211,7 @@ export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1
     const args = ['-p', '--output-format', 'json', '--no-session-persistence', '--disable-slash-commands',
       '--setting-sources', '', '--settings', 'scripts/price-collector/claude-settings.json',
       '--permission-mode', 'dontAsk', '--tools', 'Bash,Write', '--strict-mcp-config',
-      '--mcp-config', 'scripts/price-collector/apify-mcp.json', '--max-turns', '40', '--max-budget-usd', '1',
+      '--mcp-config', 'scripts/price-collector/apify-mcp.json', '--max-turns', String(maxTurns), '--max-budget-usd', String(maxBudgetUsd),
       '--model', 'sonnet', '--system-prompt', readFileSync(join(sandbox, 'scripts/price-collector/prompt.md'), 'utf8')];
     const child = spawn(executable, args, { cwd: sandbox, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let text = '';
@@ -168,7 +240,7 @@ export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1
     child.stdin.on('error', () => {});
     const limitsPath = join(env.PRICE_COLLECTOR_STATE_DIR ?? sandbox, 'limits.json');
     const enabled = existsSync(limitsPath) ? Object.entries(json(limitsPath).actors).filter(([, a]) => a.actorIdConfirmed).map(([id]) => id) : [];
-    child.stdin.end(`Run context: bounded manual test; enabled actors: ${enabled.join(', ')}. Process the prepared test sample using read-work.mjs. Write finished files, then stop.`);
+    child.stdin.end(`Run context: bounded manual test; enabled actors: ${enabled.join(', ')}. Process the prepared work using read-work.mjs. Write finished files, then stop.`);
     let finished = false;
     const finish = code => {
       if (finished) return;
@@ -195,12 +267,13 @@ export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1
 }
 
 /**
- * The internal deadline. Blank means the full 14 minutes. A smaller whole number stops Claude part
- * way through for the interruption test, after some searches have finished and been written.
+ * The internal deadline for the whole Claude phase. Blank means 14 minutes for a sample and
+ * FULL_RUN.deadlineMinutes for a full run. A whole number from 1 to 14 stops Claude part way through
+ * for the interruption test, after some searches have finished and been written.
  */
-export function collectorDeadlineMinutes(value) {
+export function collectorDeadlineMinutes(value, fullRun = false) {
   const text = String(value ?? '').trim();
-  if (text === '') return 14;
+  if (text === '') return fullRun ? FULL_RUN.deadlineMinutes : 14;
   if (!/^(?:[1-9]|1[0-4])$/.test(text)) throw new Error('Stop after must be a whole number of minutes from 1 to 14.');
   return Number(text);
 }
@@ -230,43 +303,89 @@ export function collectorTarget(env, production = productionApiOrigin()) {
   return url;
 }
 
+/** Whether this is a production-sized run; anything but an explicit true or false is refused. */
+export function fullRunRequested(value) {
+  if (!['true', 'false'].includes(value)) throw new Error('Specify whether this is a full run.');
+  return value === 'true';
+}
+
 async function prepare(env, stateDir) {
   const url = collectorTarget(env);
+  const full = fullRunRequested(env.PRICE_COLLECTOR_FULL_RUN);
   const size = Number(env.PRICE_COLLECTOR_SAMPLE_SIZE);
-  // Validate all local configuration before issuing a run (GET work writes a run).
-  sampleWork({ searches: [], matching: { waitingProducts: [] } }, size);
-  collectorDeadlineMinutes(env.PRICE_COLLECTOR_STOP_AFTER_MINUTES);
+  // Validate all local configuration before issuing a run (GET work writes a run). A full run
+  // ignores the sample size.
+  if (!full) sampleWork({ searches: [], matching: { waitingProducts: [] } }, size);
+  collectorDeadlineMinutes(env.PRICE_COLLECTOR_STOP_AFTER_MINUTES, full);
   if (!['true', 'false'].includes(env.PRICE_COLLECTOR_INCLUDE_REVIEWED)) throw new Error('Specify whether verified retailer actors may run.');
   mkdirSync(stateDir, { mode: 0o700 }); // Refuse a previous attempt's directory; never reuse output.
   const token = await collectorToken(env);
   const work = await runGetWork({ env: { PRICE_COLLECTOR_API_BASE_URL: url.href.replace(/\/$/, ''), PRICE_COLLECTOR_API_TOKEN: token } });
   if (work.exitCode !== 0) throw new Error('The test API did not issue usable work.');
-  const sample = sampleWork(JSON.parse(work.out), size);
-  save(join(stateDir, 'work.json'), sample);
-  const limits = sampleLimits(json(join(here, 'apify-limits.json')), env.PRICE_COLLECTOR_INCLUDE_REVIEWED === 'true');
+  const issued = JSON.parse(work.out);
+  const sample = full ? fullRunWork(issued) : sampleWork(issued, size);
+  save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full });
+  const source = json(join(here, 'apify-limits.json'));
+  const includeReviewed = env.PRICE_COLLECTOR_INCLUDE_REVIEWED === 'true';
+  const limits = full ? fullRunLimits(source, includeReviewed) : sampleLimits(source, includeReviewed);
   save(join(stateDir, 'limits.json'), limits);
   const sandbox = join(stateDir, 'sandbox');
   mkdirSync(join(sandbox, 'scripts'), { recursive: true, mode: 0o700 });
   cpSync(here, join(sandbox, 'scripts/price-collector'), { recursive: true });
   mkdirSync(join(sandbox, 'price-collector-out'), { mode: 0o700 });
   mkdirSync(join(stateDir, 'home'), { mode: 0o700 });
-  console.log(`Sample prepared: ${sample.searches.length} searches. Unselected work will become not_searched.`);
+  console.log(full
+    ? `Full run prepared: ${sample.searches.length} of ${issued.searches.length} issued searches in ${workBatches(sample).length} batches. The rest will become not_searched.`
+    : `Sample prepared: ${sample.searches.length} searches. Unselected work will become not_searched.`);
+}
+
+/**
+ * Runs Claude once for a sample, or once per batch for a full run, until the work is done, a session
+ * does not complete or the deadline passes. work.json holds the current batch only: read-work.mjs
+ * gives Claude that batch and the write guard accepts result files for it alone. The status is saved
+ * after every batch, so finalisation reports the batches that ran if the job is stopped part way.
+ */
+export async function collectBatches({ stateDir, issued, deadlineMs, launch, now = Date.now }) {
+  const full = issued.fullRun === true;
+  const batches = full ? workBatches(issued) : [issued];
+  const endsAt = now() + deadlineMs;
+  const total = { status: 'completed', costUsd: 0, turns: 0, subtype: null };
+  if (full) Object.assign(total, { batchesRun: 0, batchCount: batches.length });
+  for (const batch of batches) {
+    const remainingMs = endsAt - now();
+    if (remainingMs < 60 * 1000) { total.status = 'timeout'; break; }
+    save(join(stateDir, 'work.json'), batch);
+    const result = await launch(full
+      ? { timeoutMs: Math.min(remainingMs, FULL_RUN.batchMinutes * 60 * 1000), maxTurns: FULL_RUN.maxTurnsPerBatch, maxBudgetUsd: FULL_RUN.maxBudgetUsdPerBatch }
+      : { timeoutMs: remainingMs });
+    if (full) total.batchesRun += 1;
+    // An unknown cost or turn count makes the total unknown rather than an undercount.
+    total.costUsd = typeof result.costUsd === 'number' && total.costUsd !== null ? total.costUsd + result.costUsd : null;
+    total.turns = Number.isInteger(result.turns) && total.turns !== null ? total.turns + result.turns : null;
+    total.subtype = result.subtype ?? null;
+    total.status = result.status;
+    save(join(stateDir, 'collector-status.json'), total);
+    if (result.status !== 'completed') break;
+  }
+  save(join(stateDir, 'collector-status.json'), total);
+  return total;
 }
 
 async function main(env, mode) {
   const stateDir = stateDirectory(env);
   if (mode === 'cleanup') { rmSync(stateDir, { recursive: true, force: true }); return; }
   if (mode === 'prepare') { await prepare(env, stateDir); return; }
-  if (!existsSync(join(stateDir, 'work.json'))) { console.log('No issued run available for finalisation.'); return; }
+  if (!existsSync(join(stateDir, ISSUED_WORK))) { console.log('No issued run available for finalisation.'); return; }
   const sandbox = join(stateDir, 'sandbox');
   if (mode === 'collect') {
     save(join(stateDir, 'collector-status.json'), { status: 'interrupted', costUsd: null });
     if (!env.ANTHROPIC_API_KEY || !env.APIFY_TOKEN) throw new Error('Configure the Claude and Apify environment secrets.');
     const childEnv = collectorEnvironment({ ...env, PRICE_COLLECTOR_OUT_DIR: join(sandbox, 'price-collector-out'),
       PRICE_COLLECTOR_GUARD_STATE: join(stateDir, 'guard-state.json') }, join(stateDir, 'home'));
-    const status = await launchClaude({ sandbox, env: childEnv, executable: env.PRICE_COLLECTOR_CLAUDE_BIN,
-      timeoutMs: collectorDeadlineMinutes(env.PRICE_COLLECTOR_STOP_AFTER_MINUTES) * 60 * 1000 });
-    save(join(stateDir, 'collector-status.json'), status);
+    const issued = json(join(stateDir, ISSUED_WORK));
+    const deadlineMs = collectorDeadlineMinutes(env.PRICE_COLLECTOR_STOP_AFTER_MINUTES, issued.fullRun === true) * 60 * 1000;
+    const status = await collectBatches({ stateDir, issued, deadlineMs,
+      launch: options => launchClaude({ sandbox, env: childEnv, executable: env.PRICE_COLLECTOR_CLAUDE_BIN, ...options }) });
     console.log(`Collector status: ${status.status}`);
     if (status.status !== 'completed') process.exitCode = 1;
     return;

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude, toolUseReport } from './workflow.mjs';
+import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, publicSkipLine, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude, toolUseReport } from './workflow.mjs';
 import { permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { LEDGER_FILE, MAX_POLLS_PER_RUN, leadingJsonObject, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
@@ -103,7 +103,7 @@ test('OIDC exchange uses the API application scope, never a stored API password,
 test('finalisation runs after a collector timeout even with no result files and hides submission errors', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-test-'));
   try {
-    writeFileSync(join(dir, 'work.json'), JSON.stringify(work));
+    writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(work));
     writeFileSync(join(dir, 'collector-status.json'), JSON.stringify({ status: 'timeout', costUsd: null }));
     const calls = [];
     const answer = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 'private-token', submit: async ({ argv }) => {
@@ -154,6 +154,8 @@ setInterval(() => {}, 1000);\n`, { mode: 0o700 });
 });
 
 function saveTestWork(dir, status) {
+  // The run's issued work (finalisation) and the current batch (read-work.mjs and the write guard).
+  writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(work));
   writeFileSync(join(dir, 'work.json'), JSON.stringify(work));
   writeFileSync(join(dir, 'collector-status.json'), JSON.stringify(status));
 }
@@ -358,5 +360,128 @@ test('the summary carries Claude turns and result subtype, and says when no tool
     const unsafe = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
       submit: async () => ({ exitCode: 0, out: '' }) });
     assert.match(unsafe, /^Claude turns: unknown; result: unknown$/m);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+const search = (workItemId, product) => ({ workItemId, product });
+const master = id => ({ kind: 'master', masterProductId: id });
+const waiting = key => ({ kind: 'waiting', waitingKey: key });
+
+test('a full run is split into batches that never separate one product\'s searches', () => {
+  const issued = { runId: 7, searches: [
+    search(1, master(10)), search(2, master(10)), search(3, waiting('w')), search(4, master(11)),
+    search(5, waiting('w')), search(6, master(12)), search(7, master(12)), search(8, master(12)),
+  ], matching: { waitingProducts: [{ waitingKey: 'w' }, { waitingKey: 'x' }], masterProducts: [] } };
+  const batches = workBatches(issued, 3);
+  assert.deepEqual(batches.map(b => b.searches.map(s => s.workItemId)), [[1, 2], [3, 5, 4], [6, 7, 8]]);
+  assert.deepEqual(batches.map(b => b.matching.waitingProducts.map(p => p.waitingKey)), [[], ['w'], []]);
+  assert.deepEqual(batches.map(b => b.matching.required), [false, true, false]);
+  assert.ok(batches.every(b => b.runId === 7));
+  // A product with more searches than a batch holds still goes whole into one batch.
+  assert.deepEqual(workBatches(issued, 2).map(b => b.searches.length), [2, 2, 1, 3]);
+  assert.deepEqual(workBatches({ ...issued, searches: [] }), []);
+});
+
+test('a full run keeps at most maxBatches batches; the rest is left for not_searched', () => {
+  const searches = Array.from({ length: FULL_RUN.batchSize * (FULL_RUN.maxBatches + 2) }, (_, i) => search(i + 1, master(i + 1)));
+  const full = fullRunWork({ runId: 1, searches, matching: { waitingProducts: [], masterProducts: [] } });
+  assert.equal(full.searches.length, FULL_RUN.batchSize * FULL_RUN.maxBatches);
+  assert.equal(full.searchCount, full.searches.length);
+  assert.equal(workBatches(full).length, FULL_RUN.maxBatches);
+});
+
+test('full-run limits are the production limits, with the reviewed retailers only on request', () => {
+  const source = JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url)));
+  const limits = fullRunLimits(source, false);
+  assert.deepEqual(limits, source);
+  assert.notEqual(limits, source);
+  const enabled = fullRunLimits(source, true);
+  assert.equal(enabled.actors['abotapi/kmart-au-scraper'].actorIdConfirmed, true);
+  assert.equal(enabled.actors['axlymxp/bigw-product-scraper'].actorIdConfirmed, true);
+  assert.equal(enabled.perRun.maxActorCalls, source.perRun.maxActorCalls);
+  assert.equal(enabled.actors['varnmill/au-supermarket-prices'].pageSize, source.actors['varnmill/au-supermarket-prices'].pageSize);
+  assert.equal(source.actors['abotapi/kmart-au-scraper'].actorIdConfirmed, false);
+});
+
+test('the full-run switch and its deadline are explicit', () => {
+  assert.equal(fullRunRequested('true'), true);
+  assert.equal(fullRunRequested('false'), false);
+  for (const bad of ['', undefined, 'yes', 'TRUE']) assert.throws(() => fullRunRequested(bad));
+  assert.equal(collectorDeadlineMinutes('', true), FULL_RUN.deadlineMinutes);
+  assert.equal(collectorDeadlineMinutes('3', true), 3);
+  assert.throws(() => collectorDeadlineMinutes('90', true));
+});
+
+test('a full run starts one capped Claude session per batch, each seeing only its batch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-batches-'));
+  try {
+    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 14 }, (_, i) => search(i + 1, master(i + 1))),
+      matching: { waitingProducts: [], masterProducts: [] } };
+    const seen = [];
+    const status = await collectBatches({ stateDir: dir, issued, deadlineMs: 60 * 60 * 1000, launch: async options => {
+      seen.push({ ids: JSON.parse(readFileSync(join(dir, 'work.json'), 'utf8')).searches.map(s => s.workItemId), options });
+      return { status: 'completed', costUsd: 0.25, turns: 10, subtype: 'success' };
+    } });
+    assert.deepEqual(seen.map(s => s.ids.length), [6, 6, 2]);
+    assert.ok(seen.every(s => s.options.maxTurns === FULL_RUN.maxTurnsPerBatch && s.options.maxBudgetUsd === FULL_RUN.maxBudgetUsdPerBatch));
+    assert.ok(seen.every(s => s.options.timeoutMs <= FULL_RUN.batchMinutes * 60 * 1000));
+    assert.deepEqual(status, { status: 'completed', costUsd: 0.75, turns: 30, subtype: 'success', batchesRun: 3, batchCount: 3 });
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'collector-status.json'), 'utf8')), status);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a full run stops at the first session that does not complete, and at the deadline', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-batches-stop-'));
+  try {
+    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 18 }, (_, i) => search(i + 1, master(i + 1))),
+      matching: { waitingProducts: [], masterProducts: [] } };
+    let launches = 0;
+    const limited = await collectBatches({ stateDir: dir, issued, deadlineMs: 60 * 60 * 1000, launch: async () => {
+      launches += 1;
+      return launches === 2 ? { status: 'claude_limit', costUsd: null, turns: 60, subtype: 'error_max_turns' } : { status: 'completed', costUsd: 0.5, turns: 5, subtype: 'success' };
+    } });
+    assert.equal(launches, 2);
+    assert.deepEqual(limited, { status: 'claude_limit', costUsd: null, turns: 65, subtype: 'error_max_turns', batchesRun: 2, batchCount: 3 });
+
+    let clock = 0;
+    const timed = await collectBatches({ stateDir: dir, issued, deadlineMs: 10 * 60 * 1000, now: () => clock, launch: async ({ timeoutMs }) => {
+      assert.ok(timeoutMs <= 10 * 60 * 1000);
+      clock += 9.5 * 60 * 1000;
+      return { status: 'completed', costUsd: 0.1, turns: 3, subtype: 'success' };
+    } });
+    assert.equal(timed.status, 'timeout');
+    assert.equal(timed.batchesRun, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a sample run is still one session with the sample caps and no batch line', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-sample-'));
+  try {
+    const calls = [];
+    const status = await collectBatches({ stateDir: dir, issued: { ...work, fullRun: false }, deadlineMs: 14 * 60 * 1000,
+      launch: async options => { calls.push(options); return { status: 'timeout', costUsd: null, turns: null, subtype: null }; } });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(Object.keys(calls[0]), ['timeoutMs']);
+    assert.deepEqual(status, { status: 'timeout', costUsd: null, turns: null, subtype: null });
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'work.json'), 'utf8')).searches, work.searches);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the summary names a skipped file\'s work item and field, never the validator\'s text', async () => {
+  assert.equal(publicSkipLine('  skipped 12.json: file.rows[2].packQuantity must be 1 or more.'), 'skipped 12.json: field file.rows[2].packQuantity');
+  assert.equal(publicSkipLine('  skipped 12.json: file.rows[1] reports supplier product id "SKU-secret", which another row already reports.'), 'skipped 12.json: field file.rows[1]');
+  assert.equal(publicSkipLine('  skipped match-coke-zero.json: a match file proposes exactly one thing.'), 'skipped a match file: a file-level rule');
+  assert.equal(publicSkipLine('  skipped notes.txt: it is not a result file'), 'skipped a match file: a file-level rule');
+  assert.equal(publicSkipLine('  skipped 3.json: a search the page cap stopped must be reported as truncated, not complete.'), 'skipped 3.json: a file-level rule');
+  assert.equal(publicSkipLine('run 7: completed'), null);
+  const report = publicSubmissionReport('files: results 9, matches 0, skipped 1\n  skipped 4.json: file.rows[0].unitPrice must be above 0 "Coke $4".\nfailed requests: 0\n');
+  assert.equal(report, 'files: results 9, matches 0, skipped 1\nskipped 4.json: field file.rows[0].unitPrice\nfailed requests: 0');
+
+  const dir = mkdtempSync(join(tmpdir(), 'collector-batch-report-'));
+  try {
+    saveTestWork(dir, { status: 'completed', costUsd: 1.5, turns: 90, subtype: 'success', batchesRun: 3, batchCount: 5 });
+    const answer = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't', submit: async () => ({ exitCode: 0, out: '' }) });
+    assert.match(answer, /^Claude batches: 3 of 5$/m);
+    assert.match(answer, /^Searches given to Claude: 2$/m);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
