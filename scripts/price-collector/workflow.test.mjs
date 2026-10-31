@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, publicSkipLine, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude, toolUseReport } from './workflow.mjs';
-import { JB_METRO_CAPS, jbMetroFlags, permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
+import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, publicSkipLine, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, publicReasonLines, PUBLIC_ROW_REASONS, finaliseSample, launchClaude, toolUseReport } from './workflow.mjs';
+import { JB_METRO_CAPS, failureCode, jbMetroFlags, permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { LEDGER_FILE, MAX_POLLS_PER_RUN, leadingJsonObject, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
@@ -81,6 +81,35 @@ test('public report permits only numeric counters, not supplier text, error bodi
   assert.ok(safe.includes('accepted 1'));
   assert.ok(!safe.includes('private'));
   assert.ok(!safe.includes('secret'));
+});
+
+test('the summary shows the API\'s fixed row reasons with counts and folds any other reason', () => {
+  const raw = [
+    'rows: accepted 0, sent to review 1, pending 2, rejected 4',
+    "  rejected: source link is not on the supplier's own site × 2",
+    '  rejected: Pack price for "Coke Zero $20.99" must be above zero. × 1',
+    '  rejected: https://private.example/link × 1',
+    '  pending: listing is not confirmed, so the reading is held as a pending observation × 2',
+    '  sent to review: variant, individual size, barcode or pack quantity changed × 1',
+    '  match rejected: some private key × 1',
+    '  rejected: no count given',
+  ].join('\n');
+  const safe = publicSubmissionReport(raw);
+  assert.equal(safe, [
+    'rows: accepted 0, sent to review 1, pending 2, rejected 4',
+    '  sent to review: variant, individual size, barcode or pack quantity changed × 1',
+    '  pending: listing is not confirmed, so the reading is held as a pending observation × 2',
+    "  rejected: source link is not on the supplier's own site × 2",
+    '  rejected: other reason × 2',
+  ].join('\n'));
+  assert.deepEqual(publicReasonLines('no reasons here'), []);
+});
+
+test('the public row reasons are exactly the Domain\'s fixed row reasons', () => {
+  const domain = readFileSync(new URL('../../backend/Inventory.Domain/PriceCatalogue/PriceCollectorResultPolicy.cs', import.meta.url), 'utf8');
+  const constants = [...domain.matchAll(/public const string \w+Reason =\s*"([^"]+)";/g)].map(match => match[1]);
+  assert.ok(constants.length >= 10);
+  assert.deepEqual([...PUBLIC_ROW_REASONS].sort(), constants.sort());
 });
 
 test('OIDC exchange uses the API application scope, never a stored API password, and does not retry refusal', async () => {
@@ -326,6 +355,8 @@ test('the hook log becomes counts per tool with fixed codes, never reason text, 
       hook({ hook_event_name: 'PreToolUse', tool_name: 'mcp__apify__get-dataset-items', tool_input: { datasetId: 'Data1' } }),
       hook({ hook_event_name: 'PostToolUse', tool_name: 'mcp__apify__call-actor', tool_input: {}, tool_response: 'no run here' }),
       hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/etc/passwd' } }),
+      hook({ hook_event_name: 'PostToolUseFailure', tool_name: 'mcp__apify__axlymxp--bigw-product-scraper', tool_input: { searchQueries: ['secret-product'] }, error: 'Input is not valid: field secret-product' }),
+      hook({ hook_event_name: 'PostToolUseFailure', tool_name: 'mcp__apify__axlymxp--bigw-product-scraper', tool_input: {}, error: 'something private happened' }),
     ];
     for (const answer of answers) {
       // Claude Code receives exactly the documented shape: no diagnostic field leaks into it.
@@ -339,12 +370,28 @@ test('the hook log becomes counts per tool with fixed codes, never reason text, 
     assert.match(report, /^Tool mcp__apify__get-dataset-items: allowed 0, denied 1; not-own-dataset 1$/m);
     assert.match(report, /^Tool mcp__apify__call-actor: allowed 0, denied 0; not-recorded-string 1$/m);
     assert.match(report, /^Tool Read: allowed 0, denied 1; not-allowlisted 1$/m);
+    // A failed Apify call is counted by a fixed label; the error text and input never reach the summary.
+    assert.match(report, /^Tool mcp__apify__axlymxp--bigw-product-scraper: allowed 0, denied 0; failed-input 1, failed-other 1$/m);
+    assert.equal(JSON.parse(answers.at(-1).stdout).hookSpecificOutput, undefined);
     for (const secret of ['passwd', 'secret-product', 'Data1', 'only', 'sample and its run']) assert.ok(!report.includes(secret), secret);
     // A tampered log line cannot put free text into the summary.
     writeFileSync(join(dir, TOOL_LOG_FILE), `${JSON.stringify({ tool: 'Write <b>price</b>', event: 'before', decision: 'deny', code: 'Coke $4' })}\n`, { flag: 'a' });
     assert.match(toolUseReport(dir), /^Tool other: allowed 0, denied 1; other 1$/m);
     assert.equal(toolLabel({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/pagination.mjs --x' } }), 'Bash:pagination');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a failed call gets one fixed label, most specific cause first', () => {
+  const code = error => failureCode({ error });
+  assert.equal(code('HTTP 429 Too Many Requests'), 'failed-rate-limit');
+  assert.equal(code('Monthly usage limit exceeded (402)'), 'failed-limit');
+  assert.equal(code('403 Forbidden'), 'failed-auth');
+  assert.equal(code('Actor not found'), 'failed-not-found');
+  assert.equal(code('Input is not valid: searchQueries is required'), 'failed-input');
+  assert.equal(code('Request timed out'), 'failed-timeout');
+  assert.equal(code('boom'), 'failed-other');
+  assert.equal(failureCode({ is_interrupt: true, error: '403' }), 'failed-interrupt');
+  assert.equal(failureCode(undefined), 'failed-other');
 });
 
 test('the summary carries Claude turns and result subtype, and says when no tool was called', async () => {

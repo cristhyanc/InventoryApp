@@ -86,6 +86,7 @@
       "pageSize": 48,
       "maxPages": 3,
       "forcedInput": {
+        "includeFullDetail": false,
         "includePricing": true,
         "includeReviews": false,
         "includeReviewStats": false,

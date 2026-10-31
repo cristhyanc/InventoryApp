@@ -102,6 +102,33 @@ export async function recordDecision(event, env) {
   return {};
 }
 
+/**
+ * A fixed label for why an Apify call failed (PostToolUseFailure). The error text itself can quote
+ * the input or the actor's answer, so only these labels are kept; the order puts the most specific
+ * cause first.
+ */
+const failurePatterns = [
+  ['failed-rate-limit', /\b429\b|rate.?limit|too many requests/i],
+  ['failed-limit', /\b402\b|credit|quota|usage limit|monthly limit|insufficient/i],
+  ['failed-auth', /\b40[13]\b|unauthori[sz]ed|forbidden|token/i],
+  ['failed-not-found', /\b404\b|not found|does not exist/i],
+  ['failed-input', /input|schema|validat|invalid|required/i],
+  ['failed-timeout', /time.?out|timed out/i],
+];
+
+export function failureCode(event) {
+  if (event?.is_interrupt === true) return 'failed-interrupt';
+  const error = String(event?.error ?? '');
+  return failurePatterns.find(([, pattern]) => pattern.test(error))?.[0] ?? 'failed-other';
+}
+
+/** PostToolUseFailure: notes the fixed failure label of a failed Apify call, and decides nothing. */
+export function failureDecision(event, env) {
+  if (!String(event?.tool_name ?? '').startsWith('mcp__apify__')) return {};
+  noteToolUse(env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: 'failed', code: failureCode(event) });
+  return {};
+}
+
 function responseShape(response) {
   if (typeof response === 'string') return 'string';
   if (Array.isArray(response)) return 'array';
@@ -181,6 +208,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     event = JSON.parse(raw);
     if (event.hook_event_name === 'PostToolUse') {
       process.stdout.write(JSON.stringify(await recordDecision(event, process.env)));
+    } else if (event.hook_event_name === 'PostToolUseFailure') {
+      process.stdout.write(JSON.stringify(failureDecision(event, process.env)));
     } else {
       const answer = await toolDecision(event, process.env);
       noteToolUse(process.env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: 'before',
@@ -190,7 +219,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } catch {
     // Hook errors cannot become a permissive response or leak the event/credentials.
     if (process.env.PRICE_COLLECTOR_STATE_DIR) {
-      noteToolUse(process.env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: event?.hook_event_name === 'PostToolUse' ? 'after' : 'before', decision: 'deny', code: 'hook-error' });
+      noteToolUse(process.env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: { PostToolUse: 'after', PostToolUseFailure: 'failed' }[event?.hook_event_name] ?? 'before', decision: 'deny', code: 'hook-error' });
     }
     process.stdout.write(JSON.stringify(decision('deny', 'Collector policy could not verify this call.')));
     process.exitCode = 2;

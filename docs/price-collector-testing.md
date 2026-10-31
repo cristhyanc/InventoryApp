@@ -74,8 +74,13 @@ Incomplete searches remain `truncated`; a successful actor run alone is not proo
 
 The summary also says how many turns Claude took and its result subtype, and one line per tool
 with how many calls the hook allowed and denied and the fixed reason codes (for example
-`write-wrong-run`, `not-own-dataset`, `not-recorded-string`). These are counts and codes only, so a
-run that writes nothing shows where it stopped without publishing its output.
+`write-wrong-run`, `not-own-dataset`, `not-recorded-string`). An Apify call that fails is counted
+with a fixed failure label (`failed-input`, `failed-auth`, `failed-limit`, `failed-rate-limit`,
+`failed-not-found`, `failed-timeout`, `failed-interrupt` or `failed-other`), never the error text.
+Under the `rows:` line, the summary counts the rows the API sent to review, held pending or rejected
+per reason, but only for the API's own fixed row reasons (`PriceCollectorResultPolicy`); any other
+reason is counted as `other reason`. These are counts and codes only, so a run that writes nothing
+shows where it stopped without publishing its output.
 
 Review the counts/statuses in the Actions summary, then inspect proposed listings, pending prices
 and match decisions through the test API's Super Admin pages. Confirm pack size, variant, tax basis

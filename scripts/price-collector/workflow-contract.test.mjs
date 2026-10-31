@@ -35,6 +35,11 @@ test('the settings fail closed when a policy hook cannot run and expose no gener
   assert.equal(recorders[0].matcher, '^mcp__apify__');
   assert.equal(recorders[0].hooks[0].command, 'node scripts/price-collector/workflow-tool-guard.mjs');
   assert.equal(recorders[0].hooks[0].onFailure, 'block');
+  // A failed Apify call is labelled by the same script, so the summary can say why it failed.
+  const failures = settings.hooks.PostToolUseFailure;
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].matcher, '^mcp__apify__');
+  assert.equal(failures[0].hooks[0].command, 'node scripts/price-collector/workflow-tool-guard.mjs');
   assert.ok(!settings.permissions.allow.includes('Bash'));
   for (const tool of ['Edit', 'WebFetch', 'WebSearch', 'Agent']) assert.ok(settings.permissions.deny.includes(tool));
   // A bare Read deny rule also refuses every Write in Claude Code 2.1.316, before the hook runs, so

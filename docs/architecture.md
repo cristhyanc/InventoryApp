@@ -14980,7 +14980,8 @@ status and storage ids, so the hook also allows the free `get-dataset-items` (li
 sample page size, 3 reads per dataset), `get-actor-run` (6 polls per run) and `abort-actor-run`
 reads, only for runs this collector started, without counting them as actor calls. A trusted
 `PostToolUse` hook records those runs from the allowed calls' answers (`workflow-run-ledger.mjs`,
-fixed RunResponse paths only); every other Apify account tool is denied. A native hook failure blocks the
+fixed RunResponse paths only), and a `PostToolUseFailure` hook notes a failed Apify call under one
+fixed failure label, never its error text; every other Apify account tool is denied. A native hook failure blocks the
 tool rather than silently bypassing the guard. Literal helper arguments cannot expand shell
 commands, and sample writes must name an issued work item or matching key of that same run.
 

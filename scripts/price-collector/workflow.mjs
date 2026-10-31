@@ -133,10 +133,56 @@ export function publicSkipLine(line) {
   return `skipped ${file}: ${reason}`;
 }
 
+/**
+ * The API's own fixed reasons for a result row (PriceCollectorResultPolicy in the Domain). They are
+ * constants with no product, price or link in them, so the summary may show them word for word;
+ * any other reason is counted as "other reason". workflow.test.mjs checks this list against the
+ * Domain file, so a reason added there must be added here.
+ */
+export const PUBLIC_ROW_REASONS = Object.freeze([
+  'unknown work item',
+  'work item belongs to another run',
+  "supplier differs from the work item's supplier",
+  'listing belongs to another product',
+  'the search has already been answered',
+  'duplicate work item and supplier product id in this batch',
+  'observed before the run started',
+  'observed in the future',
+  "source link is not on the supplier's own site",
+  "price basis differs from the supplier's published basis",
+  'listing was rejected',
+  'variant, individual size, barcode or pack quantity changed',
+  'price is more than 50% below or 100% above the last accepted price',
+  'listing is not confirmed, so the reading is held as a pending observation',
+]);
+const rowReasonLabels = ['sent to review', 'pending', 'rejected'];
+
+/**
+ * The row reason lines as the summary may show them: an allowlisted reason with its count, and
+ * every other reason of the same outcome folded into one "other reason" count.
+ */
+export function publicReasonLines(out) {
+  const counts = new Map();
+  for (const line of String(out).split('\n')) {
+    const reasoned = /^ {2}(sent to review|pending|rejected): (.+) × ([1-9]\d{0,6})$/.exec(line);
+    if (!reasoned) continue;
+    const reason = PUBLIC_ROW_REASONS.includes(reasoned[2]) ? reasoned[2] : 'other reason';
+    const key = `${reasoned[1]}: ${reason}`;
+    counts.set(key, (counts.get(key) ?? 0) + Number(reasoned[3]));
+  }
+  return [...counts.entries()]
+    .sort(([a], [b]) => rowReasonLabels.indexOf(a.split(':')[0]) - rowReasonLabels.indexOf(b.split(':')[0]))
+    .map(([key, count]) => `  ${key} × ${count}`);
+}
+
 export function publicSubmissionReport(out) {
-  return String(out).split('\n')
+  const lines = String(out).split('\n')
     .map(line => (reportPatterns.some(pattern => pattern.test(line)) ? line : publicSkipLine(line)))
-    .filter(line => line !== null).join('\n');
+    .filter(line => line !== null);
+  // The reasons sit under the rows line they explain.
+  const rows = lines.findIndex(line => line.startsWith('rows: '));
+  if (rows !== -1) lines.splice(rows + 1, 0, ...publicReasonLines(out));
+  return lines.join('\n');
 }
 
 /** Only files issued to this sample reach the existing independent schema/batch validator. */
