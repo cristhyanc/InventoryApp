@@ -124,7 +124,8 @@ export function publicSkipLine(line) {
   if (!skipped) return null;
   const file = /^[1-9]\d{0,9}\.json$/.test(skipped[1]) ? skipped[1] : 'a match file';
   const field = /^(file(?:\.[A-Za-z]{1,40}|\[\d{1,4}\]){0,6})(?= )/.exec(skipped[2]);
-  return `skipped ${file}: ${field ? `field ${field[1]}` : 'a file-level rule'}`;
+  const reason = field ? `field ${field[1]}` : 'a file-level rule';
+  return `skipped ${file}: ${reason}`;
 }
 
 export function publicSubmissionReport(out) {
@@ -345,6 +346,14 @@ async function prepare(env, stateDir) {
  * gives Claude that batch and the write guard accepts result files for it alone. The status is saved
  * after every batch, so finalisation reports the batches that ran if the job is stopped part way.
  */
+/** A running total that becomes unknown (null) once any part is unknown, never an undercount. */
+const addKnown = (total, value, known) => (total === null || !known ? null : total + value);
+
+/** One Claude session's limits: a full-run batch keeps its own caps; a sample keeps the defaults. */
+const sessionOptions = (full, remainingMs) => (full
+  ? { timeoutMs: Math.min(remainingMs, FULL_RUN.batchMinutes * 60 * 1000), maxTurns: FULL_RUN.maxTurnsPerBatch, maxBudgetUsd: FULL_RUN.maxBudgetUsdPerBatch }
+  : { timeoutMs: remainingMs });
+
 export async function collectBatches({ stateDir, issued, deadlineMs, launch, now = Date.now }) {
   const full = issued.fullRun === true;
   const batches = full ? workBatches(issued) : [issued];
@@ -355,13 +364,10 @@ export async function collectBatches({ stateDir, issued, deadlineMs, launch, now
     const remainingMs = endsAt - now();
     if (remainingMs < 60 * 1000) { total.status = 'timeout'; break; }
     save(join(stateDir, 'work.json'), batch);
-    const result = await launch(full
-      ? { timeoutMs: Math.min(remainingMs, FULL_RUN.batchMinutes * 60 * 1000), maxTurns: FULL_RUN.maxTurnsPerBatch, maxBudgetUsd: FULL_RUN.maxBudgetUsdPerBatch }
-      : { timeoutMs: remainingMs });
+    const result = await launch(sessionOptions(full, remainingMs));
     if (full) total.batchesRun += 1;
-    // An unknown cost or turn count makes the total unknown rather than an undercount.
-    total.costUsd = typeof result.costUsd === 'number' && total.costUsd !== null ? total.costUsd + result.costUsd : null;
-    total.turns = Number.isInteger(result.turns) && total.turns !== null ? total.turns + result.turns : null;
+    total.costUsd = addKnown(total.costUsd, result.costUsd, typeof result.costUsd === 'number');
+    total.turns = addKnown(total.turns, result.turns, Number.isInteger(result.turns));
     total.subtype = result.subtype ?? null;
     total.status = result.status;
     save(join(stateDir, 'collector-status.json'), total);
