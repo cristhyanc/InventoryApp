@@ -1,8 +1,6 @@
-import { Component, ElementRef, EventEmitter, HostListener, Input, OnChanges, OnDestroy, Output } from '@angular/core';
-import { Subscription } from 'rxjs';
+import { Component, ElementRef, EventEmitter, HostListener, Input, OnChanges, Output } from '@angular/core';
 import { Product } from '../../../models/models';
 import { IconComponent } from '../../shared/icon.component';
-import { PopoverCoordinator } from '../../shared/popover-coordinator.service';
 
 /** How many matches the list shows at once; typing narrows it further. */
 const MAX_VISIBLE_MATCHES = 50;
@@ -16,8 +14,8 @@ const MAX_VISIBLE_MATCHES = 50;
  * a value that is submitted; it shows the chosen product again whenever the list closes.
  *
  * It is the same combobox pattern as the product form's category picker: focus stays in the box,
- * Arrow keys move through the list (`aria-activedescendant`), Enter picks, Escape and Tab close, and
- * only one popover is open at a time (see {@link PopoverCoordinator}).
+ * Arrow keys move through the list (`aria-activedescendant`), Enter picks, and Escape, Tab, a click
+ * elsewhere or focus moving anywhere outside the box close it, so it never stays open beside a help tip.
  */
 @Component({
   selector: 'app-purchase-product-picker',
@@ -25,7 +23,7 @@ const MAX_VISIBLE_MATCHES = 50;
   imports: [IconComponent],
   templateUrl: './purchase-product-picker.component.html'
 })
-export class PurchaseProductPickerComponent implements OnChanges, OnDestroy {
+export class PurchaseProductPickerComponent implements OnChanges {
   private static nextId = 0;
 
   @Input() products: Product[] = [];
@@ -57,16 +55,8 @@ export class PurchaseProductPickerComponent implements OnChanges, OnDestroy {
 
   private typed = false;
   private readonly instance = PurchaseProductPickerComponent.nextId++;
-  private readonly subscription: Subscription;
 
-  constructor(
-    private readonly host: ElementRef<HTMLElement>,
-    private readonly coordinator: PopoverCoordinator
-  ) {
-    this.subscription = coordinator.opened$.subscribe((owner) => {
-      if (owner !== this && this.open) this.close();
-    });
-  }
+  constructor(private readonly host: ElementRef<HTMLElement>) {}
 
   get listboxId(): string {
     return `purchase-product-list-${this.instance}`;
@@ -90,10 +80,6 @@ export class PurchaseProductPickerComponent implements OnChanges, OnDestroy {
     this.refreshMatches();
   }
 
-  ngOnDestroy(): void {
-    this.subscription.unsubscribe();
-  }
-
   optionId(index: number): string {
     return `${this.listboxId}-option-${index}`;
   }
@@ -111,16 +97,12 @@ export class PurchaseProductPickerComponent implements OnChanges, OnDestroy {
     this.typed = false;
     this.refreshMatches();
     this.activeIndex = this.matches.findIndex((product) => product.id === Number(this.productId));
-    this.coordinator.announceOpen(this);
   }
 
   onInput(event: Event): void {
     this.query = (event.target as HTMLInputElement).value;
     this.typed = true;
-    if (!this.open) {
-      this.open = true;
-      this.coordinator.announceOpen(this);
-    }
+    this.open = true;
     this.refreshMatches();
     this.activeIndex = this.matches.length > 0 ? 0 : -1;
   }
@@ -160,7 +142,12 @@ export class PurchaseProductPickerComponent implements OnChanges, OnDestroy {
     }
   }
 
-  onBlur(): void {
+  /** Focus leaving the box closes the list; an option keeps focus in the box, so picking one does not. */
+  onBlur(event: FocusEvent): void {
+    const movedTo = event.relatedTarget;
+    if (this.open && !(movedTo instanceof Node && this.host.nativeElement.contains(movedTo))) {
+      this.close();
+    }
     this.touched.emit();
   }
 
