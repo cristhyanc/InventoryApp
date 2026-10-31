@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, publicSkipLine, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude, toolUseReport } from './workflow.mjs';
-import { permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
+import { JB_METRO_CAPS, jbMetroFlags, permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { LEDGER_FILE, MAX_POLLS_PER_RUN, leadingJsonObject, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
@@ -393,7 +393,10 @@ test('a full run keeps at most maxBatches batches; the rest is left for not_sear
 test('full-run limits are the production limits, with the reviewed retailers only on request', () => {
   const source = JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url)));
   const limits = fullRunLimits(source, false);
-  assert.deepEqual(limits, source);
+  const { jbMetro, ...apify } = limits;
+  assert.deepEqual(apify, source);
+  assert.deepEqual(jbMetro, JB_METRO_CAPS.full);
+  assert.deepEqual(sampleLimits(source, false).jbMetro, JB_METRO_CAPS.sample);
   assert.notEqual(limits, source);
   const enabled = fullRunLimits(source, true);
   assert.equal(enabled.actors['abotapi/kmart-au-scraper'].actorIdConfirmed, true);
@@ -483,5 +486,28 @@ test('the summary names a skipped file\'s work item and field, never the validat
     const answer = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't', submit: async () => ({ exitCode: 0, out: '' }) });
     assert.match(answer, /^Claude batches: 3 of 5$/m);
     assert.match(answer, /^Searches given to Claude: 2$/m);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('JB Metro calls get the run\'s own page caps, appended last, and the sample caps by default', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-jbmetro-'));
+  try {
+    const sample = '--page-size 5 --max-pages 1 --batch-size 5 --attempts 1 --timeout-ms 15000';
+    assert.equal(jbMetroFlags(dir), sample);
+    const source = JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url)));
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(sampleLimits(source, false)));
+    assert.equal(jbMetroFlags(dir), sample);
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(fullRunLimits(source, false)));
+    assert.equal(jbMetroFlags(dir), '--page-size 20 --max-pages 5 --batch-size 20 --attempts 2 --timeout-ms 15000');
+    // A limits file above the hard ceiling, or with a missing or non-integer cap, falls back to the sample.
+    for (const jbMetro of [{ ...JB_METRO_CAPS.full, maxPages: 50 }, { ...JB_METRO_CAPS.full, attempts: undefined }, { ...JB_METRO_CAPS.full, pageSize: 2.5 }, null]) {
+      writeFileSync(join(dir, 'limits.json'), JSON.stringify({ ...fullRunLimits(source, false), jbMetro }));
+      assert.equal(jbMetroFlags(dir), sample);
+    }
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(fullRunLimits(source, false)));
+    const answer = await toolDecision({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/jbmetro-lookup.mjs --search "Coke Classic" https://www.jbmetro.com.au --max-pages 99' } },
+      { PRICE_COLLECTOR_STATE_DIR: dir });
+    assert.equal(answer.hookSpecificOutput.permissionDecision, 'allow');
+    assert.match(answer.hookSpecificOutput.updatedInput.command, /--max-pages 99 --page-size 20 --max-pages 5 --batch-size 20 --attempts 2 --timeout-ms 15000$/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -91,6 +91,9 @@ can spend at most US$15 in one run. One product's searches always stay in the sa
 match file can be written only once. The whole Claude phase has 90 minutes; the run stops at the
 first batch that does not complete, and every search no batch reached becomes `not_searched`.
 Tick **include_verified_retailers** too, or Kmart and BIG W searches become `not_searched`.
+JB Metro (not an Apify actor) reads up to 5 pages of 20 products per search in a full run, with 2
+attempts of 15 seconds per page; a sample reads one page of 5 with one attempt. The guard appends
+these caps to every JB Metro call, so Claude cannot widen them.
 
 The summary adds `Claude batches: N of M`, and Claude's cost and turns are totals across batches
 (unknown if any batch did not report them). Apify spend is limited only by the Apify account usage

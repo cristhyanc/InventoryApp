@@ -1055,7 +1055,8 @@ without enabling them in repository configuration. Claude has 40 turns, a US$1 b
 for, still manual and still against the test API: it ignores the sample size, keeps the production
 limits in `apify-limits.json` (the 600-call run cap and full page sizes), and works through every
 issued search (at most 90) in fresh Claude sessions of about 6 searches, never splitting one
-product's searches. Each session has 60 turns and a US$1 budget, so 15 sessions cap Claude at
+product's searches. JB Metro's lookup reads up to 5 pages of 20 in a full run (1 page of 5 in a
+sample); the hook appends those caps to every call. Each session has 60 turns and a US$1 budget, so 15 sessions cap Claude at
 US$15; the whole phase has a 90-minute deadline, and the run stops at the first session that does
 not complete. The Claude step's 100-minute timeout is only a backstop, and the 130-minute job leaves
 a 15-minute finalisation step. The hook allows the

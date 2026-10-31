@@ -5,7 +5,7 @@ import { appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync,
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectorToken } from './workflow-auth.mjs';
-import { TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
+import { JB_METRO_CAPS, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { runGetWork } from './get-work.mjs';
 import { runSubmission } from './submit-results.mjs';
 
@@ -69,9 +69,13 @@ export function fullRunWork(work) {
   return selectWork(work, workBatches(work).slice(0, FULL_RUN.maxBatches).flatMap(batch => batch.searches));
 }
 
-/** The production limits unchanged, except that the reviewed retailers may be enabled for this run. */
+/**
+ * The production limits unchanged, except that the reviewed retailers may be enabled for this run,
+ * plus JB Metro's full-run page caps (it is not an Apify actor, so apify-limits.json has none).
+ */
 export function fullRunLimits(source, includeReviewed) {
   const limits = structuredClone(source);
+  limits.jbMetro = { ...JB_METRO_CAPS.full };
   for (const [id, actor] of Object.entries(limits.actors)) {
     if (includeReviewed && reviewedActors.has(id) && actor.schemaVerifiedAt === '2026-10-31') actor.actorIdConfirmed = true;
   }
@@ -81,6 +85,7 @@ export function fullRunLimits(source, includeReviewed) {
 export function sampleLimits(source, includeReviewed) {
   const limits = structuredClone(source);
   limits.perRun.maxActorCalls = Math.min(12, limits.perRun.maxActorCalls);
+  limits.jbMetro = { ...JB_METRO_CAPS.sample };
   for (const [id, actor] of Object.entries(limits.actors)) {
     actor.pageSize = Math.min(5, actor.pageSize);
     actor.maxPages = 1;

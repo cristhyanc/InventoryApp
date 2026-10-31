@@ -115,6 +115,29 @@ function dedicatedActorTools(limits) {
   ]);
 }
 
+/**
+ * JB Metro's caps per run type. A sample reads one page of 5; a full run reads up to 5 pages of 20
+ * (100 products), with 2 attempts of 15 s per page so one call stays inside the Bash tool's
+ * 2-minute limit. HARD is the ceiling a limits file can never exceed.
+ */
+export const JB_METRO_CAPS = Object.freeze({
+  sample: Object.freeze({ pageSize: 5, maxPages: 1, batchSize: 5, attempts: 1, timeoutMs: 15000 }),
+  full: Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 2, timeoutMs: 15000 }),
+});
+const JB_METRO_HARD = Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 2, timeoutMs: 15000 });
+const JB_METRO_FLAGS = Object.freeze({ pageSize: '--page-size', maxPages: '--max-pages', batchSize: '--batch-size', attempts: '--attempts', timeoutMs: '--timeout-ms' });
+
+/** The flags for this run's JB Metro caps; the sample caps when the limits name none or a bad one. */
+export function jbMetroFlags(stateDir) {
+  let caps = JB_METRO_CAPS.sample;
+  try {
+    const chosen = JSON.parse(readFileSync(join(stateDir, 'limits.json'), 'utf8')).jbMetro;
+    const valid = chosen && Object.keys(JB_METRO_HARD).every(key => Number.isInteger(chosen[key]) && chosen[key] >= 1 && chosen[key] <= JB_METRO_HARD[key]);
+    if (valid) caps = chosen;
+  } catch { /* Missing or unreadable limits keep the sample caps. */ }
+  return Object.entries(JB_METRO_FLAGS).map(([key, flag]) => `${flag} ${caps[key]}`).join(' ');
+}
+
 export async function toolDecision(event, env) {
   const name = event?.tool_name ?? '';
   if (name === 'Bash') {
@@ -122,9 +145,10 @@ export async function toolDecision(event, env) {
       return decision('deny', 'Only foreground collector helper commands with literal arguments are allowed.', undefined, 'not-helper');
     }
     const command = event.tool_input.command;
-    // A helper's numeric flags cannot turn the small manual sample into an unbounded JB run.
+    // The run's own JB Metro caps are appended last, and the lookup takes the last value given, so a
+    // flag Claude added cannot widen the run.
     const fixed = command.startsWith('node scripts/price-collector/jbmetro-lookup.mjs ')
-      ? `${command} --page-size 5 --max-pages 1 --batch-size 5 --attempts 1 --timeout-ms 15000` : command;
+      ? `${command} ${jbMetroFlags(env.PRICE_COLLECTOR_STATE_DIR)}` : command;
     return decision('allow', 'Approved collector helper.', { ...event.tool_input, command: fixed });
   }
   if (name !== 'Write' && !name.startsWith('mcp__apify__')) return decision('deny', 'This tool is outside the collector allowlist.', undefined, 'not-allowlisted');
