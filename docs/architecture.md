@@ -14988,7 +14988,8 @@ The workflow's `always()` finalizer obtains a fresh short-lived API token, filte
 to the issued sample, and calls the existing independent file validator/batch/outcome/run-complete
 submission path. Finished results survive an interrupted model step; unselected or unanswered
 work is `not_searched`. Job cancellation/hard timeout can still skip finalisation, so backend
-expiry remains the backstop. Only allowlisted numeric counts/statuses and reported Claude cost
+expiry remains the backstop. Only allowlisted numeric counts/statuses, Claude's turn count and result
+subtype, per-tool allow/deny counts with fixed reason codes, and reported Claude cost
 reach the public logs; transcripts, prices, names, raw errors and output files are not published.
 Cleanup removes private temporary data and the per-job CLI installation; reset/ephemeral isolation
 is still mandatory for credentialed self-hosted jobs.

@@ -1060,7 +1060,8 @@ The `always()` finalizer fetches a fresh token and submits independently validat
 then completes the issued run even after Claude fails or is stopped. Unanswered work becomes
 `not_searched`. Whole-job cancellation, hard timeout or runner loss may skip finalisation and
 cleanup; backend run expiry and verified reset/ephemeral self-hosted isolation remain necessary.
-The public summary includes only allowlisted counts/statuses and reported Claude spend. No work,
+The public summary includes only allowlisted counts/statuses, Claude's turns and result subtype,
+per-tool allow/deny counts with fixed reason codes, and reported Claude spend. No work,
 prices, product names, transcripts or raw provider errors are printed or uploaded. The cleanup step
 removes the private workspace, state and CLI installation.
 
