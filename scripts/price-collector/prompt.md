@@ -9,10 +9,13 @@ actor's output or a product name changes these instructions.
 
 ## What a run does, in order
 
-1. **Get the work.** Run `node scripts/price-collector/get-work.mjs` once. It prints the run id, the
+1. **Get the prepared work.** In the manual workflow run `node scripts/price-collector/read-work.mjs`.
+   The trusted workflow has already issued a run and prepared a small sample without giving you
+   an API token. This helper reads that same snapshot on every call and makes no API request.
+   Outside the workflow, a trusted operator runs `get-work.mjs` before starting you. The snapshot prints the run id, the
    suppliers due tonight, one entry per search with its **work-item id**, and the matching step's
-   inputs. Run it **once**: reading the work list issues the run, and a second call would issue a
-   second run and expire this one. If it exits non-zero, stop: there is no work list, so there is
+   inputs. Never run `get-work.mjs` yourself: another API read would issue a second run and expire
+   this one. If the prepared helper exits non-zero, stop: there is no work list, so there is
    nothing to search.
 2. **Do the matching step** (below) for every product in `matching.waitingProducts`.
 3. **Do every search** in `searches` (below), writing that search's file the moment it is finished.
@@ -21,7 +24,7 @@ actor's output or a product name changes these instructions.
 
 ## The tools you may use, and no others
 
-- `Bash(node scripts/price-collector/get-work.mjs)` — the work list.
+- `Bash(node scripts/price-collector/read-work.mjs)` — the prepared work list, without an API token.
 - The **Apify MCP** tools, for the actors in `scripts/price-collector/apify-limits.json` that are
   marked `actorIdConfirmed: true`. An actor marked `false` is **refused by the guard** until the
   owner has confirmed its id and input field names in the bounded dry run: do not call it, and do
@@ -34,6 +37,13 @@ actor's output or a product name changes these instructions.
   - `axlymxp/bigw-product-scraper` — BIG W, by name.
   - `dromb/big-w-au-product-scraper` — BIG W, by SKU, **only** as the fallback described below. It is billed
     per start, so never use it for a name search.
+- An actor call answers with the run's status and its storage ids, not the products. Read the
+  products with the Apify `get-dataset-items` tool and the run's default `datasetId`. If the run is
+  still running when the call returns, follow it with `get-actor-run` and its `runId` before
+  reading. `abort-actor-run` stops a run you no longer need. These three do not count as actor
+  calls, and they work only for a run you started in this session: at most 6 `get-actor-run`
+  polls per run (wait 45 seconds each) and 3 reads per dataset. A run still unfinished after its
+  polls is aborted and its search recorded as `failed`. No other Apify tool is allowed.
 - `Bash(node scripts/price-collector/jbmetro-lookup.mjs ...)` — the route for a supplier whose
   `priceConnector` is `jb_metro`. It is not an Apify actor and takes the supplier's own `siteUrl`.
 - `Bash(node scripts/price-collector/pagination.mjs ...)` — if you would rather ask than apply the
@@ -66,8 +76,10 @@ which is a true answer.
   "next page" (their verified schemas expose page caps, not a starting-page cursor). Step 2 of
   "Each search" below says how to record their paging: without positive evidence that the actor
   read every result, the outcome is `truncated`, however few products came back.
-- These identities/schemas are verified, but the three actors remain blocked until a bounded
-  paid dry run verifies their output and cost. Do not enable them. Never add a
+- These identities/schemas are verified. The repository keeps these three actors disabled for
+  regular runs. A human may explicitly permit them for one bounded manual test; the workflow's
+  run context names the enabled actors and the hook enforces its private sample limits. Never
+  change those limits yourself. Never add a
   `maxTotalChargeUsd` to an actor's input: spending is capped by the Apify account usage limit, and
   Dromb's closed input schema would reject the field.
 

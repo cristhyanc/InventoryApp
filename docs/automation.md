@@ -1023,6 +1023,39 @@ Rerunning the same workflow run selects the most recent checkpoint from an earli
 
 Runs for one issue are queued rather than cancelled by a newer invocation, so a new label event cannot interrupt the persistence boundary. Runner termination, hard timeout, credential/API/network failure, and work never committed can still prevent remote persistence; this is not an absolute guarantee against infrastructure loss. Persistence errors remain visible as workflow failures. Deterministic tests use real temporary repositories and a bare remote to exercise downstream failures, failed-agent recovery, no-commit behavior, SHA/ancestry rejection, protected history, collision rejection and exact-SHA resume.
 
+## Manual supplier price collector (#929, stage 1)
+
+`price-collector.yml` is a **manual test workflow**, with no schedule, no production API input and
+no deployment. It runs only reviewed `main` in the protected `price-collector` environment, shares
+one non-cancelling concurrency group, and uses only `contents: read` and `id-token: write`. The
+usual runner-mode selector and credentialed self-hosted isolation gate apply. Humans configure
+the environment and Entra federation; the workflow changes none of them.
+
+The trusted preparation step issues work once using OIDC, and Claude reads a bounded snapshot
+through `read-work.mjs` without receiving the API token or OIDC/GitHub credentials. A private
+temporary workspace/home, explicit environment allowlist, pinned CLI, exact helper/tool policy and
+fail-closed hook keep the model's authority separate from the finalizer's. The default 3-search
+sample is capped at 10; private run limits cap actor calls at 12, items at 5 (Dromb 1), and internal
+pages at 1. A manual checkbox can permit the previously verified retailer actors for that sample
+without enabling them in repository configuration. Claude has 40 turns, a US$1 budget and a
+14-minute deadline; the 45-minute job leaves a 15-minute finalisation step. The hook allows the
+free Apify result reads (`get-dataset-items` with a capped limit, `get-actor-run`,
+`abort-actor-run`) because actor calls return only storage ids, but only for runs this collector
+started, with bounded polls and reads; other Apify account tools are denied. The interruption test stops Claude after a chosen number of minutes (1 to 14).
+
+The `always()` finalizer fetches a fresh token and submits independently validated finished files,
+then completes the issued run even after Claude fails or is stopped. Unanswered work becomes
+`not_searched`. Whole-job cancellation, hard timeout or runner loss may skip finalisation and
+cleanup; backend run expiry and verified reset/ephemeral self-hosted isolation remain necessary.
+The public summary includes only allowlisted counts/statuses and reported Claude spend. No work,
+prices, product names, transcripts or raw provider errors are printed or uploaded. The cleanup step
+removes the private workspace, state and CLI installation.
+
+See [Manual collector test](price-collector-testing.md) for all environment variables/secrets,
+Entra setup, the normal and interruption tests, actual supplier cost evidence, and the later
+Sydney schedule/production rollout that remains under #929. Local tests use a stub API and fake
+CLI process; they are not evidence of a successful live OIDC or paid collector run.
+
 ## Retired Copilot routes
 
 The Copilot CLI architecture check and final review were removed by issue #643 together with the `COPILOT_CLI_TOKEN` credential, the pinned `.github/copilot-cli/` manifest and its format-only JSON repair and regression suite; `verifyCopilotImplementationRetired` now also fails validation if any workflow runs the Copilot CLI or reads a Copilot credential again. Copilot implemented issues only until commit 354147a, which retired the route (`agent-ready-copilot` and its tiers, `agent-ready-full-copilot`, `agent-architecture-fix` and the workflows that assigned Copilot and handed its pull requests to Claude). Issue #194's trial evidence for that route, formerly `docs/copilot-trial-evidence.md`, described only that retired route and was removed; it remains in the repository history at commit 354147a. What still applies today:

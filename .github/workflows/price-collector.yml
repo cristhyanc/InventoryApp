@@ -1,0 +1,158 @@
+name: Price collector (manual test)
+
+# #929 rollout stage 1: no cron and no production API. A separately reviewed change enables
+# the Sydney schedule only after the owner sees the end-to-end test and actual provider costs.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_test_api:
+        description: The price-collector environment points to a disposable test API; provider spend limits are set
+        required: true
+        type: boolean
+        default: false
+      sample_size:
+        description: Maximum supplier searches (1-10); all other issued work becomes not_searched
+        required: true
+        type: string
+        default: '3'
+      include_verified_retailers:
+        description: Permit previously verified Kmart and BIG W actors for this small paid test only
+        required: true
+        type: boolean
+        default: false
+      stop_after_minutes:
+        description: Interruption test only - stop Claude after this many minutes (1-14); leave blank for a normal run
+        required: false
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: price-collector
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Check manual test authorization
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Require main and the owner's test confirmation
+        env:
+          RUN_REF: ${{ github.ref }}
+          CONFIRM_TEST_API: ${{ inputs.confirm_test_api }}
+        run: |
+          if [ "$RUN_REF" != 'refs/heads/main' ] || [ "$CONFIRM_TEST_API" != 'true' ]; then
+            echo '::error::Start the reviewed workflow from main and confirm the disposable test API and provider limits.'
+            exit 1
+          fi
+
+      - name: Require verified runner isolation for credentialed jobs
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
+        run: |
+          if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo '::error::Credentialed collector jobs require verified reset or ephemeral self-hosted runners.'
+            exit 1
+          fi
+
+  collect:
+    name: Collect and finalise the test sample
+    needs: gate
+    if: github.ref == 'refs/heads/main' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    environment: price-collector
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PRICE_COLLECTOR_TEST_API_URL: ${{ vars.PRICE_COLLECTOR_TEST_API_URL }}
+      PRICE_COLLECTOR_TENANT_ID: ${{ vars.PRICE_COLLECTOR_TENANT_ID }}
+      PRICE_COLLECTOR_CLIENT_ID: ${{ vars.PRICE_COLLECTOR_CLIENT_ID }}
+      PRICE_COLLECTOR_API_SCOPE: ${{ vars.PRICE_COLLECTOR_API_SCOPE }}
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Check out the dispatched reviewed commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+
+      - name: Allocate private per-attempt state
+        run: echo "PRICE_COLLECTOR_STATE_DIR=$RUNNER_TEMP/price-collector-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+
+      - name: Install the reviewed Claude CLI in this job's temporary directory
+        timeout-minutes: 5
+        run: npm install --prefix "$RUNNER_TEMP/price-collector-cli-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --no-audit --no-fund @anthropic-ai/claude-code@2.1.316 > /dev/null 2>&1
+
+      - name: Issue test work using a short-lived OIDC token
+        timeout-minutes: 2
+        env:
+          PRICE_COLLECTOR_SAMPLE_SIZE: ${{ inputs.sample_size }}
+          PRICE_COLLECTOR_INCLUDE_REVIEWED: ${{ inputs.include_verified_retailers }}
+          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
+        run: node scripts/price-collector/workflow.mjs prepare
+
+      - name: Run the bounded Claude collector
+        id: claude
+        timeout-minutes: 16
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
+        run: |
+          export PRICE_COLLECTOR_CLAUDE_BIN="$RUNNER_TEMP/price-collector-cli-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/node_modules/.bin/claude"
+          node scripts/price-collector/workflow.mjs collect
+
+      - name: Submit finished files and complete the issued run
+        if: always()
+        timeout-minutes: 15
+        run: node scripts/price-collector/workflow.mjs finalize
+
+      - name: Remove private work, files and CLI installation
+        if: always()
+        run: |
+          node scripts/price-collector/workflow.mjs cleanup
+          rm -rf -- "$RUNNER_TEMP/price-collector-cli-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"

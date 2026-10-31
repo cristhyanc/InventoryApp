@@ -115,7 +115,9 @@ run_step "Test price collector scripts" \
     "${repo_root}/scripts/price-collector/submit-results.test.mjs" \
     "${repo_root}/scripts/price-collector/apify-guard.test.mjs" \
     "${repo_root}/scripts/price-collector/output-schema.test.mjs" \
-    "${repo_root}/scripts/price-collector/pagination.test.mjs"
+    "${repo_root}/scripts/price-collector/pagination.test.mjs" \
+    "${repo_root}/scripts/price-collector/workflow.test.mjs" \
+    "${repo_root}/scripts/price-collector/workflow-contract.test.mjs"
 
 run_step "Restore backend" \
     dotnet restore "${backend_solution}"
