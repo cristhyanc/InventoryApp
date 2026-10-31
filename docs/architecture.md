@@ -9251,15 +9251,20 @@ renders it as five parts:
 4. **Reorder priorities**: `reorderPriorities` is the first `REORDER_PRIORITY_LIMIT` (5) rows of the
    authoritative low-stock list in its own order, and `reorderViewAllLabel` names the list's real
    length. The purchase-cost read (#788/#789) is requested only for those rows and still only with
-   `Dashboard.ViewFinancials`. Last and Cheapest purchase remain labelled as historical costs from
-   this business's own purchases. The **Cheapest supplier** column (issue #981, the same column #939
+   `Dashboard.ViewFinancials`. Last and Cheapest purchase are named by their own column headings;
+   the note row that used to repeat that they are historical costs was removed by issue #1016 and
+   the sentence was not moved anywhere else. The **Cheapest supplier** column (issue #981, the same column #939
    asks for) reuses #930's `CheapestSuppliersComponent` and `CheapestSupplierCellComponent`
    unchanged, beside - never in place of - the historical columns: `reorderPriorityIds` is set once
    per reorder read, so the component makes one summary request for the five ids and re-reads only
    when the list changes. It follows the endpoint's `Dashboard.View`, so it shows without
    `Dashboard.ViewFinancials`; its failure (with Retry) and support-session "unavailable" states are
-   the component's own and leave the rest of the dashboard alone. A note above the table says these
-   are observed supplier prices, not costs paid.
+   the component's own and leave the rest of the dashboard alone. That these are observed supplier
+   prices and not costs paid is said by a help button rather than by a row: issue #1016 put the
+   sentence behind one `HelpToggletipComponent` (see [Shared help toggletip](#shared-help-toggletip-issues-1015-and-1016))
+   beside the **Cheapest supplier** heading and beside the same label on each narrow-screen card,
+   with `CHEAPEST_SUPPLIER_HELP` held once on the component so the two cannot drift apart, and it is
+   rendered only while the list has rows.
 
 Financial gating (`canViewFinancials`), provider-optional rendering (`isLiveFleetShown`,
 `isProviderUsable`), the support-session behaviour and the business-timezone date rules (#499) are
@@ -9296,7 +9301,40 @@ Tailwind utilities in their own templates. No global class changed meaning and n
 authenticated page changed; `design-tokens.contrast.spec.ts` covers the new text/background pairs.
 Visual evidence at 360, 390, 768 and 1440px, with a no-horizontal-overflow assertion, is
 `e2e/visual/dashboard-redesign.visual.ts`, written to `docs/screenshots/issue-972/`. Issue #987's
-collapsed-group, period-control and keyboard-focus captures are written beside them by the same run.
+collapsed-group, period-control and keyboard-focus captures are written beside them by the same run,
+and so are issue #1016's two help-panel captures (`reorder-supplier-help-1440px.png` and
+`reorder-supplier-help-360px.png`).
+
+#### Shared help toggletip (issues #1015 and #1016)
+
+`components/shared/help-toggletip/` is the one help toggletip the application has, built once on the
+owner's decision of 31 October 2026 so the two places that explain a figure in place cannot drift
+apart or duplicate the interaction (the SonarCloud duplication gate is the other reason not to copy
+it). It holds no text: the caller projects the sentence and supplies the button's accessible name
+through `label`, so each issue keeps its own wording and each button says which figure it explains.
+
+The interaction is the component's, in one file: an icon-only button carrying `aria-expanded`,
+`aria-controls` and - while the panel is open - `aria-describedby`; click and tap toggle it; Enter
+and Space are answered on `keydown` with the default activation prevented, so one key press is one
+toggle; hover and keyboard focus open it transiently and let it go again, while a clicked panel
+stays open; Escape and a click outside close it, and Escape returns focus to the button. A static
+reference to the one open instance is what makes opening one close any other, so a column of them
+(the Reorder priorities cards) never shows two panels. There is no native `title` tooltip anywhere
+in it, because a `title` is reachable by neither the keyboard nor a touch screen.
+
+The panel is rendered only while it is open, with the HTML `popover` attribute and `showPopover()`,
+which puts it in the browser's **top layer**: that, not a `z-index`, is what keeps the
+`overflow-hidden` card and the horizontally scrolling table around the Reorder priorities columns
+from clipping it, and it is why the table does not move to make room. `place()` then positions it
+from the button's own rectangle - centred on the button, clamped inside the viewport's margins so it
+stays readable at 360px, and flipped above the button when there is no room below - and repositions
+on scroll and resize outside the Angular zone, since placing it changes nothing Angular renders. A
+browser with no Popover API still renders and places the panel; only the top layer is lost.
+
+Jest covers everything the component itself decides (`help-toggletip.component.spec.ts`). The top
+layer, hit testing and layout are the platform's and are not emulated under jsdom, so the
+not-clipped, inside-the-viewport result is proved in a real browser by the Playwright captures named
+above instead.
 
 #### Site and machine performance (issue #987)
 
