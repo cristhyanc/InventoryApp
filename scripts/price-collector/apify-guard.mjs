@@ -10,37 +10,38 @@
 //     resolved from the call's own actor field or from a per-actor tool name - an actor it cannot
 //     read, does not list, or whose id and input field names are still to be confirmed in the
 //     owner's dry run is refused rather than allowed;
-//   * injects the actor's `maxTotalChargeUsd` and item limit when the call carries neither, keeps a
-//     smaller request, and blocks a larger one; the same for the internal page cap of an actor that
-//     pages internally (`pageLimitField`), up to its `maxPages`;
+//   * injects the actor's item limit when the call carries none, keeps a smaller request, and
+//     blocks a larger one; the same for the internal page cap of an actor that pages internally
+//     (`pageLimitField`), up to its `maxPages`;
 //   * forces off what is billed and unread - Kmart reviews and local-stock enrichment, Varnmill paid
 //     details, and the Varnmill `onlyChanged` watcher, because every listing must get a positive
 //     check (#925);
-//   * counts the actor calls of this run and the charge they have committed to, in its own state
-//     file, and blocks the call that would pass either per-run cap. The charge counted is the
-//     **ceiling each call commits to**, which is the only figure available before a call runs, so it
-//     is the worst case and never an estimate of what Apify billed.
+//   * counts the actor calls of this run in its own state file, and blocks the call that would pass
+//     the per-run call cap, which is what stops a run that loops.
+//
+// **It sets and counts no dollar amount** (owner decision, 31 October 2026, #926): spending is capped
+// by the Apify account usage limit, which suspends runs once it is reached, so the guard adds no
+// `maxTotalChargeUsd` to a call and keeps no per-call or per-run charge cap.
 //
 // **A paid call is reserved before it is allowed, and the accounting is never assumed.** The read,
-// the comparison against the per-run caps and the write are one operation inside a cross-process
-// lock, so two hook invocations cannot read the same remaining allowance and both spend it. An
+// the comparison against the per-run call cap and the write are one operation inside a cross-process
+// lock, so two hook invocations cannot read the same remaining allowance and both use it. An
 // accounting file that is not there yet is the one legitimate initialization: a run that has made no
 // call. An accounting that cannot be read, is corrupt, cannot be locked or cannot be written
-// durably refuses the paid call instead of starting the budget again - the per-call ceilings are not
-// a substitute for the run's cap.
+// durably refuses the paid call instead of starting the count again.
 //
 // **And it is what makes a result file write-once.** A `Write` (or an `Edit`, which is always a
 // rewrite) is allowed only inside the output folder and only to a file that does not exist yet, so a
 // finished search's file cannot be changed by a later part of the run and the guard's own accounting
 // cannot be written over.
 //
-// Reaching a cap stops the run rather than overspending: the searches it never reached are recorded
+// Reaching the call cap stops the run rather than letting it loop: the searches it never reached are recorded
 // as `not_searched` when the workflow completes the run (#937).
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Where the guard keeps this run's call count and committed charge. */
+/** Where the guard keeps this run's call count. */
 export const GUARD_STATE_ENV = 'PRICE_COLLECTOR_GUARD_STATE';
 
 /** The only folder the collector may write into. */
@@ -59,7 +60,7 @@ const STATE_FILE_NAME = '.apify-guard-state.json';
 const LOCK_DIR_SUFFIX = '.lock';
 
 /** The shape of the accounting file this guard writes, and the only one it reads back. */
-export const STATE_SCHEMA_VERSION = 1;
+export const STATE_SCHEMA_VERSION = 2;
 
 /** How long one hook invocation waits for another to finish reserving before it refuses. */
 const LOCK_RETRY_DELAY_MS = 50;
@@ -84,7 +85,7 @@ export function loadMcpConfig(path = MCP_CONFIG_PATH) {
 }
 
 /** One collector run's accounting, before it has made a call. */
-export const emptyState = () => ({ actorCalls: 0, chargeUsd: 0, updatedAtUtc: null });
+export const emptyState = () => ({ actorCalls: 0, updatedAtUtc: null });
 
 const allow = (state, { reason, updatedInput }) => ({ decision: 'allow', reason, updatedInput, state });
 const deny = (reason, state) => ({ decision: 'deny', reason, updatedInput: undefined, state });
@@ -117,23 +118,6 @@ function resolveActorId({ toolName, toolInput, container, limits }) {
   }
 
   return null;
-}
-
-const isPositiveNumber = (value) => typeof value === 'number' && Number.isFinite(value) && value > 0;
-
-/** The charge ceiling this call may commit to: its own if it asked for less, else the actor's. */
-function chargeCeiling({ container, limits, actor, actorId }) {
-  const field = limits.chargeField;
-  if (!Object.hasOwn(container, field)) return { value: actor.maxTotalChargeUsd, injected: true };
-
-  const asked = container[field];
-  if (!isPositiveNumber(asked)) {
-    return { refusal: `${field} must be a positive number of US dollars.` };
-  }
-  if (asked > actor.maxTotalChargeUsd) {
-    return { refusal: `${field} may be at most ${actor.maxTotalChargeUsd} for ${actorId}, not ${asked}.` };
-  }
-  return { value: asked, injected: false };
 }
 
 /** The item limit this call may ask for: its own if it asked for less, else the actor's page size. */
@@ -180,15 +164,11 @@ const describeLimit = (field, limit) => (limit.injected ? `${field} set to ${lim
 /** The run's own caps, which a paid call is never allowed without. */
 function perRunCaps(limits) {
   const caps = limits.perRun;
-  const stated =
-    isPlainObject(caps) &&
-    Number.isInteger(caps.maxActorCalls) &&
-    caps.maxActorCalls > 0 &&
-    isPositiveNumber(caps.maxTotalChargeUsd);
+  const stated = isPlainObject(caps) && Number.isInteger(caps.maxActorCalls) && caps.maxActorCalls > 0;
 
   return stated
     ? { caps }
-    : { refusal: 'apify-limits.json does not state this run\'s own call and charge caps, so a paid call is refused rather than allowed.' };
+    : { refusal: 'apify-limits.json does not state this run\'s own call cap, so a paid call is refused rather than allowed.' };
 }
 
 function decideApifyCall({ toolName, toolInput, limits, state }) {
@@ -219,25 +199,14 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
     return deny(`this run has already made ${state.actorCalls} actor calls, which is its cap.`, state);
   }
 
-  const charge = chargeCeiling({ container, limits, actor, actorId });
-  if (charge.refusal !== undefined) return deny(charge.refusal, state);
-
   const items = itemLimit({ container, actor, actorId });
   if (items.refusal !== undefined) return deny(items.refusal, state);
 
   const pages = pageLimit({ container, actor, actorId });
   if (pages.refusal !== undefined) return deny(pages.refusal, state);
 
-  if (state.chargeUsd + charge.value > perRun.caps.maxTotalChargeUsd) {
-    return deny(
-      `this call would commit this run to more than its charge cap of ${perRun.caps.maxTotalChargeUsd} US dollars.`,
-      state,
-    );
-  }
-
   const fixed = {
     ...container,
-    [limits.chargeField]: charge.value,
     [actor.itemLimitField]: items.value,
     ...limitFields(actor.pageLimitField, pages),
     // Forced, not defaulted: an enrichment nothing reads must be off however the call asked for it.
@@ -247,7 +216,6 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
     containerField === null ? { ...toolInput, ...fixed } : { ...toolInput, [containerField]: fixed };
 
   const reasons = [
-    describeLimit(limits.chargeField, charge),
     describeLimit(actor.itemLimitField, items),
     ...(actor.pageLimitField === undefined ? [] : [describeLimit(actor.pageLimitField, pages)]),
   ];
@@ -255,7 +223,6 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
   return allow(
     {
       actorCalls: state.actorCalls + 1,
-      chargeUsd: state.chargeUsd + charge.value,
       updatedAtUtc: state.updatedAtUtc,
     },
     { reason: `${actorId}: ${reasons.join(', ')}.`, updatedInput },
@@ -306,7 +273,7 @@ const problemOf = (error) => (typeof error?.code === 'string' ? error.code : 'un
  * This run's accounting as it is stored, or why it cannot be trusted. A file that is not there yet
  * is the one legitimate initialization - a run that has made no call. An accounting that cannot be
  * read, is not JSON, or is not of the shape this guard writes is **corrupt**, and corrupt is never
- * read as an empty budget: the caller refuses the paid call instead.
+ * read as a run with no calls: the caller refuses the paid call instead.
  */
 function readState(path) {
   let body = null;
@@ -330,15 +297,11 @@ function readState(path) {
   if (!Number.isInteger(stored.actorCalls) || stored.actorCalls < 0) {
     return { status: 'unverifiable', problem: 'the call count it holds is not a whole number of calls' };
   }
-  if (!Number.isFinite(stored.chargeUsd) || stored.chargeUsd < 0) {
-    return { status: 'unverifiable', problem: 'the committed charge it holds is not an amount' };
-  }
 
   return {
     status: 'stored',
     state: {
       actorCalls: stored.actorCalls,
-      chargeUsd: stored.chargeUsd,
       updatedAtUtc: typeof stored.updatedAtUtc === 'string' ? stored.updatedAtUtc : null,
     },
   };
@@ -351,7 +314,6 @@ function writeState(path, state, now) {
     {
       schemaVersion: STATE_SCHEMA_VERSION,
       actorCalls: state.actorCalls,
-      chargeUsd: state.chargeUsd,
       updatedAtUtc: now().toISOString(),
     },
     null,
