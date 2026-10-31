@@ -9235,8 +9235,10 @@ renders it as five parts:
    `MachineRestockSyncReminderComponent` (#891), rendered inside the same grid (`host` class
    `contents`). `attentionCount` counts the alerts actually rendered plus the reminder when it shows
    pending work or a failed read, so the badge can never disagree with the tiles. The reminder's
-   14-day window and its `restockFrom` link to the oldest pending date (#948/#949) are unchanged.
-   The only actions are the existing Pick List and Needs Ordering routes.
+   14-day window and its `restockFrom` link to the oldest pending date (#948/#949) are unchanged;
+   since #1011 that link also carries `syncRestock=open`, so it lands on the machine with its Sync
+   Restock dialog already open. The only actions are the existing Pick List and Needs Ordering
+   routes.
 3. **Site and machine performance**, one card composed from `SiteMachinePerformanceComponent` and
    described in [its own section](#site-and-machine-performance-issue-987) below. It replaced the
    separate **Site performance** and **Machine performance** cards this issue shipped, and the
@@ -15402,12 +15404,15 @@ explicit action above is waiting for them.
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 
 Sync Restock above is explicit: nothing imports a machine's stock-adjustment alerts until an
-operator opens that machine and asks. Forgetting it is therefore silent, and the storage inventory
-drifts in exactly the way that looks like missing product rather than missing bookkeeping — an
-inventory count found restocks that had not been synced for a week. This feature is the reminder,
-and only the reminder: it never syncs, applies an event, resolves a duplicate or changes an
-inventory quantity, and opening the Dashboard, following one of its links or opening a preview
-acknowledges nothing.
+operator asks for that machine — by pressing Sync Restock on its page or, since issue #1011, by
+following the reminder's "Open Sync Restock" link, which opens that same dialog. Forgetting it is
+therefore silent, and the storage inventory drifts in exactly the way that looks like missing
+product rather than missing bookkeeping — an inventory count found restocks that had not been synced
+for a week. This feature is the reminder, and only the reminder: its own read never syncs, applies
+an event, resolves a duplicate or changes an inventory quantity, and opening the Dashboard
+acknowledges nothing. Following one of its links opens the machine's Sync Restock dialog, which
+fetches and imports the machine's new alerts exactly as the button does, but applies nothing:
+inventory changes only when the operator applies events in that dialog.
 
 **What makes a machine overdue: three business calendar days, not 72 hours.**
 `Inventory.Domain.Nayax.MachineRestockSyncReminderPolicy` owns every rule here, and it compares
@@ -15521,7 +15526,19 @@ publishes `oldestKnownPendingEventBusinessDate`. The banner's machine link carri
 `?restockFrom=yyyy-MM-dd`; `MachineDetailComponent` passes the query parameter to
 `MachineRestockSyncComponent` as `pendingFromDate`, and the dialog opens from it when it is a real
 date earlier than its three-day default — otherwise the default stands — so the work is not hidden
-inside the dialog the operator was just sent to. The reminder also publishes `pendingLookbackDays`
+inside the dialog the operator was just sent to. **The link also opens that dialog** (issue #1011):
+every row's link carries the explicit intent `?syncRestock=open` (never inferred from `restockFrom`,
+which a row without pending work does not carry). `MachineDetailComponent` records it for the
+machine the route names and immediately removes it from the address with `replaceUrl`, keeping
+`restockFrom`, so a reload or Back never asks again; it hands the request to
+`MachineRestockSyncComponent` as `openOnArrivalFor`. That component opens the dialog through its
+ordinary `syncRestock()`, at most once per request, only once its `machineId` is the requested
+machine and the business time zone is known, and never during a support session. A move to another
+machine closes the previous machine's dialog and cancels its request still in flight. Every preview
+request carries a generation that a newer request, a machine change or the component's destruction
+supersedes, and a superseded response changes nothing - not the loading state, the preview, an
+error, the selection or a toast - even after the page has moved back to the machine it was for.
+Ordinary visits leave the dialog closed. The reminder also publishes `pendingLookbackDays`
 and `pendingFromBusinessDate` so the banner never restates the window. The counts describe **persisted** facts only: a zero says nothing about alerts
 Nayax holds that nobody has fetched, which is why an overdue fetch and pending events are reported as
 two separate conditions and either one alone puts a machine on the banner.

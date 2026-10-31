@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { convertToParamMap, ActivatedRoute, ParamMap, provideRouter } from '@angular/router';
+import { convertToParamMap, ActivatedRoute, ParamMap, provideRouter, Router } from '@angular/router';
 import { BehaviorSubject, Observable, of } from 'rxjs';
 import { MachineDetailComponent } from './machine-detail.component';
 import { Machine, MachineLatestSales, Product } from '../../models/models';
@@ -11,9 +11,16 @@ import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService } from '../../services/nayax-connection.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
+import { startOfDayUtc } from '../../formatting/business-time-zone';
 
 function supportSessionStub(active: Observable<boolean> = of(false)): SupportSessionService {
   return { active$: active } as unknown as SupportSessionService;
+}
+
+/** A stub `Router` for the direct-construction tests below, recording the navigations asked for. */
+function routerStub(): { navigate: jest.Mock } & Router {
+  return { navigate: jest.fn(() => Promise.resolve(true)) } as unknown as { navigate: jest.Mock } & Router;
 }
 
 /** A stub `AccessService` for the direct-construction tests below, granted by default. */
@@ -50,7 +57,8 @@ describe('MachineDetailComponent product refresh', () => {
       machineService,
       breadcrumbServiceStub(),
       supportSessionStub(),
-      accessServiceStub()
+      accessServiceStub(),
+      routerStub()
     );
 
     component.ngOnInit();
@@ -79,7 +87,7 @@ describe('MachineDetailComponent restockFrom query parameter (issue #948)', () =
       queryParamMap: of(convertToParamMap(queryParams))
     } as unknown as ActivatedRoute;
     const instance = new MachineDetailComponent(
-      route, machineService, breadcrumbServiceStub(), supportSessionStub(), accessServiceStub());
+      route, machineService, breadcrumbServiceStub(), supportSessionStub(), accessServiceStub(), routerStub());
     instance.ngOnInit();
     return instance;
   }
@@ -110,7 +118,8 @@ describe('MachineDetailComponent Sales and Products tabs (issue #768)', () => {
       machineService,
       breadcrumbServiceStub(),
       supportSessionStub(),
-      accessServiceStub()
+      accessServiceStub(),
+      routerStub()
     );
     instance.ngOnInit();
     return { instance, getProducts };
@@ -382,7 +391,7 @@ describe('MachineDetailComponent breadcrumb label', () => {
     const route = { paramMap: of(convertToParamMap({ id })), queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
     const breadcrumbService = breadcrumbServiceStub();
     const component = new MachineDetailComponent(
-      route, machineService, breadcrumbService, supportSessionStub(), accessServiceStub()
+      route, machineService, breadcrumbService, supportSessionStub(), accessServiceStub(), routerStub()
     );
 
     component.ngOnInit();
@@ -674,5 +683,230 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
     expect(host.textContent).toContain('Profit unavailable');
     expect(host.textContent).not.toContain('NaN');
     expect(host.textContent).not.toContain('$0.00');
+  });
+});
+
+/**
+ * The Dashboard reminder's "Open Sync Restock" link (issue #1011): arriving with
+ * `?syncRestock=open` opens the machine's Sync Restock dialog by itself, through the rendered page
+ * and the real `MachineService`, and the sync-restock requests that actually leave the page are
+ * counted - opening the dialog is a Nayax fetch, so it must happen exactly once per click.
+ */
+describe('MachineDetailComponent Open Sync Restock from the Dashboard (issue #1011)', () => {
+  const BUSINESS_TIME_ZONE = 'Australia/Sydney';
+  const syncRestockUrl = (machineId: number) => `/api/machines/${machineId}/sync-restock`;
+
+  interface Rendered {
+    readonly fixture: ComponentFixture<MachineDetailComponent>;
+    readonly host: HTMLElement;
+    readonly httpMock: HttpTestingController;
+    readonly paramMap$: BehaviorSubject<ParamMap>;
+    readonly queryParamMap$: BehaviorSubject<ParamMap>;
+    readonly route: { snapshot: { paramMap: ParamMap } };
+    readonly navigate: jest.SpyInstance;
+    readonly timeZone: BusinessTimeZoneService;
+  }
+
+  async function renderPage(
+    queryParams: Record<string, string>,
+    { machineId = 7, timeZoneKnown = true, sessionActive = false } = {}
+  ): Promise<Rendered> {
+    const paramMap$ = new BehaviorSubject(convertToParamMap({ id: String(machineId) }));
+    const queryParamMap$ = new BehaviorSubject(convertToParamMap(queryParams));
+    // The router moves the snapshot before it emits, which is what the page reads the machine from.
+    const route = {
+      paramMap: paramMap$,
+      queryParamMap: queryParamMap$,
+      snapshot: { paramMap: paramMap$.value }
+    };
+    paramMap$.subscribe((params) => (route.snapshot.paramMap = params));
+
+    await TestBed.configureTestingModule({
+      imports: [MachineDetailComponent],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ConfigService, useValue: { apiBaseUrl: '/api' } },
+        { provide: ActivatedRoute, useValue: route },
+        { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } },
+        { provide: SupportSessionService, useValue: supportSessionStub(of(sessionActive)) }
+      ]
+    }).compileComponents();
+
+    const timeZone = TestBed.inject(BusinessTimeZoneService);
+    if (timeZoneKnown) {
+      timeZone.publish(BUSINESS_TIME_ZONE);
+    }
+    const navigate = jest.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    const httpMock = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(MachineDetailComponent);
+    const host = fixture.nativeElement as HTMLElement;
+    document.body.appendChild(host);
+    const rendered = { fixture, host, httpMock, paramMap$, queryParamMap$, route, navigate, timeZone };
+    answerPageReads(rendered, machineId);
+    return rendered;
+  }
+
+  function answerPageReads({ fixture, httpMock }: Rendered, machineId: number): void {
+    fixture.detectChanges();
+    httpMock
+      .match(`/api/machines/${machineId}`)
+      .forEach((request) => request.flush({ machineID: machineId + 9000, localMachineId: machineId } as Machine));
+    fixture.detectChanges();
+    httpMock
+      .match(`/api/machines/${machineId}/latest-sales`)
+      .forEach((request) => request.flush(emptyLatestSales(machineId)));
+    fixture.detectChanges();
+  }
+
+  /** The sync-restock requests made so far, each answered with an empty preview. */
+  function flushSyncRequests({ fixture, httpMock }: Rendered, machineId = 7) {
+    const requests = httpMock.match((request) => request.url === syncRestockUrl(machineId));
+    requests.forEach((request) =>
+      request.flush({ machineId, newEventCount: 0, events: [], productImpacts: [], hiddenReconciledCount: 0, message: null }));
+    fixture.detectChanges();
+    return requests;
+  }
+
+  const dialog = ({ host }: Rendered) => host.querySelector<HTMLElement>('[role="dialog"]');
+
+  beforeEach(() => jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'] })
+    .setSystemTime(new Date('2026-10-28T01:00:00Z'))); // 28 Oct in Sydney; the default From is 25 Oct
+
+  afterEach(() => {
+    jest.useRealTimers();
+    document.body.innerHTML = '';
+    TestBed.resetTestingModule();
+  });
+
+  it('opens the dialog at an older pending date with exactly one sync request', async () => {
+    const rendered = await renderPage({ syncRestock: 'open', restockFrom: '2026-10-16' });
+
+    const requests = flushSyncRequests(rendered);
+
+    expect(dialog(rendered)).not.toBeNull();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].request.method).toBe('POST');
+    expect(requests[0].request.params.get('fromDate')).toBe(startOfDayUtc(2026, 10, 16, BUSINESS_TIME_ZONE).toISOString());
+  });
+
+  it('opens the dialog at the usual default when the link has no pending date', async () => {
+    const rendered = await renderPage({ syncRestock: 'open' });
+
+    const requests = flushSyncRequests(rendered);
+
+    expect(dialog(rendered)).not.toBeNull();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].request.params.get('fromDate')).toBe(startOfDayUtc(2026, 10, 25, BUSINESS_TIME_ZONE).toISOString());
+  });
+
+  it('keeps the usual default for a later or malformed pending date', async () => {
+    const rendered = await renderPage({ syncRestock: 'open', restockFrom: 'not-a-date' });
+
+    const requests = flushSyncRequests(rendered);
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].request.params.get('fromDate')).toBe(startOfDayUtc(2026, 10, 25, BUSINESS_TIME_ZONE).toISOString());
+  });
+
+  it('takes the request out of the address, keeping restockFrom, without a new history entry', async () => {
+    const rendered = await renderPage({ syncRestock: 'open', restockFrom: '2026-10-16' });
+
+    expect(rendered.navigate).toHaveBeenCalledTimes(1);
+    const [commands, extras] = rendered.navigate.mock.calls[0];
+    expect(commands).toEqual([]);
+    expect(extras).toEqual(expect.objectContaining({
+      queryParams: { syncRestock: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true
+    }));
+  });
+
+  it('leaves the dialog closed on an ordinary visit, even with a pending date', async () => {
+    const rendered = await renderPage({ restockFrom: '2026-10-16' });
+
+    expect(dialog(rendered)).toBeNull();
+    expect(flushSyncRequests(rendered)).toHaveLength(0);
+    expect(rendered.navigate).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen or sync again after it is closed and the page updates', async () => {
+    const rendered = await renderPage({ syncRestock: 'open' });
+    flushSyncRequests(rendered);
+
+    (rendered.host.querySelector('[aria-label="Close Sync Restock"]') as HTMLButtonElement).click();
+    rendered.fixture.detectChanges();
+    // The address the page itself asked for, and a further update of the same machine.
+    rendered.queryParamMap$.next(convertToParamMap({}));
+    rendered.paramMap$.next(convertToParamMap({ id: '7' }));
+    answerPageReads(rendered, 7);
+
+    expect(dialog(rendered)).toBeNull();
+    expect(flushSyncRequests(rendered)).toHaveLength(0);
+  });
+
+  it('waits for the business time zone instead of opening into its loading error', async () => {
+    const rendered = await renderPage({ syncRestock: 'open' }, { timeZoneKnown: false });
+
+    expect(dialog(rendered)).toBeNull();
+    expect(flushSyncRequests(rendered)).toHaveLength(0);
+
+    rendered.timeZone.publish(BUSINESS_TIME_ZONE);
+    rendered.fixture.detectChanges();
+
+    expect(dialog(rendered)).not.toBeNull();
+    expect(dialog(rendered)?.textContent).not.toContain('Loading the business time zone');
+    expect(flushSyncRequests(rendered)).toHaveLength(1);
+  });
+
+  it('opens nothing and makes no request during a support session', async () => {
+    const rendered = await renderPage({ syncRestock: 'open' }, { sessionActive: true });
+
+    expect(dialog(rendered)).toBeNull();
+    expect(flushSyncRequests(rendered)).toHaveLength(0);
+  });
+
+  it('never shows the previous machine\'s dialog after moving to another machine', async () => {
+    const rendered = await renderPage({ syncRestock: 'open' });
+    flushSyncRequests(rendered);
+    expect(dialog(rendered)).not.toBeNull();
+
+    rendered.queryParamMap$.next(convertToParamMap({}));
+    rendered.paramMap$.next(convertToParamMap({ id: '8' }));
+    answerPageReads(rendered, 8);
+
+    expect(dialog(rendered)).toBeNull();
+    expect(flushSyncRequests(rendered, 8)).toHaveLength(0);
+  });
+
+  it('cancels the previous machine\'s sync request when the page moves to another machine', async () => {
+    const rendered = await renderPage({ syncRestock: 'open' });
+    const inFlight = rendered.httpMock.match((request) => request.url === syncRestockUrl(7));
+    expect(inFlight).toHaveLength(1);
+
+    rendered.queryParamMap$.next(convertToParamMap({}));
+    rendered.paramMap$.next(convertToParamMap({ id: '8' }));
+    answerPageReads(rendered, 8);
+
+    expect(inFlight[0].cancelled).toBe(true);
+    expect(dialog(rendered)).toBeNull();
+    expect(rendered.host.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')?.textContent?.trim())
+      .toBe('Sync Restock');
+  });
+
+  it('moves focus into the dialog and returns it to Sync Restock on close', async () => {
+    const rendered = await renderPage({ syncRestock: 'open' });
+    flushSyncRequests(rendered);
+
+    expect(document.activeElement).toBe(dialog(rendered));
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    rendered.fixture.detectChanges();
+
+    expect(dialog(rendered)).toBeNull();
+    expect((document.activeElement as HTMLElement | null)?.textContent?.trim()).toBe('Sync Restock');
   });
 });

@@ -194,7 +194,7 @@ describe('Dashboard Needs attention (issue #972)', () => {
     expect(host.querySelector('[data-testid="needs-attention-count"]')?.textContent?.trim()).toBe('4 items');
     // Opening Sync Restock still starts at the oldest pending date (PR #949), from the machine's page.
     const link = tile?.querySelector<HTMLAnchorElement>('[data-testid="restock-sync-reminder-link-501"]');
-    expect(link?.getAttribute('href')).toBe('/machines/501?restockFrom=2026-10-16');
+    expect(link?.getAttribute('href')).toBe('/machines/501?syncRestock=open&restockFrom=2026-10-16');
     expect(link?.textContent).toContain('Open Sync Restock');
     expect(host.querySelectorAll('[data-testid="restock-sync-reminder"]')).toHaveLength(1);
   });
