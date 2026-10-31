@@ -295,15 +295,14 @@ export function readStoredPlanPicks(scope: PlanPicksScope): StoredPlanPicks | nu
 
   if (
     typeof record !== 'object' ||
-    record === null ||
-    record.version !== PLAN_PICKS_STORAGE_VERSION ||
-    record.accountKey !== scope.accountKey ||
-    record.businessName !== scope.businessName
+    record?.version !== PLAN_PICKS_STORAGE_VERSION ||
+    record?.accountKey !== scope.accountKey ||
+    record?.businessName !== scope.businessName
   ) {
     return null;
   }
 
-  const plan = readPlan(record.plan);
+  const plan = readPlan(record?.plan);
   if (plan === null) {
     clearStoredPlanPicks();
   }
