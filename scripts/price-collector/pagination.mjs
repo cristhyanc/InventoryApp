@@ -138,6 +138,18 @@ const FLAG_OPTIONS = Object.freeze({
   '--completeness-proven': 'completenessProven',
 });
 
+/** The argument after an option, or an empty string when the option is the last argument. */
+const valueAfter = (argv, index) => (index + 1 < argv.length ? String(argv[index + 1]) : '');
+
+/** The options each mode cannot answer without. */
+function requireModeOptions(values, flags) {
+  if (flags.internalPaging) {
+    if (values.itemLimit === null) throw new Error('--internal-paging needs --item-limit.');
+  } else if (values.pageSize === null || values.maxPages === null) {
+    throw new Error('--page-size and --max-pages are required.');
+  }
+}
+
 function parsePaginationArguments(argv) {
   const values = { returned: 0, pageSize: null, reportedTotal: null, itemsSoFar: 0, pagesRead: 0, maxPages: null, rowCount: 0, itemLimit: null };
   const flags = { internalPaging: false, completenessProven: false };
@@ -150,22 +162,18 @@ function parsePaginationArguments(argv) {
       continue;
     }
     if (argument === '--failure') {
-      failure = index + 1 < argv.length ? String(argv[index + 1]) : '';
+      failure = valueAfter(argv, index);
       index += 1;
       continue;
     }
     if (!Object.hasOwn(NUMERIC_OPTIONS, argument)) throw new Error(`Unknown option ${argument}.`);
-    const raw = index + 1 < argv.length ? String(argv[index + 1]) : '';
+    const raw = valueAfter(argv, index);
     if (!/^\d+$/.test(raw)) throw new Error(`${argument} needs a whole number, not "${raw}".`);
     values[NUMERIC_OPTIONS[argument]] = Number(raw);
     index += 1;
   }
 
-  if (flags.internalPaging) {
-    if (values.itemLimit === null) throw new Error('--internal-paging needs --item-limit.');
-  } else if (values.pageSize === null || values.maxPages === null) {
-    throw new Error('--page-size and --max-pages are required.');
-  }
+  requireModeOptions(values, flags);
   return { values, flags, failure };
 }
 
