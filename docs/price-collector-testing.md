@@ -59,7 +59,8 @@ In GitHub → Actions → **Price collector (manual test)** → Run workflow:
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
-   or overrides backend supplier cadence.
+   or overrides the backend's supplier list. Every enabled supplier with a collection route is in
+   every run's work, however recently it was checked.
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.

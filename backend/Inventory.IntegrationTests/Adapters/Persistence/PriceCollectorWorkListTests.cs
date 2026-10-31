@@ -165,6 +165,32 @@ public class PriceCollectorWorkListTests
     }
 
     /// <summary>
+    /// A supplier checked an hour ago is still searched (owner decision, 1 November 2026): a run
+    /// searches every collectable supplier, so a partial run can no longer mark a supplier as checked
+    /// for the products it never reached.
+    /// </summary>
+    [Fact]
+    public async Task A_supplier_checked_moments_ago_is_still_searched()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(
+            fixture.SupplierPresetId, SupplierPriceConnector.Varnmill, connectorKey: "coles");
+
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(matched.Id, cola);
+        var listing = await fixture.SeedListingAsync(cola, "coles:1");
+        var earlierRun = await fixture.SeedRunAsync(IssuedAt.AddHours(-2));
+        await fixture.SeedAcceptedPriceAsync(listing, earlierRun, 2.50m, IssuedAt.AddHours(-1));
+
+        var workList = await IssueAsync(fixture);
+
+        Assert.Equal(fixture.SupplierPresetId, Assert.Single(workList.Suppliers).SupplierPresetId);
+        var product = Assert.Single(workList.MatchedProducts);
+        Assert.Equal(fixture.SupplierPresetId, Assert.Single(product.WorkItems).SupplierPresetId);
+    }
+
+    /// <summary>
     /// Every due supplier's collection route travels with the run: the connector, its key where the
     /// route takes one, and the site URL the JB Metro route talks to. A product due at two suppliers
     /// is two work items, one per pair.

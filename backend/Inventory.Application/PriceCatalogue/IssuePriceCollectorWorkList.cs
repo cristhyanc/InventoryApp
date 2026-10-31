@@ -86,7 +86,7 @@ public sealed class IssuePriceCollectorWorkList
     {
         var issuedAtUtc = _clock.UtcNow;
 
-        var suppliers = await DueSuppliersAsync(issuedAtUtc, cancellationToken);
+        var suppliers = await DueSuppliersAsync(cancellationToken);
         var matched = await _catalogue.ListTrackedMasterProductsAsync(cancellationToken);
         var waiting = await _catalogue.ListProductsAwaitingMatchAsync(cancellationToken);
         var continueAfter = await _runs.LastIssuedWorkAsync(cancellationToken);
@@ -191,12 +191,12 @@ public sealed class IssuePriceCollectorWorkList
     }
 
     /// <summary>
-    /// The suppliers due on this run: every supplier master record
-    /// <see cref="PriceCollectorWorkListPolicy.IsSupplierDue"/> says is due, in their own key order
+    /// The suppliers searched on this run: every supplier master record
+    /// <see cref="PriceCollectorWorkListPolicy.IsSupplierDue"/> says is collectable, whenever it was
+    /// last checked, in their own key order
     /// so two reads of the work list agree about which supplier a work item belongs to.
     /// </summary>
     private async Task<List<CollectableSupplier>> DueSuppliersAsync(
-        DateTime asOfUtc,
         CancellationToken cancellationToken)
     {
         var suppliers = await _catalogue.ListCollectableSuppliersAsync(cancellationToken);
@@ -204,10 +204,7 @@ public sealed class IssuePriceCollectorWorkList
         return [.. suppliers
             .Where(supplier => PriceCollectorWorkListPolicy.IsSupplierDue(
                 supplier.IsEnabled,
-                supplier.PriceConnector is not null,
-                supplier.LastCheckedAtUtc,
-                supplier.PriceCheckFreshnessHours,
-                asOfUtc))
+                supplier.PriceConnector is not null))
             .OrderBy(supplier => supplier.SupplierPresetId)];
     }
 
