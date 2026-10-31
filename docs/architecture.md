@@ -13680,7 +13680,12 @@ the count in the message, because `Product.CategoryId` is set to null when its c
 A refused delete answers `409` with that message; a validation refusal answers `400`. Since issue
 #737 the same product refusal is also readable *before* the attempt, on the catalogue reads - see
 "Whether a product may be deleted is published" below; the delete's own transactional decision is
-unchanged and remains the authority.
+unchanged and remains the authority. **Since issue #1026, a category the business's sales provider
+names is never deleted here either** - the same reason its rename is refused above:
+`CategoryCataloguePolicy.ProviderCategoryDeletionRefusal` names the provider, and
+`EfCategoryStore.DeleteAsync` checks `ExternalCategoryId` first, inside the same transaction, before
+the product-count check, so the provider refusal wins when both apply. `CategoryListComponent`
+hides **Delete** for such a row from the same `providerManagedFields` signal that locks its name.
 
 **Whether a product may be deleted is published, by the rule that refuses the delete** (issue #737,
 B2). The criterion is that **Delete** is offered only where the API allows it, which a client cannot

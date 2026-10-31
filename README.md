@@ -1924,6 +1924,11 @@ does not manage.
   "cola", "COLA" and "Cola" all find a product named "Coca Cola".
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
+- **A category that comes from Nayax cannot be deleted either** (issue #1026), the same way its name
+  cannot be edited: the local catalogue would otherwise drift from the provider's. The Categories
+  page shows no **Delete** button for such a category, and the API refuses the delete outright if
+  it is attempted anyway — before the "used by products" check, so this refusal wins when both
+  apply.
 - **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739), **and it
   has its own page: Products → Import products** (`/products/import`, issue #888). The sidebar's
   **Inventory → Import products** entry goes there, for every business that may run imports with a

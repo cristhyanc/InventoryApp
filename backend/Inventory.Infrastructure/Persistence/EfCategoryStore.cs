@@ -13,12 +13,12 @@ namespace Inventory.Infrastructure.Persistence;
 /// <see cref="Inventory.Infrastructure.Models.Category"/> entity it reads, which moved there in
 /// issue #307; this adapter followed them in issue #309 (Persistence 8/8 of #153).
 ///
-/// <para><strong>The write side arrived with issue #736</strong>, and with it the two refusals that
-/// depend on stored rows: a name another category of this business already uses, and a rename of a
-/// category the business's sales provider manages. Both are read, compared and acted on as one
-/// operation - inside a relational transaction - because the uniqueness rule is not a database
-/// constraint (the schema is deliberately unchanged here), so the window between looking and writing
-/// is the only thing holding it.</para>
+/// <para><strong>The write side arrived with issue #736</strong>, and with it the refusals that
+/// depend on stored rows: a name another category of this business already uses, a rename of a
+/// category the business's sales provider manages, and - since issue #1026 - a delete of one.
+/// Each is read, compared and acted on as one operation - inside a relational transaction - because
+/// the uniqueness rule is not a database constraint (the schema is deliberately unchanged here), so
+/// the window between looking and writing is the only thing holding it.</para>
 ///
 /// Tenant scoping stays the central <see cref="AppDbContext"/> query filters and
 /// <c>BusinessOwnershipEnforcer</c>: the uniqueness check therefore compares this business's
@@ -117,10 +117,11 @@ public sealed class EfCategoryStore : ICategoryStore
     }
 
     /// <summary>
-    /// Deletes the category only while no product uses it. The count and the delete share one
-    /// transaction, because <c>Product.CategoryId</c> is set to null when its category disappears:
-    /// a product categorised between a separate count and this delete would be left uncategorised
-    /// rather than the delete being refused.
+    /// Deletes the category only while no product uses it, and never a category the business's
+    /// sales provider names (issue #1026) - checked first, so that refusal wins when both apply. The
+    /// checks and the delete share one transaction, because <c>Product.CategoryId</c> is set to null
+    /// when its category disappears: a product categorised between a separate count and this delete
+    /// would be left uncategorised rather than the delete being refused.
     /// </summary>
     public async Task<CategoryWriteAttempt> DeleteAsync(long id, CancellationToken cancellationToken)
     {
@@ -131,6 +132,12 @@ public sealed class EfCategoryStore : ICategoryStore
         var category = await _db.Categories.FirstOrDefaultAsync(
             candidate => candidate.Id == id, cancellationToken);
         if (category is null) return CategoryWriteAttempt.NotFound();
+
+        if (category.ExternalCategoryId is not null)
+        {
+            return CategoryWriteAttempt.Refused(CategoryCataloguePolicy.ProviderCategoryDeletionRefusal(
+                await EfSalesProviderQueries.CurrentBusinessSalesProviderAsync(_db, cancellationToken)));
+        }
 
         var products = await _db.Products.CountAsync(product => product.CategoryId == id, cancellationToken);
         if (CategoryCataloguePolicy.DeletionRefusal(products) is { } refusal)

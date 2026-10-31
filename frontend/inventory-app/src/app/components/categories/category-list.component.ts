@@ -57,6 +57,15 @@ export class CategoryListComponent implements OnInit, OnDestroy {
     return (this.editing?.providerManagedFields ?? []).includes('name');
   }
 
+  /**
+   * Whether the provider names this category, so it cannot be deleted here either (issue #1026),
+   * from the same signal {@link nameLocked} uses. The API refuses the delete regardless; this just
+   * stops the row offering a Delete that must fail.
+   */
+  providerManaged(category: Category): boolean {
+    return (category.providerManagedFields ?? []).includes('name');
+  }
+
   startCreate(): void {
     this.editing = null;
     this.error = '';
@@ -104,7 +113,7 @@ export class CategoryListComponent implements OnInit, OnDestroy {
   confirmDelete(category: Category): void {
     // Checked here as well as hidden in the template, so the write is actually unavailable rather
     // than merely invisible - the endpoint refuses it either way.
-    if (this.sessionActive) {
+    if (this.sessionActive || this.providerManaged(category)) {
       return;
     }
     this.confirmingCategory = category;

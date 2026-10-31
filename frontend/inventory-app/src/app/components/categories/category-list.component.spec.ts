@@ -185,6 +185,32 @@ describe('CategoryListComponent delete vs refusal (issue #737)', () => {
   });
 });
 
+describe('CategoryListComponent delete hidden for a provider-managed category (issue #1026)', () => {
+  it('hides Delete for a category the provider manages', async () => {
+    const { host } = await render({ categories: [category({ id: 9, name: 'Nayax Drinks', providerManagedFields: ['name'] })] });
+
+    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
+    expect(deleteButton).toBeUndefined();
+  });
+
+  it('shows Delete for a category this business maintains itself', async () => {
+    const { host } = await render({ categories: [category({ id: 9, name: 'Drinks', providerManagedFields: [] })] });
+
+    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
+    expect(deleteButton).toBeDefined();
+  });
+
+  it('does not delete a provider-managed category even if confirmDelete() is invoked directly', async () => {
+    const { component, deleteFn } = await render({ categories: [category({ id: 9, name: 'Nayax Drinks', providerManagedFields: ['name'] })] });
+
+    component.confirmDelete(category({ id: 9, name: 'Nayax Drinks', providerManagedFields: ['name'] }));
+    component.deleteConfirmed();
+
+    expect(deleteFn).not.toHaveBeenCalled();
+    expect(component.confirmingCategory).toBeNull();
+  });
+});
+
 /**
  * Create/rename and delete while a support session is active (issue #554, extended by #737). A
  * session grants `InventoryOperate`, so these would otherwise still render.
