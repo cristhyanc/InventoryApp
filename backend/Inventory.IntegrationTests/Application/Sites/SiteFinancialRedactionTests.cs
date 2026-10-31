@@ -18,7 +18,7 @@ namespace InventoryApi.Tests.Application.Sites;
 /// Which site figures each use case calculates for whom (issue #697).
 ///
 /// <para>Sites is part of the day-to-day inventory work, so every role holds
-/// <c>Inventory.Operate</c> and reaches both use cases; the three revenue figures and the estimated
+/// <c>Inventory.Operate</c> and reaches both use cases; every revenue figure and the estimated
 /// card profit additionally need <c>Dashboard.ViewFinancials</c>. The expected roles are written out
 /// literally from the agreed table of issue #328 rather than read back from
 /// <c>RoleCapabilities</c> - a test that asked the capability table what it allows would pass
@@ -64,6 +64,8 @@ public class SiteFinancialRedactionTests
         Assert.Null(site.TodayRevenue);
         Assert.Null(site.CurrentWeekRevenue);
         Assert.Null(site.PreviousComparableWeekRevenue);
+        Assert.Null(site.LastWeekRevenue);
+        Assert.Null(site.MonthToDateRevenue);
     }
 
     /// <summary>
@@ -94,11 +96,15 @@ public class SiteFinancialRedactionTests
         Assert.Equal(9m, site.TodayRevenue);
         Assert.Equal(9m, site.CurrentWeekRevenue);
         Assert.Equal(3m, site.PreviousComparableWeekRevenue);
+        // The 3.00 sale is at the previous comparable week's start, which is also last week's start
+        // and inside the month, so last week is that sale and month to date is both of them.
+        Assert.Equal(3m, site.LastWeekRevenue);
+        Assert.Equal(12m, site.MonthToDateRevenue);
         Assert.Single(facts.CompletedSalesRequests);
     }
 
     /// <summary>
-    /// Redaction removes the three amounts and changes nothing else: every other figure is the one
+    /// Redaction removes the revenue amounts and changes nothing else: every other figure is the one
     /// the same request produces for an Owner over the same fleet and fixtures.
     /// </summary>
     [Fact]
@@ -108,7 +114,14 @@ public class SiteFinancialRedactionTests
         var asOwner = Assert.Single(await Summaries(BusinessRole.Owner, Facts()));
 
         Assert.Equal(
-            asOwner with { TodayRevenue = null, CurrentWeekRevenue = null, PreviousComparableWeekRevenue = null },
+            asOwner with
+            {
+                TodayRevenue = null,
+                CurrentWeekRevenue = null,
+                PreviousComparableWeekRevenue = null,
+                LastWeekRevenue = null,
+                MonthToDateRevenue = null,
+            },
             asOperator);
 
         // The fixture really has stock to report, so the comparison above is not two empty rows
@@ -129,6 +142,7 @@ public class SiteFinancialRedactionTests
             .Handle(CancellationToken.None));
 
         Assert.Equal(9m, site.TodayRevenue);
+        Assert.Equal(12m, site.MonthToDateRevenue);
     }
 
     /// <summary>

@@ -140,6 +140,16 @@ public class OperatorReadableFinancialFigureTests
             FigureOutcome.Withheld,
             "Issue #697, as above."),
         new(
+            "SiteSummaryDto.LastWeekRevenue",
+            FigureOutcome.Withheld,
+            "Issue #1012 added the period; issue #697's rule is unchanged and covers it, because the "
+                + "figure is one more sum over the same completed-sales read that is not made at all "
+                + "for a caller without the capability."),
+        new(
+            "SiteSummaryDto.MonthToDateRevenue",
+            FigureOutcome.Withheld,
+            "Issue #1012, as above."),
+        new(
             "SiteProductDto.EstimatedCardProfit",
             FigureOutcome.Withheld,
             "Issue #697: null without the capability, and GetSiteProducts resolves neither the card "

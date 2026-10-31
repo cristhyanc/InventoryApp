@@ -26,8 +26,17 @@ public interface ISiteFactsStore
 {
     Task<IReadOnlyList<SiteProductActivityFact>> GetProductActivityAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The completed sales of <paramref name="machineIds"/> authorized at or after
+    /// <paramref name="fromUtc"/>.
+    ///
+    /// <para>The bound is <b>inclusive</b> (issue #1012), because its caller derives it from the
+    /// first instant of the earliest period it publishes a figure for: a sale authorized at exactly
+    /// a period's start belongs to that period, which is the comparison the figures themselves make,
+    /// so an exclusive bound would make that period's own first instant unreachable.</para>
+    /// </summary>
     Task<IReadOnlyList<SiteCompletedSaleFact>> GetRecentCompletedSalesAsync(
-        IReadOnlyCollection<long> machineIds, DateTime since, CancellationToken cancellationToken);
+        IReadOnlyCollection<long> machineIds, DateTime fromUtc, CancellationToken cancellationToken);
 
     Task<IReadOnlyDictionary<long, Inventory.Domain.Sites.SiteProductCostBasis>> GetProductCostBasisAsync(
         CancellationToken cancellationToken);

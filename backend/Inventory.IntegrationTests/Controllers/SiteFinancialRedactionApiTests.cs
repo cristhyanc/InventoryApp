@@ -33,7 +33,7 @@ namespace InventoryApi.Tests.Controllers;
 ///
 /// <para>What it has to prove is about the <strong>raw JSON</strong>, because that is what an
 /// Operator calling the API directly receives whatever the Angular application chooses to render
-/// (issue #699): on <c>GET /api/sites</c> the three revenue figures, and on
+/// (issue #699): on <c>GET /api/sites</c> every revenue figure, and on
 /// <c>GET /api/sites/{id}/products</c> the estimated card profit, carry no number at all for a
 /// caller without <c>Dashboard.ViewFinancials</c> - they are <c>null</c>, never <c>0</c> - while
 /// stock, MDB codes, unit cost and site price are value-for-value what a Manager and an Owner are
@@ -41,20 +41,27 @@ namespace InventoryApi.Tests.Controllers;
 /// commission agreement, fee rate and pair of completed sales, so every difference between the
 /// three responses is the role and nothing else.</para>
 ///
-/// <para>The host runs on a fixed clock, so the business day, the week to
-/// date and the previous comparable week the revenue figures are summed over are the same every
-/// run and all three figures are a non-zero amount for a caller who may see them. A redacted
-/// <c>previousComparableWeekRevenue</c> is therefore distinguishable from the honest <c>0</c> an
-/// empty period would report.</para>
+/// <para>The host runs on a fixed clock, so every period the revenue figures are summed over - the
+/// business day, the week to date, the previous comparable week, and since issue #1012 last week and
+/// month to date - is the same every run, and each figure is a non-zero amount for a caller who may
+/// see them. A redacted <c>previousComparableWeekRevenue</c> is therefore distinguishable from the
+/// honest <c>0</c> an empty period would report.</para>
 /// </summary>
 public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancialRedactionApiTests.ApiFactory>
 {
     private const string SitesUri = "/api/sites";
     private const string SiteProductsUri = "/api/sites/42/products";
 
-    /// <summary>The revenue figures <c>Dashboard.ViewFinancials</c> governs on a site row.</summary>
+    /// <summary>
+    /// The revenue figures <c>Dashboard.ViewFinancials</c> governs on a site row. Issue #1012's two
+    /// additive periods are here for the same reason the first three are: they are sums over the one
+    /// completed-sales read the capability decides whether to make at all.
+    /// </summary>
     private static readonly string[] SiteRevenueProperties =
-        ["todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue"];
+    [
+        "todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue", "lastWeekRevenue",
+        "monthToDateRevenue",
+    ];
 
     private readonly ApiFactory _factory;
 
@@ -147,6 +154,32 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         Assert.Equal(
             ApiFactory.PreviousComparableWeekSaleValue,
             site.GetProperty("previousComparableWeekRevenue").GetDecimal());
+    }
+
+    /// <summary>
+    /// The contract for issue #1012's two additive fields, over the real pipeline: a site row
+    /// publishes <c>lastWeekRevenue</c> and <c>monthToDateRevenue</c> beside the three it already
+    /// did, and each carries the seeded amount for that period. The seeded previous-comparable-week
+    /// sale is on Thursday 5 March, which is inside last week (Monday 2 to Sunday 8 March) and
+    /// inside March, so last week is that sale alone and month to date is both sales - a figure the
+    /// former sixteen-day lookback could not have reached in a later part of a month.
+    /// </summary>
+    [Theory]
+    [InlineData(ApiFactory.ManagerObjectId)]
+    [InlineData(ApiFactory.OwnerObjectId)]
+    public async Task A_site_row_publishes_last_week_and_month_to_date_sales(string objectId)
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(objectId).GetAsync(SitesUri);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var site = Assert.Single((await ReadJsonAsync(response)).EnumerateArray());
+        Assert.Equal(
+            ApiFactory.PreviousComparableWeekSaleValue, site.GetProperty("lastWeekRevenue").GetDecimal());
+        Assert.Equal(
+            ApiFactory.TodaysSaleValue + ApiFactory.PreviousComparableWeekSaleValue,
+            site.GetProperty("monthToDateRevenue").GetDecimal());
     }
 
     [Theory]
