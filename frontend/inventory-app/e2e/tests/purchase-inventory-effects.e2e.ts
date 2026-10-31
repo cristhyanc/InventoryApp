@@ -25,14 +25,16 @@ test('creating, editing and deleting a purchase moves inventory and costing with
   await page.locator('input[type=file]').setInputFiles(receiptFile);
   await page.locator('input[name="title"]').fill(title);
   await page.locator('select[name="supplierId"]').selectOption({ label: seeded.supplierA });
-  await page.getByRole('button', { name: 'Add Product' }).click();
-  await page.getByTestId('purchase-item-product').selectOption({ label: seeded.purchaseProduct });
+  await page.getByRole('button', { name: 'Add product' }).click();
+  // The line's product is a searchable box over the business's own products (issue #1029).
+  await page.getByTestId('purchase-item-product').fill(seeded.purchaseProduct);
+  await page.getByTestId('purchase-product-option').filter({ hasText: seeded.purchaseProduct }).first().click();
   await page.getByTestId('purchase-item-quantity').fill('10');
   // Typing into the line's Total price field makes that the entered figure (issues #707 and #878),
   // so $20.00 for 10 units fills the Unit price with the $2.00 this purchase is costed at.
   await page.getByTestId('purchase-item-line-total').fill('20');
   await expect(page.getByTestId('purchase-item-cost')).toHaveValue('2.0000');
-  await page.getByRole('button', { name: 'Add Purchase' }).click();
+  await page.getByRole('button', { name: 'Save purchase' }).click();
 
   await expect(page).toHaveURL(/\/purchases$/);
   const purchaseRow = page.getByRole('row', { name: new RegExp(title) });

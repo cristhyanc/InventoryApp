@@ -56,7 +56,7 @@ test('a reorder alert becomes a supplier order and then a costed purchase', asyn
   // 4. Receive it, which creates the purchase.
   await page.getByRole('button', { name: 'Receive / Create Purchase' }).click();
   await expect(page).toHaveURL(new RegExp(String.raw`/purchases/new\?supplierOrderId=${orderId}$`));
-  await expect(page.getByRole('heading', { name: `Receiving Supplier Order #${orderId}` })).toBeVisible();
+  await expect(page.getByRole('heading', { name: `Receiving supplier order #${orderId}` })).toBeVisible();
 
   await page.locator('input[type=file]').setInputFiles(receiptFile);
   await page.locator('input[name="title"]').fill('E2E received supplier order');
@@ -69,7 +69,7 @@ test('a reorder alert becomes a supplier order and then a costed purchase', asyn
   // the entered figure and fills the Total price beside it (issues #707 and #878).
   await page.getByTestId('purchase-item-cost').fill('1.5');
   await expect(page.getByTestId('purchase-item-line-total')).toHaveValue('42.00');
-  await page.getByRole('button', { name: 'Add Purchase' }).click();
+  await page.getByRole('button', { name: 'Save purchase' }).click();
 
   // 5. The order is fully received, so it leaves the open list.
   await expect(page).toHaveURL(/\/purchases\/orders$/);

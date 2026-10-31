@@ -1,0 +1,46 @@
+<div class="flex flex-col gap-1" data-testid="purchase-receipt">
+  <input
+    #fileInput
+    type="file"
+    accept="image/*,.pdf"
+    class="sr-only"
+    tabindex="-1"
+    aria-hidden="true"
+    data-testid="purchase-receipt-input"
+    [attr.id]="inputId"
+    (change)="onFileSelected($event)"
+  />
+
+  @if (pendingFile) {
+    <div class="flex max-w-full flex-wrap items-center self-start gap-x-3 gap-y-1 rounded-lg border border-rr-teal-border bg-rr-teal-tint px-3 py-2 text-sm">
+      <span class="flex min-w-0 items-center gap-2 text-rr-navy">
+        <app-icon name="receipt" [size]="18" />
+        <span class="min-w-0 break-all font-medium" data-testid="purchase-receipt-name">{{ pendingFile.name }}</span>
+        <span class="shrink-0 text-xs text-rr-muted">{{ formatSize(pendingFile.size) }}</span>
+      </span>
+      <span class="flex flex-wrap items-center gap-1">
+        <button type="button" class="inline-flex min-h-11 items-center rounded-md px-2 font-semibold text-rr-teal hover:bg-white" data-testid="purchase-receipt-preview" [attr.aria-label]="'Preview ' + pendingFile.name" (click)="previewPending()">Preview</button>
+        <button type="button" class="inline-flex min-h-11 items-center gap-1 rounded-md px-2 font-semibold text-rr-teal hover:bg-white" data-testid="purchase-receipt-replace" [attr.aria-label]="'Replace ' + pendingFile.name" [disabled]="disabled" (click)="chooseFile()"><app-icon name="swap_horiz" [size]="16" />Replace</button>
+        <button type="button" class="inline-flex min-h-11 items-center gap-1 rounded-md px-2 font-semibold text-rr-danger-text hover:bg-white" data-testid="purchase-receipt-remove" [attr.aria-label]="'Remove ' + pendingFile.name" [disabled]="disabled" (click)="removePending()"><app-icon name="close" [size]="16" />Remove</button>
+      </span>
+    </div>
+  } @else if (stored) {
+    <div class="flex max-w-full flex-wrap items-center self-start gap-x-3 gap-y-1 rounded-lg border border-rr-teal-border bg-rr-teal-tint px-3 py-2 text-sm">
+      <span class="flex min-w-0 items-center gap-2 text-rr-navy">
+        <app-icon name="receipt" [size]="18" />
+        <span class="min-w-0 break-all font-medium" data-testid="purchase-receipt-name">{{ stored.fileName }}</span>
+        <span class="shrink-0 text-xs text-rr-muted">{{ formatSize(stored.fileSizeBytes) }}</span>
+      </span>
+      <button type="button" class="inline-flex min-h-11 items-center rounded-md px-2 font-semibold text-rr-teal hover:bg-white" data-testid="purchase-receipt-preview" [attr.aria-label]="'Preview ' + stored.fileName" (click)="previewStored.emit()">Preview</button>
+    </div>
+    <p class="m-0 text-xs text-rr-muted" data-testid="purchase-receipt-stored-note">A saved receipt stays attached; it can't be replaced or removed here.</p>
+  } @else {
+    <div class="flex flex-wrap items-center gap-3">
+      <button type="button" class="rr-button-secondary" data-testid="purchase-receipt-attach" [disabled]="disabled" (click)="chooseFile()">
+        <app-icon name="upload" [size]="18" />
+        Attach receipt
+      </button>
+      <span class="text-xs text-rr-muted">Optional · PDF or image</span>
+    </div>
+  }
+</div>

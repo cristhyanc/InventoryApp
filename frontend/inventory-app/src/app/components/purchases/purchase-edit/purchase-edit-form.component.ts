@@ -1,10 +1,8 @@
 import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
-import { GstClassification, Product, Purchase, Supplier } from '../../../models/models';
+import { GstClassification, Product, Purchase, PurchaseGstSummary, Supplier } from '../../../models/models';
 import { PurchaseItemPayload, PurchaseUpdatePayload } from '../../../services/purchase.service';
-import { IconComponent } from '../../shared/icon.component';
-import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from '../gst-classification-options';
+import { isChargePresent } from '../gst-classification-options';
 import {
   DEFAULT_PRICE_ENTRY_MODE,
   PriceEntryMode,
@@ -20,6 +18,8 @@ import {
   totalPriceFieldValue,
   unitPriceFieldValue
 } from '../purchase-line-price';
+import { PurchaseFormLayoutComponent, missingProductErrorMessage } from '../purchase-form/purchase-form-layout.component';
+import { StoredReceipt } from '../purchase-form/purchase-receipt-field.component';
 
 /**
  * One line of the purchase edit form (issue #431).
@@ -58,7 +58,7 @@ export interface EditPurchaseItem {
 @Component({
   selector: 'app-purchase-edit-form',
   standalone: true,
-  imports: [CommonModule, FormsModule, IconComponent],
+  imports: [CommonModule, PurchaseFormLayoutComponent],
   templateUrl: './purchase-edit-form.component.html'
 })
 export class PurchaseEditFormComponent {
@@ -89,16 +89,31 @@ export class PurchaseEditFormComponent {
    */
   @Input() sessionActive = false;
 
+  /**
+   * The saved purchase's input GST as the API last calculated it, shown in the summary as the last
+   * saved figure. `null` when the read carried none, which is shown as calculated on save.
+   */
+  @Input() gstSummary: PurchaseGstSummary | null = null;
+
+  /**
+   * A receipt chosen during this edit for a purchase that has none (issue #1029). The page owns it
+   * and attaches it through the existing attach endpoint only after the edit itself is saved.
+   */
+  @Input() pendingFile: File | null = null;
+
   /** The edited values, for the page to send through the existing update API. */
   @Output() readonly saveRequested = new EventEmitter<PurchaseUpdatePayload>();
 
   /** The person left without saving; the page decides where that returns to. */
   @Output() readonly editCancelled = new EventEmitter<void>();
 
-  editItems: EditPurchaseItem[] = [];
+  /** A receipt was chosen, replaced (`File`) or removed (`null`) before saving. */
+  @Output() readonly pendingFileChange = new EventEmitter<File | null>();
 
-  /** The GST picker's options, shared with the purchase entry form. */
-  readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
+  /** The person asked to see the receipt the purchase already holds. */
+  @Output() readonly previewStoredReceipt = new EventEmitter<void>();
+
+  editItems: EditPurchaseItem[] = [];
 
   /**
    * Why this form refused to submit its own lines (issue #707), as opposed to {@link error}, which
@@ -118,8 +133,18 @@ export class PurchaseEditFormComponent {
     supplierId: '' as number | ''
   };
 
-  /** The purchase the form opened on, kept for its stored purchase instant and nothing else. */
+  /** The purchase the form opened on, kept for its stored purchase instant and its receipt. */
   private source: Purchase | null = null;
+
+  /**
+   * The receipt the saved purchase holds, or `null` when it has none. The four document values are
+   * all present or all absent (issue #976), so the stored name alone answers it.
+   */
+  get storedReceipt(): StoredReceipt | null {
+    const source = this.source;
+    if (!source?.storedFileName) return null;
+    return { fileName: source.fileName ?? source.storedFileName, fileSizeBytes: source.fileSizeBytes };
+  }
 
   /**
    * The charge classifications the edited purchase was read with, kept out of `editForm` because
@@ -162,6 +187,14 @@ export class PurchaseEditFormComponent {
     if (this.saving) return;
     if (!this.editForm.title.trim()) return;
 
+    // Every line names a product (issue #1029): a line added during the edit starts with none
+    // chosen rather than silently on the first product in the list.
+    const linesWithoutProduct = this.editItems.filter((item) => !item.productId);
+    if (linesWithoutProduct.length > 0) {
+      this.lineError = missingProductErrorMessage(linesWithoutProduct.length);
+      return;
+    }
+
     // Every line's quantity and price, in whichever direction it was entered (issue #707): a whole
     // number of units above zero, a finite non-negative entered amount, and a finite non-negative
     // unit cost to submit. A line that fails this is refused here, so a blank price, a zero
@@ -192,7 +225,7 @@ export class PurchaseEditFormComponent {
 
   addEditItem(): void {
     this.editItems.push({
-      productId: this.products[0]?.id ?? 0,
+      productId: 0,
       quantity: 1,
       priceEntryMode: DEFAULT_PRICE_ENTRY_MODE,
       lineTotal: 0,

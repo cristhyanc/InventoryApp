@@ -480,6 +480,11 @@ describe('landing page tokens (issue #954)', () => {
     ['a storage shortage or unconfirmed save on its tint', () => rr('danger-text'), () => rr('danger-bg')],
     ['a changed pick quantity’s suggestion on its tint', () => rr('warn-text'), () => rr('warn-bg')],
     ['the planning-only notice on the teal tint', () => rr('navy'), () => rr('teal-tint')],
+    // The Add and Edit Purchase layout (issue #1029).
+    ['a receipt size beside its file name on the teal tint', () => rr('muted'), () => rr('teal-tint')],
+    ['a receipt Remove action on the teal tint', () => rr('danger-text'), () => rr('teal-tint')],
+    ['an unclassified GST note in the purchase summary', () => rr('warn-text'), () => WHITE],
+    ['a purchase line value on the canvas', () => rr('navy'), () => rr('canvas')],
     // The pricing cards (issue #971), which sit on rr-surface inside the white Pricing section.
     ['plan names and prices on a plan card', () => rr('navy'), () => rr('surface')],
     ['plan descriptions, features and billing notes on a plan card', () => rr('muted'), () => rr('surface')],

@@ -286,6 +286,7 @@ describe('PurchaseEditFormComponent GST edit mapping (issue #431, moved by #475)
     const { component, saved } = createForm(stored);
 
     component.addEditItem();
+    component.editItems[1].productId = 20;
     component.submit();
 
     const items = savedItems(saved);
@@ -299,6 +300,7 @@ describe('PurchaseEditFormComponent GST edit mapping (issue #431, moved by #475)
     const { component, saved } = createForm(stored);
 
     component.addEditItem();
+    component.editItems[1].productId = 20;
     component.editItems[1].gstClassification = GstClassification.Taxable;
     component.submit();
 
@@ -329,6 +331,23 @@ describe('PurchaseEditFormComponent GST edit mapping (issue #431, moved by #475)
 
     expect(savedItems(saved)).toEqual([{ productId: 20, quantity: 3, unitCost: 2.5 }]);
     expect(component.editItems[0].gstClassification).toBe(GstClassification.Unknown);
+  });
+
+  it('starts a line added during the edit with no product, and refuses to save it until one is chosen (issue #1029)', () => {
+    const stored = purchase({ items: [item({ id: 11 })] });
+    const { component, saved } = createForm(stored);
+
+    component.addEditItem();
+    expect(component.editItems[1].productId).toBe(0);
+
+    component.submit();
+    expect(saved).toHaveLength(0);
+    expect(component.lineError).toBe('Choose a product for every item. 1 item(s) have no product.');
+
+    component.editItems[1].productId = 20;
+    component.submit();
+    expect(saved).toHaveLength(1);
+    expect(component.lineError).toBe('');
   });
 
   it('treats a stored line as identified and a line added during the edit as new', () => {
@@ -685,23 +704,46 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
   });
 
   /**
-   * The responsive rules are the ones `/purchases/new` already uses and that issue #410's restyle
-   * verified at 1440px and 390px: a single column of fields that becomes two at `md`, and a
-   * line-item row that is one column per control below `md`. This pins the classes rather than
-   * re-deciding the layout.
+   * The shared Add/Edit layout (issue #1029): a line is a stacked card of six columns on a narrow
+   * screen and one table row at `xl`, so nothing needs the page to scroll sideways at 360px.
    */
-  it('reuses the purchase entry form\'s responsive grids, so it collapses to one column on a narrow screen', async () => {
+  it('renders each line as a stacked card that becomes a table row on a wide screen (issue #1029)', async () => {
     const { host } = await render(purchase({ items: [item({ id: 11 })] }));
 
-    expect(host.querySelector('.grid.gap-4.md\\:grid-cols-2')).not.toBeNull();
     const line = host.querySelector('[data-testid="edit-purchase-item"]');
-    expect(line?.className).toContain('grid');
-    expect(line?.className).toContain(
-      'md:grid-cols-[minmax(0,3fr)_minmax(6rem,1fr)_minmax(14rem,2fr)_minmax(9rem,1fr)_auto]');
+    expect(line?.className).toContain('grid-cols-6');
+    expect(line?.className).toContain('xl:grid-cols-[minmax(0,1fr)_5.5rem_8rem_8rem_9.5rem_2.75rem]');
+  });
+
+  it('shows the saved receipt with Preview only, so opening or cancelling Edit can never delete it (issue #1029)', async () => {
+    const { fixture, host } = await render(purchase({ fileName: 'invoice.pdf', storedFileName: 'abc.pdf', fileSizeBytes: 2048 }));
+    const previews: number[] = [];
+    fixture.componentInstance.previewStoredReceipt.subscribe(() => previews.push(1));
+
+    expect(host.querySelector('[data-testid="purchase-receipt-name"]')?.textContent).toBe('invoice.pdf');
+    expect(host.querySelector('[data-testid="purchase-receipt-remove"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-receipt-replace"]')).toBeNull();
+    (host.querySelector('[data-testid="purchase-receipt-preview"]') as HTMLButtonElement).click();
+    expect(previews).toHaveLength(1);
+  });
+
+  it('offers Attach receipt for a purchase with none, and reports the chosen file to the page (issue #1029)', async () => {
+    const { fixture, host } = await render(purchase({ fileName: null, storedFileName: null, contentType: null, fileSizeBytes: null }));
+    const chosen: (File | null)[] = [];
+    fixture.componentInstance.pendingFileChange.subscribe((file) => chosen.push(file));
+
+    expect(host.querySelector('[data-testid="purchase-receipt-attach"]')).not.toBeNull();
+
+    fixture.componentInstance.pendingFile = new File(['scan'], 'receipt.pdf');
+    fixture.detectChanges();
+    (host.querySelector('[data-testid="purchase-receipt-remove"]') as HTMLButtonElement).click();
+
+    expect(chosen).toEqual([null]);
   });
 
   it('labels every field it offers', async () => {
-    const { host } = await render(purchase({ deliveryCost: 5, packageCost: 2 }));
+    // Notes and charges hold values, so their optional sections open on Edit (issue #1029).
+    const { host } = await render(purchase({ deliveryCost: 5, packageCost: 2, notes: 'Delivered Tuesday' }));
 
     const labelled = ['editTitle', 'editSupplierId', 'editPurchaseDate', 'editTotalAmount', 'editDeliveryCost', 'editPackageCost', 'editNotes'];
     for (const id of labelled) {

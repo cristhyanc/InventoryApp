@@ -2,12 +2,15 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { Product, Purchase, Supplier } from '../../../models/models';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Product, Purchase, PurchaseGstSummary, Supplier } from '../../../models/models';
 import { PurchaseService, PurchaseUpdatePayload } from '../../../services/purchase.service';
 import { SupplierService } from '../../../services/supplier.service';
 import { ProductService } from '../../../services/product.service';
 import { PurchaseEditFormComponent } from './purchase-edit-form.component';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { ToastService } from '../../../services/toast.service';
+import { ObjectUrlCache } from '../../shared/object-url-cache';
 
 /**
  * The dedicated Edit purchase page (issue #475), reached at `/purchases/:id/edit`. Editing a
@@ -20,6 +23,11 @@ import { SupportSessionService } from '../../../support-session/support-session.
  * state), loads the suppliers and products the form offers, owns the loading / unavailable /
  * save-error states and the save request, and navigates back to the list. The form itself is
  * `PurchaseEditFormComponent`.
+ *
+ * A receipt chosen during the edit, for a purchase that has none, is attached through the existing
+ * `POST /api/purchases/{id}/file` only after the edit itself has saved (issue #1029): the update and
+ * the attach stay the two existing requests, and an attach the API refuses never undoes the saved
+ * edit. A receipt the purchase already holds is never replaced or deleted from here.
  *
  * Permissions and tenant isolation are the API's, unchanged: `GET`/`PUT /api/purchases/{id}` are
  * `[Authorize]`d and scoped by the `AppDbContext` tenant filters, so another business's id reaches
@@ -53,8 +61,15 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
+  /** The saved purchase's input GST from the read, shown in the form's summary as last saved. */
+  gstSummary: PurchaseGstSummary | null = null;
+
+  /** A receipt chosen during this edit, attached once the edit has saved. */
+  pendingReceipt: File | null = null;
+
   private purchaseId: number | null = null;
   private readonly subscriptions = new Subscription();
+  private readonly objectUrls = new ObjectUrlCache();
 
   constructor(
     private readonly purchaseService: PurchaseService,
@@ -62,7 +77,8 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
     private readonly productService: ProductService,
     private readonly router: Router,
     private readonly route: ActivatedRoute,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    private readonly toastService: ToastService
   ) {
     this.subscriptions.add(supportSession.active$.subscribe((active) => (this.sessionActive = active)));
   }
@@ -78,6 +94,7 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.subscriptions.unsubscribe();
+    this.objectUrls.releaseAll();
   }
 
   onSave(payload: PurchaseUpdatePayload): void {
@@ -88,8 +105,13 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
     this.saving = true;
     this.saveError = '';
 
-    this.purchaseService.update(this.purchaseId, payload).subscribe({
+    const purchaseId = this.purchaseId;
+    this.purchaseService.update(purchaseId, payload).subscribe({
       next: () => {
+        if (this.pendingReceipt) {
+          this.attachReceipt(purchaseId, this.pendingReceipt);
+          return;
+        }
         this.saving = false;
         this.returnToList();
       },
@@ -107,10 +129,46 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
     this.returnToList();
   }
 
+  /** Opens the purchase's saved receipt, fetched through the authorized API as the list does. */
+  previewStoredReceipt(): void {
+    if (this.purchaseId === null) return;
+    this.purchaseService.getFile(this.purchaseId).subscribe({
+      next: (blob) => window.open(this.objectUrls.create(blob), '_blank', 'noopener'),
+      error: (err) => {
+        this.toastService.error('Could not open the receipt. Try again.');
+        console.error('Failed to open purchase document', err);
+      }
+    });
+  }
+
+  /**
+   * The edit is saved, so the chosen receipt goes through the existing attach endpoint, which keeps
+   * every size, type and storage rule it already enforced. A refusal is reported, not hidden, and
+   * the saved edit stands: the list offers the attach again for a purchase that still has none.
+   */
+  private attachReceipt(purchaseId: number, file: File): void {
+    this.purchaseService.attachDocument(purchaseId, file).subscribe({
+      next: () => {
+        this.saving = false;
+        this.pendingReceipt = null;
+        this.returnToList();
+      },
+      error: (failure: HttpErrorResponse) => {
+        this.saving = false;
+        const reason = typeof failure?.error === 'string' && failure.error.trim() ? ` ${failure.error.trim()}` : '';
+        this.toastService.error(
+          `The purchase was saved, but the receipt was not attached.${reason} You can add it from the Purchases list.`);
+        this.returnToList();
+      }
+    });
+  }
+
   private load(idParam: string | null): void {
     const id = Number(idParam);
     this.purchase = null;
     this.saveError = '';
+    this.gstSummary = null;
+    this.pendingReceipt = null;
     if (!idParam || !Number.isInteger(id) || id <= 0) {
       this.loading = false;
       this.purchaseId = null;
@@ -124,6 +182,7 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
     this.purchaseService.get(id).subscribe({
       next: (purchase) => {
         this.purchase = purchase;
+        this.gstSummary = this.purchaseService.getGstSummaryFor(id);
         this.loading = false;
       },
       error: (err) => {
