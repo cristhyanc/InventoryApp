@@ -62,9 +62,9 @@ is a true answer, and an overspent run is not.
 - Dromb is only the fallback: `operation: "item"` with one known `item_id` (or its published
   product `url`). Its item-limit field is `limit`, not `maxItems`; an item lookup returns one
   product. Never use Dromb keyword search in this collector.
-- Kmart and Axlymxp paginate internally. Do not rerun the same first search as if it were a
-  subsequent page: their verified schemas expose page caps, not a starting-page cursor. If a
-  returned-product or internal-page cap prevents proving completeness, report `truncated`.
+- Kmart and Axlymxp paginate internally: one call per search, never a repeated search as a
+  "next page" (their verified schemas expose page caps, not a starting-page cursor). Step 2 of
+  "Each search" below says how to record their paging and when the outcome is `truncated`.
 - These identities/schemas are verified, but the three actors remain blocked until a bounded
   paid dry run verifies output and Apify transport-level charge caps. Do not enable them or
   raise the existing ceilings. Axlymxp's start charge alone can consume the current $0.02 cap;
@@ -128,10 +128,21 @@ One entry of `searches` is one product at one supplier, identified by its `workI
    **every** run, even for a product whose listings you already know: a new pack of the same product
    (a 30-pack beside a 24-pack) has its own supplier product id, and an id-only lookup would never
    find it.
-2. **Read every page the rule allows.** Ask for at most the actor's configured page size. If the
-   actor filled that page, or reports more results than it returned, ask for the next page — up to
-   the actor's page cap. If the cap stops you while there is more, that search's outcome is
-   `truncated`.
+2. **Read every page the rule allows.** How depends on the actor:
+   - **Kmart (`abotapi/kmart-au-scraper`) and BIG W by name (`axlymxp/bigw-product-scraper`)
+     page internally.** Make **one** call per search, with at most the actor's configured item
+     limit (`maxItems`) and page cap (`maxPages` / `maxPagesPerQuery`); the actor reads its own
+     pages inside that call. Never call the same search again to get a "next page": it returns the
+     same first results and is billed again. Record `paging` as one page read of a cap of one
+     (`"pagesRead": 1, "pageCap": 1`). If the call returned as many products as its item limit, there
+     may be more: set `moreAvailable` to true and the outcome is `truncated`.
+   - **Dromb (`dromb/big-w-au-product-scraper`)** looks up one known item; there are no pages.
+   - **JB Metro (`jbmetro-lookup.mjs`)** reads its own pages up to its page cap and reports
+     `pagesRead` and `truncated`; run it once per search and record what it reports.
+   - **Varnmill (`varnmill/au-supermarket-prices`)**: ask for at most the actor's configured page
+     size. If the actor filled that page, or reports more results than it returned, ask for the
+     next page — up to the actor's page cap. If the cap stops you while there is more, that
+     search's outcome is `truncated`.
 3. **Keep only the real matches.** The results are noisy: a keyword search for one product returns
    other brands, other products and accessories. Keep a result only when it is **the same product**
    — same brand, same variant, same individual unit size — in **any** pack size. A different flavour,

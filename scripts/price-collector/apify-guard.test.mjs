@@ -668,7 +668,7 @@ describe('verified retailer input contracts', () => {
 
   it('bounds BIG W internal paging and keeps pricing without reviews', () => {
     const actor = 'axlymxp/bigw-product-scraper';
-    const answer = decideApify({ actor, input: { searchQueries: ['chocolate'], maxPagesPerQuery: 999,
+    const answer = decideApify({ actor, input: { searchQueries: ['chocolate'],
       includePricing: false, includeReviewStats: true, includeReviews: true } }, { rules: confirming(actor) });
     assert.equal(answer.decision, 'allow');
     const input = inputOf(answer);
@@ -688,4 +688,33 @@ describe('verified retailer input contracts', () => {
     assert.equal(inputOf(answer).maxItems, undefined);
     assert.equal(inputOf(answer).limit, 1);
   });
+
+  for (const [actor, field, query] of [
+    ['abotapi/kmart-au-scraper', 'maxPages', { searchTerms: ['chocolate'] }],
+    ['axlymxp/bigw-product-scraper', 'maxPagesPerQuery', { searchQueries: ['chocolate'] }],
+  ]) {
+    it(`keeps a smaller ${field} for ${actor} rather than raising it to the cap`, () => {
+      const answer = decideApify({ actor, input: { ...query, [field]: 1 } }, { rules: confirming(actor) });
+      assert.equal(answer.decision, 'allow');
+      assert.equal(inputOf(answer)[field], 1);
+    });
+
+    it(`refuses a ${field} above the cap for ${actor}`, () => {
+      const answer = decideApify({ actor, input: { ...query, [field]: 4 } }, { rules: confirming(actor) });
+      assert.equal(answer.decision, 'deny');
+      assert.match(answer.reason, new RegExp(`${field} may be at most 3`));
+    });
+
+    it(`refuses a zero or malformed ${field} for ${actor}, which these actors read as every page`, () => {
+      for (const asked of [0, -1, 1.5, '2']) {
+        const answer = decideApify({ actor, input: { ...query, [field]: asked } }, { rules: confirming(actor) });
+        assert.equal(answer.decision, 'deny', String(asked));
+      }
+    });
+
+    it(`does not force ${field} for ${actor}, so a request is judged rather than overwritten`, () => {
+      assert.equal(limits.actors[actor].pageLimitField, field);
+      assert.equal(Object.hasOwn(limits.actors[actor].forcedInput, field), false);
+    });
+  }
 });

@@ -16653,7 +16653,11 @@ page); live pricing stays on and reviews/rating requests are off. Dromb is restr
 `operation: item` with a known `item_id` or published URL, `limit: 1` and no raw output.
 The two name-search actors expose internal page caps, not a starting-page cursor. Repeating a
 first-page request is not pagination; a limit that prevents proving completeness is reported as
-truncated. Existing spending ceilings remain unchanged, and all three remain blocked by
+truncated. Their page cap is not forced: each names it as `pageLimitField` (`maxPages`,
+`maxPagesPerQuery`), and the guard keeps a smaller positive request, sets the configured `maxPages`
+when none is given, and refuses zero (which these actors read as every page), a malformed value or a
+larger one. The prompt's "Each search" step makes one call per search for these two actors and asks
+for further pages only from Varnmill. Existing spending ceilings remain unchanged, and all three remain blocked by
 `actorIdConfirmed: false` until the bounded dry run and transport charge-limit verification.
 The existing generic guard puts the charge field in actor input; Dromb's closed input schema does
 not declare that field, so #926 must verify the MCP transport budget option before enabling it.
