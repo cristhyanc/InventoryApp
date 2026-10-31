@@ -26,7 +26,10 @@ It has no production API input and no cron. #926 stays open until real output/co
    and collector application's GUIDs. Set `PriceCollector__RunExpiryHours` to at least 1 (default 6)
    and restart the test API. Its workforce API audience remains the API application's own id.
 5. Create the GitHub environment **price-collector** with a required human reviewer and deployment
-   branches limited to **main**. Add environment variables:
+   branches limited to **main** and **develop** (develop is how the collector is run against the
+   hosted testing API; see [Hosted testing environment](testing-environment.md#manual-supplier-price-collector-against-testing)).
+   This environment and its federated credential are the collector's own; they are not the
+   `testing` environment or the testing deployment identity. Add environment variables:
 
    | Variable | Value |
    | --- | --- |
@@ -41,15 +44,17 @@ It has no production API input and no cron. #926 stays open until real output/co
    spend limit. The collector guards calls, items and pages; it does not enforce an Apify dollar cap.
    Keep the existing repository runner-mode and isolation variables unchanged. In self-hosted mode,
    this job is refused unless a human has already verified reset/ephemeral runner isolation.
-7. Review and merge the feature PR into `develop`. The owner separately releases reviewed code to
-   `main` through the normal process before running it. This workflow deliberately refuses feature
-   branches and `develop`; implementing #929 does not authorize a release or a deployment.
+7. Review and merge the feature PR into `develop`. The workflow runs only from reviewed **main** or
+   reviewed **develop** and refuses every feature branch, and it refuses the production API origin
+   (the one in `frontend/inventory-app/src/assets/config.json`). To test against the hosted testing
+   API, run it from `develop` once Deploy Testing has deployed that commit; running it never
+   authorizes a release or a production deployment.
 
 ## First run
 
 In GitHub → Actions → **Price collector (manual test)** → Run workflow:
 
-1. Select **main**.
+1. Select **develop** (to test the code the hosted testing API runs) or **main**.
 2. Confirm that the environment points to a disposable test API and provider limits are set.
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test

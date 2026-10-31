@@ -181,10 +181,24 @@ function stateDirectory(env) {
   return dir;
 }
 
-async function prepare(env, stateDir) {
-  if (env.GITHUB_REF !== 'refs/heads/main') throw new Error('Only the reviewed main workflow may issue a run.');
+// The production API origin, from the production frontend's own runtime configuration. The
+// collector is a test-only stage: it must never issue work from, or submit results to, production.
+export function productionApiOrigin(configPath = join(here, '../../frontend/inventory-app/src/assets/config.json')) {
+  return new URL(json(configPath).apiBaseUrl).origin;
+}
+
+// Reviewed main or develop only (develop to run against the hosted testing API), an HTTPS test API
+// URL without credentials, query or fragment, and never the production API.
+export function collectorTarget(env, production = productionApiOrigin()) {
+  if (!['refs/heads/main', 'refs/heads/develop'].includes(env.GITHUB_REF)) throw new Error('Only the reviewed main or develop workflow may issue a run.');
   const url = new URL(env.PRICE_COLLECTOR_TEST_API_URL);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Configure an HTTPS test API URL.');
+  if (url.origin === new URL(production).origin) throw new Error('The collector test API must not be the production API.');
+  return url;
+}
+
+async function prepare(env, stateDir) {
+  const url = collectorTarget(env);
   const size = Number(env.PRICE_COLLECTOR_SAMPLE_SIZE);
   // Validate all local configuration before issuing a run (GET work writes a run).
   sampleWork({ searches: [], matching: { waitingProducts: [] } }, size);

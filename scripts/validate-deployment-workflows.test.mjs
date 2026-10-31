@@ -9,14 +9,18 @@ import {
   deployProductionPath,
   deployProductionRecoveryPath,
   deployProductionReleasePath,
+  deployTestingPath,
   extractJobPermissions,
   extractJobs,
+  extractStep,
   extractTriggers,
   readWorkflows,
+  TESTING_ORDER_STEP,
   verifyDeployProductionRecoveryWorkflow,
   verifyDeployProductionReleaseWorkflow,
   verifyDeployProductionWorkflow,
   verifyDeploymentWorkflows,
+  verifyDeployTestingWorkflow,
   verifyNoOtherWorkflowDeploys,
 } from './validate-deployment-workflows.mjs';
 import { RUNS_ON_SELECTOR } from './validate-runner-placement.mjs';
@@ -440,4 +444,383 @@ test('an inactive invalid record is still selected, and an older record wins ove
   const olderRecord = runStep(baselineScript, { entry: 'recovery', recorded: fixture.baseline, baseline: fixture.release });
   assert.equal(olderRecord.status, 1, olderRecord.log);
   assert.match(olderRecord.log, /differs from the last recorded production release/);
+});
+
+// ---------------------------------------------------------------------------------------
+// Deploy Testing (deploy-testing.yml): the hosted testing environment, deployed from develop.
+// ---------------------------------------------------------------------------------------
+
+const testing = readRepositoryFile(deployTestingPath);
+const testingJobs = extractJobs(testing, deployTestingPath);
+
+function mutateTesting(original, replacement) {
+  assert.ok(testing.includes(original), `fixture text not found: ${original}`);
+  return testing.replace(original, () => replacement);
+}
+
+function replaceInTestingJob(jobId, original, replacement) {
+  const jobText = testingJobs[jobId].trimEnd();
+  assert.ok(testing.includes(jobText), `job text not found: ${jobId}`);
+  assert.ok(jobText.includes(original), `fixture text not found in ${jobId}: ${original}`);
+  return testing.replace(jobText, () => jobText.replace(original, () => replacement));
+}
+
+test('testing deploys on every push to develop and on a manual dispatch with no inputs, nothing else', () => {
+  verifyDeployTestingWorkflow(testing);
+  assert.deepEqual(extractTriggers(testing), ['push', 'workflow_dispatch']);
+  for (const tampered of [
+    mutateTesting('      - develop\n', '      - develop\n      - main\n'),
+    mutateTesting('      - develop\n', "      - '**'\n"),
+    mutateTesting('  push:\n    branches:\n', '  push:\n    tags:\n      - v*\n    branches:\n'),
+    mutateTesting('  workflow_dispatch:\n', '  workflow_dispatch:\n    inputs:\n      sha:\n        type: string\n'),
+    mutateTesting('  workflow_dispatch:\n', '  workflow_dispatch:\n  pull_request:\n'),
+    mutateTesting('  workflow_dispatch:\n', '  workflow_dispatch:\n  schedule:\n    - cron: "0 0 * * *"\n'),
+  ]) {
+    assert.throws(() => verifyDeployTestingWorkflow(tampered), /on: block|triggered only/);
+  }
+});
+
+test('a manual testing run started from any branch other than develop is refused before anything runs', () => {
+  const ungatedResolve = mutateTesting("if: github.ref != 'refs/heads/develop'", "if: github.ref == 'refs/heads/never'");
+  assert.throws(() => verifyDeployTestingWorkflow(ungatedResolve), /refs\/heads\/develop/);
+  for (const jobId of ['deploy-api', 'deploy-frontend']) {
+    const ungated = replaceInTestingJob(jobId, "if: github.ref == 'refs/heads/develop' && ", 'if: ');
+    assert.throws(() => verifyDeployTestingWorkflow(ungated), new RegExp(jobId));
+  }
+});
+
+test('testing builds and deploys exactly the triggering commit and never reads a newer develop head', () => {
+  for (const jobId of ['validate', 'build']) {
+    const movingCheckout = replaceInTestingJob(jobId, 'ref: ${{ needs.resolve.outputs.sha }}', 'ref: develop');
+    assert.throws(() => verifyDeployTestingWorkflow(movingCheckout), /every checkout must use ref/);
+  }
+  const fetchedHead = replaceInTestingJob('build', '      - name: Publish API\n', '      - name: Fetch develop\n        run: git fetch origin develop\n\n      - name: Publish API\n');
+  assert.throws(() => verifyDeployTestingWorkflow(fetchedHead), /git fetch/);
+  const otherApiArtifact = replaceInTestingJob('deploy-api', 'name: testing-api-${{ needs.resolve.outputs.sha }}', 'name: testing-api-${{ github.run_id }}');
+  assert.throws(() => verifyDeployTestingWorkflow(otherApiArtifact), /testing-api-/);
+  const otherFrontendArtifact = replaceInTestingJob('deploy-frontend', 'name: testing-frontend-${{ needs.resolve.outputs.sha }}', 'name: testing-frontend-latest');
+  assert.throws(() => verifyDeployTestingWorkflow(otherFrontendArtifact), /testing-frontend-/);
+  const rebuildingFrontend = replaceInTestingJob('deploy-frontend', 'skip_app_build: true', 'skip_app_build: false');
+  assert.throws(() => verifyDeployTestingWorkflow(rebuildingFrontend), /skip_app_build/);
+  const headSha = replaceInTestingJob('resolve', 'sha="$GITHUB_SHA"', 'sha="$(gh api repos/$GITHUB_REPOSITORY/commits/develop --jq .sha)"');
+  assert.throws(() => verifyDeployTestingWorkflow(headSha), /GITHUB_SHA/);
+});
+
+test('failed validation, build or test API health prevents the testing deployment that follows', () => {
+  for (const dependency of ['validate', 'build']) {
+    const ungated = replaceInTestingJob('deploy-api', `      - ${dependency}\n`, '');
+    assert.throws(() => verifyDeployTestingWorkflow(ungated), new RegExp(`must need '${dependency}'`));
+  }
+  for (const dependency of ['verify-api', 'record-deployment']) {
+    const ungated = replaceInTestingJob('deploy-frontend', `      - ${dependency}\n`, '');
+    assert.throws(() => verifyDeployTestingWorkflow(ungated), new RegExp(`must need '${dependency}'`));
+  }
+  const noValidation = replaceInTestingJob('validate', 'bash scripts/validate.sh', 'echo skipped');
+  assert.throws(() => verifyDeployTestingWorkflow(noValidation), /validate\.sh/);
+  const healthAlways = replaceInTestingJob('verify-api', `    runs-on: ${RUNS_ON_SELECTOR}\n`, `    if: always()\n    runs-on: ${RUNS_ON_SELECTOR}\n`);
+  assert.throws(() => verifyDeployTestingWorkflow(healthAlways), /verify-api/);
+  const noHealth = replaceInTestingJob('verify-api', '"$base/health/ready"', '"$base/health/live"');
+  assert.throws(() => verifyDeployTestingWorkflow(noHealth), /health\/ready/);
+  const recordAlways = replaceInTestingJob('record-deployment', "    if: (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')\n", "    if: always() && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')\n");
+  assert.throws(() => verifyDeployTestingWorkflow(recordAlways), /record-deployment/);
+  const frontendUnverified = replaceInTestingJob('deploy-frontend', '- name: Verify the test frontend responds and calls the test API', '- name: Done');
+  assert.throws(() => verifyDeployTestingWorkflow(frontendUnverified), /Verify the test frontend/);
+  const configUnchecked = replaceInTestingJob('deploy-frontend', ' && [ "$configured" = "$expected" ]', '');
+  assert.throws(() => verifyDeployTestingWorkflow(configUnchecked), /configured/);
+});
+
+test('testing uses only its own environment and OIDC identity, never a production credential or a stored secret', () => {
+  for (const [original, replacement] of [
+    ['client-id: ${{ vars.TESTING_AZURE_CLIENT_ID }}', 'client-id: ${{ vars.VmInventoryApi_CLIENT_ID_4D7F }}'],
+    ['azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}', 'azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_RED_ISLAND_0C128C000 }}'],
+    ['azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}', 'azure_static_web_apps_api_token: ${{ secrets.TESTING_SWA_TOKEN }}'],
+    ['    environment: testing\n', '    environment: VmInventoryApi_Env\n'],
+    ['    environment: testing\n', '    environment: price-collector\n'],
+    ['app-name: ${{ vars.TESTING_API_APP_NAME }}', 'app-name: vm-manager'],
+    ['app-name: ${{ vars.TESTING_API_APP_NAME }}', 'app-name: ${{ vars.TESTING_API_APP_NAME }}\n          publish-profile: ${{ vars.PROFILE }}'],
+  ]) {
+    assert.throws(() => verifyDeployTestingWorkflow(mutateTesting(original, replacement)), /forbidden|missing required|environment/);
+  }
+  const jobs = testingJobs;
+  assert.deepEqual(extractJobPermissions(jobs['deploy-api']), { contents: 'read', deployments: 'read', 'id-token': 'write' });
+  assert.deepEqual(extractJobPermissions(jobs['deploy-frontend']), { contents: 'read', 'id-token': 'write' });
+  assert.deepEqual(extractJobPermissions(jobs.validate), { contents: 'read' });
+  const writer = replaceInTestingJob('deploy-api', '      deployments: read\n', '      deployments: read\n      contents: write\n');
+  assert.throws(() => verifyDeployTestingWorkflow(writer), /contents: write|permissions/);
+  // An OIDC token or the testing environment in a job that does not deploy is refused.
+  const oidcInValidate = replaceInTestingJob('validate', '      contents: read\n', '      contents: read\n      id-token: write\n');
+  assert.throws(() => verifyDeployTestingWorkflow(oidcInValidate), /validate/);
+});
+
+test('production and every other workflow are refused the testing environment and identity, and production keeps its own', () => {
+  const workflows = readWorkflows();
+  verifyNoOtherWorkflowDeploys(workflows);
+  for (const path of [deployProductionReleasePath, deployProductionPath, '.github/workflows/vm-manager.yml', '.github/workflows/price-collector.yml']) {
+    for (const injected of ['    environment: testing\n', '          client-id: ${{ vars.TESTING_AZURE_CLIENT_ID }}\n']) {
+      const tampered = { ...workflows, [path]: `${workflows[path]}${injected}` };
+      assert.throws(() => verifyNoOtherWorkflowDeploys(tampered), /forbidden text/);
+    }
+  }
+  // Allowing testing did not open a second production path: other workflows still may not deploy.
+  const vmManager = '.github/workflows/vm-manager.yml';
+  const deploying = { ...workflows, [vmManager]: `${workflows[vmManager]}      - uses: azure/webapps-deploy@v2\n` };
+  assert.throws(() => verifyNoOtherWorkflowDeploys(deploying), /forbidden text/);
+  // And production still runs only from main, with its own environment and identity.
+  verifyDeployProductionReleaseWorkflow(deploy);
+  assert.ok(deploy.includes('environment: VmInventoryApi_Env'));
+  assert.ok(!testing.includes('VmInventoryApi'));
+});
+
+test('testing runs share one non-cancelling queue and the order rule is checked again before Azure', () => {
+  for (const tampered of [
+    mutateTesting('  cancel-in-progress: false\n', '  cancel-in-progress: true\n'),
+    mutateTesting('  group: deploy-testing\n', '  group: deploy-testing-${{ github.sha }}\n'),
+    mutateTesting('concurrency:\n  group: deploy-testing\n  cancel-in-progress: false\n', ''),
+    replaceInTestingJob('deploy-api', '    environment: testing\n', '    environment: testing\n    concurrency:\n      group: other\n'),
+  ]) {
+    assert.throws(() => verifyDeployTestingWorkflow(tampered), /concurrency|cancel-in-progress/);
+  }
+  const noRecheck = replaceInTestingJob('deploy-api', `- name: ${TESTING_ORDER_STEP}`, '- name: Skip the order check');
+  assert.throws(() => verifyDeployTestingWorkflow(noRecheck), /order|missing step|must come before/);
+  const weakerRecheck = replaceInTestingJob('deploy-api', 'behind) fail', 'behind) echo');
+  assert.throws(() => verifyDeployTestingWorkflow(weakerRecheck), /repeat the resolve job's step exactly/);
+  const weakerResolve = replaceInTestingJob('resolve', 'behind) fail', 'behind) echo');
+  assert.throws(() => verifyDeployTestingWorkflow(weakerResolve), /behind\) fail/);
+});
+
+test('testing keeps the test database and documents outside the package and runs no scheduled job', () => {
+  for (const [original, replacement] of [
+    ['^Data\\ Source=/home/data/', '^Data\\ Source='],
+    ['[ "$(setting DocumentStorage__Provider)" = "AzureBlob" ]', 'true'],
+    ['[ "$(setting ASPNETCORE_ENVIRONMENT)" = "Staging" ]', 'true'],
+  ]) {
+    assert.throws(() => verifyDeployTestingWorkflow(replaceInTestingJob('deploy-api', original, replacement)), /deploy-api/);
+  }
+  const keepsJobs = replaceInTestingJob('build', 'rm -rf -- "$RUNNER_TEMP/api/App_Data/jobs"', 'true');
+  assert.throws(() => verifyDeployTestingWorkflow(keepsJobs), /App_Data\/jobs/);
+});
+
+// Behaviour of the testing steps, run in bash exactly as GitHub runs them, with a fake gh/az.
+const testingFixtureRoot = mkdtempSync(join(tmpdir(), 'deploy-testing-'));
+test.after(() => rmSync(testingFixtureRoot, { recursive: true, force: true }));
+const testingBin = join(testingFixtureRoot, 'bin');
+mkdirSync(testingBin);
+// gh answers by endpoint: the develop comparison, the newest record, and the record comparison.
+writeFileSync(join(testingBin, 'gh'), `#!/usr/bin/env bash
+case "$*" in
+  *"/deployments?"*) [ "\${FAKE_RECORDS_EXIT:-0}" = 0 ] || exit 1; printf "%s" "$FAKE_RECORDED" ;;
+  *"...develop"*) [ "\${FAKE_DEVELOP_EXIT:-0}" = 0 ] || exit 1; printf "%s" "$FAKE_CONTAINED" ;;
+  *"/compare/"*) printf "%s" "$FAKE_ORDER" ;;
+  *) echo "unexpected gh call: $*" >&2; exit 2 ;;
+esac
+`);
+chmodSync(join(testingBin, 'gh'), 0o755);
+// az returns the App Service settings fixture; it is never printed by the step.
+writeFileSync(join(testingBin, 'az'), `#!/usr/bin/env bash
+[ "\${FAKE_AZ_EXIT:-0}" = 0 ] || exit 1
+case "$*" in
+  "staticwebapp show "*) printf "%s" "$FAKE_SWA_HOST" ;;
+  "staticwebapp secrets list "*) printf "%s" "$FAKE_SWA_TOKEN" ;;
+  *) printf "%s" "$FAKE_SETTINGS" ;;
+esac
+`);
+chmodSync(join(testingBin, 'az'), 0o755);
+
+const SHA = 'a'.repeat(40);
+const RECORDED = 'b'.repeat(40);
+
+function runTestingStep(script, env = {}, cwd = testingFixtureRoot) {
+  const output = join(testingFixtureRoot, `output-${Math.random().toString(36).slice(2)}`);
+  writeFileSync(output, '');
+  const result = spawnSync('bash', ['-c', script], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      PATH: `${testingBin}:${process.env.PATH}`,
+      HOME: testingFixtureRoot,
+      GITHUB_OUTPUT: output,
+      GITHUB_REPOSITORY: 'owner/repo',
+      GITHUB_SHA: SHA,
+      TESTING_ENVIRONMENT: 'testing',
+      TESTING_RECORD_TASK: 'deploy:testing-backend',
+      PRODUCTION_API_HOST: 'vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net',
+      PRODUCTION_FRONTEND_HOST: 'red-island-0c128c000.7.azurestaticapps.net',
+      GH_TOKEN: 'fake',
+      ...env,
+    },
+  });
+  const outputs = Object.fromEntries(
+    readFileSync(output, 'utf8').split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
+  );
+  return { status: result.status, log: `${result.stdout}${result.stderr}`, outputs };
+}
+
+const orderScript = stepScript(testingJobs.resolve, TESTING_ORDER_STEP);
+
+test('the order step is byte-identical in resolve and deploy-api', () => {
+  assert.equal(stepScript(testingJobs['deploy-api'], TESTING_ORDER_STEP).trimEnd(), orderScript.trimEnd());
+  assert.equal(extractStep(testingJobs['deploy-api'], TESTING_ORDER_STEP, deployTestingPath).trimEnd(), extractStep(testingJobs.resolve, TESTING_ORDER_STEP, deployTestingPath).trimEnd());
+});
+
+test('the first testing deployment, and every newer or identical commit, is allowed', () => {
+  for (const [recorded, order] of [['', ''], [RECORDED, 'ahead'], [SHA, 'identical']]) {
+    const run = runTestingStep(orderScript, { FAKE_CONTAINED: 'ahead', FAKE_RECORDED: recorded, FAKE_ORDER: order });
+    assert.equal(run.status, 0, run.log);
+    assert.equal(run.outputs.sha, SHA);
+  }
+  const head = runTestingStep(orderScript, { FAKE_CONTAINED: 'identical', FAKE_RECORDED: '' });
+  assert.equal(head.status, 0, head.log);
+});
+
+test('an older commit never overwrites a newer testing deployment', () => {
+  const run = runTestingStep(orderScript, { FAKE_CONTAINED: 'ahead', FAKE_RECORDED: RECORDED, FAKE_ORDER: 'behind' });
+  assert.notEqual(run.status, 0);
+  assert.match(run.log, /newer than/);
+  assert.equal(run.outputs.sha, undefined);
+  const diverged = runTestingStep(orderScript, { FAKE_CONTAINED: 'ahead', FAKE_RECORDED: RECORDED, FAKE_ORDER: 'diverged' });
+  assert.notEqual(diverged.status, 0);
+  assert.match(diverged.log, /diverged/);
+});
+
+test('a commit outside develop, an invalid record or an unreadable API stops the run before deploying', () => {
+  for (const [env, message] of [
+    [{ FAKE_CONTAINED: 'behind' }, /not contained in develop/],
+    [{ FAKE_CONTAINED: 'diverged' }, /not contained in develop/],
+    [{ FAKE_DEVELOP_EXIT: '1' }, /Could not compare/],
+    [{ FAKE_CONTAINED: 'ahead', FAKE_RECORDS_EXIT: '1' }, /Could not read the recorded testing deployments/],
+    [{ FAKE_CONTAINED: 'ahead', FAKE_RECORDED: 'main' }, /not a full commit SHA/],
+    [{ GITHUB_SHA: 'develop', FAKE_CONTAINED: 'ahead' }, /full 40-character/],
+  ]) {
+    const run = runTestingStep(orderScript, env);
+    assert.notEqual(run.status, 0, run.log);
+    assert.match(run.log, message);
+    assert.equal(run.outputs.sha, undefined);
+  }
+});
+
+const configScript = stepScript(testingJobs['deploy-api'], 'Check the testing environment configuration');
+const GUID = '00000000-0000-4000-8000-000000000000';
+const validConfig = {
+  AZURE_CLIENT_ID: GUID,
+  AZURE_TENANT_ID: GUID,
+  AZURE_SUBSCRIPTION_ID: GUID,
+  RESOURCE_GROUP: 'restockroo-testing',
+  API_APP_NAME: 'restockroo-testing-api',
+  API_BASE_URL: 'https://restockroo-testing-api.azurewebsites.net/',
+};
+
+test('the test API configuration must be complete and must not name production', () => {
+  const ok = runTestingStep(configScript, validConfig);
+  assert.equal(ok.status, 0, ok.log);
+  assert.equal(ok.outputs.api_base_url, 'https://restockroo-testing-api.azurewebsites.net');
+  for (const [override, message] of [
+    [{ AZURE_CLIENT_ID: '' }, /TESTING_AZURE_CLIENT_ID/],
+    [{ API_APP_NAME: 'vm-manager' }, /production App Service/],
+    [{ API_BASE_URL: 'https://VM-MANAGER-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net' }, /production API/],
+    [{ API_BASE_URL: 'http://restockroo-testing-api.azurewebsites.net' }, /https origin/],
+    [{ API_BASE_URL: 'https://restockroo-testing-api.azurewebsites.net/api' }, /https origin/],
+  ]) {
+    const run = runTestingStep(configScript, { ...validConfig, ...override });
+    assert.notEqual(run.status, 0, run.log);
+    assert.match(run.log, message);
+  }
+});
+
+const dataScript = stepScript(testingJobs['deploy-api'], 'Check the test API keeps its data outside the package');
+const goodSettings = {
+  ASPNETCORE_ENVIRONMENT: 'Staging',
+  Database__AllowAutomaticMigrationUnsafeOutsideDevelopment: 'true',
+  ConnectionStrings__DefaultConnection: 'Data Source=/home/data/inventory-testing.db',
+  DocumentStorage__Provider: 'AzureBlob',
+  DocumentStorage__BlobServiceUri: 'https://restockrootesting.blob.core.windows.net',
+  DocumentStorage__ContainerName: 'business-documents-testing',
+};
+const settingsJson = (values) => JSON.stringify(Object.entries(values).map(([name, value]) => ({ name, value, slotSetting: false })));
+
+test('the test API is deployed only while its database and documents live outside the package', () => {
+  const ok = runTestingStep(dataScript, { RESOURCE_GROUP: 'rg', API_APP_NAME: 'app', FAKE_SETTINGS: settingsJson(goodSettings) });
+  assert.equal(ok.status, 0, ok.log);
+  // The connection string and other values are compared, never printed.
+  assert.ok(!ok.log.includes('inventory-testing.db'), ok.log);
+  for (const [override, message] of [
+    [{ ASPNETCORE_ENVIRONMENT: 'Production' }, /must be Staging/],
+    [{ ASPNETCORE_ENVIRONMENT: undefined }, /must be Staging/],
+    [{ Database__AllowAutomaticMigrationUnsafeOutsideDevelopment: 'false' }, /AllowAutomaticMigration/],
+    [{ ConnectionStrings__DefaultConnection: 'Data Source=inventory.db' }, /outside the deployed package/],
+    [{ ConnectionStrings__DefaultConnection: 'Data Source=/home/site/wwwroot/inventory.db' }, /outside the deployed package/],
+    [{ ConnectionStrings__DefaultConnection: 'Data Source=/home/data/../site/wwwroot/inventory.db' }, /outside the deployed package/],
+    [{ DocumentStorage__Provider: 'FileSystem' }, /AzureBlob/],
+    [{ DocumentStorage__BlobServiceUri: 'https://evil.example' }, /blob endpoint/],
+    [{ DocumentStorage__ContainerName: '' }, /ContainerName/],
+  ]) {
+    const values = { ...goodSettings, ...override };
+    for (const [name, value] of Object.entries(values)) if (value === undefined) delete values[name];
+    const run = runTestingStep(dataScript, { RESOURCE_GROUP: 'rg', API_APP_NAME: 'app', FAKE_SETTINGS: settingsJson(values) });
+    assert.notEqual(run.status, 0, run.log);
+    assert.match(run.log, message);
+    assert.match(run.log, /Nothing was deployed/);
+  }
+  const unreadable = runTestingStep(dataScript, { RESOURCE_GROUP: 'rg', API_APP_NAME: 'app', FAKE_AZ_EXIT: '1' });
+  assert.notEqual(unreadable.status, 0);
+  assert.match(unreadable.log, /Could not read the test App Service settings/);
+});
+
+test('a test API that could make real Nayax calls or scheduled backups is reported', () => {
+  const run = runTestingStep(dataScript, {
+    RESOURCE_GROUP: 'rg',
+    API_APP_NAME: 'app',
+    FAKE_SETTINGS: settingsJson({ ...goodSettings, NayaxTokenProtection__ActiveKeyId: 'k1', BackupStorage__BlobServiceUri: 'https://x.blob.core.windows.net' }),
+  });
+  assert.equal(run.status, 0, run.log);
+  assert.match(run.log, /::warning::Nayax token protection is configured/);
+  assert.match(run.log, /::warning::BackupStorage is configured/);
+});
+
+const pointScript = stepScript(testingJobs['deploy-frontend'], 'Point the frontend at the test API');
+
+test('the test frontend bundle is pointed at the test API and never at the production API', () => {
+  const site = join(testingFixtureRoot, 'site');
+  mkdirSync(join(site, 'testing-frontend', 'assets'), { recursive: true });
+  const config = join(site, 'testing-frontend', 'assets', 'config.json');
+  writeFileSync(config, readRepositoryFile('frontend/inventory-app/src/assets/config.json'));
+  const ok = runTestingStep(pointScript, { API_BASE_URL: 'https://restockroo-testing-api.azurewebsites.net' }, site);
+  assert.equal(ok.status, 0, ok.log);
+  assert.deepEqual(JSON.parse(readFileSync(config, 'utf8')), { apiBaseUrl: 'https://restockroo-testing-api.azurewebsites.net/api' });
+
+  const production = runTestingStep(pointScript, { API_BASE_URL: 'https://vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net' }, site);
+  assert.notEqual(production.status, 0);
+  assert.match(production.log, /must not call the production API/);
+
+  rmSync(config);
+  const missing = runTestingStep(pointScript, { API_BASE_URL: 'https://restockroo-testing-api.azurewebsites.net' }, site);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.log, /no assets\/config.json/);
+});
+
+test('the production API host the testing workflow refuses is the one the production frontend calls', () => {
+  const productionApi = new URL(JSON.parse(readRepositoryFile('frontend/inventory-app/src/assets/config.json')).apiBaseUrl).host;
+  assert.ok(testing.includes(`  PRODUCTION_API_HOST: ${productionApi}\n`));
+});
+
+const tokenScript = stepScript(testingJobs['deploy-frontend'], 'Read the test Static Web App deployment token');
+
+test('the test Static Web App token is read with the testing identity, masked first, and never production', () => {
+  const env = { RESOURCE_GROUP: 'rg', STATIC_WEB_APP_NAME: 'restockroo-testing', FAKE_SWA_HOST: 'gentle-sea-1.azurestaticapps.net', FAKE_SWA_TOKEN: 'swa-token-value' };
+  const ok = runTestingStep(tokenScript, env);
+  assert.equal(ok.status, 0, ok.log);
+  assert.equal(ok.outputs.token, 'swa-token-value');
+  // The only place the token appears in the log is the mask command, before any output uses it.
+  assert.deepEqual(ok.log.split('\n').filter((line) => line.includes('swa-token-value')), ['::add-mask::swa-token-value']);
+
+  const production = runTestingStep(tokenScript, { ...env, FAKE_SWA_HOST: 'Red-Island-0c128c000.7.azurestaticapps.net' });
+  assert.notEqual(production.status, 0);
+  assert.match(production.log, /production Static Web App/);
+  assert.equal(production.outputs.token, undefined);
+  assert.ok(!production.log.includes('swa-token-value'));
+
+  const empty = runTestingStep(tokenScript, { ...env, FAKE_SWA_TOKEN: '' });
+  assert.notEqual(empty.status, 0);
+  const refused = runTestingStep(tokenScript, { ...env, FAKE_AZ_EXIT: '1' });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.log, /testing deployment identity/);
 });

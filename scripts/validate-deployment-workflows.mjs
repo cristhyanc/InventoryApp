@@ -1,13 +1,20 @@
-// Production deployment workflow contract (issues #343 and #491).
+// Deployment workflow contract (issues #343 and #491, and the hosted testing environment).
 //
 // Proves from the workflow text that production changes only through the two manually started
 // entry points, Deploy Production (no inputs) and Deploy Production (advanced recovery), and that
 // both run the one shared release workflow: no push- or pull-request-triggered workflow can reach
-// Azure, both entry points run only from main and share one non-cancelling concurrency group, the
-// normal release deploys the dispatch commit and reads its baseline from the release records, every
-// job is bound to the one resolved release SHA, validation, the migration preflight and the API
-// health check gate what follows them, and each job keeps its expected environment and permission
-// boundary.
+// production Azure, both entry points run only from main and share one non-cancelling concurrency
+// group, the normal release deploys the dispatch commit and reads its baseline from the release
+// records, every job is bound to the one resolved release SHA, validation, the migration preflight
+// and the API health check gate what follows them, and each job keeps its expected environment and
+// permission boundary.
+//
+// The one other workflow that may deploy is Deploy Testing (deploy-testing.yml). It is checked as a
+// separate, narrower path: it deploys only develop, only to the testing environment with the testing
+// identity, never with a stored secret or any production environment, variable or token, and with
+// the same exact-SHA, validation, health-check and non-cancelling serialization rules, plus a check
+// that an older commit never overwrites a newer testing deployment. No workflow other than these two
+// may hold a deployment step, and neither may borrow the other's environment or identity.
 //
 // Usage: node scripts/validate-deployment-workflows.mjs
 
@@ -20,6 +27,7 @@ import { BASELINE_CONDITION, ISOLATION_CONDITION } from './validate-runner-place
 export const deployProductionPath = '.github/workflows/deploy-production.yml';
 export const deployProductionRecoveryPath = '.github/workflows/deploy-production-recovery.yml';
 export const deployProductionReleasePath = '.github/workflows/deploy-production-release.yml';
+export const deployTestingPath = '.github/workflows/deploy-testing.yml';
 export const RELEASE_WORKFLOW_CALL = 'uses: ./.github/workflows/deploy-production-release.yml';
 // Both entry points declare exactly this block, so they share one queue and never cancel a deployment.
 export const SHARED_CONCURRENCY = 'concurrency:\n  group: deploy-production\n  cancel-in-progress: false\n';
@@ -44,6 +52,42 @@ export const DEPLOYMENT_MARKERS = Object.freeze([
   'VmInventoryApi_Env',
   'VmInventoryApi_CLIENT_ID',
 ]);
+
+// Text that only the testing deployment may contain: its environment and its Azure identity. No
+// production workflow, and no other workflow, may reach the test resources or their identity.
+export const TESTING_MARKERS = Object.freeze([
+  'environment: testing',
+  'TESTING_AZURE_CLIENT_ID',
+  'TESTING_API_APP_NAME',
+  'TESTING_STATIC_WEB_APP_NAME',
+]);
+
+// Text the testing deployment must never contain: the production environment, identity, token,
+// release workflow and production health URL, any stored secret (it authenticates only with OIDC),
+// inherited secrets, the collector's environment and every other way to pass Azure credentials.
+export const TESTING_FORBIDDEN = Object.freeze([
+  'VmInventoryApi',
+  'AZURE_STATIC_WEB_APPS_API_TOKEN',
+  'deploy-production',
+  'PRODUCTION_API_BASE_URL',
+  'secrets.',
+  'secrets[',
+  'secrets: inherit',
+  'environment: price-collector',
+  'app-name: vm-manager',
+  'publish-profile',
+  'git fetch',
+  'git pull',
+  'workflow_run',
+]);
+export const TESTING_ENVIRONMENT = 'testing';
+export const TESTING_SHA = '${{ needs.resolve.outputs.sha }}';
+export const TESTING_TRIGGERS = 'on:\n  push:\n    branches:\n      - develop\n  workflow_dispatch:\n';
+export const TESTING_CONCURRENCY = 'concurrency:\n  group: deploy-testing\n  cancel-in-progress: false\n';
+export const TESTING_DEPLOY_JOB_CONDITION = `if: github.ref == 'refs/heads/develop' && needs.resolve.outputs.enabled == 'true' && ${ISOLATION_CONDITION} && ${BASELINE_CONDITION}`;
+// The step both resolve and deploy-api run, byte for byte, so the order rule checked before Azure
+// authentication is the one checked when the run started.
+export const TESTING_ORDER_STEP = 'Verify the commit is on develop and not older than the deployed one';
 
 // A failed deployment must never change code, labels or start an agent; production recovery
 // is a human decision.
@@ -220,12 +264,18 @@ function forbidEnvironment(jobs, jobId, source) {
   forbidText(jobs[jobId], 'secrets.', `${source} job '${jobId}'`);
 }
 
-// Every workflow other than the shared release workflow must be free of deployment markers, so no
-// push, pull request, schedule or agent event can reach Azure, and only the two entry points may
-// call the release workflow.
+// Every workflow other than the shared release workflow and the testing deployment must be free of
+// deployment markers, so no push, pull request, schedule or agent event can reach Azure, and only the
+// two entry points may call the release workflow. The testing deployment is checked on its own (see
+// verifyDeployTestingWorkflow); only it may hold the testing environment or identity.
 export function verifyNoOtherWorkflowDeploys(workflows) {
   for (const [path, text] of Object.entries(workflows)) {
-    if (path === deployProductionReleasePath) {
+    if (path !== deployTestingPath) {
+      for (const marker of TESTING_MARKERS) {
+        forbidText(text, marker, path);
+      }
+    }
+    if (path === deployProductionReleasePath || path === deployTestingPath) {
       continue;
     }
     for (const marker of DEPLOYMENT_MARKERS) {
@@ -463,6 +513,189 @@ export function verifyDeployProductionReleaseWorkflow(text, source = deployProdu
   requirePermissions(jobs, 'summary', {}, source);
 }
 
+// Returns one step of a job, from its `- name:` line to the next step, or fails when it is missing.
+export function extractStep(jobText, name, source) {
+  const marker = `      - name: ${name}\n`;
+  const start = jobText.indexOf(marker);
+  if (start < 0) {
+    fail(source, `missing step '${name}'`);
+  }
+  const next = jobText.indexOf('\n      - name: ', start + marker.length);
+  return next < 0 ? jobText.slice(start) : jobText.slice(start, next + 1);
+}
+
+// Deploy Testing: every push to develop deploys that commit to the separate test resources. It is a
+// deployment path of its own, never a way to production, so it must keep every safeguard the
+// production release has that applies to it, and hold nothing production uses.
+export function verifyDeployTestingWorkflow(text, source = deployTestingPath) {
+  requireText(text, 'name: Deploy Testing\n', source);
+  const triggers = extractTriggers(text);
+  if (triggers.join(',') !== 'push,workflow_dispatch') {
+    fail(source, `must be triggered only by push to develop and workflow_dispatch, found: ${triggers.join(', ') || 'none'}`);
+  }
+  // Exactly develop, no tags, paths or other branches, and a dispatch that takes no inputs.
+  if (`${extractOnBlock(text).trimEnd()}\n` !== TESTING_TRIGGERS) {
+    fail(source, `the on: block must be exactly: ${TESTING_TRIGGERS.replaceAll('\n', ' ')}`);
+  }
+  if (!/^permissions: \{\}$/m.test(text)) {
+    fail(source, 'top-level permissions must be {}');
+  }
+  // One queue for every testing run, and a running deployment is never cancelled.
+  if (!text.includes(`\n${TESTING_CONCURRENCY}`) || text.split('concurrency:').length !== 2) {
+    fail(source, `must declare exactly one concurrency block: ${TESTING_CONCURRENCY.replaceAll('\n', ' ')}`);
+  }
+  for (const forbidden of [...FORBIDDEN_IN_DEPLOY, ...TESTING_FORBIDDEN]) {
+    forbidText(text, forbidden, source);
+  }
+  // Every checkout is the resolved commit, never a branch tip read later in the run.
+  const refs = text.match(/^\s+ref:.*$/gm) ?? [];
+  if (refs.length === 0 || refs.some((line) => line.trim() !== `ref: ${TESTING_SHA}`)) {
+    fail(source, `every checkout must use ref: ${TESTING_SHA}`);
+  }
+
+  const jobs = extractJobs(text, source);
+  const expectedJobs = ['build', 'deploy-api', 'deploy-frontend', 'record-deployment', 'resolve', 'summary', 'validate', 'verify-api'];
+  if (Object.keys(jobs).sort(compareStrings).join(',') !== expectedJobs.join(',')) {
+    fail(source, `must have exactly the jobs ${expectedJobs.join(', ')}, found: ${Object.keys(jobs).sort(compareStrings).join(', ')}`);
+  }
+  for (const jobId of Object.keys(jobs)) {
+    if (extractJobPermissions(jobs[jobId]) === null) {
+      fail(source, `job '${jobId}' must declare its own permissions`);
+    }
+  }
+
+  // Resolve: refuse any ref other than develop first, report the switch, keep the runner gates, and
+  // take the commit that triggered the run.
+  const resolveJob = jobs.resolve;
+  requireOrder(resolveJob, "if: github.ref != 'refs/heads/develop'", `- name: ${TESTING_ORDER_STEP}`, `${source} job 'resolve'`);
+  requireText(resolveJob, 'Deploy Testing deploys only develop; this run was started from $RUN_REF."\n          exit 1', `${source} job 'resolve'`);
+  requireText(resolveJob, 'if [ "$TESTING_DEPLOYMENT_ENABLED" = "true" ]; then', `${source} job 'resolve'`);
+  requireText(resolveJob, 'enabled: ${{ steps.switch.outputs.enabled }}', `${source} job 'resolve'`);
+  requireText(resolveJob, `- name: ${RUNNER_BASELINE_STEP.slice('- name: '.length)}`, `${source} job 'resolve'`);
+  requireText(resolveJob, 'if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then', `${source} job 'resolve'`);
+  requireText(resolveJob, 'for tool in az jq curl docker; do', `${source} job 'resolve'`);
+  requirePermissions(jobs, 'resolve', { contents: 'read', deployments: 'read' }, source);
+  forbidEnvironment(jobs, 'resolve', source);
+
+  // The order rule: the commit is on develop, and the newest healthy testing deployment is the same
+  // commit or an ancestor of it. Checked when the run starts and again before Azure authentication.
+  const resolveOrder = extractStep(resolveJob, TESTING_ORDER_STEP, `${source} job 'resolve'`);
+  for (const required of [
+    'sha="$GITHUB_SHA"',
+    '^[0-9a-f]{40}$',
+    'compare/$sha...develop',
+    'deployments?environment=$TESTING_ENVIRONMENT&task=$TESTING_RECORD_TASK&per_page=1',
+    'compare/$recorded...$sha',
+    'identical|ahead) echo',
+    'behind) fail',
+    '*) fail',
+  ]) {
+    requireText(resolveOrder, required, `${source} step '${TESTING_ORDER_STEP}'`);
+  }
+  requireText(text, `  TESTING_ENVIRONMENT: ${TESTING_ENVIRONMENT}\n`, source);
+  requireText(text, '  TESTING_RECORD_TASK: deploy:testing-backend\n', source);
+
+  requireText(jobs.validate, 'bash scripts/validate.sh', `${source} job 'validate'`);
+  requireText(jobs.validate, 'node scripts/validate-deployment-workflows.mjs', `${source} job 'validate'`);
+  requireNeeds(jobs, 'validate', ['resolve'], source);
+  requirePermissions(jobs, 'validate', { contents: 'read' }, source);
+  forbidEnvironment(jobs, 'validate', source);
+
+  requireNeeds(jobs, 'build', ['resolve'], source);
+  requireText(jobs.build, `name: testing-api-${TESTING_SHA}`, `${source} job 'build'`);
+  requireText(jobs.build, `name: testing-frontend-${TESTING_SHA}`, `${source} job 'build'`);
+  // Testing runs no scheduled job: the backup WebJob is removed from the package it deploys.
+  requireOrder(jobs.build, 'rm -rf -- "$RUNNER_TEMP/api/App_Data/jobs"', 'name: Upload API package', `${source} job 'build'`);
+  requirePermissions(jobs, 'build', { contents: 'read' }, source);
+  forbidEnvironment(jobs, 'build', source);
+
+  const deployApi = jobs['deploy-api'];
+  requireText(deployApi, `    ${TESTING_DEPLOY_JOB_CONDITION}\n`, `${source} job 'deploy-api'`);
+  requireText(deployApi, `    environment: ${TESTING_ENVIRONMENT}\n`, `${source} job 'deploy-api'`);
+  requireNeeds(jobs, 'deploy-api', ['resolve', 'validate', 'build'], source);
+  requirePermissions(jobs, 'deploy-api', { contents: 'read', deployments: 'read', 'id-token': 'write' }, source);
+  requireText(deployApi, `name: testing-api-${TESTING_SHA}`, `${source} job 'deploy-api'`);
+  if (extractStep(deployApi, TESTING_ORDER_STEP, `${source} job 'deploy-api'`).trimEnd() !== resolveOrder.trimEnd()) {
+    fail(source, `step '${TESTING_ORDER_STEP}' of job 'deploy-api' must repeat the resolve job's step exactly`);
+  }
+  requireOrder(deployApi, '- name: Check the testing environment configuration', 'uses: azure/login', `${source} job 'deploy-api'`);
+  requireOrder(deployApi, `- name: ${TESTING_ORDER_STEP}`, 'uses: azure/login', `${source} job 'deploy-api'`);
+  requireOrder(deployApi, 'uses: azure/login', '- name: Check the test API keeps its data outside the package', `${source} job 'deploy-api'`);
+  requireOrder(deployApi, '- name: Check the test API keeps its data outside the package', 'uses: azure/webapps-deploy', `${source} job 'deploy-api'`);
+  for (const required of [
+    '[ "$API_APP_NAME" != "vm-manager" ]',
+    '[ "${host,,}" != "${PRODUCTION_API_HOST,,}" ]',
+    '^Data\\ Source=/home/data/',
+    '[ "$(setting DocumentStorage__Provider)" = "AzureBlob" ]',
+    '[ "$(setting ASPNETCORE_ENVIRONMENT)" = "Staging" ]',
+    'client-id: ${{ vars.TESTING_AZURE_CLIENT_ID }}',
+    'tenant-id: ${{ vars.TESTING_AZURE_TENANT_ID }}',
+    'subscription-id: ${{ vars.TESTING_AZURE_SUBSCRIPTION_ID }}',
+    'app-name: ${{ vars.TESTING_API_APP_NAME }}',
+  ]) {
+    requireText(deployApi, required, `${source} job 'deploy-api'`);
+  }
+
+  requireNeeds(jobs, 'verify-api', ['deploy-api'], source);
+  // The health check polls the readiness endpoint of the test API this run deployed.
+  requireText(jobs['verify-api'], '--max-time 10 "$base/health/ready"', `${source} job 'verify-api'`);
+  requireText(jobs['verify-api'], 'WEBAPP_URL: ${{ needs.deploy-api.outputs.api_base_url }}', `${source} job 'verify-api'`);
+  requirePermissions(jobs, 'verify-api', {}, source);
+  forbidEnvironment(jobs, 'verify-api', source);
+  if (/^ {4}if:/m.test(jobs['verify-api'])) {
+    fail(source, "job 'verify-api' must run only when 'deploy-api' succeeded (no custom if:)");
+  }
+
+  // The newest record is what the order rule compares with, so a commit is recorded only once its
+  // API passed the health check.
+  requirePermissions(jobs, 'record-deployment', { deployments: 'write' }, source);
+  forbidEnvironment(jobs, 'record-deployment', source);
+  requireNeeds(jobs, 'record-deployment', ['resolve', 'deploy-api', 'verify-api'], source);
+  const recordConditions = jobs['record-deployment'].match(/^ {4}if:.*$/gm) ?? [];
+  if (recordConditions.some((line) => line !== `    if: ${RUNNER_ISOLATION_CONDITION}`)) {
+    fail(source, "job 'record-deployment' must run only when 'verify-api' succeeded (no if: other than the runner isolation gate)");
+  }
+  requireText(jobs['record-deployment'], 'production_environment: false', `${source} job 'record-deployment'`);
+
+  const deployFrontend = jobs['deploy-frontend'];
+  requireText(deployFrontend, `    ${TESTING_DEPLOY_JOB_CONDITION}\n`, `${source} job 'deploy-frontend'`);
+  requireText(deployFrontend, `    environment: ${TESTING_ENVIRONMENT}\n`, `${source} job 'deploy-frontend'`);
+  requireNeeds(jobs, 'deploy-frontend', ['resolve', 'build', 'deploy-api', 'verify-api', 'record-deployment'], source);
+  requirePermissions(jobs, 'deploy-frontend', { contents: 'read', 'id-token': 'write' }, source);
+  requireText(deployFrontend, `name: testing-frontend-${TESTING_SHA}`, `${source} job 'deploy-frontend'`);
+  requireText(deployFrontend, 'skip_app_build: true', `${source} job 'deploy-frontend'`);
+  requireText(deployFrontend, 'azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}', `${source} job 'deploy-frontend'`);
+  // The bundle is pointed at the test API before it is uploaded; the deployment token is masked
+  // before it is written anywhere, and Azure is signed out of before the upload runs.
+  requireOrder(deployFrontend, '- name: Point the frontend at the test API', 'uses: Azure/static-web-apps-deploy', `${source} job 'deploy-frontend'`);
+  requireOrder(deployFrontend, 'echo "::add-mask::$token"', 'echo "token=$token" >> "$GITHUB_OUTPUT"', `${source} job 'deploy-frontend'`);
+  requireOrder(deployFrontend, 'az logout', 'uses: Azure/static-web-apps-deploy', `${source} job 'deploy-frontend'`);
+  // After the upload the site must answer and serve the configuration that points at the test API.
+  requireOrder(deployFrontend, 'uses: Azure/static-web-apps-deploy', '- name: Verify the test frontend responds and calls the test API', `${source} job 'deploy-frontend'`);
+  requireText(deployFrontend, 'if [ "$code" = "200" ] && [ "$configured" = "$expected" ]; then', `${source} job 'deploy-frontend'`);
+  requireText(deployFrontend, '"$base/assets/config.json"', `${source} job 'deploy-frontend'`);
+  for (const required of [
+    '[ "${host,,}" != "$PRODUCTION_FRONTEND_HOST" ]',
+    '[ "${base#https://}" != "$PRODUCTION_API_HOST" ]',
+    'client-id: ${{ vars.TESTING_AZURE_CLIENT_ID }}',
+  ]) {
+    requireText(deployFrontend, required, `${source} job 'deploy-frontend'`);
+  }
+
+  // Only the two deploy jobs hold the testing environment, Azure access or an OIDC token.
+  for (const [jobId, jobText] of Object.entries(jobs)) {
+    if (jobId === 'deploy-api' || jobId === 'deploy-frontend') {
+      continue;
+    }
+    for (const marker of [...DEPLOYMENT_MARKERS, ...TESTING_MARKERS, 'id-token']) {
+      forbidText(jobText, marker, `${source} job '${jobId}'`);
+    }
+  }
+
+  requireText(jobs.summary, 'if: always()', `${source} job 'summary'`);
+  requirePermissions(jobs, 'summary', {}, source);
+}
+
 export function readWorkflows(read = readRepositoryFile) {
   const directory = resolve(repositoryRoot, '.github/workflows');
   const workflows = {};
@@ -476,7 +709,7 @@ export function readWorkflows(read = readRepositoryFile) {
 }
 
 export function verifyDeploymentWorkflows(workflows = readWorkflows()) {
-  for (const path of [deployProductionPath, deployProductionRecoveryPath, deployProductionReleasePath]) {
+  for (const path of [deployProductionPath, deployProductionRecoveryPath, deployProductionReleasePath, deployTestingPath]) {
     if (!(path in workflows)) {
       fail(path, 'missing');
     }
@@ -485,6 +718,7 @@ export function verifyDeploymentWorkflows(workflows = readWorkflows()) {
   verifyDeployProductionWorkflow(workflows[deployProductionPath]);
   verifyDeployProductionRecoveryWorkflow(workflows[deployProductionRecoveryPath]);
   verifyDeployProductionReleaseWorkflow(workflows[deployProductionReleasePath]);
+  verifyDeployTestingWorkflow(workflows[deployTestingPath]);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

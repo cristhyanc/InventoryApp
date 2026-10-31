@@ -2,6 +2,10 @@ name: Price collector (manual test)
 
 # #929 rollout stage 1: no cron and no production API. A separately reviewed change enables
 # the Sydney schedule only after the owner sees the end-to-end test and actual provider costs.
+# A human may start it from reviewed main or from reviewed develop, normally against the hosted
+# testing API that Deploy Testing deploys from develop (docs/testing-environment.md). Either way
+# it runs in the price-collector environment with the collector's own federated identity, which is
+# separate from the testing deployment identity, and it refuses the production API.
 on:
   workflow_dispatch:
     inputs:
@@ -56,13 +60,17 @@ jobs:
             exit 1
           fi
 
-      - name: Require main and the owner's test confirmation
+      - name: Require main or develop and the owner's test confirmation
         env:
           RUN_REF: ${{ github.ref }}
           CONFIRM_TEST_API: ${{ inputs.confirm_test_api }}
         run: |
-          if [ "$RUN_REF" != 'refs/heads/main' ] || [ "$CONFIRM_TEST_API" != 'true' ]; then
-            echo '::error::Start the reviewed workflow from main and confirm the disposable test API and provider limits.'
+          case "$RUN_REF" in
+            refs/heads/main|refs/heads/develop) ;;
+            *) echo '::error::Start the reviewed workflow from main or develop; feature branches never receive collector credentials.'; exit 1 ;;
+          esac
+          if [ "$CONFIRM_TEST_API" != 'true' ]; then
+            echo '::error::Confirm the disposable test API and provider limits.'
             exit 1
           fi
 
@@ -79,7 +87,7 @@ jobs:
   collect:
     name: Collect and finalise the test sample
     needs: gate
-    if: github.ref == 'refs/heads/main' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     environment: price-collector
     timeout-minutes: 45
