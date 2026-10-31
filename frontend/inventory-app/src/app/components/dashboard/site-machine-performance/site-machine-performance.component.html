@@ -2,7 +2,8 @@
   Site and machine performance (issue #987): the owner-approved Stitch hierarchy, where each site is
   one summary row - pale lavender, like the mockup - that expands to the white machine rows standing
   at it, under one set of columns. Every figure, destination and unavailable state is the one the two
-  former cards already had; the component calculates nothing.
+  former cards already had, plus each machine's own stock level (issue #1013), which `GET api/sites`
+  publishes per machine; the component calculates nothing.
 -->
 <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="site-machine-performance-title">
   <div class="card-header flex-wrap gap-2">
@@ -174,9 +175,33 @@
                           <span [attr.data-testid]="'machine-name-' + machine.machineID">{{ machineName(machine) }}</span>
                         }
                       </td>
-                      <!-- Site figures, never a machine's: see `machineStockNote` above. -->
-                      <td class="table-cell value-muted" data-testid="machine-stock">{{ machineFigureUnavailable }}</td>
-                      <td class="table-cell value-muted" data-testid="machine-low-empty">{{ machineFigureUnavailable }}</td>
+                      <!--
+                        The machine's own stock level (issue #1013), from the site read that fetched
+                        this machine's selections - never the site's percentage repeated, and never
+                        a figure derived here. A machine that read does not cover, or that reports
+                        no capacity, says so instead; see `machineStockNote` above.
+                      -->
+                      <td class="table-cell" [attr.data-testid]="'machine-stock-' + machine.machineID">
+                        @if (hasMachineStockPercentage(group, machine)) {
+                          <span class="flex items-center gap-2">
+                            <span class="h-2 w-20 overflow-hidden rounded-full bg-rr-surface" aria-hidden="true">
+                              <span
+                                class="block h-full rounded-full"
+                                [attr.data-testid]="'machine-stock-bar-' + machine.machineID"
+                                [ngClass]="machineStockBarClass(group, machine)"
+                                [style.width.%]="machineStockBarWidth(group, machine)"
+                              ></span>
+                            </span>
+                            <span class="badge" [ngClass]="machineStockClass(group, machine)">{{ machineStockText(group, machine) }}</span>
+                          </span>
+                          <!-- The level in words as well as in colour, exactly as the site row states it. -->
+                          <span class="block text-xs text-rr-caption">{{ machineStockStatusLabel(group, machine) }}</span>
+                        } @else {
+                          <span class="value-muted">{{ machineStockText(group, machine) }}</span>
+                        }
+                      </td>
+                      <!-- Low/empty exists per site only, so a machine row still has none to state. -->
+                      <td class="table-cell value-muted" [attr.data-testid]="'machine-low-empty-' + machine.machineID">{{ machineFigureUnavailable }}</td>
                       @if (canViewFinancials) {
                         <td class="table-cell table-num">
                           <div>{{ machineSalesText(machine) }}</div>
@@ -216,7 +241,10 @@
               <tfoot class="bg-rr-surface font-semibold">
                 <tr>
                   <td class="table-cell">{{ totalsLabel }}</td>
-                  <!-- Stock is a site figure, so the fleet total has none to state here. -->
+                  <!--
+                    Stock is per site and per machine, never a fleet figure: averaging percentages
+                    across a fleet would invent one, so the totals row states none.
+                  -->
                   <td class="table-cell"></td>
                   <td class="table-cell"></td>
                   <td class="table-cell table-num">
@@ -302,6 +330,24 @@
                         >{{ machineName(machine) }}</a>
                       } @else {
                         <p class="m-0 break-words font-semibold text-rr-navy" [attr.data-testid]="'machine-name-' + machine.machineID">{{ machineName(machine) }}</p>
+                      }
+                      <!-- The same machine stock figure as the wide layout's Stock cell (issue #1013). -->
+                      <p class="m-0 mt-2 text-xs text-rr-muted">Stock</p>
+                      @if (hasMachineStockPercentage(group, machine)) {
+                        <p class="m-0 flex items-center gap-2">
+                          <span class="h-2 w-20 shrink-0 overflow-hidden rounded-full bg-rr-surface" aria-hidden="true">
+                            <span
+                              class="block h-full rounded-full"
+                              [attr.data-testid]="'machine-card-stock-bar-' + machine.machineID"
+                              [ngClass]="machineStockBarClass(group, machine)"
+                              [style.width.%]="machineStockBarWidth(group, machine)"
+                            ></span>
+                          </span>
+                          <span class="badge" [ngClass]="machineStockClass(group, machine)">{{ machineStockText(group, machine) }}</span>
+                          <span class="text-xs text-rr-caption">{{ machineStockStatusLabel(group, machine) }}</span>
+                        </p>
+                      } @else {
+                        <p class="m-0 text-sm value-muted">{{ machineStockText(group, machine) }}</p>
                       }
                       @if (canViewFinancials) {
                         <p class="m-0 mt-2 text-xs text-rr-muted">{{ salesHeader }}</p>

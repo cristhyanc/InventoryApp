@@ -547,6 +547,22 @@ export interface Machine {
 }
 
 /**
+ * One machine standing at a site, with that machine's own stock percentage (issue #1013). It is the
+ * same rule as the site's `totalStockPercentage` applied to that machine's selections alone - the
+ * server's figure, from selections `GET api/sites` already fetches - so a machine row never repeats
+ * its site's percentage and nothing derives one in the browser.
+ *
+ * `stockPercentage` is `null` for a machine whose selections report **no capacity at all**: nothing
+ * is known about how full it is, which is neither 0% nor the 100% the site rule answers for a site
+ * with no capacity. It is a stock figure rather than a financial one, so it is never withheld by
+ * role.
+ */
+export interface SiteMachineStock {
+  machineId: number;
+  stockPercentage?: number | null;
+}
+
+/**
  * Every revenue figure is optional and nullable, on the same `Dashboard.ViewFinancials` rule as
  * {@link Machine} (issue #699).
  */
@@ -569,6 +585,12 @@ export interface Site {
    */
   lastWeekRevenue?: number | null;
   monthToDateRevenue?: number | null;
+  /**
+   * The machines standing at this site and each one's own stock percentage (issue #1013), in the
+   * order the fleet read returned them. Absent or empty means the response published none, which a
+   * machine row shows as unavailable rather than as a figure of its own; see {@link SiteMachineStock}.
+   */
+  machineStocks?: readonly SiteMachineStock[];
 }
 
 /**

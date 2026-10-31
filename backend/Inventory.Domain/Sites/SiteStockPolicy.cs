@@ -28,14 +28,46 @@ public static class SiteStockPolicy
     /// </summary>
     public static decimal CalculateStockPercentage(IEnumerable<SiteMachineProductStockFact> facts)
     {
-        var totals = facts.Aggregate(
+        var totals = Totals(facts);
+
+        return totals.MaxStock == 0 ? 100 : Percentage(totals);
+    }
+
+    /// <summary>
+    /// One machine's own stock percentage, over that machine's selections alone (issue #1013). It is
+    /// the same arithmetic as <see cref="CalculateStockPercentage"/> over a narrower group - the same
+    /// sum of (PAR - MissingStockByMDB) over the same sum of PAR, counting unmapped and inactive
+    /// selections toward physical capacity exactly as the site figure does - so the machine figures
+    /// and the site figure above them cannot come to disagree about what "stocked" means.
+    ///
+    /// <para>The one deliberate difference is the no-capacity answer. A <em>site</em> with no
+    /// capacity reports 100%, which is long-standing published behaviour and is unchanged. A
+    /// <em>machine</em> with no capacity reports <see langword="null"/>: nothing is known about how
+    /// full it is, and reporting either 0% or 100% for it would be a statement about a machine the
+    /// provider gave no capacity for.</para>
+    /// </summary>
+    public static decimal? CalculateMachineStockPercentage(IEnumerable<SiteMachineProductStockFact> facts)
+    {
+        var totals = Totals(facts);
+
+        return totals.MaxStock == 0 ? null : Percentage(totals);
+    }
+
+    private static (int QuantityInStock, int MaxStock) Totals(IEnumerable<SiteMachineProductStockFact> facts) =>
+        facts.Aggregate(
             (QuantityInStock: 0, MaxStock: 0),
             (totals, fact) => (
                 totals.QuantityInStock + fact.Par - fact.MissingStockByMdb,
                 totals.MaxStock + fact.Par));
 
-        return totals.MaxStock == 0 ? 100 : (decimal)totals.QuantityInStock / totals.MaxStock * 100;
-    }
+    /// <summary>
+    /// The percentage itself, for a group that has capacity. More missing than was ever stocked for
+    /// gives a negative figure, which is reported rather than clamped: it is a contradiction in the
+    /// provider's own data, and correcting it here would hide it from the only place that can
+    /// notice.
+    /// </summary>
+    private static decimal Percentage((int QuantityInStock, int MaxStock) totals) =>
+        (decimal)totals.QuantityInStock / totals.MaxStock * 100;
 
     /// <summary>
     /// Counts how many distinct active catalogue products are low (in stock but at/under their

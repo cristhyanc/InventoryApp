@@ -242,6 +242,12 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         // rows agreeing with each other.
         Assert.Equal(1, operatorSite.GetProperty("machineCount").GetInt32());
         Assert.Equal(60m, operatorSite.GetProperty("totalStockPercentage").GetDecimal());
+
+        // Including, since issue #1013, the site's own machine and that machine's own percentage,
+        // which an Operator is given exactly as a Manager is: stock is not a financial figure.
+        var operatorMachineStock = Assert.Single(operatorSite.GetProperty("machineStocks").EnumerateArray());
+        Assert.Equal(ApiFactory.SeededMachineId, operatorMachineStock.GetProperty("machineId").GetInt64());
+        Assert.Equal(60m, operatorMachineStock.GetProperty("stockPercentage").GetDecimal());
         Assert.Equal(ApiFactory.MdbCode, operatorProduct.GetProperty("mdbCode").GetInt32());
         Assert.Equal(6, operatorProduct.GetProperty("quantityInStock").GetInt32());
     }
@@ -278,6 +284,12 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
 
         /// <summary>The seeded machine product's MDB code, which every role may see.</summary>
         public const int MdbCode = 3;
+
+        /// <summary>
+        /// The one machine standing at the seeded site, which every role may see - and whose own
+        /// stock percentage the site row publishes since issue #1013.
+        /// </summary>
+        public const long SeededMachineId = MachineId;
 
         private const int BusinessId = 1;
         private const long ProductId = 100;

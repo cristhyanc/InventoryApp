@@ -284,6 +284,15 @@ public record PurchaseResponseDto(
 // combined dashboard card needs no period a site is silent about. todayRevenue, currentWeekRevenue
 // and previousComparableWeekRevenue keep their existing meaning and values, and the comparison
 // baseline is still the previous comparable week alone.
+//
+// machineStocks is additive too (issue #1013): one entry per machine standing at the site, carrying
+// the provider's machine id - the same MachineID GET api/machines publishes - and that machine's own
+// stock percentage. The percentage is the site rule over that machine's selections alone, taken from
+// selections this endpoint already fetches for totalStockPercentage, so it costs no extra provider
+// request. A null stockPercentage means the machine reports no capacity at all, which is neither 0
+// nor the 100 the site rule answers for a site with no capacity; it is a stock figure rather than a
+// financial one, so no role is sent a different value. Every other field, the route and the status
+// codes are unchanged.
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
@@ -295,8 +304,13 @@ public record SiteSummaryDto(
     decimal? CurrentWeekRevenue,
     decimal? PreviousComparableWeekRevenue,
     decimal? LastWeekRevenue,
-    decimal? MonthToDateRevenue
+    decimal? MonthToDateRevenue,
+    IReadOnlyList<SiteMachineStockDto> MachineStocks
 );
+
+// One machine on a GET /api/sites row (issue #1013); see SiteSummaryDto above and
+// Inventory.Application.Sites.SiteMachineStock for the rule behind the figure.
+public record SiteMachineStockDto(long MachineId, decimal? StockPercentage);
 
 // One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id
 // a filter submits, the name it shows, and the number of machines the fleet has at that site. It is
