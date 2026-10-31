@@ -1040,8 +1040,8 @@ pages at 1. A manual checkbox can permit the previously verified retailer actors
 without enabling them in repository configuration. Claude has 40 turns, a US$1 budget and a
 14-minute deadline; the 45-minute job leaves a 15-minute finalisation step. The hook allows the
 free Apify result reads (`get-dataset-items` with a capped limit, `get-actor-run`,
-`abort-actor-run`) because actor calls return only storage ids; other Apify account tools are
-denied. The interruption test stops Claude after a chosen number of minutes (1 to 14).
+`abort-actor-run`) because actor calls return only storage ids, but only for runs this collector
+started, with bounded polls and reads; other Apify account tools are denied. The interruption test stops Claude after a chosen number of minutes (1 to 14).
 
 The `always()` finalizer fetches a fresh token and submits independently validated finished files,
 then completes the issued run even after Claude fails or is stopped. Unanswered work becomes

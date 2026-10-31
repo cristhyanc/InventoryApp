@@ -26,6 +26,12 @@ test('the settings fail closed when a policy hook cannot run and expose no gener
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].matcher, '.*');
   assert.equal(hooks[0].hooks[0].onFailure, 'block');
+  // The run ledger is written only by the trusted PostToolUse hook; a failed record blocks too.
+  const recorders = settings.hooks.PostToolUse;
+  assert.equal(recorders.length, 1);
+  assert.equal(recorders[0].matcher, '^mcp__apify__');
+  assert.equal(recorders[0].hooks[0].command, 'node scripts/price-collector/workflow-tool-guard.mjs');
+  assert.equal(recorders[0].hooks[0].onFailure, 'block');
   assert.ok(!settings.permissions.allow.includes('Bash'));
   for (const tool of ['Read', 'Edit', 'WebFetch', 'WebSearch', 'Agent']) assert.ok(settings.permissions.deny.includes(tool));
 });

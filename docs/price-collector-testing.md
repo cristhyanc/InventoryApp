@@ -103,9 +103,11 @@ settings enable only actor execution, literal helper commands and sample-bound w
 the hook denies every other tool and blocks on hook failure. The CLI is pinned to 2.1.316, including
 support for `onFailure: block`. The existing atomic Apify guard still reserves each call.
 An actor call returns only the run's status and storage ids, so the hook also allows the free
-`get-dataset-items` (limit capped to the sample page size), `get-actor-run` and `abort-actor-run`
-tools for plain run/dataset ids; they are not counted as actor calls. Every other Apify account
-tool stays denied. Claude is launched by absolute path with a fixed `PATH`, and a cancelled job's
+`get-dataset-items` (limit capped to the sample page size, at most 3 reads per dataset),
+`get-actor-run` (at most 6 polls per run) and `abort-actor-run` tools, only for runs this
+collector started. A trusted `PostToolUse` hook records each run and its datasets from the answer
+to an allowed actor call in a private ledger that Claude cannot write; the reads are not counted
+as actor calls. Every other Apify account tool stays denied. Claude is launched by absolute path with a fixed `PATH`, and a cancelled job's
 `SIGINT` stops Claude's process group just as `SIGTERM` does.
 
 The finalizer obtains a **fresh** API token, copies only this sample's regular result files to a

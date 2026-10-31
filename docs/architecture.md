@@ -14894,8 +14894,10 @@ separate temporary workspace/home with only the explicitly allowed environment a
 `workflow-tool-guard.mjs` denies arbitrary shell, file reads, edits and other tools; approved actor
 calls still pass through the existing atomic `apify-guard.mjs`. An actor call returns only its run
 status and storage ids, so the hook also allows the free `get-dataset-items` (limit capped to the
-sample page size), `get-actor-run` and `abort-actor-run` reads for plain ids, without counting
-them as actor calls; every other Apify account tool is denied. A native hook failure blocks the
+sample page size, 3 reads per dataset), `get-actor-run` (6 polls per run) and `abort-actor-run`
+reads, only for runs this collector started, without counting them as actor calls. A trusted
+`PostToolUse` hook records those runs from the allowed calls' answers (`workflow-run-ledger.mjs`,
+fixed RunResponse paths only); every other Apify account tool is denied. A native hook failure blocks the
 tool rather than silently bypassing the guard. Literal helper arguments cannot expand shell
 commands, and sample writes must name an issued work item or matching key of that same run.
 

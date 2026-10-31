@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runGuard } from './apify-guard.mjs';
+import { recordRun, reserveRead } from './workflow-run-ledger.mjs';
 
 export function permittedCommand(command) {
   if (typeof command !== 'string' || /[\x00-\x1f$`;&|<>\\!*?()[\]{}#]/.test(command)) return false;
@@ -32,26 +33,51 @@ function writeBelongsToSample(event, stateDir) {
 
 // Actor tools and call-actor return only the run status and storage ids; the rows are read with
 // get-dataset-items, and a run that outlives waitSecs is followed with get-actor-run (Apify MCP
-// server docs). These reads are free, so they are not reserved against the actor call cap.
-// Aborting only reduces spend. Every other Apify account tool stays denied.
+// server docs). These reads are free, so they are not reserved against the actor call cap, but
+// each is allowed only for a run this collector started, with a bounded number of polls and reads
+// (workflow-run-ledger.mjs). Aborting only reduces spend. Every other Apify account tool is denied.
 const storageId = /^[a-zA-Z0-9]{1,64}$/;
 const readTools = new Map([
   ['get-dataset-items', 'datasetId'], ['get-actor-run', 'runId'], ['abort-actor-run', 'runId'],
 ]);
+const actorCallTools = new Set(['mcp__apify__call-actor', 'mcp__apify__call_actor']);
 
-function readDecision(tool, input, limits) {
+async function readDecision(tool, input, limits, stateDir) {
   const idField = readTools.get(tool);
   if (!storageId.test(String(input?.[idField] ?? ''))) {
     return decision('deny', `${tool} needs the plain ${idField} an allowed actor call returned.`);
   }
-  if (tool !== 'get-dataset-items') return decision('allow', `${tool} reads or stops this run without a new actor call.`);
-  // A sample call returns at most the largest page size, so a read never needs more rows than that.
-  const cap = Math.max(...Object.values(limits.actors).map(actor => actor.pageSize));
-  const offset = input.offset ?? 0;
-  if (!Number.isInteger(offset) || offset < 0) return decision('deny', 'offset must be a whole number of items.');
-  const asked = input.limit ?? cap;
-  if (!Number.isInteger(asked) || asked < 1) return decision('deny', 'limit must be a positive whole number of items.');
-  return decision('allow', 'Reads the rows of an allowed actor call.', { ...input, offset, limit: Math.min(asked, cap) });
+  let updatedInput;
+  if (tool === 'get-dataset-items') {
+    // A sample call returns at most the largest page size, so a read never needs more rows than that.
+    const cap = Math.max(...Object.values(limits.actors).map(actor => actor.pageSize));
+    const offset = input.offset ?? 0;
+    if (!Number.isInteger(offset) || offset < 0) return decision('deny', 'offset must be a whole number of items.');
+    const asked = input.limit ?? cap;
+    if (!Number.isInteger(asked) || asked < 1) return decision('deny', 'limit must be a positive whole number of items.');
+    updatedInput = { ...input, offset, limit: Math.min(asked, cap) };
+  }
+  const refusal = await reserveRead(stateDir, tool, input);
+  if (refusal) return decision('deny', refusal);
+  return decision('allow', `${tool} follows a run this collector started.`, updatedInput);
+}
+
+/** PostToolUse: remembers the run an allowed actor call started, so its rows may be read. */
+export async function recordDecision(event, env) {
+  const name = event?.tool_name ?? '';
+  if (!name.startsWith('mcp__apify__')) return {};
+  const limits = JSON.parse(readFileSync(join(env.PRICE_COLLECTOR_STATE_DIR, 'limits.json'), 'utf8'));
+  const startedRun = actorCallTools.has(name) || dedicatedActorTools(limits).includes(name);
+  if (startedRun || name === 'mcp__apify__get-actor-run') {
+    await recordRun(env.PRICE_COLLECTOR_STATE_DIR, { startedRun, response: event.tool_response });
+  }
+  return {};
+}
+
+function dedicatedActorTools(limits) {
+  return Object.keys(limits.actors).flatMap(id => [
+    `mcp__apify__${id.replace('/', '--')}`, `mcp__apify__${id.replace('/', '-slash-')}`,
+  ]);
 }
 
 export async function toolDecision(event, env) {
@@ -68,12 +94,10 @@ export async function toolDecision(event, env) {
   }
   if (name !== 'Write' && !name.startsWith('mcp__apify__')) return decision('deny', 'This tool is outside the collector allowlist.');
   const limits = JSON.parse(readFileSync(join(env.PRICE_COLLECTOR_STATE_DIR, 'limits.json'), 'utf8'));
-  const dedicated = Object.keys(limits.actors).flatMap(id => [
-    `mcp__apify__${id.replace('/', '--')}`, `mcp__apify__${id.replace('/', '-slash-')}`,
-  ]);
+  const dedicated = dedicatedActorTools(limits);
   const tool = name.slice('mcp__apify__'.length);
-  if (readTools.has(tool)) return readDecision(tool, event.tool_input, limits);
-  if (name !== 'Write' && !dedicated.includes(name) && !['mcp__apify__call-actor', 'mcp__apify__call_actor'].includes(name)) {
+  if (readTools.has(tool)) return readDecision(tool, event.tool_input, limits, env.PRICE_COLLECTOR_STATE_DIR);
+  if (name !== 'Write' && !dedicated.includes(name) && !actorCallTools.has(name)) {
     return decision('deny', 'Only the reviewed actor execution tools are allowed, not arbitrary Apify account tools.');
   }
   if (name === 'Write' && !writeBelongsToSample(event, env.PRICE_COLLECTOR_STATE_DIR)) {
@@ -91,7 +115,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     let raw = '';
     for await (const chunk of process.stdin) raw += chunk;
-    process.stdout.write(JSON.stringify(await toolDecision(JSON.parse(raw), process.env)));
+    const event = JSON.parse(raw);
+    const answer = event.hook_event_name === 'PostToolUse' ? await recordDecision(event, process.env) : await toolDecision(event, process.env);
+    process.stdout.write(JSON.stringify(answer));
   } catch {
     // Hook errors cannot become a permissive response or leak the event/credentials.
     process.stdout.write(JSON.stringify(decision('deny', 'Collector policy could not verify this call.')));

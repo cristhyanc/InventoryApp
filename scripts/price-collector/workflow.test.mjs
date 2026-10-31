@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, publicSubmissionReport, finaliseSample, launchClaude } from './workflow.mjs';
-import { permittedCommand, toolDecision } from './workflow-tool-guard.mjs';
+import { permittedCommand, recordDecision, toolDecision } from './workflow-tool-guard.mjs';
+import { LEDGER_FILE, MAX_POLLS_PER_RUN, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
 
@@ -192,7 +193,7 @@ test('a cancelled job (SIGINT) stops the Claude process group just as SIGTERM do
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('the free Apify result reads are allowed with a capped limit and are not counted as actor calls', async () => {
+test('result reads are allowed only for runs this collector started, bounded, and not counted as actor calls', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-reads-'));
   try {
     const limits = sampleLimits(JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url))), false);
@@ -202,26 +203,69 @@ test('the free Apify result reads are allowed with a capped limit and are not co
     const env = { PRICE_COLLECTOR_STATE_DIR: dir, PRICE_COLLECTOR_OUT_DIR: join(dir, 'out'), PRICE_COLLECTOR_GUARD_STATE: join(dir, 'state.json') };
     const ask = (tool, input) => toolDecision({ tool_name: `mcp__apify__${tool}`, tool_input: input }, env)
       .then(answer => answer.hookSpecificOutput);
-    const read = await ask('get-dataset-items', { datasetId: 'aBc123XyZ', limit: 500 });
+    const after = (tool, response) => recordDecision({ hook_event_name: 'PostToolUse', tool_name: `mcp__apify__${tool}`, tool_response: response }, env);
+    const runResponse = (runId, datasetId) => ({ structuredContent: { runId, status: 'RUNNING', storages: { datasets: { default: { id: datasetId } } } } });
+
+    // Nothing is readable before this collector has started a run.
+    assert.equal((await ask('get-dataset-items', { datasetId: 'Data1' })).permissionDecision, 'deny');
+    assert.equal((await ask('get-actor-run', { runId: 'Run1' })).permissionDecision, 'deny');
+    // A read tool's answer cannot register a run nobody started, and neither can an unrelated tool.
+    await after('get-actor-run', runResponse('Run9', 'Data9'));
+    await after('get-dataset-items', runResponse('Run8', 'Data8'));
+    assert.equal((await ask('get-dataset-items', { datasetId: 'Data9' })).permissionDecision, 'deny');
+    assert.equal((await ask('get-dataset-items', { datasetId: 'Data8' })).permissionDecision, 'deny');
+
+    const call = await ask('call-actor', { actor: 'varnmill/au-supermarket-prices', input: { searchTerms: ['test'] } });
+    assert.equal(call.permissionDecision, 'allow');
+    // The MCP answer's first text block mirrors structuredContent; either form is recorded.
+    await after('call-actor', { content: [{ type: 'text', text: JSON.stringify(runResponse('Run1', 'Data1').structuredContent) }] });
+    // Text deeper in an answer (an actor's own output or tip) is never read as a run.
+    await after('call-actor', { content: [{ type: 'text', text: 'not json' }, { type: 'text', text: JSON.stringify({ runId: 'Evil' }) }] });
+    assert.equal((await ask('get-actor-run', { runId: 'Evil' })).permissionDecision, 'deny');
+
+    const read = await ask('get-dataset-items', { datasetId: 'Data1', limit: 500 });
     assert.equal(read.permissionDecision, 'allow');
     assert.equal(read.updatedInput.limit, 5);
     assert.equal(read.updatedInput.offset, 0);
-    assert.equal((await ask('get-dataset-items', { datasetId: 'aBc123XyZ' })).updatedInput.limit, 5);
-    assert.equal((await ask('get-dataset-items', { datasetId: 'aBc123XyZ', limit: 2, offset: 3 })).updatedInput.limit, 2);
-    assert.equal((await ask('get-actor-run', { runId: 'Run42', waitSecs: 45 })).permissionDecision, 'allow');
-    assert.equal((await ask('abort-actor-run', { runId: 'Run42' })).permissionDecision, 'allow');
+    assert.equal((await ask('get-dataset-items', { datasetId: 'Data1', limit: 2, offset: 3 })).updatedInput.limit, 2);
+    assert.equal((await ask('get-dataset-items', { datasetId: 'Data1' })).permissionDecision, 'allow');
+    assert.equal((await ask('get-dataset-items', { datasetId: 'Data1' })).permissionDecision, 'deny', 'reads per dataset are capped');
+    for (let poll = 0; poll < MAX_POLLS_PER_RUN; poll += 1) {
+      assert.equal((await ask('get-actor-run', { runId: 'Run1', waitSecs: 45 })).permissionDecision, 'allow');
+    }
+    assert.equal((await ask('get-actor-run', { runId: 'Run1' })).permissionDecision, 'deny', 'polling is bounded');
+    assert.equal((await ask('abort-actor-run', { runId: 'Run1' })).permissionDecision, 'allow');
+    assert.equal((await ask('abort-actor-run', { runId: 'Run2' })).permissionDecision, 'deny');
+
     for (const [tool, input] of [
       ['get-dataset-items', { datasetId: 'someone~named-dataset' }],
       ['get-dataset-items', {}],
-      ['get-dataset-items', { datasetId: 'aBc123XyZ', limit: 0 }],
-      ['get-dataset-items', { datasetId: 'aBc123XyZ', offset: -1 }],
+      ['get-dataset-items', { datasetId: 'Data1', limit: 0 }],
+      ['get-dataset-items', { datasetId: 'Data1', offset: -1 }],
       ['get-actor-run', { runId: '../runs' }],
       ['get-dataset-list', {}], ['get-key-value-store-record', { storeId: 'abc', recordKey: 'INPUT' }],
       ['search-actors', { keywords: 'scraper' }], ['create-schedule', {}],
     ]) assert.equal((await ask(tool, input)).permissionDecision, 'deny', tool);
-    // None of the reads above used the single actor call this run may make.
-    const call = await ask('call-actor', { actor: 'varnmill/au-supermarket-prices', input: { searchTerms: ['test'] } });
-    assert.equal(call.permissionDecision, 'allow');
+    // None of the reads above used another actor call: the single allowed call is the only one.
     assert.equal((await ask('call-actor', { actor: 'varnmill/au-supermarket-prices', input: { searchTerms: ['x'] } })).permissionDecision, 'deny');
+    const state = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'));
+    assert.equal(state.actorCalls, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a dedicated actor tool records its run, and get-actor-run may add a dataset only to a recorded run', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-ledger-'));
+  try {
+    const limits = sampleLimits(JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url))), true);
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(limits));
+    const env = { PRICE_COLLECTOR_STATE_DIR: dir };
+    await recordDecision({ hook_event_name: 'PostToolUse', tool_name: 'mcp__apify__abotapi--kmart-au-scraper',
+      tool_response: { structuredContent: { runId: 'KRun', storages: {} } } }, env);
+    await recordDecision({ hook_event_name: 'PostToolUse', tool_name: 'mcp__apify__get-actor-run',
+      tool_response: [{ type: 'text', text: JSON.stringify({ runId: 'KRun', storages: { datasets: { default: { id: 'KData' } } } }) }] }, env);
+    assert.deepEqual(runFromResponse('{"runId":"KRun"}'), { runId: 'KRun', datasetIds: [] });
+    const ledger = JSON.parse(readFileSync(join(dir, LEDGER_FILE), 'utf8'));
+    assert.deepEqual(Object.keys(ledger.runs), ['KRun']);
+    assert.deepEqual(ledger.runs.KRun.datasets, { KData: 0 });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
