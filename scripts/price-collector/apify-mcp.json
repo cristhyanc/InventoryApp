@@ -3,7 +3,7 @@
   "mcpServers": {
     "apify": {
       "type": "http",
-      "url": "https://mcp.apify.com?actors=varnmill/au-supermarket-prices,abotapi/kmart-product-scraper,axlymxp/bigw-product-search,dromb/bigw-sku-lookup",
+      "url": "https://mcp.apify.com?actors=varnmill/au-supermarket-prices,abotapi/kmart-au-scraper,axlymxp/bigw-product-scraper,dromb/big-w-au-product-scraper",
       "headers": {
         "Authorization": "Bearer ${APIFY_TOKEN}"
       }

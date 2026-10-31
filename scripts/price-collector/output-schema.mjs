@@ -128,8 +128,9 @@ function resultFileRules(file, problems) {
   }
 
   const paging = file.paging;
-  if (isPlainObject(paging) && paging.moreAvailable === true && paging.pagesRead >= paging.pageCap && file.outcome === 'complete') {
-    problems.push('a search the page cap stopped must be reported as truncated, not complete.');
+  const finishedOutcome = file.outcome === 'complete' || file.outcome === 'no_matches';
+  if (isPlainObject(paging) && paging.moreAvailable === true && paging.pagesRead >= paging.pageCap && finishedOutcome) {
+    problems.push(`a search the page cap stopped must be reported as truncated, not ${file.outcome}.`);
   }
 
   const seen = new Set();

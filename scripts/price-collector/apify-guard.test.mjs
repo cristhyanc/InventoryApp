@@ -34,7 +34,7 @@ import {
 
 const limits = loadLimits();
 const VARNMILL = 'varnmill/au-supermarket-prices';
-const UNCONFIRMED = Object.freeze(['abotapi/kmart-product-scraper', 'axlymxp/bigw-product-search', 'dromb/bigw-sku-lookup']);
+const UNCONFIRMED = Object.freeze(['abotapi/kmart-au-scraper', 'axlymxp/bigw-product-scraper', 'dromb/big-w-au-product-scraper']);
 
 /**
  * The rules with one actor's configuration marked confirmed. The actors the owner has not verified
@@ -73,9 +73,9 @@ afterEach(async () => {
 describe('the limits file', () => {
   it('names the actors the owner chose in testing, and only those', () => {
     assert.deepEqual(Object.keys(limits.actors).sort(), [
-      'abotapi/kmart-product-scraper',
-      'axlymxp/bigw-product-search',
-      'dromb/bigw-sku-lookup',
+      'abotapi/kmart-au-scraper',
+      'axlymxp/bigw-product-scraper',
+      'dromb/big-w-au-product-scraper',
       VARNMILL,
     ]);
   });
@@ -98,13 +98,13 @@ describe('the limits file', () => {
   it('forces the enrichments and the watcher off, which is where the money goes', () => {
     assert.equal(limits.actors[VARNMILL].forcedInput.onlyChanged, false);
     assert.equal(limits.actors[VARNMILL].forcedInput.fetchPaidDetails, false);
-    assert.equal(limits.actors['abotapi/kmart-product-scraper'].forcedInput.includeReviews, false);
-    assert.equal(limits.actors['abotapi/kmart-product-scraper'].forcedInput.includeLocalStock, false);
+    assert.equal(limits.actors['abotapi/kmart-au-scraper'].forcedInput.fetchReviews, false);
+    assert.equal(limits.actors['abotapi/kmart-au-scraper'].forcedInput.includeClickAndCollect, false);
   });
 
   it('says which actor ids are still to be confirmed in the dry run', () => {
     assert.equal(limits.actors[VARNMILL].actorIdConfirmed, true);
-    for (const actorId of ['abotapi/kmart-product-scraper', 'axlymxp/bigw-product-search', 'dromb/bigw-sku-lookup']) {
+    for (const actorId of ['abotapi/kmart-au-scraper', 'axlymxp/bigw-product-scraper', 'dromb/big-w-au-product-scraper']) {
       assert.equal(limits.actors[actorId].actorIdConfirmed, false, actorId);
     }
   });
@@ -233,12 +233,12 @@ describe('the limits it injects or verifies', () => {
     assert.equal(inputOf(answer).fetchPaidDetails, false);
 
     const kmart = decideApify(
-      { actor: 'abotapi/kmart-product-scraper', input: { includeReviews: true, includeLocalStock: true } },
-      { rules: confirming('abotapi/kmart-product-scraper') },
+      { actor: 'abotapi/kmart-au-scraper', input: { fetchReviews: true, includeClickAndCollect: true } },
+      { rules: confirming('abotapi/kmart-au-scraper') },
     );
     assert.equal(kmart.decision, 'allow');
-    assert.equal(inputOf(kmart).includeReviews, false);
-    assert.equal(inputOf(kmart).includeLocalStock, false);
+    assert.equal(inputOf(kmart).fetchReviews, false);
+    assert.equal(inputOf(kmart).includeClickAndCollect, false);
   });
 
   it('fixes an input the call carries flat rather than under input', () => {
@@ -644,4 +644,77 @@ describe('parallel hook invocations', () => {
     assert.equal(stored.actorCalls, 4);
     assert.equal(Math.round(stored.chargeUsd * 100) / 100, 0.08);
   });
+});
+
+
+describe('verified retailer input contracts', () => {
+  it('forces off Kmart reviews, stores, delivery and incremental output', () => {
+    const actor = 'abotapi/kmart-au-scraper';
+    const answer = decideApify({ actor, input: { searchTerms: ['chocolate'], fetchReviews: true, maxReviews: 20,
+      storePostcodes: ['2600'], storeNames: ['Canberra'], includeClickAndCollect: true,
+      verifyOnlineDelivery: true, incrementalMode: true } }, { rules: confirming(actor) });
+    assert.equal(answer.decision, 'allow');
+    const input = inputOf(answer);
+    assert.equal(input.fetchReviews, false);
+    assert.equal(input.maxReviews, 0);
+    assert.deepEqual(input.storePostcodes, []);
+    assert.deepEqual(input.storeNames, []);
+    assert.equal(input.includeClickAndCollect, false);
+    assert.equal(input.verifyOnlineDelivery, false);
+    assert.equal(input.incrementalMode, false);
+    assert.equal(input.maxPages, 3);
+    assert.deepEqual(input.searchTerms, ['chocolate']);
+  });
+
+  it('bounds BIG W internal paging and keeps pricing without reviews', () => {
+    const actor = 'axlymxp/bigw-product-scraper';
+    const answer = decideApify({ actor, input: { searchQueries: ['chocolate'],
+      includePricing: false, includeReviewStats: true, includeReviews: true } }, { rules: confirming(actor) });
+    assert.equal(answer.decision, 'allow');
+    const input = inputOf(answer);
+    assert.equal(input.maxPagesPerQuery, 3);
+    assert.equal(input.includePricing, true);
+    assert.equal(input.includeReviews, false);
+    assert.equal(input.includeReviewStats, false);
+    assert.deepEqual(input.searchQueries, ['chocolate']);
+  });
+
+  it('uses Dromb item lookup, not a keyword search or invented maxItems', () => {
+    const actor = 'dromb/big-w-au-product-scraper';
+    const answer = decideApify({ actor, input: { operation: 'search', item_id: '123' } }, { rules: confirming(actor) });
+    assert.equal(answer.decision, 'allow');
+    assert.equal(inputOf(answer).operation, 'item');
+    assert.equal(inputOf(answer).item_id, '123');
+    assert.equal(inputOf(answer).maxItems, undefined);
+    assert.equal(inputOf(answer).limit, 1);
+  });
+
+  for (const [actor, field, query] of [
+    ['abotapi/kmart-au-scraper', 'maxPages', { searchTerms: ['chocolate'] }],
+    ['axlymxp/bigw-product-scraper', 'maxPagesPerQuery', { searchQueries: ['chocolate'] }],
+  ]) {
+    it(`keeps a smaller ${field} for ${actor} rather than raising it to the cap`, () => {
+      const answer = decideApify({ actor, input: { ...query, [field]: 1 } }, { rules: confirming(actor) });
+      assert.equal(answer.decision, 'allow');
+      assert.equal(inputOf(answer)[field], 1);
+    });
+
+    it(`refuses a ${field} above the cap for ${actor}`, () => {
+      const answer = decideApify({ actor, input: { ...query, [field]: 4 } }, { rules: confirming(actor) });
+      assert.equal(answer.decision, 'deny');
+      assert.match(answer.reason, new RegExp(`${field} may be at most 3`));
+    });
+
+    it(`refuses a zero or malformed ${field} for ${actor}, which these actors read as every page`, () => {
+      for (const asked of [0, -1, 1.5, '2']) {
+        const answer = decideApify({ actor, input: { ...query, [field]: asked } }, { rules: confirming(actor) });
+        assert.equal(answer.decision, 'deny', String(asked));
+      }
+    });
+
+    it(`does not force ${field} for ${actor}, so a request is judged rather than overwritten`, () => {
+      assert.equal(limits.actors[actor].pageLimitField, field);
+      assert.equal(Object.hasOwn(limits.actors[actor].forcedInput, field), false);
+    });
+  }
 });

@@ -11,7 +11,8 @@
 //     read, does not list, or whose id and input field names are still to be confirmed in the
 //     owner's dry run is refused rather than allowed;
 //   * injects the actor's `maxTotalChargeUsd` and item limit when the call carries neither, keeps a
-//     smaller request, and blocks a larger one;
+//     smaller request, and blocks a larger one; the same for the internal page cap of an actor that
+//     pages internally (`pageLimitField`), up to its `maxPages`;
 //   * forces off what is billed and unread - Kmart reviews and local-stock enrichment, Varnmill paid
 //     details, and the Varnmill `onlyChanged` watcher, because every listing must get a positive
 //     check (#925);
@@ -150,6 +151,32 @@ function itemLimit({ container, actor, actorId }) {
   return { value: asked, injected: false };
 }
 
+/**
+ * The internal page cap this call may ask for, for an actor that pages internally and names the
+ * field (`pageLimitField`): a smaller positive request is kept, a missing one is set to the actor's
+ * `maxPages`, and a larger, zero (which these actors read as "every page") or malformed one is refused.
+ */
+function pageLimit({ container, actor, actorId }) {
+  const field = actor.pageLimitField;
+  if (field === undefined) return { value: undefined, injected: false };
+  if (!Object.hasOwn(container, field)) return { value: actor.maxPages, injected: true };
+
+  const asked = container[field];
+  if (!Number.isInteger(asked) || asked <= 0) {
+    return { refusal: `${field} must be a positive whole number of pages.` };
+  }
+  if (asked > actor.maxPages) {
+    return { refusal: `${field} may be at most ${actor.maxPages} for ${actorId}, not ${asked}.` };
+  }
+  return { value: asked, injected: false };
+}
+
+/** The input field a limit sets, or nothing for a limit the actor does not have. */
+const limitFields = (field, limit) => (field === undefined ? {} : { [field]: limit.value });
+
+/** How the reason names a limit: set by the guard, or the call's own accepted. */
+const describeLimit = (field, limit) => (limit.injected ? `${field} set to ${limit.value}` : `${field} ${limit.value} accepted`);
+
 /** The run's own caps, which a paid call is never allowed without. */
 function perRunCaps(limits) {
   const caps = limits.perRun;
@@ -198,6 +225,9 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
   const items = itemLimit({ container, actor, actorId });
   if (items.refusal !== undefined) return deny(items.refusal, state);
 
+  const pages = pageLimit({ container, actor, actorId });
+  if (pages.refusal !== undefined) return deny(pages.refusal, state);
+
   if (state.chargeUsd + charge.value > perRun.caps.maxTotalChargeUsd) {
     return deny(
       `this call would commit this run to more than its charge cap of ${perRun.caps.maxTotalChargeUsd} US dollars.`,
@@ -209,6 +239,7 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
     ...container,
     [limits.chargeField]: charge.value,
     [actor.itemLimitField]: items.value,
+    ...limitFields(actor.pageLimitField, pages),
     // Forced, not defaulted: an enrichment nothing reads must be off however the call asked for it.
     ...actor.forcedInput,
   };
@@ -216,8 +247,9 @@ function decideApifyCall({ toolName, toolInput, limits, state }) {
     containerField === null ? { ...toolInput, ...fixed } : { ...toolInput, [containerField]: fixed };
 
   const reasons = [
-    charge.injected ? `${limits.chargeField} set to ${charge.value}` : `${limits.chargeField} ${charge.value} accepted`,
-    items.injected ? `${actor.itemLimitField} set to ${items.value}` : `${actor.itemLimitField} ${items.value} accepted`,
+    describeLimit(limits.chargeField, charge),
+    describeLimit(actor.itemLimitField, items),
+    ...(actor.pageLimitField === undefined ? [] : [describeLimit(actor.pageLimitField, pages)]),
   ];
 
   return allow(
