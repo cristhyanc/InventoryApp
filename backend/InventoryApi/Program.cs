@@ -377,11 +377,16 @@ builder.Services.AddSingleton<IPriceCollectorRunSettings>(serviceProvider =>
         serviceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger("InventoryApi.Auth.PriceCollector")));
 
+// The local dev server and the production frontend are fixed; a deployment such as the hosted
+// testing environment adds its own frontend's origin with Cors:AdditionalAllowedOrigins, and an
+// invalid entry fails startup here. See BrowserClientOrigins.
+var browserClientOrigins = BrowserClientOrigins.Resolve(builder.Configuration);
+
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngularDevClient", policy =>
+    options.AddPolicy(BrowserClientOrigins.PolicyName, policy =>
     {
-        policy.WithOrigins("http://localhost:4200", "https://red-island-0c128c000.7.azurestaticapps.net")
+        policy.WithOrigins([.. browserClientOrigins])
               .AllowAnyHeader()
               .AllowAnyMethod()
               // A browser client can read only the response headers a CORS policy exposes, so the
@@ -572,7 +577,7 @@ if (app.Environment.IsDevelopment())
 // authorization. Uploaded purchase and operating-expense documents are stored outside the
 // web root (see FileSystemDocumentStorage) and are only readable through the [Authorize]d
 // endpoints, so no business document has an anonymous URL.
-app.UseCors("AllowAngularDevClient");
+app.UseCors(BrowserClientOrigins.PolicyName);
 app.UseAuthentication();
 
 // A Super Admin's role preview (issue #720). After authentication, because whether the

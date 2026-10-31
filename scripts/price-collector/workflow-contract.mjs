@@ -11,7 +11,11 @@ export function verifyCollectorWorkflow(text) {
   requireText('  workflow_dispatch:', 'The collector must have a manual entry point.');
   if (/^ {2}(?:schedule|push|pull_request|pull_request_target|workflow_run|workflow_call):/m.test(text)) problems.push('Stage 1 must not start automatically.');
   requireText('group: price-collector\n  cancel-in-progress: false', 'Collector runs must not overlap or cancel one another.');
-  requireText("github.ref == 'refs/heads/main'", 'Only reviewed main may receive credentials.');
+  // Reviewed main or develop only (develop to test against the hosted testing API); a feature branch
+  // never receives the collector's credentials, and the refusal runs before the credentialed job.
+  requireText("    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (", 'Only reviewed main or develop may receive credentials.');
+  requireText('            refs/heads/main|refs/heads/develop) ;;\n            *) echo', 'The gate must refuse every other ref.');
+  if (/refs\/heads\/(?!(?:main|develop)\b)/.test(text)) problems.push('Only main and develop may be named as collector refs.');
   requireText('environment: price-collector', 'The collector needs its dedicated protected environment.');
   requireText('PRICE_COLLECTOR_TEST_API_URL:', 'Stage 1 requires the dedicated test API setting.');
   requireText('          persist-credentials: false', 'Checkout must not leave a GitHub credential.');

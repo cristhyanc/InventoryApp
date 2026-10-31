@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, publicSubmissionReport, finaliseSample, launchClaude } from './workflow.mjs';
+import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude } from './workflow.mjs';
 import { permittedCommand, recordDecision, toolDecision } from './workflow-tool-guard.mjs';
 import { LEDGER_FILE, MAX_POLLS_PER_RUN, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
@@ -268,4 +268,22 @@ test('a dedicated actor tool records its run, and get-actor-run may add a datase
     assert.deepEqual(Object.keys(ledger.runs), ['KRun']);
     assert.deepEqual(ledger.runs.KRun.datasets, { KData: 0 });
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a run is issued only from reviewed main or develop, to an HTTPS test API that is not production', () => {
+  const production = productionApiOrigin();
+  assert.equal(production, new URL(JSON.parse(readFileSync(new URL('../../frontend/inventory-app/src/assets/config.json', import.meta.url), 'utf8')).apiBaseUrl).origin);
+  const testApi = 'https://restockroo-testing-api.azurewebsites.net';
+  for (const ref of ['refs/heads/main', 'refs/heads/develop']) {
+    assert.equal(collectorTarget({ GITHUB_REF: ref, PRICE_COLLECTOR_TEST_API_URL: testApi }).origin, testApi);
+  }
+  for (const ref of ['refs/heads/feature', 'refs/heads/developer', 'refs/tags/v1', 'refs/pull/1/merge', undefined]) {
+    assert.throws(() => collectorTarget({ GITHUB_REF: ref, PRICE_COLLECTOR_TEST_API_URL: testApi }), /main or develop/);
+  }
+  for (const url of [production, `${production}/`, production.toUpperCase()]) {
+    assert.throws(() => collectorTarget({ GITHUB_REF: 'refs/heads/develop', PRICE_COLLECTOR_TEST_API_URL: url }), /not be the production API/);
+  }
+  for (const url of ['http://restockroo-testing-api.azurewebsites.net', 'https://user:pw@restockroo-testing-api.azurewebsites.net', `${testApi}?x=1`]) {
+    assert.throws(() => collectorTarget({ GITHUB_REF: 'refs/heads/develop', PRICE_COLLECTOR_TEST_API_URL: url }), /HTTPS test API URL/);
+  }
 });

@@ -15,7 +15,10 @@ test('a cron, a write token, artifact publication or a non-always finalizer brea
     workflow.replace('      contents: read', '      contents: write'),
     workflow.replace('        if: always()', '        if: success()'),
     workflow + '\n# uses: actions/upload-artifact@v4\n',
-    workflow.replace("github.ref == 'refs/heads/main'", "github.ref != ''"),
+    workflow.replace("(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')", "github.ref != ''"),
+    workflow.replace("(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')", "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/'))"),
+    workflow.replace('            refs/heads/main|refs/heads/develop) ;;', '            refs/heads/*) ;;'),
+    workflow.replace("|| github.ref == 'refs/heads/develop')", "|| github.ref == 'refs/heads/feature')"),
   ]) assert.throws(() => verifyCollectorWorkflow(changed));
 });
 
