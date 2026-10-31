@@ -26,7 +26,7 @@ export function verifyCollectorWorkflow(text) {
   if (/upload-artifact|azure\/login|webapps-deploy|--dangerously-skip-permissions|PRICE_COLLECTOR_API_TOKEN:/.test(text)) problems.push('No transcripts/artifacts, deployments, permission bypass or stored API token.');
   requireText('      - name: Submit finished files and complete the issued run\n        if: always()\n        timeout-minutes: 15', 'Partial-result finalisation must run after failure with its own time budget.');
   requireText('      - name: Remove private work, files and CLI installation\n        if: always()', 'Private files must be cleaned after failure too.');
-  if (!collect.includes('timeout-minutes: 45') || !collect.includes('timeout-minutes: 16')) problems.push('The job must leave at least 15 minutes after Claude stops.');
+  if (!collect.includes('    timeout-minutes: 130\n') || !collect.includes('        timeout-minutes: 100\n')) problems.push('The job must leave at least 15 minutes after Claude stops.');
   if (problems.length) throw new Error(problems.join('\n'));
 }
 
