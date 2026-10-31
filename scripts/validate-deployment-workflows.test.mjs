@@ -16,6 +16,7 @@ import {
   extractTriggers,
   readWorkflows,
   TESTING_ORDER_STEP,
+  TESTING_ATTEMPT_STEP,
   verifyDeployProductionRecoveryWorkflow,
   verifyDeployProductionReleaseWorkflow,
   verifyDeployProductionWorkflow,
@@ -542,10 +543,10 @@ test('testing uses only its own environment and OIDC identity, never a productio
     assert.throws(() => verifyDeployTestingWorkflow(mutateTesting(original, replacement)), /forbidden|missing required|environment/);
   }
   const jobs = testingJobs;
-  assert.deepEqual(extractJobPermissions(jobs['deploy-api']), { contents: 'read', deployments: 'read', 'id-token': 'write' });
+  assert.deepEqual(extractJobPermissions(jobs['deploy-api']), { contents: 'read', deployments: 'write', 'id-token': 'write' });
   assert.deepEqual(extractJobPermissions(jobs['deploy-frontend']), { contents: 'read', 'id-token': 'write' });
   assert.deepEqual(extractJobPermissions(jobs.validate), { contents: 'read' });
-  const writer = replaceInTestingJob('deploy-api', '      deployments: read\n', '      deployments: read\n      contents: write\n');
+  const writer = replaceInTestingJob('deploy-api', '      deployments: write\n', '      deployments: write\n      contents: write\n');
   assert.throws(() => verifyDeployTestingWorkflow(writer), /contents: write|permissions/);
   // An OIDC token or the testing environment in a job that does not deploy is refused.
   const oidcInValidate = replaceInTestingJob('validate', '      contents: read\n', '      contents: read\n      id-token: write\n');
@@ -605,12 +606,41 @@ const testingFixtureRoot = mkdtempSync(join(tmpdir(), 'deploy-testing-'));
 test.after(() => rmSync(testingFixtureRoot, { recursive: true, force: true }));
 const testingBin = join(testingFixtureRoot, 'bin');
 mkdirSync(testingBin);
-// gh answers by endpoint: the develop comparison, the newest record, and the record comparison.
+// gh answers by endpoint: the develop comparison, the newest record of each task, the record
+// comparison, and record creation. With FAKE_STORE set it keeps the records it creates in that file
+// and orders commits by their position in FAKE_HISTORY, so a whole sequence of runs can be replayed.
 writeFileSync(join(testingBin, 'gh'), `#!/usr/bin/env bash
 case "$*" in
-  *"/deployments?"*) [ "\${FAKE_RECORDS_EXIT:-0}" = 0 ] || exit 1; printf "%s" "$FAKE_RECORDED" ;;
+  *"--method POST"*"/statuses"*) cat >/dev/null ;;
+  *"--method POST"*"/deployments"*)
+    body="$(cat)"
+    task="$(jq -r .task <<<"$body")"
+    [ "$task" != "\${FAKE_POST_FAIL_TASK:-}" ] || exit 1
+    printf "%s %s\\n" "$task" "$(jq -r .ref <<<"$body")" >> "$FAKE_STORE"
+    wc -l < "$FAKE_STORE" | tr -d ' ' ;;
+  *"/deployments?"*)
+    [ "\${FAKE_RECORDS_EXIT:-0}" = 0 ] || exit 1
+    task="$(sed 's/.*task=\\([^&]*\\)&.*/\\1/' <<<"$*")"
+    if [ -n "\${FAKE_STORE:-}" ]; then
+      awk -v task="$task" '$1 == task { sha = $2 } END { printf "%s", sha }' "$FAKE_STORE"
+    elif [ "$task" = "$TESTING_ATTEMPT_TASK" ]; then
+      printf "%s" "\${FAKE_ATTEMPT:-}"
+    else
+      printf "%s" "$FAKE_RECORDED"
+    fi ;;
   *"...develop"*) [ "\${FAKE_DEVELOP_EXIT:-0}" = 0 ] || exit 1; printf "%s" "$FAKE_CONTAINED" ;;
-  *"/compare/"*) printf "%s" "$FAKE_ORDER" ;;
+  *"/compare/"*)
+    range="$(sed 's/.*compare\\/\\([^ ]*\\).*/\\1/' <<<"$*")"
+    base="\${range%...*}"; head="\${range#*...}"
+    if [ -n "\${FAKE_HISTORY:-}" ]; then
+      position() { local i=0 commit; for commit in $FAKE_HISTORY; do [ "$commit" = "$1" ] && { echo "$i"; return; }; i=$((i + 1)); done; echo -1; }
+      b="$(position "$base")"; h="$(position "$head")"
+      if [ "$b" = "$h" ]; then printf identical; elif [ "$h" -gt "$b" ]; then printf ahead; else printf behind; fi
+    elif [ -n "\${FAKE_ATTEMPT:-}" ] && [ "$base" = "$FAKE_ATTEMPT" ]; then
+      printf "%s" "$FAKE_ATTEMPT_ORDER"
+    else
+      printf "%s" "$FAKE_ORDER"
+    fi ;;
   *) echo "unexpected gh call: $*" >&2; exit 2 ;;
 esac
 `);
@@ -642,6 +672,7 @@ function runTestingStep(script, env = {}, cwd = testingFixtureRoot) {
       GITHUB_REPOSITORY: 'owner/repo',
       GITHUB_SHA: SHA,
       TESTING_ENVIRONMENT: 'testing',
+      TESTING_ATTEMPT_TASK: 'deploy:testing-attempt',
       TESTING_RECORD_TASK: 'deploy:testing-backend',
       PRODUCTION_API_HOST: 'vm-manager-axhadxh5hjehayh0.australiaeast-01.azurewebsites.net',
       PRODUCTION_FRONTEND_HOST: 'red-island-0c128c000.7.azurestaticapps.net',
@@ -696,6 +727,101 @@ test('a commit outside develop, an invalid record or an unreadable API stops the
     assert.match(run.log, message);
     assert.equal(run.outputs.sha, undefined);
   }
+});
+
+test('a newer upload attempt blocks an older commit even when no healthy record follows it', () => {
+  // B (newer) was uploaded but never recorded healthy; A (older) is the newest healthy deployment.
+  const older = runTestingStep(orderScript, { FAKE_CONTAINED: 'ahead', FAKE_ATTEMPT: RECORDED, FAKE_ATTEMPT_ORDER: 'behind', FAKE_RECORDED: SHA, FAKE_ORDER: 'identical' });
+  assert.notEqual(older.status, 0, older.log);
+  assert.match(older.log, /newest attempted testing deployment is b{40}, which is newer than/);
+  assert.equal(older.outputs.sha, undefined);
+  const diverged = runTestingStep(orderScript, { FAKE_CONTAINED: 'ahead', FAKE_ATTEMPT: RECORDED, FAKE_ATTEMPT_ORDER: 'diverged', FAKE_RECORDED: '' });
+  assert.notEqual(diverged.status, 0, diverged.log);
+  assert.match(diverged.log, /diverged/);
+  const same = runTestingStep(orderScript, { FAKE_CONTAINED: 'ahead', FAKE_ATTEMPT: SHA, FAKE_ATTEMPT_ORDER: 'identical', FAKE_RECORDED: RECORDED, FAKE_ORDER: 'ahead' });
+  assert.equal(same.status, 0, same.log);
+  assert.equal(same.outputs.sha, SHA);
+});
+
+const attemptScript = stepScript(testingJobs['deploy-api'], TESTING_ATTEMPT_STEP);
+const recordScript = stepScript(testingJobs['record-deployment'], 'Record the deployed backend SHA');
+const [COMMIT_A, COMMIT_B, COMMIT_C] = ['a', 'b', 'c'].map((digit) => digit.repeat(40));
+
+// Replays runs of the deploy-api and record-deployment steps against one record store. Each run is
+// the order check, the attempt record, then (when the upload passed its health check) the healthy
+// record. Returns whether the order check let the commit through.
+function replayTestingRuns(name, runs) {
+  const store = join(testingFixtureRoot, `store-${name}`);
+  writeFileSync(store, '');
+  const shared = { FAKE_STORE: store, FAKE_HISTORY: `${COMMIT_A} ${COMMIT_B} ${COMMIT_C}`, FAKE_CONTAINED: 'ahead', RUN_URL: 'https://example.invalid/run' };
+  return runs.map(({ sha, healthy = true, recordFails = false }) => {
+    const env = { ...shared, GITHUB_SHA: sha, TESTING_SHA: sha };
+    const order = runTestingStep(orderScript, env);
+    if (order.status !== 0) return { allowed: false, log: order.log };
+    const attempt = runTestingStep(attemptScript, env);
+    assert.equal(attempt.status, 0, attempt.log);
+    if (healthy) {
+      const record = runTestingStep(recordScript, { ...env, FAKE_POST_FAIL_TASK: recordFails ? 'deploy:testing-backend' : '' });
+      assert.equal(record.status, recordFails ? 1 : 0, record.log);
+    }
+    return { allowed: true, log: order.log };
+  });
+}
+
+test('re-running an older commit after a newer upload failed its health check is refused', () => {
+  const [a, b, rerunA, rerunB, c] = replayTestingRuns('failed-health', [
+    { sha: COMMIT_A },
+    { sha: COMMIT_B, healthy: false },
+    { sha: COMMIT_A },
+    { sha: COMMIT_B },
+    { sha: COMMIT_C },
+  ]);
+  assert.ok(a.allowed && b.allowed, `${a.log}${b.log}`);
+  assert.equal(rerunA.allowed, false, rerunA.log);
+  assert.match(rerunA.log, /newest attempted testing deployment is b{40}, which is newer than a{40}/);
+  assert.ok(rerunB.allowed, rerunB.log);
+  assert.ok(c.allowed, c.log);
+});
+
+test('re-running an older commit after a newer upload failed its healthy record is refused', () => {
+  const [a, b, rerunA] = replayTestingRuns('failed-record', [
+    { sha: COMMIT_A },
+    { sha: COMMIT_B, recordFails: true },
+    { sha: COMMIT_A },
+  ]);
+  assert.ok(a.allowed && b.allowed, `${a.log}${b.log}`);
+  assert.equal(rerunA.allowed, false, rerunA.log);
+  assert.match(rerunA.log, /newer than a{40}/);
+});
+
+test('an upload attempt that cannot be recorded stops the job before the upload', () => {
+  const store = join(testingFixtureRoot, 'store-attempt-fails');
+  writeFileSync(store, '');
+  const run = runTestingStep(attemptScript, { FAKE_STORE: store, TESTING_SHA: COMMIT_A, FAKE_POST_FAIL_TASK: 'deploy:testing-attempt' });
+  assert.notEqual(run.status, 0, run.log);
+  assert.match(run.log, /attempt was not recorded, so nothing was uploaded/);
+});
+
+test('the attempt record is required, unconditional and written between the order check and the upload', () => {
+  const missing = replaceInTestingJob('deploy-api', `- name: ${TESTING_ATTEMPT_STEP}`, '- name: Note the upload');
+  assert.throws(() => verifyDeployTestingWorkflow(missing), /Record the deployment attempt before upload/);
+  const deployApi = testingJobs['deploy-api'];
+  const attemptStep = extractStep(deployApi, TESTING_ATTEMPT_STEP, deployTestingPath);
+  const uploadStart = deployApi.indexOf('      - name: Deploy to the test App Service');
+  const uploadEnd = deployApi.indexOf('      - name: Azure Logout');
+  const upload = deployApi.slice(uploadStart, uploadEnd);
+  const afterUpload = deployApi.replace(attemptStep, '').replace(upload, `${upload}${attemptStep}`);
+  assert.throws(() => verifyDeployTestingWorkflow(testing.replace(deployApi.trimEnd(), () => afterUpload.trimEnd())), /must come before/);
+  const optional = replaceInTestingJob('deploy-api', `- name: ${TESTING_ATTEMPT_STEP}\n`, `- name: ${TESTING_ATTEMPT_STEP}\n        continue-on-error: true\n`);
+  assert.throws(() => verifyDeployTestingWorkflow(optional), /must always run/);
+  const gated = replaceInTestingJob('deploy-api', `- name: ${TESTING_ATTEMPT_STEP}\n`, `- name: ${TESTING_ATTEMPT_STEP}\n        if: success()\n`);
+  assert.throws(() => verifyDeployTestingWorkflow(gated), /must always run/);
+  const otherTask = replaceInTestingJob('deploy-api', '--arg task "$TESTING_ATTEMPT_TASK"', '--arg task "$TESTING_RECORD_TASK"');
+  assert.throws(() => verifyDeployTestingWorkflow(otherTask), /TESTING_ATTEMPT_TASK/);
+  const readOnly = replaceInTestingJob('deploy-api', '      deployments: write\n', '      deployments: read\n');
+  assert.throws(() => verifyDeployTestingWorkflow(readOnly), /permissions must be exactly/);
+  const healthyOnly = testing.replaceAll('          check_newest "$TESTING_ATTEMPT_TASK" attempted\n', '');
+  assert.throws(() => verifyDeployTestingWorkflow(healthyOnly), /check_newest "\$TESTING_ATTEMPT_TASK"/);
 });
 
 const configScript = stepScript(testingJobs['deploy-api'], 'Check the testing environment configuration');

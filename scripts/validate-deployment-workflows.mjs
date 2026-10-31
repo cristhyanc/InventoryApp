@@ -88,6 +88,8 @@ export const TESTING_DEPLOY_JOB_CONDITION = `if: github.ref == 'refs/heads/devel
 // The step both resolve and deploy-api run, byte for byte, so the order rule checked before Azure
 // authentication is the one checked when the run started.
 export const TESTING_ORDER_STEP = 'Verify the commit is on develop and not older than the deployed one';
+export const TESTING_ATTEMPT_STEP = 'Record the deployment attempt before upload';
+export const TESTING_ATTEMPT_TASK = 'deploy:testing-attempt';
 
 // A failed deployment must never change code, labels or start an agent; production recovery
 // is a human decision.
@@ -577,15 +579,19 @@ export function verifyDeployTestingWorkflow(text, source = deployTestingPath) {
   requirePermissions(jobs, 'resolve', { contents: 'read', deployments: 'read' }, source);
   forbidEnvironment(jobs, 'resolve', source);
 
-  // The order rule: the commit is on develop, and the newest healthy testing deployment is the same
-  // commit or an ancestor of it. Checked when the run starts and again before Azure authentication.
+  // The order rule: the commit is on develop, and both the newest upload attempt and the newest
+  // healthy testing deployment are the same commit or an ancestor of it. Checked when the run starts
+  // and again before Azure authentication. The attempt record covers an upload that failed its health
+  // check or its healthy record, after its migrations may already have run.
   const resolveOrder = extractStep(resolveJob, TESTING_ORDER_STEP, `${source} job 'resolve'`);
   for (const required of [
     'sha="$GITHUB_SHA"',
     '^[0-9a-f]{40}$',
     'compare/$sha...develop',
-    'deployments?environment=$TESTING_ENVIRONMENT&task=$TESTING_RECORD_TASK&per_page=1',
+    'deployments?environment=$TESTING_ENVIRONMENT&task=$task&per_page=1',
     'compare/$recorded...$sha',
+    'check_newest "$TESTING_ATTEMPT_TASK" attempted\n',
+    'check_newest "$TESTING_RECORD_TASK" healthy\n',
     'identical|ahead) echo',
     'behind) fail',
     '*) fail',
@@ -593,6 +599,7 @@ export function verifyDeployTestingWorkflow(text, source = deployTestingPath) {
     requireText(resolveOrder, required, `${source} step '${TESTING_ORDER_STEP}'`);
   }
   requireText(text, `  TESTING_ENVIRONMENT: ${TESTING_ENVIRONMENT}\n`, source);
+  requireText(text, `  TESTING_ATTEMPT_TASK: ${TESTING_ATTEMPT_TASK}\n`, source);
   requireText(text, '  TESTING_RECORD_TASK: deploy:testing-backend\n', source);
 
   requireText(jobs.validate, 'bash scripts/validate.sh', `${source} job 'validate'`);
@@ -613,7 +620,7 @@ export function verifyDeployTestingWorkflow(text, source = deployTestingPath) {
   requireText(deployApi, `    ${TESTING_DEPLOY_JOB_CONDITION}\n`, `${source} job 'deploy-api'`);
   requireText(deployApi, `    environment: ${TESTING_ENVIRONMENT}\n`, `${source} job 'deploy-api'`);
   requireNeeds(jobs, 'deploy-api', ['resolve', 'validate', 'build'], source);
-  requirePermissions(jobs, 'deploy-api', { contents: 'read', deployments: 'read', 'id-token': 'write' }, source);
+  requirePermissions(jobs, 'deploy-api', { contents: 'read', deployments: 'write', 'id-token': 'write' }, source);
   requireText(deployApi, `name: testing-api-${TESTING_SHA}`, `${source} job 'deploy-api'`);
   if (extractStep(deployApi, TESTING_ORDER_STEP, `${source} job 'deploy-api'`).trimEnd() !== resolveOrder.trimEnd()) {
     fail(source, `step '${TESTING_ORDER_STEP}' of job 'deploy-api' must repeat the resolve job's step exactly`);
@@ -622,6 +629,25 @@ export function verifyDeployTestingWorkflow(text, source = deployTestingPath) {
   requireOrder(deployApi, `- name: ${TESTING_ORDER_STEP}`, 'uses: azure/login', `${source} job 'deploy-api'`);
   requireOrder(deployApi, 'uses: azure/login', '- name: Check the test API keeps its data outside the package', `${source} job 'deploy-api'`);
   requireOrder(deployApi, '- name: Check the test API keeps its data outside the package', 'uses: azure/webapps-deploy', `${source} job 'deploy-api'`);
+  // Every upload is recorded before it starts, unconditionally, and a failed record stops the job.
+  requireOrder(deployApi, `- name: ${TESTING_ORDER_STEP}`, `- name: ${TESTING_ATTEMPT_STEP}`, `${source} job 'deploy-api'`);
+  requireOrder(deployApi, '- name: Check the test API keeps its data outside the package', `- name: ${TESTING_ATTEMPT_STEP}`, `${source} job 'deploy-api'`);
+  requireOrder(deployApi, `- name: ${TESTING_ATTEMPT_STEP}`, 'uses: azure/webapps-deploy', `${source} job 'deploy-api'`);
+  const attemptStep = extractStep(deployApi, TESTING_ATTEMPT_STEP, `${source} job 'deploy-api'`);
+  for (const required of [
+    'set -euo pipefail',
+    '--arg ref "$TESTING_SHA"',
+    '--arg task "$TESTING_ATTEMPT_TASK"',
+    'production_environment: false',
+    'gh api --method POST "repos/$GITHUB_REPOSITORY/deployments"',
+    '[[ "$deployment_id" =~ ^[0-9]+$ ]] || {',
+    `TESTING_SHA: ${TESTING_SHA}`,
+  ]) {
+    requireText(attemptStep, required, `${source} step '${TESTING_ATTEMPT_STEP}'`);
+  }
+  if (/^\s*(if|continue-on-error):/m.test(attemptStep) || attemptStep.includes('|| true')) {
+    fail(source, `step '${TESTING_ATTEMPT_STEP}' must always run and stop the job when the attempt is not recorded`);
+  }
   for (const required of [
     '[ "$API_APP_NAME" != "vm-manager" ]',
     '[ "${host,,}" != "${PRODUCTION_API_HOST,,}" ]',

@@ -17,7 +17,7 @@ push to `develop` runs Deploy Testing as a no-op that reports "switched off".
    `refs/heads/develop`. Reads the `TESTING_DEPLOYMENT_ENABLED` switch and applies the runner-mode,
    isolation and tool-baseline gates. The testing commit is `github.sha`, the commit that triggered
    the run, which is fixed for the run and for its re-runs. The run checks that the commit is in
-   `develop` and is not older than the commit the test API already runs (see
+   `develop` and is not older than the newest uploaded or healthy testing commit (see
    [Ordering](#ordering-and-concurrency)).
 2. **Validate testing commit** (`contents: read`, no environment, no secret). Checks out the exact
    commit, then runs the runner-placement and deployment-workflow contracts and `bash scripts/validate.sh`.
@@ -25,13 +25,15 @@ push to `develop` runs Deploy Testing as a no-op that reports "switched off".
    `App_Data/jobs` from the package, so the production database-backup WebJob never reaches
    testing. Builds the Angular bundle once. Uploads both as `testing-api-<sha>` and
    `testing-frontend-<sha>`.
-4. **Deploy test API** (environment `testing`, `contents: read`, `deployments: read`,
+4. **Deploy test API** (environment `testing`, `contents: read`, `deployments: write`,
    `id-token: write`). The job runs only after validation and build both succeeded. It checks the
    testing variables, refusing the production App Service name and the production API host. It
    repeats the order check, then signs in with the testing identity through OIDC. Next it reads the
    test App Service settings and refuses to deploy unless the database and documents live outside
    the package (see [Test API application settings](#test-api-application-settings)). It compares
-   those values without printing them. Finally it deploys `testing-api-<sha>`.
+   those values without printing them. It then records the upload attempt as a GitHub deployment
+   with task `deploy:testing-attempt` and stops if that record cannot be written. Finally it
+   deploys `testing-api-<sha>`.
 5. **Verify test API health** (no permissions). Polls `GET /health/ready` on `TESTING_API_BASE_URL`
    for up to about 15 minutes, because startup may be applying migrations.
 6. **Record testing backend deployment** (`deployments: write`). Runs only after a healthy check. It
@@ -54,14 +56,18 @@ All runs share the `deploy-testing` concurrency group with `cancel-in-progress: 
 deployment that has started always finishes. GitHub keeps at most one waiting run per group, and a
 newer push replaces the waiting run (shown as cancelled), never the running one.
 
-Each healthy deployment is recorded. The order check reads the newest record and compares it with
-the run's commit through the GitHub compare API:
+Two kinds of record are kept. An **attempt** record (`deploy:testing-attempt`) is written
+immediately before every API upload. A **healthy** record (`deploy:testing-backend`) is written
+only after `/health/ready` succeeds. The order check reads the newest record of each kind and
+compares each with the run's commit through the GitHub compare API:
 
-- **No record, the same commit, or a newer commit:** the run deploys. Re-deploying the same commit
-  is allowed.
-- **An older commit** (`behind`): the run is refused. This covers re-running an old run after a newer
-  commit is already deployed. To deploy the current head, push to `develop` or start **Run
-  workflow** on `develop`.
+- **No record, the same commit, or a newer commit (for both):** the run deploys. Re-deploying the
+  same commit is allowed, including one whose upload failed.
+- **An older commit** (`behind` either record): the run is refused. This covers re-running an old
+  run after a newer commit was deployed, and also after a newer commit was uploaded but then failed
+  its health check or its healthy record. Its migrations may already have changed the test
+  database, so older code must not be deployed over it. To recover, fix forward: push to `develop`
+  or start **Run workflow** on `develop`.
 - **A diverged commit:** the run is refused.
 
 The check runs when the run starts and again immediately before Azure sign-in. Runs are serialized,
@@ -69,7 +75,8 @@ so no other testing deployment can happen between the check and the upload.
 
 ### Deployment records
 
-Records are GitHub deployments on environment `testing` with task `deploy:testing-backend`. If a
+Records are GitHub deployments on environment `testing` with task `deploy:testing-attempt`
+(before each upload) or `deploy:testing-backend` (after each healthy deployment). If a
 record ever names a commit that is no longer in `develop` (for example, after history was
 rewritten), runs stop with "diverged". To clear it, a human deletes that deployment through the
 REST API: first create an `inactive` status for it, then delete it. GitHub also creates its own

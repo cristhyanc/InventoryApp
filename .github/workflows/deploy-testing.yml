@@ -8,8 +8,9 @@ name: Deploy Testing
 #
 # A run validates the commit, builds both artifacts from it, deploys the API, waits for
 # /health/ready, records the healthy backend, then deploys the frontend pointed at the test API.
-# Runs share one non-cancelling queue, and a commit older than the one already deployed is refused,
-# so an older run can never overwrite a newer deployment. A failure stops the run; it never reverts,
+# Runs share one non-cancelling queue, every upload is recorded before it starts, and a commit older
+# than the newest upload or healthy deployment is refused, so an older run can never overwrite a newer
+# deployment, even one that failed its health check after its migrations ran. A failure stops the run; it never reverts,
 # merges, relabels, retries or starts another deployment.
 on:
   push:
@@ -27,8 +28,10 @@ concurrency:
 
 env:
   TESTING_ENVIRONMENT: testing
-  # GitHub deployment records written after each healthy backend deployment. The newest one is the
-  # commit the test API runs; a run for an older commit is refused.
+  # GitHub deployment records. An attempt record is written before every API upload, a backend
+  # record after each healthy deployment. A run for a commit older than the newest of either is
+  # refused, so an older commit never overwrites a newer upload, even one that failed afterwards.
+  TESTING_ATTEMPT_TASK: deploy:testing-attempt
   TESTING_RECORD_TASK: deploy:testing-backend
   API_PROJECT: ./backend/InventoryApi/InventoryApi.csproj
   FRONTEND_DIR: frontend/inventory-app
@@ -139,20 +142,28 @@ jobs:
             identical|ahead) ;;
             *) fail "Commit $sha is not contained in develop (compare status: $contained). Only develop commits are deployed to testing." ;;
           esac
-          recorded="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=$TESTING_ENVIRONMENT&task=$TESTING_RECORD_TASK&per_page=1" --jq '.[0].sha // empty')" \
-            || fail "Could not read the recorded testing deployments. Nothing was deployed; re-run once the GitHub API is reachable."
-          if [ -n "$recorded" ]; then
-            [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] || fail "The newest testing deployment record '$recorded' is not a full commit SHA. See docs/testing-environment.md § Deployment records."
+          # Two records are compared: the newest upload attempt (written before every upload, so a
+          # deployment that failed its health check or its healthy record still counts) and the
+          # newest healthy deployment. The commit must be the same as or newer than both.
+          check_newest() {
+            local task="$1" label="$2" recorded order
+            recorded="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=$TESTING_ENVIRONMENT&task=$task&per_page=1" --jq '.[0].sha // empty')" \
+              || fail "Could not read the recorded testing deployments ($task). Nothing was deployed; re-run once the GitHub API is reachable."
+            if [ -z "$recorded" ]; then
+              echo "No $label testing deployment is recorded yet."
+              return 0
+            fi
+            [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] || fail "The newest $label testing deployment record '$recorded' is not a full commit SHA. See docs/testing-environment.md § Deployment records."
             order="$(gh api "repos/$GITHUB_REPOSITORY/compare/$recorded...$sha" --jq '.status')" \
-              || fail "Could not compare $sha with the deployed commit $recorded. Nothing was deployed."
+              || fail "Could not compare $sha with the $label commit $recorded. Nothing was deployed."
             case "$order" in
-              identical|ahead) echo "Testing runs $recorded; $sha is the same or newer." ;;
-              behind) fail "Testing already runs $recorded, which is newer than $sha. An older commit never overwrites a newer testing deployment; push or dispatch develop again to deploy its head." ;;
-              *) fail "Commit $sha and the deployed commit $recorded have diverged (compare status: $order). Nothing was deployed. See docs/testing-environment.md § Deployment records." ;;
+              identical|ahead) echo "The newest $label testing deployment is $recorded; $sha is the same or newer." ;;
+              behind) fail "The newest $label testing deployment is $recorded, which is newer than $sha. An older commit never overwrites a newer testing deployment, even one that failed after its upload; push or dispatch develop again to deploy its head." ;;
+              *) fail "Commit $sha and the $label commit $recorded have diverged (compare status: $order). Nothing was deployed. See docs/testing-environment.md § Deployment records." ;;
             esac
-          else
-            echo "No testing deployment is recorded yet; $sha will be the first."
-          fi
+          }
+          check_newest "$TESTING_ATTEMPT_TASK" attempted
+          check_newest "$TESTING_RECORD_TASK" healthy
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Testing commit: $sha"
 
@@ -299,7 +310,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      deployments: read
+      deployments: write
       id-token: write
     outputs:
       api_base_url: ${{ steps.config.outputs.api_base_url }}
@@ -376,20 +387,28 @@ jobs:
             identical|ahead) ;;
             *) fail "Commit $sha is not contained in develop (compare status: $contained). Only develop commits are deployed to testing." ;;
           esac
-          recorded="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=$TESTING_ENVIRONMENT&task=$TESTING_RECORD_TASK&per_page=1" --jq '.[0].sha // empty')" \
-            || fail "Could not read the recorded testing deployments. Nothing was deployed; re-run once the GitHub API is reachable."
-          if [ -n "$recorded" ]; then
-            [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] || fail "The newest testing deployment record '$recorded' is not a full commit SHA. See docs/testing-environment.md § Deployment records."
+          # Two records are compared: the newest upload attempt (written before every upload, so a
+          # deployment that failed its health check or its healthy record still counts) and the
+          # newest healthy deployment. The commit must be the same as or newer than both.
+          check_newest() {
+            local task="$1" label="$2" recorded order
+            recorded="$(gh api "repos/$GITHUB_REPOSITORY/deployments?environment=$TESTING_ENVIRONMENT&task=$task&per_page=1" --jq '.[0].sha // empty')" \
+              || fail "Could not read the recorded testing deployments ($task). Nothing was deployed; re-run once the GitHub API is reachable."
+            if [ -z "$recorded" ]; then
+              echo "No $label testing deployment is recorded yet."
+              return 0
+            fi
+            [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] || fail "The newest $label testing deployment record '$recorded' is not a full commit SHA. See docs/testing-environment.md § Deployment records."
             order="$(gh api "repos/$GITHUB_REPOSITORY/compare/$recorded...$sha" --jq '.status')" \
-              || fail "Could not compare $sha with the deployed commit $recorded. Nothing was deployed."
+              || fail "Could not compare $sha with the $label commit $recorded. Nothing was deployed."
             case "$order" in
-              identical|ahead) echo "Testing runs $recorded; $sha is the same or newer." ;;
-              behind) fail "Testing already runs $recorded, which is newer than $sha. An older commit never overwrites a newer testing deployment; push or dispatch develop again to deploy its head." ;;
-              *) fail "Commit $sha and the deployed commit $recorded have diverged (compare status: $order). Nothing was deployed. See docs/testing-environment.md § Deployment records." ;;
+              identical|ahead) echo "The newest $label testing deployment is $recorded; $sha is the same or newer." ;;
+              behind) fail "The newest $label testing deployment is $recorded, which is newer than $sha. An older commit never overwrites a newer testing deployment, even one that failed after its upload; push or dispatch develop again to deploy its head." ;;
+              *) fail "Commit $sha and the $label commit $recorded have diverged (compare status: $order). Nothing was deployed. See docs/testing-environment.md § Deployment records." ;;
             esac
-          else
-            echo "No testing deployment is recorded yet; $sha will be the first."
-          fi
+          }
+          check_newest "$TESTING_ATTEMPT_TASK" attempted
+          check_newest "$TESTING_RECORD_TASK" healthy
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Testing commit: $sha"
 
@@ -439,6 +458,25 @@ jobs:
             echo "::warning::BackupStorage is configured on the test API. Testing runs no scheduled backup; remove it unless that was deliberate."
           fi
           echo "The test API keeps its database under /home/data and its documents in Blob storage."
+
+      # Recorded before the upload, never after: once the package is uploaded its migrations may run,
+      # so from here on no older commit may deploy, even if this one fails its health check or its
+      # healthy record. If the attempt cannot be recorded, nothing is uploaded.
+      - name: Record the deployment attempt before upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTING_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          deployment_id="$(jq -n \
+            --arg ref "$TESTING_SHA" \
+            --arg task "$TESTING_ATTEMPT_TASK" \
+            --arg environment "$TESTING_ENVIRONMENT" \
+            '{ref: $ref, task: $task, environment: $environment, auto_merge: false, required_contexts: [], production_environment: false, transient_environment: false, description: "Test backend upload started (Deploy Testing)"}' \
+            | gh api --method POST "repos/$GITHUB_REPOSITORY/deployments" --input - --jq '.id')" \
+            || { echo "::error::The testing deployment attempt was not recorded, so nothing was uploaded."; exit 1; }
+          [[ "$deployment_id" =~ ^[0-9]+$ ]] || { echo "::error::The testing deployment attempt was not recorded, so nothing was uploaded."; exit 1; }
+          echo "Recorded the testing upload attempt for $TESTING_SHA (deployment $deployment_id)."
 
       - name: Deploy to the test App Service
         uses: azure/webapps-deploy@5cfb776471c748b351e1ebf5770e208a54ace016 # v2.2.19
