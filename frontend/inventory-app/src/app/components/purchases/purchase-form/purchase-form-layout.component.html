@@ -22,7 +22,7 @@
     <div class="grid gap-4 p-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,2fr)]">
       <div class="field">
         <label class="field-label" [for]="fieldId('supplierId')">Supplier</label>
-        <select [id]="fieldId('supplierId')" [name]="fieldId('supplierId')" [attr.name]="fieldId('supplierId')" [ngModel]="form.supplierId" (ngModelChange)="onSupplierChange($event)">
+        <select [id]="fieldId('supplierId')" [attr.name]="fieldId('supplierId')" [ngModelOptions]="{ standalone: true }" [ngModel]="form.supplierId" (ngModelChange)="onSupplierChange($event)">
           <option value="">None</option>
           @for (s of suppliers; track s.id) {
             <option [ngValue]="s.id">{{ s.name }}</option>
@@ -32,14 +32,14 @@
 
       <div class="field">
         <label class="field-label" [for]="fieldId('purchaseDate')">Purchase date</label>
-        <input [id]="fieldId('purchaseDate')" [name]="fieldId('purchaseDate')" [attr.name]="fieldId('purchaseDate')" type="date" [ngModel]="form.purchaseDate" (ngModelChange)="onDateChange($event)" />
+        <input [id]="fieldId('purchaseDate')" [attr.name]="fieldId('purchaseDate')" [ngModelOptions]="{ standalone: true }" type="date" [ngModel]="form.purchaseDate" (ngModelChange)="onDateChange($event)" />
       </div>
 
       <div class="field">
         <label class="field-label" [for]="fieldId('title')">Purchase title</label>
         <input
           [id]="fieldId('title')"
-          [name]="fieldId('title')" [attr.name]="fieldId('title')"
+          [attr.name]="fieldId('title')" [ngModelOptions]="{ standalone: true }"
           required
           [ngModel]="form.title"
           (ngModelChange)="onTitleChange($event)"
@@ -153,7 +153,7 @@
             [ngModel]="item.quantity"
             (ngModelChange)="onQuantityChange(item, $event)"
             (blur)="markLineTouched(item)"
-            [name]="fieldId('quantity') + index" [attr.name]="fieldId('quantity') + index"
+            [attr.name]="fieldId('quantity') + index" [ngModelOptions]="{ standalone: true }"
             [attr.aria-label]="'Quantity for item ' + (index + 1)"
           />
         </div>
@@ -171,7 +171,7 @@
             [ngModel]="unitPriceValue(item)"
             (ngModelChange)="onUnitPriceChange(item, $event)"
             (blur)="markLineTouched(item)"
-            [name]="fieldId('unitCost') + index" [attr.name]="fieldId('unitCost') + index"
+            [attr.name]="fieldId('unitCost') + index" [ngModelOptions]="{ standalone: true }"
             [class.border-md-danger]="priceProblem(item) !== null"
             [attr.aria-label]="'Unit price for item ' + (index + 1)"
           />
@@ -190,7 +190,7 @@
             [ngModel]="totalPriceValue(item)"
             (ngModelChange)="onLineTotalChange(item, $event)"
             (blur)="markLineTouched(item)"
-            [name]="fieldId('lineTotal') + index" [attr.name]="fieldId('lineTotal') + index"
+            [attr.name]="fieldId('lineTotal') + index" [ngModelOptions]="{ standalone: true }"
             [class.border-md-danger]="priceProblem(item) !== null"
             [attr.aria-label]="'Total price for item ' + (index + 1)"
           />
@@ -203,7 +203,7 @@
             [attr.data-testid]="testId('purchase-item-gst')"
             class="w-full"
             [(ngModel)]="item.gstClassification"
-            [name]="fieldId('gstClassification') + index" [attr.name]="fieldId('gstClassification') + index"
+            [attr.name]="fieldId('gstClassification') + index" [ngModelOptions]="{ standalone: true }"
             [attr.aria-label]="'GST classification for item ' + (index + 1)"
           >
             @for (option of gstOptions; track option.value) {
@@ -263,10 +263,10 @@
         <div [id]="fieldId('additionalCostsPanel')" class="grid gap-4 border-t border-rr-line p-4 sm:grid-cols-2">
           <div class="field">
             <label class="field-label" [for]="fieldId('deliveryCost')">Delivery ($)</label>
-            <input [id]="fieldId('deliveryCost')" [name]="fieldId('deliveryCost')" [attr.name]="fieldId('deliveryCost')" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.deliveryCost" />
+            <input [id]="fieldId('deliveryCost')" [attr.name]="fieldId('deliveryCost')" [ngModelOptions]="{ standalone: true }" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.deliveryCost" />
             @if (hasCharge(form.deliveryCost)) {
               <label class="field-label mt-2" [for]="fieldId('deliveryGstClassification')">Delivery GST</label>
-              <select [id]="fieldId('deliveryGstClassification')" [attr.data-testid]="testId('delivery-gst')" [(ngModel)]="form.deliveryGstClassification" [name]="fieldId('deliveryGstClassification')" [attr.name]="fieldId('deliveryGstClassification')">
+              <select [id]="fieldId('deliveryGstClassification')" [attr.data-testid]="testId('delivery-gst')" [(ngModel)]="form.deliveryGstClassification" [attr.name]="fieldId('deliveryGstClassification')" [ngModelOptions]="{ standalone: true }">
                 @for (option of gstOptions; track option.value) {
                   <option [ngValue]="option.value">{{ option.label }}</option>
                 }
@@ -275,10 +275,10 @@
           </div>
           <div class="field">
             <label class="field-label" [for]="fieldId('packageCost')">Packaging ($)</label>
-            <input [id]="fieldId('packageCost')" [name]="fieldId('packageCost')" [attr.name]="fieldId('packageCost')" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.packageCost" />
+            <input [id]="fieldId('packageCost')" [attr.name]="fieldId('packageCost')" [ngModelOptions]="{ standalone: true }" type="number" inputmode="decimal" step="0.01" min="0" [(ngModel)]="form.packageCost" />
             @if (hasCharge(form.packageCost)) {
               <label class="field-label mt-2" [for]="fieldId('packageGstClassification')">Packaging GST</label>
-              <select [id]="fieldId('packageGstClassification')" [attr.data-testid]="testId('package-gst')" [(ngModel)]="form.packageGstClassification" [name]="fieldId('packageGstClassification')" [attr.name]="fieldId('packageGstClassification')">
+              <select [id]="fieldId('packageGstClassification')" [attr.data-testid]="testId('package-gst')" [(ngModel)]="form.packageGstClassification" [attr.name]="fieldId('packageGstClassification')" [ngModelOptions]="{ standalone: true }">
                 @for (option of gstOptions; track option.value) {
                   <option [ngValue]="option.value">{{ option.label }}</option>
                 }
@@ -310,7 +310,7 @@
         @if (notesOpen) {
           <div [id]="fieldId('notesPanel')" class="border-t border-rr-line p-4">
             <label class="field-label sr-only" [for]="fieldId('notes')">Notes</label>
-            <textarea class="w-full" [id]="fieldId('notes')" [name]="fieldId('notes')" [attr.name]="fieldId('notes')" rows="3" [(ngModel)]="form.notes"></textarea>
+            <textarea class="w-full" [id]="fieldId('notes')" [attr.name]="fieldId('notes')" [ngModelOptions]="{ standalone: true }" rows="3" [(ngModel)]="form.notes"></textarea>
           </div>
         }
       </section>
@@ -375,7 +375,7 @@
         </div>
         <input
           [id]="fieldId('totalAmount')"
-          [name]="fieldId('totalAmount')" [attr.name]="fieldId('totalAmount')"
+          [attr.name]="fieldId('totalAmount')" [ngModelOptions]="{ standalone: true }"
           type="number"
           inputmode="decimal"
           step="0.01"
