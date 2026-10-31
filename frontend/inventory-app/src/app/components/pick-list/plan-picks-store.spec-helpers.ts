@@ -1,5 +1,5 @@
 import { Provider } from '@angular/core';
-import { Observable, Subject, of } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, of } from 'rxjs';
 import { PlanPicksRestoration, PlanPicksStoreService } from './plan-picks-store.service';
 import { StoredPlanPicks } from './plan-picks-storage';
 
@@ -11,7 +11,10 @@ export interface PlanPicksStoreDoubleOptions {
   /** Whether writes succeed. `false` is a tab whose storage refuses them (private mode, a quota). */
   readonly writable?: boolean;
 
-  /** Whether the scope a stored plan was read under is still the one in effect when it is applied. */
+  /**
+   * Whether the scope a stored plan was read under is still the one in effect when it is applied -
+   * and, as in the real service, whether a plan may be written under it at all.
+   */
   readonly scopeCurrent?: boolean;
 
   /**
@@ -37,6 +40,12 @@ export interface PlanPicksStoreDouble {
 
   /** Answers a `'deferred'` stored-plan read with whatever the double now holds. */
   answerRestore(): void;
+
+  /**
+   * Publishes a changed scope: another signed-in account, another business, or a started support
+   * session or role preview (`eligible: false`, which also refuses every write).
+   */
+  changeScope(options?: { eligible?: boolean }): void;
 }
 
 /**
@@ -54,7 +63,11 @@ export function planPicksStoreDouble(options: PlanPicksStoreDoubleOptions = {}):
   let stored: StoredPlanPicks | null = options.stored ?? null;
   let clears = 0;
   let writes = 0;
-  const answer = (): PlanPicksRestoration | null => (stored === null ? null : { scopeToken: 1, plan: stored });
+  /** The scope in effect, as the real service publishes it, and whether a plan may be kept in it. */
+  const scopeToken = new BehaviorSubject(1);
+  let eligible = true;
+  const isCurrentScope = (token: number): boolean => scopeCurrent && eligible && token === scopeToken.value;
+  const answer = (): PlanPicksRestoration | null => (stored === null ? null : { scopeToken: scopeToken.value, plan: stored });
 
   const service = {
     restore: (): Observable<PlanPicksRestoration | null> => {
@@ -64,10 +77,13 @@ export function planPicksStoreDouble(options: PlanPicksStoreDoubleOptions = {}):
       }
       return when === 'deferred' ? deferred.asObservable() : of(answer());
     },
-    isCurrentScope: (scopeToken: number): boolean => scopeCurrent && scopeToken === 1,
-    save: (plan: StoredPlanPicks): boolean => {
+    scopeToken$: scopeToken.asObservable(),
+    isCurrentScope,
+    save: (plan: StoredPlanPicks, token: number): boolean => {
       writes++;
-      if (!writable) {
+      // The real service refuses a plan whose scope is no longer the one in effect, however
+      // writable the storage is.
+      if (!writable || !isCurrentScope(token)) {
         return false;
       }
       stored = plan;
@@ -87,6 +103,10 @@ export function planPicksStoreDouble(options: PlanPicksStoreDoubleOptions = {}):
     answerRestore: () => {
       deferred.next(answer());
       deferred.complete();
+    },
+    changeScope: (options: { eligible?: boolean } = {}) => {
+      eligible = options.eligible ?? true;
+      scopeToken.next(scopeToken.value + 1);
     }
   };
 }

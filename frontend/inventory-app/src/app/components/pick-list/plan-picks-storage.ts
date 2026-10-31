@@ -24,23 +24,53 @@ import { InvalidPickQuantity, MAXIMUM_PICK_QUANTITY, isPlanCellKey } from './pla
  * throws is "nothing stored", and a write that throws is reported as a failed write
  * ({@link writeStoredPlanPicks} answers `false`) and takes the previous record with it, so an older
  * plan can never be left behind looking like the latest saved work.
+ *
+ * **The business a record belongs to is proved, not taken on trust.** {@link PlanPicksScope} is the
+ * first filter and not the proof: a business name is mutable and not unique. The record therefore
+ * also names, for every applied machine, the machine record this business owns
+ * ({@link StoredPlanMachine}), and `PickListComponent` restores a plan only while the fleet read
+ * still agrees about them - see
+ * docs/architecture.md § Keeping the plan in the browser tab (issue #1021).
  */
 export const PLAN_PICKS_STORAGE_KEY = 'inventoryapp.planPicks';
 
 /**
  * The format version of a stored plan. A record written by any other version is read as absent and
- * removed: the alternative is restoring fields that have since changed meaning.
+ * removed: the alternative is restoring fields that have since changed meaning. Version 2 replaced
+ * `appliedMachineIds` with {@link StoredPlanMachine} entries, so a version 1 record - which carries
+ * no business identity to verify - is discarded rather than restored.
  */
-export const PLAN_PICKS_STORAGE_VERSION = 1;
+export const PLAN_PICKS_STORAGE_VERSION = 2;
 
 /**
- * Who a stored plan belongs to: the signed-in identity and the business in view. A record naming
- * anything else is not this operator's plan and is never restored. The frontend has no business id
- * of its own - `GET /api/me/access` reports the business by name - so the name is what scopes it.
+ * The first filter on a stored plan: the signed-in identity and the business name in view. A record
+ * naming anything else is certainly not the plan to restore.
+ *
+ * **It is deliberately not the proof that a record belongs to the business in view.** The frontend
+ * holds no business id - `GET /api/me/access` reports the business by name alone - and a name is
+ * mutable and not unique, so one account moved to a different business of the same name would match
+ * this scope. What a plan is actually bound to is the machine identity in
+ * {@link StoredPlanMachine}, which the server assigns and no other business shares.
  */
 export interface PlanPicksScope {
   readonly accountKey: string;
   readonly businessName: string;
+}
+
+/**
+ * One machine the plan was applied to, named by both identities the fleet read reports for it: the
+ * provider machine number every snapshot cell speaks (`Machine.machineID`), and this business's own
+ * machine record (`Machine.localMachineId`), which the database assigned and which therefore belongs
+ * to exactly one business - or `null` for a provider machine this business has no record of.
+ *
+ * The local id is the only business identity the Pick List can verify without a new API contract,
+ * which is why a plan carries one per machine instead of relying on the business name: a record
+ * restored into a fleet that names the same provider machine under a different machine record cannot
+ * be this business's plan, and a record whose machines are all unidentified is never stored at all.
+ */
+export interface StoredPlanMachine {
+  readonly machineId: number;
+  readonly localMachineId: number | null;
 }
 
 /** One cell's adjusted quantity, by its {@link isPlanCellKey} key. */
@@ -63,7 +93,8 @@ export interface StoredPlanInvalidQuantity extends InvalidPickQuantity {
  * made and the "last refreshed" time keeps saying when the figures on screen were actually read.
  */
 export interface StoredPlanPicks {
-  readonly appliedMachineIds: readonly number[];
+  /** The applied machines, each with the business identity the fleet read reported for it. */
+  readonly appliedMachines: readonly StoredPlanMachine[];
   readonly appliedProductIds: readonly number[];
   readonly products: readonly PickListProduct[];
 
@@ -99,6 +130,32 @@ function readIds(value: unknown): number[] | null {
     return null;
   }
   return value as number[];
+}
+
+/**
+ * The applied machines and the business identity each was stored with. A local id is either a whole
+ * number the database could have assigned or an explicit `null`; anything else - absent, text, a
+ * fraction - is a record this page did not write and is refused whole.
+ */
+function readMachines(value: unknown): StoredPlanMachine[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  const machines: StoredPlanMachine[] = [];
+  for (const entry of value) {
+    const machine = entry as Partial<StoredPlanMachine> | null;
+    if (
+      typeof machine !== 'object' ||
+      machine === null ||
+      !isWholeNumber(machine.machineId) ||
+      !(machine.localMachineId === null || isWholeNumber(machine.localMachineId))
+    ) {
+      return null;
+    }
+    machines.push({ machineId: machine.machineId, localMachineId: machine.localMachineId ?? null });
+  }
+  return machines;
 }
 
 function readCell(value: unknown): PickListMachineQuantity | null {
@@ -233,7 +290,7 @@ function readPlan(value: unknown): StoredPlanPicks | null {
     return null;
   }
 
-  const appliedMachineIds = readIds(plan.appliedMachineIds);
+  const appliedMachines = readMachines(plan.appliedMachines);
   const appliedProductIds = readIds(plan.appliedProductIds);
   const products = readProducts(plan.products);
   const overrides = readOverrides(plan.overrides);
@@ -241,8 +298,8 @@ function readPlan(value: unknown): StoredPlanPicks | null {
   const invalidQuantities = readInvalidQuantities(plan.invalidQuantities);
   const lastRefreshedAt = typeof plan.lastRefreshedAt === 'string' ? plan.lastRefreshedAt : '';
   if (
-    appliedMachineIds === null ||
-    appliedMachineIds.length === 0 ||
+    appliedMachines === null ||
+    appliedMachines.length === 0 ||
     appliedProductIds === null ||
     products === null ||
     overrides === null ||
@@ -253,7 +310,7 @@ function readPlan(value: unknown): StoredPlanPicks | null {
     return null;
   }
 
-  return { appliedMachineIds, appliedProductIds, products, lastRefreshedAt, overrides, pickedCells, invalidQuantities };
+  return { appliedMachines, appliedProductIds, products, lastRefreshedAt, overrides, pickedCells, invalidQuantities };
 }
 
 /** Removes this tab's stored plan. A browser that refuses storage has nothing held to remove. */

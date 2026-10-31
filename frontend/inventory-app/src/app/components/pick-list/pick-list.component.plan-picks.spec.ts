@@ -45,6 +45,9 @@ import { StoredPlanPicks } from './plan-picks-storage';
 function machine(machineID: number, machineName: string, overrides: Partial<Machine> = {}): Machine {
   return {
     machineID,
+    // This business's own machine record, which is what a stored plan is bound to (issue #1021); a
+    // test that is about a provider machine with no record of its own passes `null` for it.
+    localMachineId: machineID + 100,
     machineName,
     machineNumber: null,
     todayDirectProfit: null,
@@ -124,6 +127,9 @@ interface Harness {
 interface HarnessOptions {
   getPickList?: jest.Mock;
   machines?: Machine[];
+
+  /** The fleet read as an observable, for a spec about what happens before it answers. */
+  machineList?: Observable<Machine[]>;
   sites?: Observable<SiteListItem[]>;
   getSiteList?: jest.Mock;
   queryParams?: Record<string, string>;
@@ -136,7 +142,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
   const store = planPicksStoreDouble(options.store);
   const component = new PickListComponent(
-    { getAll: jest.fn(() => of(machines)) } as unknown as MachineService,
+    { getAll: jest.fn(() => options.machineList ?? of(machines)) } as unknown as MachineService,
     { getAll: jest.fn(() => of([product(1, 'Coke', 1), product(2, 'Chips', 2), product(3, 'Water', 1)])) } as unknown as ProductService,
     { get: getPickList } as unknown as PickListService,
     toast as unknown as ToastService,
@@ -1016,7 +1022,10 @@ describe('Plan picks kept in the browser tab (issue #1021)', () => {
 
     applyMachines(component, [10, 20]);
 
-    expect(store.stored()?.appliedMachineIds).toEqual([10, 20]);
+    expect(store.stored()?.appliedMachines).toEqual([
+      { machineId: 10, localMachineId: 110 },
+      { machineId: 20, localMachineId: 120 }
+    ]);
     expect(store.stored()?.appliedProductIds).toEqual([1, 2, 3]);
     expect(store.stored()?.products.map((p) => p.productId)).toEqual([1, 2, 3]);
     expect(store.stored()?.lastRefreshedAt).toBe(component.lastRefreshedAt?.toISOString());
@@ -1125,7 +1134,7 @@ describe('Plan picks kept in the browser tab (issue #1021)', () => {
 
     component.refresh();
 
-    expect(store.stored()?.appliedMachineIds).toEqual([10, 20]);
+    expect(store.stored()?.appliedMachines.map((m) => m.machineId)).toEqual([10, 20]);
     expect(store.stored()?.overrides).toEqual([]);
     expect(store.stored()?.pickedCells).toEqual([]);
   });
@@ -1138,7 +1147,7 @@ describe('Plan picks kept in the browser tab (issue #1021)', () => {
 
     applyMachines(component, [10, 20]);
 
-    expect(store.stored()?.appliedMachineIds).toEqual([10, 20]);
+    expect(store.stored()?.appliedMachines.map((m) => m.machineId)).toEqual([10, 20]);
     expect(store.stored()?.overrides).toEqual([]);
   });
 
@@ -1151,7 +1160,7 @@ describe('Plan picks kept in the browser tab (issue #1021)', () => {
 
     component.removeMachine(20);
 
-    expect(store.stored()?.appliedMachineIds).toEqual([10]);
+    expect(store.stored()?.appliedMachines.map((m) => m.machineId)).toEqual([10]);
     expect(store.stored()?.overrides).toEqual([{ key: '1:10', quantity: 9 }]);
     expect(store.stored()?.invalidQuantities).toEqual([]);
   });
@@ -1286,6 +1295,131 @@ describe('Plan picks kept in the browser tab (issue #1021)', () => {
 
     expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(9);
     expect(component.refillSuggestions.get(refillCellKey(1, 5))).toBe(4);
+  });
+
+  /**
+   * The business a stored plan belongs to is proved by the machine records the fleet read names, not
+   * by the business name: one account moved to a different business of the same name matches the
+   * stored account and name perfectly well, and `GET /api/me/access` reports no business id to tell
+   * the two apart.
+   */
+  it('refuses a stored plan whose machines the fleet now lists under different machine records', () => {
+    const stored = planLeftBehind();
+
+    // The same account, the same business name, the same provider machine numbers - and this
+    // business's own machine records for them, which are somebody else's.
+    const { component, getPickList, store } = createHarness({
+      machines: [machine(10, 'Drinks', { localMachineId: 510 }), machine(20, 'Snacks', { localMachineId: 520 })],
+      store: { stored }
+    });
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.hasPlanningWork()).toBe(false);
+    expect(store.stored()).toBeNull();
+    expect(getPickList).not.toHaveBeenCalled();
+  });
+
+  it('refuses the whole stored plan when only one of its machines is listed under another record', () => {
+    const stored = planLeftBehind();
+
+    const { component } = createHarness({
+      machines: [machine(10, 'Drinks'), machine(20, 'Snacks', { localMachineId: 520 })],
+      store: { stored }
+    });
+
+    // Not trimmed down to the machine that happens to agree: the record is not this business's.
+    expect(component.appliedMachineIds).toEqual([]);
+  });
+
+  it('never stores a plan whose machines the fleet cannot identify, and goes on warning about it', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const machines = [machine(10, 'Drinks', { localMachineId: null })];
+    const { component, store } = createHarness({ machines });
+
+    applyMachines(component, [10]);
+    type(component, 1, 10, '9');
+
+    // No machine record, so nothing could prove whose plan it is when it was read back.
+    expect(store.stored()).toBeNull();
+    expect(component.leaveWarning()).toBe(UNSAVED_WORK_LEAVE_WARNING);
+    expect(component.confirmLeave()).toBe(false);
+    expect(confirm).toHaveBeenCalledWith(UNSAVED_WORK_LEAVE_WARNING);
+  });
+
+  it('stores a run that mixes an identified machine with one the business has no record of', () => {
+    const machines = [machine(10, 'Drinks'), machine(20, 'Snacks', { localMachineId: null })];
+    const { component, store } = createHarness({ machines });
+
+    applyMachines(component, [10, 20]);
+
+    expect(store.stored()?.appliedMachines).toEqual([
+      { machineId: 10, localMachineId: 110 },
+      { machineId: 20, localMachineId: null }
+    ]);
+    expect(component.leaveWarning()).toBeNull();
+  });
+
+  it('discards the plan on screen, and its stored copy, once the account or business changes', () => {
+    const { component, store } = createHarness();
+    applyMachines(component, [10, 20]);
+    type(component, 1, 10, '9');
+    expect(store.stored()).not.toBeNull();
+
+    store.changeScope();
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.stagedMachineIds).toEqual([]);
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.lastRefreshedAt).toBeNull();
+    expect(component.hasPlanningWork()).toBe(false);
+    expect(component.appliedProductIds).toEqual([1, 2, 3]);
+    expect(store.stored()).toBeNull();
+  });
+
+  it('discards the plan on screen when a support session or role preview starts, and stores nothing after', () => {
+    const { component, store } = createHarness();
+    applyMachines(component, [10]);
+    component.togglePicked(row(component, 1), 10);
+
+    store.changeScope({ eligible: false });
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.isPicked(1, 10)).toBe(false);
+    expect(store.stored()).toBeNull();
+
+    // Planning inside that context is memory-only, so the departure warning protects it again.
+    applyMachines(component, [10]);
+    type(component, 1, 10, '9');
+    expect(store.stored()).toBeNull();
+    expect(component.leaveWarning()).toBe(UNSAVED_WORK_LEAVE_WARNING);
+  });
+
+  it('never stores a snapshot read for the previous scope, nor shows it', () => {
+    const answer = new Subject<PickListResult>();
+    const getPickList = jest.fn(() => answer.asObservable());
+    const { component, store } = createHarness({ getPickList });
+    applyMachines(component, [10]);
+
+    store.changeScope();
+    answer.next(snapshot());
+    answer.complete();
+
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(store.stored()).toBeNull();
+  });
+
+  it('drops a stored plan that is still waiting for the machine list when the scope changes', () => {
+    const stored = planLeftBehind();
+    const fleet = new Subject<Machine[]>();
+    const { component, store } = createHarness({ store: { stored }, machineList: fleet });
+
+    // The plan has been read for the scope the page opened in, and is waiting for the fleet read.
+    store.changeScope();
+    fleet.next([machine(10, 'Drinks'), machine(20, 'Snacks')]);
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.hasPlanningWork()).toBe(false);
   });
 });
 

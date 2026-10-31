@@ -28,8 +28,8 @@ import {
   planCellMachineId,
   storageShortage
 } from './plan-picks';
-import { PlanPicksRestoration, PlanPicksStoreService } from './plan-picks-store.service';
-import { StoredPlanPicks } from './plan-picks-storage';
+import { PlanPicksRestoration, PlanPicksStoreService, UNRESOLVED_SCOPE_TOKEN } from './plan-picks-store.service';
+import { StoredPlanMachine, StoredPlanPicks } from './plan-picks-storage';
 import { PendingWorkGuarded } from './pick-list-leave.guard';
 
 type PickListSortColumn = 'name' | 'mdbCode';
@@ -120,6 +120,19 @@ const COMPACT_LAYOUT_QUERY = '(max-width: 767px)';
  * against. Display state (search, category, status filter, sort, phone machine focus) is not
  * restored. Every existing discard clears the stored copy too, and a stored plan is trimmed to the
  * machines the fleet read still lists.
+ *
+ * **A plan belongs to the account, business and context it was planned in, for its whole life.**
+ * Each plan is bound to the scope token it was read or planned under ({@link planScopeToken}): that
+ * token is what {@link PlanPicksStoreService.save} is given, so planning work is never written under
+ * a scope that became current after it was made, and when
+ * {@link PlanPicksStoreService.scopeToken$} reports any change - another signed-in account, another
+ * business, a started support session or role preview, capabilities being read again - a pending
+ * restoration is dropped and what is on screen is discarded with its stored copy
+ * ({@link discardPlanForScopeChange}), rather than left displaying one business's figures to
+ * another's context. The business **name** is never the proof of which business a plan belongs to:
+ * a restored plan's machines must still match the machine records this business owns
+ * (`StoredPlanMachine`), and a plan whose machines the fleet read cannot identify is not stored at
+ * all - so the departure warning goes on protecting it.
  *
  * **Leaving the page is guarded** ({@link confirmLeave}, wired as the route's `canDeactivate`, and
  * {@link onBeforeUnload} for a reload or a closed tab): typed refill quantities, planning work this
@@ -232,6 +245,19 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   private planPersisted = false;
 
   /**
+   * The scope the plan on screen belongs to (issue #1021), and `null` while there is no plan to own.
+   * It is captured when the snapshot is asked for or restored - never when the plan is written - so
+   * a scope that changed in between refuses the write instead of inheriting somebody else's work.
+   */
+  private planScopeToken: number | null = null;
+
+  /** The scope in effect, which a plan read or planned now would belong to. */
+  private currentScopeToken = UNRESOLVED_SCOPE_TOKEN;
+
+  /** Watches the scope for the lifetime of the page; see {@link discardPlanForScopeChange}. */
+  private scopeWatch?: Subscription;
+
+  /**
    * The stored plan read on arrival, held until the fleet read says which of its machines still
    * exist. `null` once it has been applied, dropped or found absent.
    */
@@ -300,6 +326,10 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
 
     this.observeLayout();
 
+    // Watched before anything is read or restored, so no plan can exist that is not bound to a
+    // scope, and a scope that changes afterwards is acted on at once (issue #1021).
+    this.scopeWatch = this.planStore.scopeToken$.subscribe((token) => this.onScopeToken(token));
+
     // Asked for before the fleet read below, and applied only once that read has settled: a stored
     // plan is restored against the machines the business still has (issue #1021).
     this.restoration = this.planStore.restore().subscribe((restoration) => {
@@ -339,6 +369,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   ngOnDestroy(): void {
     this.compactQuery?.removeEventListener('change', this.onCompactChange);
     this.restoration?.unsubscribe();
+    this.scopeWatch?.unsubscribe();
   }
 
   /**
@@ -994,6 +1025,9 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
    */
   private fetchSnapshot(): void {
     const generation = ++this.snapshotGeneration;
+    // The plan this read will show belongs to the scope asking for it, not to whichever scope is in
+    // effect when the answer comes back: a scope change meanwhile discards it instead (issue #1021).
+    this.planScopeToken = this.currentScopeToken;
     const machineIds = [...this.appliedMachineIds];
     const token = this.loadState.start();
     const isLatest = (): boolean => generation === this.snapshotGeneration && this.loadState.isCurrent(token);
@@ -1027,6 +1061,47 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   }
 
   /**
+   * Takes every change of scope (issue #1021): another signed-in account, another business, a
+   * started or ended support session or role preview, or capabilities being read again.
+   *
+   * Nothing planned under the previous scope may survive it. A restoration still waiting for the
+   * fleet read is dropped unapplied, and a plan already on screen is discarded with its stored copy:
+   * it holds the previous business's product names and storage figures, which the context now in
+   * effect may not see, and it must not be written under the new scope either.
+   */
+  private onScopeToken(token: number): void {
+    this.currentScopeToken = token;
+
+    if (this.pendingRestoration !== null && this.pendingRestoration.scopeToken !== token) {
+      this.pendingRestoration = null;
+      // One restore attempt per visit, and this page's own scope no longer has one to make.
+      this.restorationDone = true;
+    }
+
+    if (this.planScopeToken !== null && this.planScopeToken !== token) {
+      this.discardPlanForScopeChange();
+    }
+  }
+
+  /**
+   * Drops the plan on screen because the scope that owns it is no longer the one in effect. It is
+   * not a discard the operator asked for, so it asks nothing: there is no context left to ask in.
+   * The stored copy goes with it, and the applied selection and the Products filter go back to where
+   * a fresh visit starts, because both name this business's own machines and products.
+   */
+  private discardPlanForScopeChange(): void {
+    this.stagedMachineIds = [];
+    this.appliedMachineIds = [];
+    this.focusedMachineId = null;
+    const allProductIds = this.allProducts.map((p) => p.id);
+    this.stagedProductIds = allProductIds;
+    this.appliedProductIds = allProductIds;
+    this.productSelectionRestored = false;
+    // Bumps the snapshot generation too, so a read in flight for the previous scope cannot land.
+    this.clearSnapshot();
+  }
+
+  /**
    * Applies the stored plan once both answers it depends on are in: the stored-plan read and the
    * fleet read it is trimmed against. Whatever happens, it is attempted once.
    */
@@ -1055,7 +1130,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
       return;
     }
 
-    this.applyRestoredPlan(restoration.plan);
+    this.applyRestoredPlan(restoration.plan, restoration.scopeToken);
   }
 
   /**
@@ -1064,9 +1139,20 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
    * ignored and forgotten. Nothing here reads the pick list again, so the restored figures and
    * their "last refreshed" instant are exactly the ones the operator planned against; nothing here
    * touches {@link mode}, the preselected machine or Record refill either.
+   *
+   * **The fleet read is what proves the plan is this business's** (issue #1021). A record names the
+   * machine record this business owned for each of its machines, and the fleet read names them now;
+   * {@link verifiedRestoredMachineIds} refuses the whole record unless the two agree, because an
+   * account whose membership moved to a different business of the same name matches the stored
+   * account and business name perfectly well.
    */
-  private applyRestoredPlan(plan: StoredPlanPicks): void {
-    const machineIds = plan.appliedMachineIds.filter((id) => this.allMachines.some((m) => m.machineID === id));
+  private applyRestoredPlan(plan: StoredPlanPicks, scopeToken: number): void {
+    const machineIds = this.verifiedRestoredMachineIds(plan.appliedMachines);
+    if (machineIds === null) {
+      this.forgetPersistedPlan();
+      return;
+    }
+
     const products = plan.products
       .map((product) => ({
         ...product,
@@ -1082,6 +1168,7 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
       products.flatMap((product) => product.machineQuantities.map((cell) => planCellKey(product.productId, cell.machineId)))
     );
 
+    this.planScopeToken = scopeToken;
     this.appliedMachineIds = machineIds;
     this.stagedMachineIds = [...machineIds];
     this.appliedProductIds = [...plan.appliedProductIds];
@@ -1115,33 +1202,89 @@ export class PickListComponent implements OnInit, OnDestroy, PendingWorkGuarded 
   }
 
   /**
+   * The stored machines to restore, or `null` when the record may not be restored at all.
+   *
+   * A machine the fleet read no longer lists is dropped, as the issue requires. A machine it lists
+   * under a **different** machine record of this business's own is not a changed machine: the same
+   * provider number belongs to somebody else's fleet, which is proof the record was written for
+   * another business, so the whole record is refused rather than trimmed to the part that happens to
+   * agree. A record none of whose surviving machines carries a machine record at all is refused for
+   * the opposite reason: there is nothing in it this page can check, and an unverifiable plan is not
+   * restored on the strength of a business name alone.
+   */
+  private verifiedRestoredMachineIds(machines: readonly StoredPlanMachine[]): number[] | null {
+    const kept: StoredPlanMachine[] = [];
+    for (const machine of machines) {
+      const listed = this.allMachines.find((m) => m.machineID === machine.machineId);
+      if (listed === undefined) {
+        continue;
+      }
+      if ((listed.localMachineId ?? null) !== machine.localMachineId) {
+        return null;
+      }
+      kept.push(machine);
+    }
+
+    return kept.some((machine) => machine.localMachineId !== null) ? kept.map((machine) => machine.machineId) : null;
+  }
+
+  /**
    * Writes the complete plan to this tab, or forgets the stored copy when there is no loaded
    * snapshot left to come back to. {@link planPersisted} records the honest outcome, and a refused
    * write takes the previous copy with it rather than leaving an older plan as the newest one.
+   *
+   * **A plan is written only with the business identity that can prove whose it is**, and only for
+   * the scope it was planned under: {@link storableMachines} answers `null` when no applied machine
+   * carries one of this business's own machine records, and the write is refused if the scope moved
+   * on. Either way nothing is stored and {@link planPersisted} stays false, so the existing
+   * departure warning goes on protecting work this tab cannot safely keep.
    */
   private persistPlan(): void {
-    if (this.appliedMachineIds.length === 0 || this.lastRefreshedAt === null) {
+    const machines = this.storableMachines();
+    if (machines === null || this.lastRefreshedAt === null || this.planScopeToken === null) {
       this.forgetPersistedPlan();
       return;
     }
 
-    this.planPersisted = this.planStore.save({
-      appliedMachineIds: [...this.appliedMachineIds],
-      appliedProductIds: [...this.appliedProductIds],
-      products: this.pickListProducts,
-      lastRefreshedAt: this.lastRefreshedAt.toISOString(),
-      overrides: [...this.overrides].map(([key, quantity]) => ({ key, quantity })),
-      pickedCells: [...this.pickedCells],
-      invalidQuantities: [...this.invalidQuantities].map(([key, invalid]) => ({ key, ...invalid }))
-    });
+    this.planPersisted = this.planStore.save(
+      {
+        appliedMachines: machines,
+        appliedProductIds: [...this.appliedProductIds],
+        products: this.pickListProducts,
+        lastRefreshedAt: this.lastRefreshedAt.toISOString(),
+        overrides: [...this.overrides].map(([key, quantity]) => ({ key, quantity })),
+        pickedCells: [...this.pickedCells],
+        invalidQuantities: [...this.invalidQuantities].map(([key, invalid]) => ({ key, ...invalid }))
+      },
+      this.planScopeToken
+    );
     if (!this.planPersisted) {
       this.planStore.clear();
     }
   }
 
+  /**
+   * The applied machines as a stored plan names them - the provider number and this business's own
+   * machine record for it - or `null` when there is no plan to store: nothing is applied, or not one
+   * applied machine has a machine record, which would leave the plan with no business identity to
+   * verify when it is read back.
+   */
+  private storableMachines(): StoredPlanMachine[] | null {
+    if (this.appliedMachineIds.length === 0) {
+      return null;
+    }
+
+    const machines = this.appliedMachineIds.map((machineId) => ({
+      machineId,
+      localMachineId: this.allMachines.find((m) => m.machineID === machineId)?.localMachineId ?? null
+    }));
+    return machines.some((machine) => machine.localMachineId !== null) ? machines : null;
+  }
+
   private forgetPersistedPlan(): void {
     this.planStore.clear();
     this.planPersisted = false;
+    this.planScopeToken = null;
   }
 
   private actionableCells(products: PickListProduct[]): { productId: number; machineId: number }[] {

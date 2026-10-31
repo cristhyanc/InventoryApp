@@ -2,6 +2,7 @@ import {
   PLAN_PICKS_STORAGE_KEY,
   PLAN_PICKS_STORAGE_VERSION,
   PlanPicksScope,
+  StoredPlanMachine,
   StoredPlanPicks,
   clearStoredPlanPicks,
   readStoredPlanPicks,
@@ -20,7 +21,10 @@ const scope: PlanPicksScope = { accountKey: 'account-1', businessName: 'Snack Co
 
 function plan(overrides: Partial<StoredPlanPicks> = {}): StoredPlanPicks {
   return {
-    appliedMachineIds: [10, 20],
+    appliedMachines: [
+      { machineId: 10, localMachineId: 110 },
+      { machineId: 20, localMachineId: null }
+    ],
     appliedProductIds: [1, 2],
     products: [
       {
@@ -67,9 +71,9 @@ describe('Plan picks tab storage (issue #1021)', () => {
 
   it('replaces the plan it already held rather than keeping both', () => {
     writeStoredPlanPicks(scope, plan());
-    writeStoredPlanPicks(scope, plan({ appliedMachineIds: [10] }));
+    writeStoredPlanPicks(scope, plan({ appliedMachines: [{ machineId: 10, localMachineId: 110 }] }));
 
-    expect(readStoredPlanPicks(scope)?.appliedMachineIds).toEqual([10]);
+    expect(readStoredPlanPicks(scope)?.appliedMachines).toEqual([{ machineId: 10, localMachineId: 110 }]);
   });
 
   it('never restores another account or another business, and leaves that record alone', () => {
@@ -87,6 +91,14 @@ describe('Plan picks tab storage (issue #1021)', () => {
     expect(readStoredPlanPicks(scope)).toBeNull();
   });
 
+  it('ignores a record in the first format, which named no machine record to verify the business by', () => {
+    const first: Record<string, unknown> = { ...plan(), appliedMachineIds: [10, 20] };
+    delete first['appliedMachines'];
+    store({ version: 1, ...scope, plan: first });
+
+    expect(readStoredPlanPicks(scope)).toBeNull();
+  });
+
   it('ignores and removes a record that is not readable JSON', () => {
     sessionStorage.setItem(PLAN_PICKS_STORAGE_KEY, 'not json {');
 
@@ -97,9 +109,15 @@ describe('Plan picks tab storage (issue #1021)', () => {
   it.each([
     ['no plan at all', undefined],
     ['a plan that is not an object', 'a plan'],
-    ['no applied machines', plan({ appliedMachineIds: [] })],
-    ['a machine id that is not a whole number', plan({ appliedMachineIds: [10.5] })],
-    ['a machine id that is not a number', plan({ appliedMachineIds: ['10'] as unknown as number[] })],
+    ['no applied machines', plan({ appliedMachines: [] })],
+    ['a machine id that is not a whole number', plan({ appliedMachines: [{ machineId: 10.5, localMachineId: 110 }] })],
+    ['a machine id that is not a number', plan({ appliedMachines: [{ machineId: '10' as unknown as number, localMachineId: 110 }] })],
+    ['an applied machine that is not an object', plan({ appliedMachines: [10 as unknown as StoredPlanMachine] })],
+    [
+      'an applied machine naming no machine record either way',
+      plan({ appliedMachines: [{ machineId: 10 } as unknown as StoredPlanMachine] })
+    ],
+    ['a machine record id that is not a whole number', plan({ appliedMachines: [{ machineId: 10, localMachineId: 1.5 }] })],
     ['no products field', plan({ products: undefined as unknown as StoredPlanPicks['products'] })],
     ['a product with no name', plan({ products: [{ ...plan().products[0], productName: 7 as unknown as string }] })],
     [
@@ -142,7 +160,7 @@ describe('Plan picks tab storage (issue #1021)', () => {
     });
 
     try {
-      expect(writeStoredPlanPicks(scope, plan({ appliedMachineIds: [10] }))).toBe(false);
+      expect(writeStoredPlanPicks(scope, plan({ appliedMachines: [{ machineId: 10, localMachineId: 110 }] }))).toBe(false);
     } finally {
       setItem.mockRestore();
     }

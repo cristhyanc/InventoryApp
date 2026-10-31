@@ -2826,7 +2826,13 @@ Nayax call changed; everything below happens in the browser.
   and it is never kept or restored for a different sign-in, a different business, a support session
   or a role preview. Your search, category, filters, sorting and the machine a phone is focused on
   are not restored — only the plan is. If a machine has gone from your fleet since, it is quietly
-  dropped from the restored plan with whatever you had entered for it.
+  dropped from the restored plan with whatever you had entered for it. A plan is only ever brought
+  back for the machines it was planned for: if those machines now belong to a different business —
+  even one with the same name — the plan is thrown away rather than shown. And if the sign-in, the
+  business or a support session changes while the page is open, the plan on screen is cleared along
+  with the stored copy, because it is not this account's or business's to look at any more. Where
+  none of the machines in a run is one your business has a machine record for, the plan cannot be
+  kept at all, and leaving asks before discarding it exactly as it used to.
 - **A quantity the list cannot use is never guessed at.** A negative, fractional, non-numeric or
   too-large entry is refused whole — never cut down to the part that happens to be a number — and an
   empty box means "not filled in yet", not 0. The cell keeps exactly what you typed, says what is
