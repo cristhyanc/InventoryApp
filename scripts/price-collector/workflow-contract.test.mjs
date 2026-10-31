@@ -36,5 +36,9 @@ test('the settings fail closed when a policy hook cannot run and expose no gener
   assert.equal(recorders[0].hooks[0].command, 'node scripts/price-collector/workflow-tool-guard.mjs');
   assert.equal(recorders[0].hooks[0].onFailure, 'block');
   assert.ok(!settings.permissions.allow.includes('Bash'));
-  for (const tool of ['Read', 'Edit', 'WebFetch', 'WebSearch', 'Agent']) assert.ok(settings.permissions.deny.includes(tool));
+  for (const tool of ['Edit', 'WebFetch', 'WebSearch', 'Agent']) assert.ok(settings.permissions.deny.includes(tool));
+  // A bare Read deny rule also refuses every Write in Claude Code 2.1.316, before the hook runs, so
+  // no result file can be written (live run 41197670772). Read is kept away by --tools Bash,Write
+  // and by the hook, which denies every tool outside its allowlist.
+  assert.ok(!settings.permissions.deny.some(rule => rule === 'Read' || rule.startsWith('Read(')));
 });

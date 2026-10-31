@@ -8,7 +8,7 @@
       "Write(./price-collector-out/**)",
       "mcp__apify__*"
     ],
-    "deny": ["Read", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task", "Skill"]
+    "deny": ["Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task", "Skill"]
   },
   "hooks": {
     "PreToolUse": [{
