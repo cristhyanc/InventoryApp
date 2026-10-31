@@ -14892,7 +14892,10 @@ and stores a small sample privately. Claude reads that snapshot with `read-work.
 receives the Restockroo token or the GitHub/OIDC request credentials. The model process runs in a
 separate temporary workspace/home with only the explicitly allowed environment and settings.
 `workflow-tool-guard.mjs` denies arbitrary shell, file reads, edits and other tools; approved actor
-calls still pass through the existing atomic `apify-guard.mjs`. A native hook failure blocks the
+calls still pass through the existing atomic `apify-guard.mjs`. An actor call returns only its run
+status and storage ids, so the hook also allows the free `get-dataset-items` (limit capped to the
+sample page size), `get-actor-run` and `abort-actor-run` reads for plain ids, without counting
+them as actor calls; every other Apify account tool is denied. A native hook failure blocks the
 tool rather than silently bypassing the guard. Literal helper arguments cannot expand shell
 commands, and sample writes must name an issued work item or matching key of that same run.
 

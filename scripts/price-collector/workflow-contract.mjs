@@ -9,7 +9,7 @@ export function verifyCollectorWorkflow(text) {
   const problems = runnerPlacementViolations(text, workflowPath);
   const requireText = (part, reason) => { if (!text.includes(part)) problems.push(reason); };
   requireText('  workflow_dispatch:', 'The collector must have a manual entry point.');
-  if (/^  (?:schedule|push|pull_request|pull_request_target|workflow_run|workflow_call):/m.test(text)) problems.push('Stage 1 must not start automatically.');
+  if (/^ {2}(?:schedule|push|pull_request|pull_request_target|workflow_run|workflow_call):/m.test(text)) problems.push('Stage 1 must not start automatically.');
   requireText('group: price-collector\n  cancel-in-progress: false', 'Collector runs must not overlap or cancel one another.');
   requireText("github.ref == 'refs/heads/main'", 'Only reviewed main may receive credentials.');
   requireText('environment: price-collector', 'The collector needs its dedicated protected environment.');

@@ -20,11 +20,11 @@ on:
         required: true
         type: boolean
         default: false
-      simulate_timeout:
-        description: Stop Claude after 10 seconds to exercise partial-result finalisation
-        required: true
-        type: boolean
-        default: false
+      stop_after_minutes:
+        description: Interruption test only - stop Claude after this many minutes (1-14); leave blank for a normal run
+        required: false
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -132,6 +132,7 @@ jobs:
         env:
           PRICE_COLLECTOR_SAMPLE_SIZE: ${{ inputs.sample_size }}
           PRICE_COLLECTOR_INCLUDE_REVIEWED: ${{ inputs.include_verified_retailers }}
+          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
         run: node scripts/price-collector/workflow.mjs prepare
 
       - name: Run the bounded Claude collector
@@ -140,7 +141,7 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-          PRICE_COLLECTOR_SIMULATE_TIMEOUT: ${{ inputs.simulate_timeout }}
+          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
         run: |
           export PRICE_COLLECTOR_CLAUDE_BIN="$RUNNER_TEMP/price-collector-cli-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/node_modules/.bin/claude"
           node scripts/price-collector/workflow.mjs collect

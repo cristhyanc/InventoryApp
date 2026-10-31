@@ -58,7 +58,7 @@ In GitHub → Actions → **Price collector (manual test)** → Run workflow:
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.
-5. Leave **simulate_timeout** off and approve the environment job.
+5. Leave **stop_after_minutes** blank and approve the environment job.
 
 The sample allows at most **12 Apify calls**, at most **5 returned items** per call (Dromb still 1),
 and **1 internal page**. Claude runs with at most **40 turns**, a **US$1 Claude budget**, and a
@@ -72,10 +72,12 @@ and currency there. No observed supplier price changes purchases, GST accounting
 
 ## Interruption run and cost evidence
 
-Repeat with **simulate_timeout** enabled. Claude is stopped after 10 seconds; the job is expected
-to fail its Claude step while the finalisation step still runs. Any finished files are submitted;
-the other work becomes `not_searched`. A fast run may finish before 10 seconds; use representative
-work that takes longer to exercise interruption. With no finished files, run completion still runs.
+Repeat with **stop_after_minutes** set to a whole number of minutes (1 to 14). Pick a value
+shorter than the first run's Claude duration but long enough for at least one search to finish,
+for example half of it. Claude is stopped at that point; the job is expected to fail its Claude
+step while the finalisation step still runs. The finished files are submitted and the other work
+becomes `not_searched`. If no file had finished, run completion still runs; repeat with a longer
+value, because #929's evidence needs at least one finished file submitted after the stop.
 Cancellation of the entire job or its hard timeout can skip finalisation; backend run expiry is
 the backstop, not a claim that an `always()` step is guaranteed to run.
 
@@ -100,6 +102,11 @@ credential, API token, shell startup overrides or inherited user/project Claude 
 settings enable only actor execution, literal helper commands and sample-bound write-once files;
 the hook denies every other tool and blocks on hook failure. The CLI is pinned to 2.1.316, including
 support for `onFailure: block`. The existing atomic Apify guard still reserves each call.
+An actor call returns only the run's status and storage ids, so the hook also allows the free
+`get-dataset-items` (limit capped to the sample page size), `get-actor-run` and `abort-actor-run`
+tools for plain run/dataset ids; they are not counted as actor calls. Every other Apify account
+tool stays denied. Claude is launched by absolute path with a fixed `PATH`, and a cancelled job's
+`SIGINT` stops Claude's process group just as `SIGTERM` does.
 
 The finalizer obtains a **fresh** API token, copies only this sample's regular result files to a
 private submission folder, and delegates independent schema validation, batching, outcome ordering

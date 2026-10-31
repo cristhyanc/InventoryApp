@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, collectorEnvironment, publicSubmissionReport, finaliseSample, launchClaude } from './workflow.mjs';
+import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, publicSubmissionReport, finaliseSample, launchClaude } from './workflow.mjs';
 import { permittedCommand, toolDecision } from './workflow-tool-guard.mjs';
 import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
@@ -43,6 +43,22 @@ test('Claude inherits neither collector nor GitHub/OIDC credentials or arbitrary
   assert.equal(env.APIFY_TOKEN, 'apify-key');
   for (const key of ['PRICE_COLLECTOR_API_TOKEN', 'ACTIONS_ID_TOKEN_REQUEST_TOKEN', 'GITHUB_TOKEN', 'NODE_OPTIONS', 'BASH_ENV']) assert.equal(env[key], undefined);
   assert.equal(env.HOME, '/isolated');
+  // The runner's PATH is not inherited: only Node's own directory and the system directories.
+  assert.equal(env.PATH, [dirname(process.execPath), '/usr/bin', '/bin'].join(':'));
+});
+
+test('Claude is launched only by absolute path', async () => {
+  for (const executable of [undefined, 'claude', 'node_modules/.bin/claude']) {
+    await assert.rejects(launchClaude({ executable, sandbox: '/tmp', env: {} }), /absolute path/);
+  }
+});
+
+test('the interruption test stops Claude after a chosen number of minutes, and a normal run gets 14', () => {
+  assert.equal(collectorDeadlineMinutes(''), 14);
+  assert.equal(collectorDeadlineMinutes(undefined), 14);
+  assert.equal(collectorDeadlineMinutes('3'), 3);
+  assert.equal(collectorDeadlineMinutes('14'), 14);
+  for (const bad of ['0', '15', '1.5', '-1', 'ten', '03']) assert.throws(() => collectorDeadlineMinutes(bad), bad);
 });
 
 test('tool policy refuses arbitrary shell, command substitution, redirects, extra tools and background commands', async () => {
@@ -159,5 +175,53 @@ test('dedicated -- actor names are normalized, the call cap is enforced and writ
     assert.equal((await write(join(dir, 'out/99.json'), 99)).hookSpecificOutput.permissionDecision, 'deny');
     assert.equal((await write(join(dir, 'outside/1.json'), 1)).hookSpecificOutput.permissionDecision, 'deny');
     assert.equal((await write(join(dir, 'out/1.json'), 1)).hookSpecificOutput.permissionDecision, 'allow');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a cancelled job (SIGINT) stops the Claude process group just as SIGTERM does', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-sigint-'));
+  try {
+    mkdirSync(join(dir, 'scripts/price-collector'), { recursive: true });
+    writeFileSync(join(dir, 'scripts/price-collector/prompt.md'), 'test prompt');
+    const fake = join(dir, 'fake-claude');
+    writeFileSync(fake, '#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n', { mode: 0o700 });
+    const running = launchClaude({ executable: fake, sandbox: dir, env: { PATH: process.env.PATH }, timeoutMs: 60000 });
+    setTimeout(() => process.emit('SIGINT'), 300);
+    assert.equal((await running).status, 'interrupted');
+    assert.equal(process.listenerCount('SIGINT'), 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the free Apify result reads are allowed with a capped limit and are not counted as actor calls', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-reads-'));
+  try {
+    const limits = sampleLimits(JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url))), false);
+    limits.perRun.maxActorCalls = 1;
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(limits));
+    saveTestWork(dir, {});
+    const env = { PRICE_COLLECTOR_STATE_DIR: dir, PRICE_COLLECTOR_OUT_DIR: join(dir, 'out'), PRICE_COLLECTOR_GUARD_STATE: join(dir, 'state.json') };
+    const ask = (tool, input) => toolDecision({ tool_name: `mcp__apify__${tool}`, tool_input: input }, env)
+      .then(answer => answer.hookSpecificOutput);
+    const read = await ask('get-dataset-items', { datasetId: 'aBc123XyZ', limit: 500 });
+    assert.equal(read.permissionDecision, 'allow');
+    assert.equal(read.updatedInput.limit, 5);
+    assert.equal(read.updatedInput.offset, 0);
+    assert.equal((await ask('get-dataset-items', { datasetId: 'aBc123XyZ' })).updatedInput.limit, 5);
+    assert.equal((await ask('get-dataset-items', { datasetId: 'aBc123XyZ', limit: 2, offset: 3 })).updatedInput.limit, 2);
+    assert.equal((await ask('get-actor-run', { runId: 'Run42', waitSecs: 45 })).permissionDecision, 'allow');
+    assert.equal((await ask('abort-actor-run', { runId: 'Run42' })).permissionDecision, 'allow');
+    for (const [tool, input] of [
+      ['get-dataset-items', { datasetId: 'someone~named-dataset' }],
+      ['get-dataset-items', {}],
+      ['get-dataset-items', { datasetId: 'aBc123XyZ', limit: 0 }],
+      ['get-dataset-items', { datasetId: 'aBc123XyZ', offset: -1 }],
+      ['get-actor-run', { runId: '../runs' }],
+      ['get-dataset-list', {}], ['get-key-value-store-record', { storeId: 'abc', recordKey: 'INPUT' }],
+      ['search-actors', { keywords: 'scraper' }], ['create-schedule', {}],
+    ]) assert.equal((await ask(tool, input)).permissionDecision, 'deny', tool);
+    // None of the reads above used the single actor call this run may make.
+    const call = await ask('call-actor', { actor: 'varnmill/au-supermarket-prices', input: { searchTerms: ['test'] } });
+    assert.equal(call.permissionDecision, 'allow');
+    assert.equal((await ask('call-actor', { actor: 'varnmill/au-supermarket-prices', input: { searchTerms: ['x'] } })).permissionDecision, 'deny');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

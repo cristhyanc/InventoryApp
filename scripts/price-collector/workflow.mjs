@@ -2,14 +2,14 @@
 // Claude gets a small work snapshot and Apify access, never the API/OIDC/GitHub credentials.
 import { spawn } from 'node:child_process';
 import { appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectorToken } from './workflow-auth.mjs';
 import { runGetWork } from './get-work.mjs';
 import { runSubmission } from './submit-results.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const reviewedActors = ['abotapi/kmart-au-scraper', 'axlymxp/bigw-product-scraper', 'dromb/big-w-au-product-scraper'];
+const reviewedActors = new Set(['abotapi/kmart-au-scraper', 'axlymxp/bigw-product-scraper', 'dromb/big-w-au-product-scraper']);
 const json = path => JSON.parse(readFileSync(path, 'utf8'));
 const save = (path, value) => writeFileSync(path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 
@@ -28,7 +28,7 @@ export function sampleLimits(source, includeReviewed) {
   for (const [id, actor] of Object.entries(limits.actors)) {
     actor.pageSize = Math.min(5, actor.pageSize);
     actor.maxPages = 1;
-    if (includeReviewed && reviewedActors.includes(id) && actor.schemaVerifiedAt === '2026-10-31') actor.actorIdConfirmed = true;
+    if (includeReviewed && reviewedActors.has(id) && actor.schemaVerifiedAt === '2026-10-31') actor.actorIdConfirmed = true;
   }
   return limits;
 }
@@ -36,8 +36,10 @@ export function sampleLimits(source, includeReviewed) {
 export function collectorEnvironment(env, home) {
   // An allowlist avoids inheriting OIDC endpoint credentials, API tokens, shell startup scripts,
   // Node injection flags or pre-existing Claude authentication/configuration from a runner.
+  // PATH is fixed: the running Node's own directory plus the system directories, never the runner's
+  // inherited PATH, so a writable directory on it cannot replace node or a system command.
   return {
-    PATH: env.PATH, HOME: home, TMPDIR: home, CLAUDE_CONFIG_DIR: join(home, '.claude'),
+    PATH: [dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: home, TMPDIR: home, CLAUDE_CONFIG_DIR: join(home, '.claude'),
     ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY, APIFY_TOKEN: env.APIFY_TOKEN,
     PRICE_COLLECTOR_STATE_DIR: env.PRICE_COLLECTOR_STATE_DIR,
     PRICE_COLLECTOR_OUT_DIR: env.PRICE_COLLECTOR_OUT_DIR,
@@ -71,12 +73,12 @@ function submissionFolder(stateDir, outputDir, work) {
     try {
       const path = join(outputDir, name);
       const stat = lstatSync(path);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error();
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error('Not a regular result file.');
       const file = json(path);
-      const selected = /^[1-9][0-9]*\.json$/.test(name)
+      const selected = /^[1-9]\d*\.json$/.test(name)
         ? name === `${file.workItemId}.json` && work.searches.some(s => s.workItemId === file.workItemId)
         : /^match-[a-zA-Z0-9_-]+\.json$/.test(name) && work.matching.waitingProducts.some(p => p.waitingKey === file.waitingKey);
-      if (file.runId !== work.runId || !selected) throw new Error();
+      if (file.runId !== work.runId || !selected) throw new Error('Not a result for this sample.');
       cpSync(path, join(dir, name), { errorOnExist: true, force: false });
     } catch { refused++; }
   }
@@ -98,7 +100,11 @@ export async function finaliseSample({ stateDir, outputDir, env, token, submit =
 }
 
 /** No raw CLI output or transcript is sent to stdout, stderr, Actions outputs or artifacts. */
-export function launchClaude({ executable = 'claude', sandbox, env, timeoutMs = 14 * 60 * 1000 }) {
+export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1000 }) {
+  // An absolute path to the job's own installation, never a `claude` looked up on PATH.
+  if (typeof executable !== 'string' || !isAbsolute(executable)) {
+    return Promise.reject(new Error('The collector needs the absolute path of the reviewed Claude CLI.'));
+  }
   return new Promise(resolveResult => {
     const args = ['-p', '--output-format', 'json', '--no-session-persistence', '--disable-slash-commands',
       '--setting-sources', '', '--settings', 'scripts/price-collector/claude-settings.json',
@@ -118,7 +124,10 @@ export function launchClaude({ executable = 'claude', sandbox, env, timeoutMs = 
       forceKill.unref();
     };
     const timer = setTimeout(() => stop('timeout'), timeoutMs);
+    // Cancelling a run sends SIGINT before SIGTERM. Claude runs in its own process group, so
+    // both signals must stop that group, or it would keep calling Apify during finalisation.
     const interrupt = () => stop('interrupted');
+    process.once('SIGINT', interrupt);
     process.once('SIGTERM', interrupt);
     const capture = (chunk, stderr) => {
       if (text.length + errorText.length + chunk.length > 2 * 1024 * 1024) { stop('output_limit'); return; }
@@ -136,6 +145,7 @@ export function launchClaude({ executable = 'claude', sandbox, env, timeoutMs = 
       finished = true;
       clearTimeout(timer);
       clearTimeout(forceKill);
+      process.removeListener('SIGINT', interrupt);
       process.removeListener('SIGTERM', interrupt);
       let result = {};
       try { result = JSON.parse(text); } catch { /* Failure remains generic; output stays private. */ }
@@ -149,6 +159,17 @@ export function launchClaude({ executable = 'claude', sandbox, env, timeoutMs = 
     child.on('error', () => finish(1));
     child.on('close', finish);
   });
+}
+
+/**
+ * The internal deadline. Blank means the full 14 minutes. A smaller whole number stops Claude part
+ * way through for the interruption test, after some searches have finished and been written.
+ */
+export function collectorDeadlineMinutes(value) {
+  const text = String(value ?? '').trim();
+  if (text === '') return 14;
+  if (!/^(?:[1-9]|1[0-4])$/.test(text)) throw new Error('Stop after must be a whole number of minutes from 1 to 14.');
+  return Number(text);
 }
 
 function stateDirectory(env) {
@@ -167,6 +188,7 @@ async function prepare(env, stateDir) {
   const size = Number(env.PRICE_COLLECTOR_SAMPLE_SIZE);
   // Validate all local configuration before issuing a run (GET work writes a run).
   sampleWork({ searches: [], matching: { waitingProducts: [] } }, size);
+  collectorDeadlineMinutes(env.PRICE_COLLECTOR_STOP_AFTER_MINUTES);
   if (!['true', 'false'].includes(env.PRICE_COLLECTOR_INCLUDE_REVIEWED)) throw new Error('Specify whether verified retailer actors may run.');
   mkdirSync(stateDir, { mode: 0o700 }); // Refuse a previous attempt's directory; never reuse output.
   const token = await collectorToken(env);
@@ -196,7 +218,7 @@ async function main(env, mode) {
     const childEnv = collectorEnvironment({ ...env, PRICE_COLLECTOR_OUT_DIR: join(sandbox, 'price-collector-out'),
       PRICE_COLLECTOR_GUARD_STATE: join(stateDir, 'guard-state.json') }, join(stateDir, 'home'));
     const status = await launchClaude({ sandbox, env: childEnv, executable: env.PRICE_COLLECTOR_CLAUDE_BIN,
-      timeoutMs: env.PRICE_COLLECTOR_SIMULATE_TIMEOUT === 'true' ? 10000 : 14 * 60 * 1000 });
+      timeoutMs: collectorDeadlineMinutes(env.PRICE_COLLECTOR_STOP_AFTER_MINUTES) * 60 * 1000 });
     save(join(stateDir, 'collector-status.json'), status);
     console.log(`Collector status: ${status.status}`);
     if (status.status !== 'completed') process.exitCode = 1;
@@ -215,9 +237,11 @@ async function main(env, mode) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.env, process.argv[2]).catch(() => {
+  try {
+    await main(process.env, process.argv[2]);
+  } catch {
     // Never print thrown provider bodies, filesystem names, work text or credential values.
     console.error('Collector workflow step failed. Check environment configuration and private provider run status; no automatic retry was made.');
     process.exitCode = 1;
-  });
+  }
 }

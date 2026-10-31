@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { runGuard } from './apify-guard.mjs';
 
 export function permittedCommand(command) {
-  if (typeof command !== 'string' || /[\n\r\x00-\x1f$`;&|<>\\!*?()[\]{}#]/.test(command)) return false;
+  if (typeof command !== 'string' || /[\x00-\x1f$`;&|<>\\!*?()[\]{}#]/.test(command)) return false;
   if (command === 'node scripts/price-collector/read-work.mjs') return true;
   // Each argument is either a simple bare token or a quoted string without shell expansion.
   return /^node scripts\/price-collector\/(?:jbmetro-lookup|pagination)\.mjs(?: (?:[a-zA-Z0-9_:/.,=+%-]+|"[^"']*"|'[^'"]*'))+$/.test(command);
@@ -23,11 +23,35 @@ function writeBelongsToSample(event, stateDir) {
   const content = JSON.parse(input.content);
   if (content.runId !== work.runId) return false;
   const name = basename(input.file_path);
-  if (/^[1-9][0-9]*\.json$/.test(name)) {
+  if (/^[1-9]\d*\.json$/.test(name)) {
     return String(content.workItemId) + '.json' === name && work.searches.some(s => s.workItemId === content.workItemId);
   }
   return /^match-[a-zA-Z0-9_-]+\.json$/.test(name) &&
     work.matching.waitingProducts.some(p => p.waitingKey === content.waitingKey);
+}
+
+// Actor tools and call-actor return only the run status and storage ids; the rows are read with
+// get-dataset-items, and a run that outlives waitSecs is followed with get-actor-run (Apify MCP
+// server docs). These reads are free, so they are not reserved against the actor call cap.
+// Aborting only reduces spend. Every other Apify account tool stays denied.
+const storageId = /^[a-zA-Z0-9]{1,64}$/;
+const readTools = new Map([
+  ['get-dataset-items', 'datasetId'], ['get-actor-run', 'runId'], ['abort-actor-run', 'runId'],
+]);
+
+function readDecision(tool, input, limits) {
+  const idField = readTools.get(tool);
+  if (!storageId.test(String(input?.[idField] ?? ''))) {
+    return decision('deny', `${tool} needs the plain ${idField} an allowed actor call returned.`);
+  }
+  if (tool !== 'get-dataset-items') return decision('allow', `${tool} reads or stops this run without a new actor call.`);
+  // A sample call returns at most the largest page size, so a read never needs more rows than that.
+  const cap = Math.max(...Object.values(limits.actors).map(actor => actor.pageSize));
+  const offset = input.offset ?? 0;
+  if (!Number.isInteger(offset) || offset < 0) return decision('deny', 'offset must be a whole number of items.');
+  const asked = input.limit ?? cap;
+  if (!Number.isInteger(asked) || asked < 1) return decision('deny', 'limit must be a positive whole number of items.');
+  return decision('allow', 'Reads the rows of an allowed actor call.', { ...input, offset, limit: Math.min(asked, cap) });
 }
 
 export async function toolDecision(event, env) {
@@ -47,6 +71,8 @@ export async function toolDecision(event, env) {
   const dedicated = Object.keys(limits.actors).flatMap(id => [
     `mcp__apify__${id.replace('/', '--')}`, `mcp__apify__${id.replace('/', '-slash-')}`,
   ]);
+  const tool = name.slice('mcp__apify__'.length);
+  if (readTools.has(tool)) return readDecision(tool, event.tool_input, limits);
   if (name !== 'Write' && !dedicated.includes(name) && !['mcp__apify__call-actor', 'mcp__apify__call_actor'].includes(name)) {
     return decision('deny', 'Only the reviewed actor execution tools are allowed, not arbitrary Apify account tools.');
   }
