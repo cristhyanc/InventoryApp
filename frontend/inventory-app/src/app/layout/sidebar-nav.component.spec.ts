@@ -377,7 +377,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(link(host, '/super-admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
   });
 
-  it('adds no other destination when access is confirmed, besides its own three children', async () => {
+  it('adds no other destination when access is confirmed, besides its own children', async () => {
     const { component } = await render({ diagnosticsAccess: of(true) });
 
     expect(component.navigation.map((entry) => entry.label)).toEqual([
@@ -390,7 +390,8 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
       '/super-admin/diagnostics',
       '/super-admin/businesses',
       '/super-admin/supplier-presets',
-      '/super-admin/price-catalogue-review'
+      '/super-admin/price-catalogue-review',
+      '/super-admin/master-products'
     ]);
   });
 });

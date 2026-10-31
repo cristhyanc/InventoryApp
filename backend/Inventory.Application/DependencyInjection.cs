@@ -239,6 +239,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<DecideProductMatchReview>();
         services.AddScoped<DecideAutomaticProductMatchReview>();
 
+        // And the Super Admin's read-only view of the master products themselves (issue #1023): one
+        // bounded, searchable page of the shared catalogue and one product with its supplier
+        // listings. Scoped like the surfaces above and for the same reason, and read-only - creating,
+        // editing and deleting a master product are separate issues, and the review of #928 remains
+        // the only writer of one.
+        services.AddScoped<ListMasterProducts>();
+        services.AddScoped<GetMasterProduct>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed

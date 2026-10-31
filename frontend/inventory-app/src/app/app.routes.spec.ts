@@ -31,6 +31,7 @@ import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/pla
 import { SuperAdminBusinessesComponent } from './components/super-admin/businesses/super-admin-businesses.component';
 import { SuperAdminSupplierPresetsComponent } from './components/super-admin/supplier-presets/super-admin-supplier-presets.component';
 import { SuperAdminPriceCatalogueReviewComponent } from './components/super-admin/price-catalogue-review/super-admin-price-catalogue-review.component';
+import { SuperAdminMasterProductsComponent } from './components/super-admin/master-products/super-admin-master-products.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
 import { BusinessSettingsComponent } from './components/admin/business-settings/business-settings.component';
@@ -424,6 +425,23 @@ describe('super-admin routing (issue #546)', () => {
     await expect(loadedComponent('super-admin/price-catalogue-review')).resolves.toBe(
       SuperAdminPriceCatalogueReviewComponent
     );
+  });
+
+  /**
+   * The Master products page (issue #1023) is guarded exactly like the four above, for the same
+   * reason: its authority is the platform-admin check and no business role or membership. It reads
+   * the shared catalogue, which belongs to no business at all.
+   */
+  it('guards /super-admin/master-products with MsalGuard then platformAdminGuard, and nothing else', () => {
+    expect(route('super-admin/master-products').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+  });
+
+  it('carries no accountStateGuard on /super-admin/master-products either', () => {
+    expect(route('super-admin/master-products').canActivate ?? []).not.toContain(accountStateGuard);
+  });
+
+  it('loads the Super Admin Master products page component', async () => {
+    await expect(loadedComponent('super-admin/master-products')).resolves.toBe(SuperAdminMasterProductsComponent);
   });
 });
 

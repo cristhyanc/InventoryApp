@@ -17,6 +17,7 @@ import {
   activeNavLink,
   activeNavRoute,
   businessesNavLink,
+  masterProductsNavLink,
   navLinks,
   navLockOf,
   navLockSummary,
@@ -371,7 +372,8 @@ describe('primary navigation (issue #391)', () => {
 /**
  * The top-level Super Admin group (issue #546, parent #510 under #328), which took
  * `Platform Diagnostics` out of the business `Admin` group (issue #335) and added Businesses
- * (issue #547), Supplier Presets (issue #848) and Supplier Price Review (issue #928).
+ * (issue #547), Supplier Presets (issue #848), Supplier Price Review (issue #928) and Master
+ * Products (issue #1023).
  *
  * The group is presentation only. `GET /api/admin/diagnostics/access` decides whether it is
  * composed in, and the API is independently authorized on every request, so a navigation without
@@ -384,12 +386,13 @@ describe('navigationFor (issue #546)', () => {
     expect(childRoutes('Admin', ownerNavigation())).toEqual(adminChildRoutes);
   });
 
-  it('adds it last, holding its four destinations, once the API confirms access', () => {
+  it('adds it last, holding its five destinations, once the API confirms access', () => {
     expect(group('Super Admin', ownerNavigation(true)).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
       supplierPresetsNavLink,
-      priceCatalogueReviewNavLink
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
   });
 
@@ -405,7 +408,8 @@ describe('navigationFor (issue #546)', () => {
       platformDiagnosticsNavLink.route,
       businessesNavLink.route,
       supplierPresetsNavLink.route,
-      priceCatalogueReviewNavLink.route
+      priceCatalogueReviewNavLink.route,
+      masterProductsNavLink.route
     ]);
   });
 
@@ -469,7 +473,8 @@ describe('navigationFor (issue #546)', () => {
       platformDiagnosticsNavLink,
       businessesNavLink,
       supplierPresetsNavLink,
-      priceCatalogueReviewNavLink
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
     expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       platformDiagnosticsNavLink.route
@@ -502,6 +507,30 @@ describe('navigationFor (issue #546)', () => {
     expect(superAdminNavGroup.children).toContain(priceCatalogueReviewNavLink);
     expect(navLinks(navigationFor(OWNER, false, 'offered')).map((link) => link.route)).not.toContain(
       priceCatalogueReviewNavLink.route
+    );
+  });
+
+  /**
+   * Master Products sits beside Supplier Price Review, declares no capability either, and is offered
+   * only to the configured platform administrator (issue #1023): the catalogue is shared by every
+   * business, so no business role grants a look at it - not even an Owner's.
+   */
+  it('declares Master Products with no capability either, next to Supplier Price Review (#1023)', () => {
+    expect(masterProductsNavLink).toEqual({
+      kind: 'link',
+      label: 'Master Products',
+      route: '/super-admin/master-products'
+    });
+
+    const children = superAdminNavGroup.children;
+    expect(children).toContain(masterProductsNavLink);
+    expect(children.indexOf(masterProductsNavLink)).toBe(children.indexOf(priceCatalogueReviewNavLink) + 1);
+
+    expect(navLinks(navigationFor(OWNER, false, 'offered')).map((link) => link.route)).not.toContain(
+      masterProductsNavLink.route
+    );
+    expect(navLinks(navigationFor(OWNER, true, 'offered')).map((link) => link.route)).toContain(
+      masterProductsNavLink.route
     );
   });
 });
@@ -641,7 +670,8 @@ describe('navigationFor capabilities (issue #528)', () => {
       platformDiagnosticsNavLink,
       businessesNavLink,
       supplierPresetsNavLink,
-      priceCatalogueReviewNavLink
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
   });
 
@@ -677,7 +707,8 @@ describe('navigationFor with the business navigation withheld (issue #676)', () 
       platformDiagnosticsNavLink,
       businessesNavLink,
       supplierPresetsNavLink,
-      priceCatalogueReviewNavLink
+      priceCatalogueReviewNavLink,
+      masterProductsNavLink
     ]);
   });
 

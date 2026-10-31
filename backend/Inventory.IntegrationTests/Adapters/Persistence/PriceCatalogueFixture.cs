@@ -233,6 +233,19 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         new EfPriceCatalogueReviewStore(Track(TestAppDbContext.For(_options, businessId)));
 
     /// <summary>
+    /// The read-only master-product catalogue store as a platform-admin request reaches it (issue
+    /// #1023): the real adapter on a context whose caller has no business at all, which is the scope
+    /// every <c>api/super-admin/master-products</c> request has.
+    ///
+    /// <para>That is the shape that matters here too. The adapter reads four platform tables and no
+    /// tenant-owned one, so unlike the review store beside it, it needs no filter-ignoring read and no
+    /// write lease - and a denied scope is what proves it: a mapping, a product and a business are
+    /// invisible to it, and its answers still carry everything the catalogue page needs.</para>
+    /// </summary>
+    public IMasterProductCatalogueStore DeniedMasterProductStore() =>
+        new EfMasterProductCatalogueStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>
     /// Holds one reading against a listing, as the collector results of #937 do when a reading is not
     /// a price: written directly, because what is under test here is what the <em>review</em> does
     /// with a held reading.
@@ -797,6 +810,50 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
             Barcode = barcode,
             BarcodeScope = barcodeScope,
             MatchStatus = SupplierListingMatchStatus.Proposed,
+            CreatedAtUtc = CreatedAt,
+            UpdatedAtUtc = CreatedAt,
+        };
+
+        db.SupplierListings.Add(listing);
+        await db.SaveChangesAsync();
+
+        return listing.Id;
+    }
+
+    /// <summary>
+    /// One listing of a master product described the way a supplier publishes it (issue #1023): the
+    /// supplier's own wording and page, the individual size, the pack quantity and the match status a
+    /// test is about.
+    ///
+    /// <para>Separate from <see cref="SeedListingAsync"/> because the catalogue detail publishes the
+    /// title and the URL, which that one does not set, and from
+    /// <see cref="SeedIdentifiedListingAsync"/> because the identity fields #937 compares are not what
+    /// is under test here.</para>
+    /// </summary>
+    public async Task<long> SeedDescribedListingAsync(
+        long masterProductId,
+        string supplierProductId,
+        SupplierListingMatchStatus matchStatus = SupplierListingMatchStatus.Proposed,
+        string? title = null,
+        string? url = null,
+        decimal? sizeValue = null,
+        MasterProductSizeUnit? sizeUnit = null,
+        int? unitsPerPack = null,
+        int? supplierPresetId = null)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var listing = new SupplierListing
+        {
+            SupplierPresetId = supplierPresetId ?? SupplierPresetId,
+            MasterProductId = masterProductId,
+            SupplierProductId = supplierProductId,
+            Title = title,
+            Url = url,
+            SizeValue = sizeValue,
+            SizeUnit = sizeUnit,
+            UnitsPerPack = unitsPerPack,
+            MatchStatus = matchStatus,
             CreatedAtUtc = CreatedAt,
             UpdatedAtUtc = CreatedAt,
         };
