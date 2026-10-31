@@ -132,7 +132,10 @@ Do not configure `BackupStorage` for testing. Testing has no scheduled backup.
 `restockroo-testing-web` (this is `TESTING_STATIC_WEB_APP_NAME`), and the **Free** plan. For
 **Deployment source**, choose **Other**, not GitHub, so Azure adds no workflow or secret to this
 repository. Note the URL, for example `https://<words>.azurestaticapps.net`. That is the test
-frontend origin.
+frontend origin. A Static Web App created with GitHub as its source stays linked to that portal
+workflow and rejects Deploy Testing's upload with "No matching Static Web App was found or the api
+key was invalid", even with a fresh token. If that happens, delete it and create it again with
+**Other**.
 
 ### 5. Test API application settings
 
@@ -197,12 +200,14 @@ production uses. Do this only when the compiled `externalIdSettings` are filled 
    secret or certificate. This is not production's identity (`VmInventoryApi_CLIENT_ID_4D7F`) and
    not the collector's.
 2. The registration → **Certificates & secrets** → **Federated credentials** → **Add credential**:
-   - Scenario: **GitHub Actions deploying Azure resources**
-   - Organization `cristhyanc`, repository `InventoryApp`, entity type **Environment**, environment
-     `testing`
-   - The subject is `repo:cristhyanc/InventoryApp:environment:testing`, the issuer
-     `https://token.actions.githubusercontent.com`, and the audience `api://AzureADTokenExchange`.
-     If the repository uses a customised OIDC subject template, match it exactly.
+   - Scenario: **Other issuer**, so the portal does not rewrite the subject.
+   - Issuer `https://token.actions.githubusercontent.com`, subject identifier
+     `repo:cristhyanc/InventoryApp:environment:testing`, audience `api://AzureADTokenExchange`.
+   - Do not use the ID-based subject the portal's GitHub scenario may build
+     (`repo:cristhyanc@<owner id>/InventoryApp@<repository id>:environment:testing`). GitHub sends
+     the classic subject above, and sign-in then fails with `AADSTS700213: No matching federated
+     identity record found`. If the repository ever adopts a customised OIDC subject template,
+     match that exactly instead.
 3. Minimal role assignments (portal → resource → **Access control (IAM)** → **Add role assignment**
    → select the `restockroo-testing-deploy` service principal):
 
@@ -308,3 +313,10 @@ production-host rules are in `scripts/price-collector/workflow.test.mjs` and
 
 Nothing here proves that the Azure resources, role assignments or federated credential exist, or
 that a live deployment succeeds. Those are verified only by a successful run after the human setup.
+The first end-to-end deployment succeeded on 31 Oct 2026, after three setup fixes:
+
+| Failure in the run | Cause | Fix |
+| --- | --- | --- |
+| Azure Login: `AADSTS700213: No matching federated identity record found` | The federated credential used the ID-based subject | Add a credential with the classic subject (step 2 of the identity setup) |
+| Deploy test frontend: "Could not read the test Static Web App with the testing deployment identity" | The deploy identity had no role on the Static Web App | Give it **Contributor** on that Static Web App |
+| Deploy test frontend: "No matching Static Web App was found or the api key was invalid" | The Static Web App was created with GitHub as its source | Recreate it with deployment source **Other** |

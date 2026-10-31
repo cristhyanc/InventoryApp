@@ -720,7 +720,6 @@ jobs:
           app_location: testing-frontend
           output_location: ''
           skip_app_build: true
-          skip_api_build: true
 
       - name: Verify the test frontend responds and calls the test API
         env:
