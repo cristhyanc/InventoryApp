@@ -228,6 +228,102 @@ describe('SuperAdminMasterProductsComponent (issue #1023)', () => {
   });
 
   /**
+   * The search box stays usable while a read is outstanding, so two reads can be in flight and the
+   * slower one can be the older one. Only the newest may describe the page: a "pepsi" search box
+   * above the "cola" rows, the "cola" total and the "cola" page number would be a lie about what is
+   * on screen.
+   */
+  it('lets only the newest search describe the page, whichever read answers last', async () => {
+    const firstRead = new Subject<SuperAdminMasterProductPage>();
+    const secondRead = new Subject<SuperAdminMasterProductPage>();
+    const list = jest.fn().mockReturnValueOnce(firstRead).mockReturnValueOnce(secondRead);
+    const { component, fixture } = await render({ list });
+
+    component.searchText = 'pepsi';
+    component.search();
+
+    secondRead.next(page({ products: [product({ id: 2, brand: 'Pepsi', name: 'Max' })], totalCount: 1, page: 1, hasMore: false }));
+    // The first read answers afterwards, with another search's page, total and position.
+    firstRead.next(page({ products: [product({ id: 1, brand: 'Coca-Cola' })], totalCount: 40, page: 3, hasMore: true }));
+    fixture.detectChanges();
+
+    expect(component.appliedSearch).toBe('pepsi');
+    expect(component.products.map((match) => match.id)).toEqual([2]);
+    expect(component.totalCount).toBe(1);
+    expect(component.page).toBe(1);
+    expect(component.hasMore).toBe(false);
+  });
+
+  /** An older failure is just as stale as an older success: it must not overwrite a newer answer. */
+  it('keeps the newest search on screen when an older read fails afterwards', async () => {
+    const firstRead = new Subject<SuperAdminMasterProductPage>();
+    const secondRead = new Subject<SuperAdminMasterProductPage>();
+    const list = jest.fn().mockReturnValueOnce(firstRead).mockReturnValueOnce(secondRead);
+    const { component, fixture, host } = await render({ list });
+
+    component.searchText = 'pepsi';
+    component.search();
+
+    secondRead.next(page({ products: [product({ id: 2, brand: 'Pepsi', name: 'Max' })], totalCount: 1 }));
+    firstRead.error(new Error('the abandoned search failed'));
+    fixture.detectChanges();
+
+    expect(component.loadError).toBe(false);
+    expect(component.loading).toBe(false);
+    expect(component.products.map((match) => match.id)).toEqual([2]);
+    expect(host.querySelector('[data-testid="master-product-error"]')).toBeNull();
+  });
+
+  /** A paging step is the same race: the page shown must be the page last asked for. */
+  it('lets only the newest page step describe the page, whichever read answers last', async () => {
+    const firstRead = new Subject<SuperAdminMasterProductPage>();
+    const secondRead = new Subject<SuperAdminMasterProductPage>();
+    const thirdRead = new Subject<SuperAdminMasterProductPage>();
+    const list = jest.fn().mockReturnValueOnce(firstRead).mockReturnValueOnce(secondRead).mockReturnValueOnce(thirdRead);
+    const { component } = await render({ list });
+
+    firstRead.next(page({ page: 1, pageSize: 1, totalCount: 3, hasMore: true }));
+    component.nextPage();
+    component.nextPage();
+
+    thirdRead.next(page({ products: [product({ id: 3 })], page: 3, pageSize: 1, totalCount: 3, hasMore: false }));
+    secondRead.next(page({ products: [product({ id: 2 })], page: 2, pageSize: 1, totalCount: 3, hasMore: true }));
+
+    expect(component.page).toBe(3);
+    expect(component.hasMore).toBe(false);
+    expect(component.products.map((match) => match.id)).toEqual([3]);
+  });
+
+  /** A failed read must not end the page's read stream: the next search has to be answered. */
+  it('reads again after a failed read instead of going silent', async () => {
+    const list = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new Error('nope')))
+      .mockReturnValueOnce(of(page({ products: [product({ id: 5, brand: 'Pepsi' })], totalCount: 1 })));
+    const { component, fixture } = await render({ list });
+
+    expect(component.loadError).toBe(true);
+
+    component.searchText = 'pepsi';
+    component.search();
+    fixture.detectChanges();
+
+    expect(component.loadError).toBe(false);
+    expect(component.products.map((match) => match.id)).toEqual([5]);
+  });
+
+  it('abandons the read still in flight when it is destroyed', async () => {
+    const pending = new Subject<SuperAdminMasterProductPage>();
+    const { fixture } = await render({ list: jest.fn(() => pending) });
+
+    expect(pending.observed).toBe(true);
+
+    fixture.destroy();
+
+    expect(pending.observed).toBe(false);
+  });
+
+  /**
    * The issue's last criterion, as the page's own contract: this is a read-only screen. No Add, Edit
    * or Delete control exists on it, because the API has none and those actions are separate issues.
    */

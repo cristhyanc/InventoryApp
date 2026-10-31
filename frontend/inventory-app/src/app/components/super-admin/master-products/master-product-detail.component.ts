@@ -1,5 +1,6 @@
 import { CommonModule, DatePipe } from '@angular/common';
-import { Component, EventEmitter, Input, OnChanges, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
+import { Subject, Subscription, catchError, map, of, switchMap, tap } from 'rxjs';
 import {
   SuperAdminMasterProductDetail,
   SuperAdminMasterProductListing,
@@ -11,6 +12,9 @@ import {
   SupplierPriceBasis
 } from '../../../services/super-admin-price-catalogue-review.service';
 import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
+
+/** A read tagged with the product it was issued for; `detail` is null when that read failed. */
+type MasterProductRead = { id: number; detail: SuperAdminMasterProductDetail | null };
 
 /**
  * One master product's supplier listings (issue #1023): which suppliers publish it, the pack each one
@@ -28,6 +32,12 @@ import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
  *
  * **It is read only**: there is no control here that confirms, corrects, refuses or deletes anything -
  * that is the Supplier Price Review's authority (issue #928).
+ *
+ * **Only the product it was last given may be described here.** The page reuses this one component for
+ * whichever row is open, so viewing product A's listings and then product B's must never let A's
+ * slower answer - or A's failure - describe B. The `switchMap` cancels the read still in flight and
+ * the identity check discards an answer that arrives anyway, exactly as the product price-tracking
+ * panel does it.
  */
 @Component({
   selector: 'app-super-admin-master-product-detail',
@@ -35,7 +45,7 @@ import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
   imports: [CommonModule, DatePipe],
   templateUrl: './master-product-detail.component.html'
 })
-export class MasterProductDetailComponent implements OnChanges {
+export class MasterProductDetailComponent implements OnChanges, OnDestroy {
   /** The master product to show the listings of. */
   @Input({ required: true }) productId!: number;
 
@@ -46,27 +56,56 @@ export class MasterProductDetailComponent implements OnChanges {
   loading = false;
   loadError = false;
 
-  constructor(private readonly masterProducts: SuperAdminMasterProductsService) {}
+  private readonly requested = new Subject<number>();
+  private readonly reads: Subscription;
 
-  ngOnChanges(): void {
-    this.load();
+  constructor(private readonly masterProducts: SuperAdminMasterProductsService) {
+    this.reads = this.requested
+      .pipe(
+        tap(() => {
+          this.loading = true;
+          this.loadError = false;
+          this.detail = null;
+        }),
+        switchMap((id) =>
+          this.masterProducts.get(id).pipe(
+            map((detail): MasterProductRead => ({ id, detail })),
+            // A failed read travels as a result rather than as an error, so one failure cannot end
+            // the stream and leave every later selection unanswered.
+            catchError(() => of<MasterProductRead>({ id, detail: null }))
+          )
+        )
+      )
+      .subscribe(({ id, detail }) => {
+        if (id !== this.productId) {
+          return;
+        }
+
+        this.loading = false;
+
+        if (detail === null) {
+          this.loadError = true;
+          return;
+        }
+
+        this.detail = detail;
+      });
   }
 
-  load(): void {
-    this.loading = true;
-    this.loadError = false;
-    this.detail = null;
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['productId']) {
+      this.requested.next(this.productId);
+    }
+  }
 
-    this.masterProducts.get(this.productId).subscribe({
-      next: (detail) => {
-        this.detail = detail;
-        this.loading = false;
-      },
-      error: () => {
-        this.loading = false;
-        this.loadError = true;
-      }
-    });
+  ngOnDestroy(): void {
+    this.reads.unsubscribe();
+    this.requested.complete();
+  }
+
+  /** Re-reads the product this panel is about, abandoning whatever read is still in flight. */
+  load(): void {
+    this.requested.next(this.productId);
   }
 
   /** What the catalogue thinks of one listing, in the server's own vocabulary. */

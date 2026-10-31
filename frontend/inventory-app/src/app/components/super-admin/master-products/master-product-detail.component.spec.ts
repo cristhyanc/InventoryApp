@@ -56,6 +56,12 @@ function detail(listings: readonly SuperAdminMasterProductListing[]): SuperAdmin
   };
 }
 
+/** The same detail for a named product, so two reads in flight can be told apart on screen. */
+function detailOf(id: number, brand: string, name: string): SuperAdminMasterProductDetail {
+  const base = detail([listing()]);
+  return { ...base, product: { ...base.product, id, brand, name } };
+}
+
 async function render(service: Partial<SuperAdminMasterProductsService>, productId = 1) {
   await TestBed.configureTestingModule({
     imports: [MasterProductDetailComponent],
@@ -194,6 +200,78 @@ describe('MasterProductDetailComponent (issue #1023)', () => {
 
     expect(get).toHaveBeenNthCalledWith(1, 1);
     expect(get).toHaveBeenNthCalledWith(2, 2);
+  });
+
+  /**
+   * The page reuses this one component for whichever row is open, so viewing product A's listings and
+   * then product B's leaves two reads in flight. Only the product last asked for may be described: A's
+   * slower answer must not appear under B's heading.
+   */
+  it('ignores a slower read for a product the page has already moved on from', async () => {
+    const firstRead = new Subject<SuperAdminMasterProductDetail>();
+    const secondRead = new Subject<SuperAdminMasterProductDetail>();
+    const get = jest.fn().mockReturnValueOnce(firstRead).mockReturnValueOnce(secondRead);
+    const { fixture, host, component } = await render({ get }, 1);
+
+    fixture.componentRef.setInput('productId', 2);
+    fixture.detectChanges();
+
+    secondRead.next(detailOf(2, 'Pepsi', 'Max'));
+    // Product 1's read answers afterwards, describing the product nobody is looking at any more.
+    firstRead.next(detailOf(1, 'Coca-Cola', 'Classic'));
+    fixture.detectChanges();
+
+    expect(component.detail?.product.id).toBe(2);
+    expect(host.textContent).toContain('Supplier listings — Pepsi Max');
+    expect(host.textContent).not.toContain('Supplier listings — Coca-Cola');
+  });
+
+  /** An older failure is just as stale as an older success, and must not replace a newer product. */
+  it('keeps the newest product on screen when an older read fails afterwards', async () => {
+    const firstRead = new Subject<SuperAdminMasterProductDetail>();
+    const secondRead = new Subject<SuperAdminMasterProductDetail>();
+    const get = jest.fn().mockReturnValueOnce(firstRead).mockReturnValueOnce(secondRead);
+    const { fixture, host, component } = await render({ get }, 1);
+
+    fixture.componentRef.setInput('productId', 2);
+    fixture.detectChanges();
+
+    secondRead.next(detailOf(2, 'Pepsi', 'Max'));
+    firstRead.error(new Error('the abandoned read failed'));
+    fixture.detectChanges();
+
+    expect(component.loadError).toBe(false);
+    expect(component.loading).toBe(false);
+    expect(component.detail?.product.id).toBe(2);
+    expect(host.querySelector('[data-testid="master-product-detail-error"]')).toBeNull();
+  });
+
+  /** A failed read must not end this panel's read stream: the next selection has to be answered. */
+  it('reads again after a failed read instead of going silent', async () => {
+    const get = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new Error('nope')))
+      .mockReturnValueOnce(of(detailOf(2, 'Pepsi', 'Max')));
+    const { fixture, component } = await render({ get }, 1);
+
+    expect(component.loadError).toBe(true);
+
+    fixture.componentRef.setInput('productId', 2);
+    fixture.detectChanges();
+
+    expect(component.loadError).toBe(false);
+    expect(component.detail?.product.id).toBe(2);
+  });
+
+  it('abandons the read still in flight when it is destroyed', async () => {
+    const pending = new Subject<SuperAdminMasterProductDetail>();
+    const { fixture } = await render({ get: jest.fn(() => pending) });
+
+    expect(pending.observed).toBe(true);
+
+    fixture.destroy();
+
+    expect(pending.observed).toBe(false);
   });
 
   it('asks the page to close it, rather than closing itself', async () => {

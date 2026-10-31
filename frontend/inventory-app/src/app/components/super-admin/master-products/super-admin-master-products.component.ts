@@ -1,14 +1,21 @@
 import { CommonModule, DatePipe } from '@angular/common';
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Subject, takeUntil } from 'rxjs';
+import { Subject, Subscription, catchError, map, of, switchMap, tap } from 'rxjs';
 import {
   MASTER_PRODUCT_PAGE_SIZE,
   SuperAdminMasterProduct,
+  SuperAdminMasterProductPage,
   SuperAdminMasterProductsService
 } from '../../../services/super-admin-master-products.service';
 import { MASTER_PRODUCT_SIZE_UNIT_LABELS } from '../../../services/super-admin-price-catalogue-review.service';
 import { MasterProductDetailComponent } from './master-product-detail.component';
+
+/** What one read of the catalogue asked the server for. */
+type CatalogueRequest = { search: string; page: number; pageSize: number };
+
+/** A read tagged with the request it answers; `result` is null when that read failed. */
+type CatalogueRead = { request: CatalogueRequest; result: SuperAdminMasterProductPage | null };
 
 /**
  * The Super Admin Master products page (issue #1023), at `/super-admin/master-products`, over the two
@@ -35,6 +42,12 @@ import { MasterProductDetailComponent } from './master-product-detail.component'
  * **Nothing about any business is here**, in either direction: the API publishes no business id, name
  * or product id and no count of who is tracking what, so there is nothing of the kind for this page to
  * display.
+ *
+ * **Only the newest read may describe the page.** Every search and every page step goes through one
+ * `switchMap`, which cancels the read still in flight, because the search box stays usable while a
+ * read is outstanding: searching "cola" and then "pepsi" must never leave the "pepsi" search box above
+ * the "cola" rows, the "cola" total and the "cola" page number. That is the same cancellation the
+ * product price-tracking panel uses for the same reason.
  */
 @Component({
   selector: 'app-super-admin-master-products',
@@ -61,47 +74,59 @@ export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
   /** The product whose supplier listings are open, or `null` when none is. */
   selectedProductId: number | null = null;
 
-  private readonly destroying$ = new Subject<void>();
+  private readonly requested = new Subject<CatalogueRequest>();
+  private readonly reads: Subscription;
 
-  constructor(private readonly masterProducts: SuperAdminMasterProductsService) {}
+  constructor(private readonly masterProducts: SuperAdminMasterProductsService) {
+    this.reads = this.requested
+      .pipe(
+        tap(() => {
+          this.loading = true;
+          this.loadError = false;
+        }),
+        switchMap((request) =>
+          this.masterProducts.list(request).pipe(
+            map((result): CatalogueRead => ({ request, result })),
+            // A failed read is carried through as a result rather than as an error, so one failure
+            // cannot end the stream and leave every later search unanswered.
+            catchError(() => of<CatalogueRead>({ request, result: null }))
+          )
+        )
+      )
+      .subscribe(({ request, result }) => {
+        this.loading = false;
+
+        if (result === null) {
+          this.products = [];
+          this.loadError = true;
+          return;
+        }
+
+        this.products = result.products;
+        this.totalCount = result.totalCount;
+        // The server's own answer, not what was asked for: a page size above the maximum is
+        // bounded rather than refused, and the page must show the slice it really received.
+        this.page = result.page;
+        this.pageSize = result.pageSize;
+        this.hasMore = result.hasMore;
+        // The search this answer was read with, which is the request's and never the search box's:
+        // the box may already hold the next thing somebody typed.
+        this.appliedSearch = request.search;
+      });
+  }
 
   ngOnInit(): void {
     this.load();
   }
 
   ngOnDestroy(): void {
-    this.destroying$.next();
-    this.destroying$.complete();
+    this.reads.unsubscribe();
+    this.requested.complete();
   }
 
-  /** Reads the current page with the current search. */
+  /** Reads the current page with the current search, abandoning whatever read is still in flight. */
   load(): void {
-    this.loading = true;
-    this.loadError = false;
-
-    const search = this.searchText.trim();
-
-    this.masterProducts
-      .list({ search, page: this.page, pageSize: this.pageSize })
-      .pipe(takeUntil(this.destroying$))
-      .subscribe({
-        next: (result) => {
-          this.products = result.products;
-          this.totalCount = result.totalCount;
-          // The server's own answer, not what was asked for: a page size above the maximum is
-          // bounded rather than refused, and the page must show the slice it really received.
-          this.page = result.page;
-          this.pageSize = result.pageSize;
-          this.hasMore = result.hasMore;
-          this.appliedSearch = search;
-          this.loading = false;
-        },
-        error: () => {
-          this.products = [];
-          this.loading = false;
-          this.loadError = true;
-        }
-      });
+    this.requested.next({ search: this.searchText.trim(), page: this.page, pageSize: this.pageSize });
   }
 
   /** A new search always starts at the first page: page 4 of the previous search means nothing here. */
