@@ -71,6 +71,11 @@ and **1 internal page**. Claude runs with at most **40 turns**, a **US$1 Claude 
 has its own 15-minute step. Supplier calls can cost money even if no matching product is found.
 Incomplete searches remain `truncated`; a successful actor run alone is not proof of completeness.
 
+The summary also says how many turns Claude took and its result subtype, and one line per tool
+with how many calls the hook allowed and denied and the fixed reason codes (for example
+`write-wrong-run`, `not-own-dataset`, `not-recorded-string`). These are counts and codes only, so a
+run that writes nothing shows where it stopped without publishing its output.
+
 Review the counts/statuses in the Actions summary, then inspect proposed listings, pending prices
 and match decisions through the test API's Super Admin pages. Confirm pack size, variant, tax basis
 and currency there. No observed supplier price changes purchases, GST accounting or inventory.

@@ -50,7 +50,7 @@ export function runFromResponse(response) {
   if (typeof value === 'string') value = { content: [{ type: 'text', text: value }] };
   let run = value?.structuredContent;
   if (run === undefined && Array.isArray(value?.content) && value.content[0]?.type === 'text') {
-    try { run = JSON.parse(value.content[0].text); } catch { run = undefined; }
+    run = leadingJsonObject(value.content[0].text);
   }
   if (run === undefined && typeof value?.runId === 'string') run = value;
   if (!storageId.test(String(run?.runId ?? ''))) return null;
@@ -58,6 +58,33 @@ export function runFromResponse(response) {
   const datasetIds = datasets && typeof datasets === 'object'
     ? Object.values(datasets).map(dataset => dataset?.id).filter(id => storageId.test(String(id ?? ''))) : [];
   return { runId: run.runId, datasetIds };
+}
+
+/**
+ * The JSON object a text starts with, even when more text follows it. The Apify server's first text
+ * block mirrors structuredContent as JSON, and a client may join it with the summary block that
+ * follows. Only an object at the very start is read; anything after it is ignored.
+ */
+export function leadingJsonObject(text) {
+  if (typeof text !== 'string') return undefined;
+  const start = text.length - text.trimStart().length;
+  if (text[start] !== '{') return undefined;
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (char === '\\') index += 1;
+      else if (char === '"') inString = false;
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === '{' || char === '[') {
+      depth += 1;
+    } else if ((char === '}' || char === ']') && --depth === 0) {
+      try { return JSON.parse(text.slice(start, index + 1)); } catch { return undefined; }
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -77,20 +104,24 @@ export async function recordRun(stateDir, { startedRun, response }) {
   });
 }
 
-/** PreToolUse: why a follow-up read is refused, or null once it is reserved. */
+/** PreToolUse: why a follow-up read is refused ({ code, message }), or null once it is reserved. */
 export async function reserveRead(stateDir, tool, input) {
   return withLedger(stateDir, ledger => {
     if (tool === 'get-dataset-items') {
       const run = Object.values(ledger.runs).find(entry => Object.hasOwn(entry.datasets, input.datasetId));
-      if (!run) return 'Only a dataset of a run this collector started may be read.';
-      if (run.datasets[input.datasetId] >= MAX_READS_PER_DATASET) return `A dataset may be read at most ${MAX_READS_PER_DATASET} times.`;
+      if (!run) return { code: 'not-own-dataset', message: 'Only a dataset of a run this collector started may be read.' };
+      if (run.datasets[input.datasetId] >= MAX_READS_PER_DATASET) {
+        return { code: 'dataset-read-cap', message: `A dataset may be read at most ${MAX_READS_PER_DATASET} times.` };
+      }
       run.datasets[input.datasetId] += 1;
       return null;
     }
     const run = ledger.runs[input.runId];
-    if (!run) return 'Only a run this collector started may be followed or stopped.';
+    if (!run) return { code: 'not-own-run', message: 'Only a run this collector started may be followed or stopped.' };
     if (tool === 'get-actor-run') {
-      if (run.polls >= MAX_POLLS_PER_RUN) return `A run may be polled at most ${MAX_POLLS_PER_RUN} times; abort it and record the search as failed.`;
+      if (run.polls >= MAX_POLLS_PER_RUN) {
+        return { code: 'poll-cap', message: `A run may be polled at most ${MAX_POLLS_PER_RUN} times; abort it and record the search as failed.` };
+      }
       run.polls += 1;
     }
     return null;

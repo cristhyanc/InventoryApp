@@ -5,6 +5,7 @@ import { appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync,
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectorToken } from './workflow-auth.mjs';
+import { TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { runGetWork } from './get-work.mjs';
 import { runSubmission } from './submit-results.mjs';
 
@@ -85,6 +86,33 @@ function submissionFolder(stateDir, outputDir, work) {
   return { dir, refused };
 }
 
+/**
+ * How the hook answered each tool, as counts: one line per tool label with allowed and denied
+ * calls and the fixed codes of the denials and after-call records. Labels and codes are checked
+ * against plain patterns again here, so nothing else from the log can reach the public summary.
+ */
+export function toolUseReport(stateDir) {
+  const path = join(stateDir, TOOL_LOG_FILE);
+  if (!existsSync(path)) return 'Tool calls: none\n';
+  const tools = new Map();
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    const tool = /^[A-Za-z0-9_:-]{1,80}$/.test(entry?.tool) ? entry.tool : 'other';
+    const code = /^[a-z-]{1,40}$/.test(entry?.code) ? entry.code : 'other';
+    const counts = tools.get(tool) ?? { allowed: 0, denied: 0, codes: new Map() };
+    if (entry?.event === 'before' && entry.decision === 'allow') counts.allowed += 1;
+    else if (entry?.event === 'before') counts.denied += 1;
+    if (code !== 'ok') counts.codes.set(code, (counts.codes.get(code) ?? 0) + 1);
+    tools.set(tool, counts);
+  }
+  if (tools.size === 0) return 'Tool calls: none\n';
+  return [...tools].sort(([a], [b]) => a.localeCompare(b)).map(([tool, counts]) => {
+    const codes = [...counts.codes].map(([code, count]) => `${code} ${count}`).join(', ');
+    return `Tool ${tool}: allowed ${counts.allowed}, denied ${counts.denied}${codes ? `; ${codes}` : ''}\n`;
+  }).join('');
+}
+
 export async function finaliseSample({ stateDir, outputDir, env, token, submit = runSubmission }) {
   const work = json(join(stateDir, 'work.json'));
   const status = existsSync(join(stateDir, 'collector-status.json')) ? json(join(stateDir, 'collector-status.json')) : { status: 'not_started', costUsd: null };
@@ -94,7 +122,9 @@ export async function finaliseSample({ stateDir, outputDir, env, token, submit =
   const allowedStatuses = ['completed', 'failed', 'timeout', 'interrupted', 'output_limit', 'claude_limit', 'apify_limit', 'not_started'];
   const label = allowedStatuses.includes(status.status) ? status.status : 'failed';
   const cost = typeof status.costUsd === 'number' && Number.isFinite(status.costUsd) && status.costUsd >= 0 ? status.costUsd.toFixed(6) : 'unknown';
-  const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nSample searches: ${work.searches.length}\nFiles refused before submission: ${refused}\n${publicSubmissionReport(result.out)}\nSubmission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
+  const turns = Number.isInteger(status.turns) ? status.turns : 'unknown';
+  const subtype = typeof status.subtype === 'string' && /^[a-z_]{1,40}$/.test(status.subtype) ? status.subtype : 'unknown';
+  const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${toolUseReport(stateDir)}Sample searches: ${work.searches.length}\nFiles refused before submission: ${refused}\n${publicSubmissionReport(result.out)}\nSubmission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
   save(join(stateDir, 'submission-status.json'), { ok: result.exitCode === 0 && refused === 0 });
   return report;
 }
@@ -154,7 +184,10 @@ export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1
       if (!stopped && /enforced_spend_limit_reached|specified API usage limits|error_max_budget_usd|error_max_turns/.test(combined)) status = 'claude_limit';
       if (!stopped && /monthly-usage-hard-limit-exceeded|platform-feature-disabled/.test(combined)) status = 'apify_limit';
       const costUsd = typeof result.total_cost_usd === 'number' && Number.isFinite(result.total_cost_usd) ? result.total_cost_usd : null;
-      resolveResult({ status, costUsd });
+      // Counts and the CLI's own result subtype only; never the result text.
+      const turns = Number.isInteger(result.num_turns) && result.num_turns >= 0 ? result.num_turns : null;
+      const subtype = typeof result.subtype === 'string' && /^[a-z_]{1,40}$/.test(result.subtype) ? result.subtype : null;
+      resolveResult({ status, costUsd, turns, subtype });
     };
     child.on('error', () => finish(1));
     child.on('close', finish);

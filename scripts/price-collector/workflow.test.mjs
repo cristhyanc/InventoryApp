@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude } from './workflow.mjs';
-import { permittedCommand, recordDecision, toolDecision } from './workflow-tool-guard.mjs';
-import { LEDGER_FILE, MAX_POLLS_PER_RUN, runFromResponse } from './workflow-run-ledger.mjs';
+import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude, toolUseReport } from './workflow.mjs';
+import { permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
+import { LEDGER_FILE, MAX_POLLS_PER_RUN, leadingJsonObject, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
 
@@ -286,4 +287,76 @@ test('a run is issued only from reviewed main or develop, to an HTTPS test API t
   for (const url of ['http://restockroo-testing-api.azurewebsites.net', 'https://user:pw@restockroo-testing-api.azurewebsites.net', `${testApi}?x=1`]) {
     assert.throws(() => collectorTarget({ GITHUB_REF: 'refs/heads/develop', PRICE_COLLECTOR_TEST_API_URL: url }), /HTTPS test API URL/);
   }
+});
+
+test('a run is read from the leading JSON of an answer even when a summary follows it, and from nowhere else', () => {
+  const run = { runId: 'Run7', status: 'SUCCEEDED', storages: { datasets: { default: { id: 'Data7', fields: ['name{x}', 'a"b'] } } } };
+  const joined = `${JSON.stringify(run)}\nRun Run7 succeeded with 5 items. Use get-dataset-items with datasetId=Data7.`;
+  for (const response of [joined, [{ type: 'text', text: joined }], { content: [{ type: 'text', text: `  ${joined}` }] }]) {
+    assert.deepEqual(runFromResponse(response), { runId: 'Run7', datasetIds: ['Data7'] });
+  }
+  // An object anywhere but the very start, or a second object after the first, is never read.
+  assert.equal(runFromResponse('Summary first {"runId":"Evil"}'), null);
+  assert.deepEqual(runFromResponse(`{"status":"RUNNING"}\n{"runId":"Evil"}`), null);
+  assert.equal(leadingJsonObject('{"a":"}"}trailing').a, '}');
+  assert.equal(leadingJsonObject('{"a":"\\"}"}x').a, '"}');
+  assert.equal(leadingJsonObject('{unterminated'), undefined);
+  assert.equal(leadingJsonObject(42), undefined);
+});
+
+test('the hook log becomes counts per tool with fixed codes, never reason text, inputs or invented labels', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-tool-log-'));
+  try {
+    const limits = sampleLimits(JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url))), false);
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(limits));
+    saveTestWork(dir, {});
+    const env = { PRICE_COLLECTOR_STATE_DIR: dir, PRICE_COLLECTOR_OUT_DIR: join(dir, 'out'), PRICE_COLLECTOR_GUARD_STATE: join(dir, 'state.json') };
+    const hook = event => spawnSync(process.execPath, [new URL('./workflow-tool-guard.mjs', import.meta.url).pathname],
+      { input: JSON.stringify(event), env: { ...env, PATH: process.env.PATH }, encoding: 'utf8' });
+    const write = (file, content) => ({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: join(dir, 'out', file), content } });
+    const answers = [
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/read-work.mjs' } }),
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'cat /etc/passwd secret-product' } }),
+      hook(write('1.json', JSON.stringify({ runId: 40, workItemId: 1 }))),
+      hook(write('1.json', 'not json')),
+      hook(write('99.json', JSON.stringify({ runId: 41, workItemId: 99 }))),
+      hook(write('1.json', JSON.stringify({ runId: 41, workItemId: 1 }))),
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'mcp__apify__get-dataset-items', tool_input: { datasetId: 'Data1' } }),
+      hook({ hook_event_name: 'PostToolUse', tool_name: 'mcp__apify__call-actor', tool_input: {}, tool_response: 'no run here' }),
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/etc/passwd' } }),
+    ];
+    for (const answer of answers) {
+      // Claude Code receives exactly the documented shape: no diagnostic field leaks into it.
+      const out = JSON.parse(answer.stdout);
+      if (out.hookSpecificOutput) assert.deepEqual(Object.keys(out).sort(), ['hookSpecificOutput']);
+    }
+    const report = toolUseReport(dir);
+    assert.match(report, /^Tool Bash:other: allowed 0, denied 1; not-helper 1$/m);
+    assert.match(report, /^Tool Bash:read-work: allowed 1, denied 0$/m);
+    assert.match(report, /^Tool Write: allowed 1, denied 3; write-wrong-run 1, write-not-json 1, write-not-in-sample 1$/m);
+    assert.match(report, /^Tool mcp__apify__get-dataset-items: allowed 0, denied 1; not-own-dataset 1$/m);
+    assert.match(report, /^Tool mcp__apify__call-actor: allowed 0, denied 0; not-recorded-string 1$/m);
+    assert.match(report, /^Tool Read: allowed 0, denied 1; not-allowlisted 1$/m);
+    for (const secret of ['passwd', 'secret-product', 'Data1', 'only', 'sample and its run']) assert.ok(!report.includes(secret), secret);
+    // A tampered log line cannot put free text into the summary.
+    writeFileSync(join(dir, TOOL_LOG_FILE), `${JSON.stringify({ tool: 'Write <b>price</b>', event: 'before', decision: 'deny', code: 'Coke $4' })}\n`, { flag: 'a' });
+    assert.match(toolUseReport(dir), /^Tool other: allowed 0, denied 1; other 1$/m);
+    assert.equal(toolLabel({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/pagination.mjs --x' } }), 'Bash:pagination');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the summary carries Claude turns and result subtype, and says when no tool was called', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-turns-'));
+  try {
+    saveTestWork(dir, { status: 'completed', costUsd: 0.12, turns: 9, subtype: 'success' });
+    const report = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
+      submit: async () => ({ exitCode: 0, out: '' }) });
+    assert.match(report, /^Claude turns: 9; result: success$/m);
+    assert.match(report, /^Tool calls: none$/m);
+    rmSync(join(dir, 'submission'), { recursive: true, force: true });
+    saveTestWork(dir, { status: 'completed', costUsd: null, turns: 'many', subtype: 'Error: secret' });
+    const unsafe = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
+      submit: async () => ({ exitCode: 0, out: '' }) });
+    assert.match(unsafe, /^Claude turns: unknown; result: unknown$/m);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
