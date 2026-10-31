@@ -8,6 +8,7 @@ import { describe, it } from 'node:test';
 import {
   SEARCH_FAILURE_REASONS,
   SEARCH_OUTCOMES,
+  internalPagingOutcome,
   runPagination,
   searchOutcomeFor,
   shouldRequestNextPage,
@@ -113,6 +114,48 @@ describe('searchOutcomeFor', () => {
       () => searchOutcomeFor({ pagesRead: 1, maxPages: 4, moreAvailable: false, rowCount: 0, failure: 'site_was_rude' }),
       /failure reason/i,
     );
+  });
+});
+
+describe('internalPagingOutcome (Kmart and Axlymxp BIG W page internally)', () => {
+  it('reports a below-limit search without completeness evidence as truncated, not no_matches', () => {
+    // The internal page cap, filtering or failed detail requests can return fewer rows than maxItems
+    // from a search that did not finish; a short answer alone proves nothing.
+    const answer = internalPagingOutcome({ returned: 12, itemLimit: 50, rowCount: 0 });
+    assert.deepEqual(answer.paging, { pagesRead: 1, pageCap: 1, moreAvailable: true });
+    assert.equal(answer.outcome, SEARCH_OUTCOMES.truncated);
+  });
+
+  it('reports a below-limit search with matches but unknown completeness as truncated, not complete', () => {
+    const answer = internalPagingOutcome({ returned: 30, itemLimit: 50, completenessProven: false, rowCount: 3 });
+    assert.equal(answer.outcome, SEARCH_OUTCOMES.truncated);
+  });
+
+  it('reports a search that reached the item limit as truncated even with completeness evidence', () => {
+    const answer = internalPagingOutcome({ returned: 50, itemLimit: 50, completenessProven: true, rowCount: 4 });
+    assert.equal(answer.paging.moreAvailable, true);
+    assert.equal(answer.outcome, SEARCH_OUTCOMES.truncated);
+  });
+
+  it('reports complete or no_matches only with positive completeness evidence below the item limit', () => {
+    assert.equal(internalPagingOutcome({ returned: 12, itemLimit: 50, completenessProven: true, rowCount: 2 }).outcome, SEARCH_OUTCOMES.complete);
+    assert.equal(internalPagingOutcome({ returned: 12, itemLimit: 50, completenessProven: true, rowCount: 0 }).outcome, SEARCH_OUTCOMES.noMatches);
+  });
+
+  it('lets a failure win, whatever the paging says', () => {
+    const answer = internalPagingOutcome({ returned: 0, itemLimit: 50, rowCount: 0, failure: SEARCH_FAILURE_REASONS.timeout });
+    assert.equal(answer.outcome, SEARCH_OUTCOMES.failed);
+  });
+
+  it('answers on the command line, treating completeness as unproven unless the flag says otherwise', () => {
+    const unproven = runPagination(['--internal-paging', '--returned', '12', '--item-limit', '50', '--row-count', '0']);
+    assert.equal(unproven.exitCode, 0);
+    assert.equal(JSON.parse(unproven.out).outcome, 'truncated');
+
+    const proven = runPagination(['--internal-paging', '--completeness-proven', '--returned', '12', '--item-limit', '50', '--row-count', '0']);
+    assert.equal(JSON.parse(proven.out).outcome, 'no_matches');
+
+    assert.equal(runPagination(['--internal-paging', '--returned', '12']).exitCode, 2);
   });
 });
 

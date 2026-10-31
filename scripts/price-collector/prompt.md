@@ -64,7 +64,8 @@ is a true answer, and an overspent run is not.
   product. Never use Dromb keyword search in this collector.
 - Kmart and Axlymxp paginate internally: one call per search, never a repeated search as a
   "next page" (their verified schemas expose page caps, not a starting-page cursor). Step 2 of
-  "Each search" below says how to record their paging and when the outcome is `truncated`.
+  "Each search" below says how to record their paging: without positive evidence that the actor
+  read every result, the outcome is `truncated`, however few products came back.
 - These identities/schemas are verified, but the three actors remain blocked until a bounded
   paid dry run verifies output and Apify transport-level charge caps. Do not enable them or
   raise the existing ceilings. Axlymxp's start charge alone can consume the current $0.02 cap;
@@ -134,8 +135,16 @@ One entry of `searches` is one product at one supplier, identified by its `workI
      limit (`maxItems`) and page cap (`maxPages` / `maxPagesPerQuery`); the actor reads its own
      pages inside that call. Never call the same search again to get a "next page": it returns the
      same first results and is billed again. Record `paging` as one page read of a cap of one
-     (`"pagesRead": 1, "pageCap": 1`). If the call returned as many products as its item limit, there
-     may be more: set `moreAvailable` to true and the outcome is `truncated`.
+     (`"pagesRead": 1, "pageCap": 1`). Fewer products than the item limit is **not** evidence that
+     the search finished: the actor's internal page cap, its filtering or a failed detail request
+     can all return fewer rows from an unfinished search. Set `moreAvailable` to false only when the
+     actor's output or run metadata positively shows it read every result before any cap (for
+     example a reported total it has fully returned, or a run status saying the search was
+     exhausted) **and** it returned fewer products than the item limit. Otherwise — the page cap was
+     reached, the actor reports more results, or completeness cannot be established — set
+     `moreAvailable` to true and the outcome is `truncated`, whatever the row count, never `complete`
+     or `no_matches`. `node scripts/price-collector/pagination.mjs --internal-paging --returned <n>
+     --item-limit <maxItems> --row-count <rows> [--completeness-proven]` answers the same rule.
    - **Dromb (`dromb/big-w-au-product-scraper`)** looks up one known item; there are no pages.
    - **JB Metro (`jbmetro-lookup.mjs`)** reads its own pages up to its page cap and reports
      `pagesRead` and `truncated`; run it once per search and record what it reports.

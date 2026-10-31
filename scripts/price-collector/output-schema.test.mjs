@@ -118,6 +118,17 @@ describe('a result file', () => {
     );
   });
 
+  it('refuses a search the page cap stopped that calls itself no_matches, so no listing is taken as gone', () => {
+    // An internally paged actor (Kmart, Axlymxp) records one page of a cap of one; without proof
+    // that it read everything, moreAvailable is true and only truncated is accepted.
+    const unproven = { pagesRead: 1, pageCap: 1, moreAvailable: true };
+    const answer = validateResultFile(resultFile({ outcome: 'no_matches', rows: [], paging: unproven }));
+
+    assert.equal(answer.ok, false);
+    assert.match(problemsOf(answer), /truncated, not no_matches/);
+    assert.equal(validateResultFile(resultFile({ outcome: 'truncated', rows: [], paging: unproven })).ok, true);
+  });
+
   it('requires a price above zero, in AUD, with a declared basis and stock answer', () => {
     assert.equal(validateResultFile(resultFile({ rows: [row({ packPrice: 0 })] })).ok, false);
     assert.equal(validateResultFile(resultFile({ rows: [row({ packPrice: -1 })] })).ok, false);

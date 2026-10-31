@@ -15,6 +15,12 @@
 //
 //   node scripts/price-collector/pagination.mjs --returned 50 --page-size 50 --items-so-far 200 \
 //     --pages-read 4 --max-pages 4 --row-count 6
+//
+// An actor that pages internally (Kmart, Axlymxp BIG W) is one call per search, answered with
+// `--internal-paging`; it is complete only with `--completeness-proven` (see internalPagingOutcome):
+//
+//   node scripts/price-collector/pagination.mjs --internal-paging --returned 12 --item-limit 50 \
+//     --row-count 2
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -98,6 +104,24 @@ export function searchOutcomeFor({ pagesRead, maxPages, moreAvailable, rowCount,
   };
 }
 
+/**
+ * The paging record and outcome of one search on an actor that pages **internally** (Kmart,
+ * Axlymxp BIG W): one call, whose own page cap the collector cannot see past. Fewer products than
+ * the item limit is not evidence that the search finished - the internal page cap, filtering or a
+ * failed detail request can all return fewer rows from an unfinished search. So the search counts
+ * as finished only when the actor's output or run metadata positively shows it read every result
+ * (`completenessProven`) and it returned fewer products than the item limit; anything else, unknown
+ * included, is `truncated`, so a missing listing is never treated as gone.
+ */
+export function internalPagingOutcome({ returned, itemLimit, completenessProven = false, rowCount, failure = null }) {
+  positiveWholeNumber(itemLimit, 'item limit');
+  notNegativeWholeNumber(returned, 'returned count');
+
+  const moreAvailable = completenessProven !== true || returned >= itemLimit;
+  const answered = searchOutcomeFor({ pagesRead: 1, maxPages: 1, moreAvailable, rowCount, failure });
+  return { paging: { pagesRead: 1, pageCap: 1, moreAvailable }, ...answered };
+}
+
 const NUMERIC_OPTIONS = Object.freeze({
   '--returned': 'returned',
   '--page-size': 'pageSize',
@@ -106,14 +130,25 @@ const NUMERIC_OPTIONS = Object.freeze({
   '--pages-read': 'pagesRead',
   '--max-pages': 'maxPages',
   '--row-count': 'rowCount',
+  '--item-limit': 'itemLimit',
+});
+
+const FLAG_OPTIONS = Object.freeze({
+  '--internal-paging': 'internalPaging',
+  '--completeness-proven': 'completenessProven',
 });
 
 function parsePaginationArguments(argv) {
-  const values = { returned: 0, pageSize: null, reportedTotal: null, itemsSoFar: 0, pagesRead: 0, maxPages: null, rowCount: 0 };
+  const values = { returned: 0, pageSize: null, reportedTotal: null, itemsSoFar: 0, pagesRead: 0, maxPages: null, rowCount: 0, itemLimit: null };
+  const flags = { internalPaging: false, completenessProven: false };
   let failure = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = String(argv[index]);
+    if (Object.hasOwn(FLAG_OPTIONS, argument)) {
+      flags[FLAG_OPTIONS[argument]] = true;
+      continue;
+    }
     if (argument === '--failure') {
       failure = index + 1 < argv.length ? String(argv[index + 1]) : '';
       index += 1;
@@ -126,16 +161,32 @@ function parsePaginationArguments(argv) {
     index += 1;
   }
 
-  if (values.pageSize === null || values.maxPages === null) {
+  if (flags.internalPaging) {
+    if (values.itemLimit === null) throw new Error('--internal-paging needs --item-limit.');
+  } else if (values.pageSize === null || values.maxPages === null) {
     throw new Error('--page-size and --max-pages are required.');
   }
-  return { values, failure };
+  return { values, flags, failure };
+}
+
+function answerInternalPaging(values, flags, failure) {
+  const answered = internalPagingOutcome({ ...values, completenessProven: flags.completenessProven, failure });
+  return {
+    moreAvailable: answered.paging.moreAvailable,
+    requestNextPage: false,
+    paging: answered.paging,
+    outcome: answered.outcome,
+    failureReason: answered.failureReason,
+  };
 }
 
 /** One invocation: the page decision and the outcome it implies, as JSON on stdout. */
 export function runPagination(argv) {
   try {
-    const { values, failure } = parsePaginationArguments(argv ?? []);
+    const { values, flags, failure } = parsePaginationArguments(argv ?? []);
+    if (flags.internalPaging) {
+      return { exitCode: 0, out: JSON.stringify(answerInternalPaging(values, flags, failure)), err: '' };
+    }
     const paging = shouldRequestNextPage(values);
     const answered = searchOutcomeFor({ ...values, moreAvailable: paging.moreAvailable, failure });
 

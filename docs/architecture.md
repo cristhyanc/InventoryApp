@@ -16657,7 +16657,13 @@ truncated. Their page cap is not forced: each names it as `pageLimitField` (`max
 `maxPagesPerQuery`), and the guard keeps a smaller positive request, sets the configured `maxPages`
 when none is given, and refuses zero (which these actors read as every page), a malformed value or a
 larger one. The prompt's "Each search" step makes one call per search for these two actors and asks
-for further pages only from Varnmill. Existing spending ceilings remain unchanged, and all three remain blocked by
+for further pages only from Varnmill. A search on either of them is `complete` or `no_matches` only
+when the actor's output or run metadata positively shows it read every result and it returned fewer
+products than its item limit; a short answer alone is not evidence, so anything else is `truncated`
+(`internalPagingOutcome` in `pagination.mjs`). The inspected output schemas carry no such total or
+completion field, so until the dry run identifies one these searches are reported `truncated`, and
+the backend never takes a missing Kmart or BIG W listing as gone. The result-file check refuses
+`no_matches` as well as `complete` for a search whose paging says the cap stopped it. Existing spending ceilings remain unchanged, and all three remain blocked by
 `actorIdConfirmed: false` until the bounded dry run and transport charge-limit verification.
 The existing generic guard puts the charge field in actor input; Dromb's closed input schema does
 not declare that field, so #926 must verify the MCP transport budget option before enabling it.
