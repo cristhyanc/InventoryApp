@@ -1,16 +1,17 @@
 // Tests for scripts/price-collector/apify-guard.mjs and apify-limits.json: the `PreToolUse` hook
-// that enforces the collector's spending caps and its write-once output folder (issue #926, parent
-// #817).
+// that enforces the collector's actor, input and call-count rules and its write-once output folder
+// (issue #926, parent #817).
 //
 // The point of the hook is that **the caps are not Claude's to obey**: an unlisted or unconfirmed
-// actor, a call with no charge ceiling, a call past the run's own caps and a rewrite of a finished
-// result file are all refused by code, in a separate process, before the tool runs. No test makes a
+// actor, a call past the run's own call cap and a rewrite of a finished result file are all
+// refused by code, in a separate process, before the tool runs. No test makes a
 // live call: the hook never calls anything itself.
 //
-// The accounting is tested as the spending control it is, because its failure modes are what a cap
+// The call accounting is tested as the loop control it is, because its failure modes are what a cap
 // is worth: an accounting that cannot be read, is corrupt, cannot be locked or cannot be written
-// refuses the paid call rather than starting the budget again, and four real node processes
-// released together may not spend one remaining reservation twice.
+// refuses the paid call rather than starting the count again, and four real node processes
+// released together may not take one remaining reservation twice. The guard sets and counts no
+// dollar amount: the Apify account usage limit caps spending (owner decision, 31 October 2026).
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -80,19 +81,20 @@ describe('the limits file', () => {
     ]);
   });
 
-  it('gives every actor a page size, a page cap, a charge ceiling and an item-limit field', () => {
+  it('gives every actor a page size, a page cap and an item-limit field, and no dollar ceiling', () => {
     for (const [actorId, actor] of Object.entries(limits.actors)) {
       assert.ok(Number.isInteger(actor.pageSize) && actor.pageSize > 0, `${actorId} pageSize`);
       assert.ok(Number.isInteger(actor.maxPages) && actor.maxPages > 0, `${actorId} maxPages`);
-      assert.ok(actor.maxTotalChargeUsd > 0, `${actorId} maxTotalChargeUsd`);
+      assert.equal(Object.hasOwn(actor, 'maxTotalChargeUsd'), false, `${actorId} maxTotalChargeUsd`);
       assert.ok(typeof actor.itemLimitField === 'string' && actor.itemLimitField !== '', `${actorId} itemLimitField`);
       assert.ok(Array.isArray(actor.serves) && actor.serves.length > 0, `${actorId} serves`);
     }
   });
 
-  it('bounds one collector run by a call count and a charge ceiling', () => {
+  it('bounds one collector run by a call count, and sets no dollar amount (the Apify account limit does)', () => {
     assert.ok(Number.isInteger(limits.perRun.maxActorCalls) && limits.perRun.maxActorCalls > 0);
-    assert.ok(limits.perRun.maxTotalChargeUsd > 0);
+    assert.equal(Object.hasOwn(limits.perRun, 'maxTotalChargeUsd'), false);
+    assert.equal(Object.hasOwn(limits, 'chargeField'), false);
   });
 
   it('forces the enrichments and the watcher off, which is where the money goes', () => {
@@ -152,7 +154,6 @@ describe('which actor may be called', () => {
       assert.equal(answer.decision, 'deny', actorId);
       assert.match(answer.reason, /not confirmed/i);
       assert.equal(answer.state.actorCalls, 0);
-      assert.equal(answer.state.chargeUsd, 0);
     }
   });
 
@@ -175,41 +176,39 @@ describe('which actor may be called', () => {
     assert.equal(decideApify({ actor: VARNMILL, input: { query: 'coca cola' } }).decision, 'allow');
   });
 
-  it('refuses a paid call when the limits file states no per-run caps at all', () => {
-    for (const perRun of [undefined, {}, { maxActorCalls: 0, maxTotalChargeUsd: 12 }, { maxActorCalls: 600, maxTotalChargeUsd: 0 }]) {
+  it('refuses a paid call when the limits file states no per-run call cap', () => {
+    for (const perRun of [undefined, {}, { maxActorCalls: 0 }, { maxActorCalls: 1.5 }]) {
       const answer = decideApify({ actor: VARNMILL }, { rules: { ...limits, perRun } });
 
       assert.equal(answer.decision, 'deny', JSON.stringify(perRun));
-      assert.match(answer.reason, /caps/i);
+      assert.match(answer.reason, /call cap/i);
     }
   });
 });
 
 describe('the limits it injects or verifies', () => {
-  it('injects the charge ceiling and the item limit when the call carries neither', () => {
+  it('injects the item limit when the call carries none, and adds no charge field to the actor input', () => {
     const answer = decideApify({ actor: VARNMILL, input: { query: 'coca cola 375ml' } });
 
     assert.equal(answer.decision, 'allow');
-    assert.equal(inputOf(answer).maxTotalChargeUsd, limits.actors[VARNMILL].maxTotalChargeUsd);
     assert.equal(inputOf(answer).maxItems, limits.actors[VARNMILL].pageSize);
+    assert.equal(Object.hasOwn(inputOf(answer), 'maxTotalChargeUsd'), false);
+  });
+
+  it('adds no charge field to an actor whose closed input schema would reject it', () => {
+    // Dromb declares additionalProperties: false; an injected maxTotalChargeUsd would fail every call.
+    const actor = 'dromb/big-w-au-product-scraper';
+    const answer = decideApify({ actor, input: { item_id: '123' } }, { rules: confirming(actor) });
+
+    assert.equal(answer.decision, 'allow');
+    assert.equal(Object.hasOwn(inputOf(answer), 'maxTotalChargeUsd'), false);
   });
 
   it('keeps a call that asks for less than the limits allow', () => {
-    const answer = decideApify({ actor: VARNMILL, input: { maxItems: 10, maxTotalChargeUsd: 0.01 } });
+    const answer = decideApify({ actor: VARNMILL, input: { maxItems: 10 } });
 
     assert.equal(answer.decision, 'allow');
     assert.equal(inputOf(answer).maxItems, 10);
-    assert.equal(inputOf(answer).maxTotalChargeUsd, 0.01);
-  });
-
-  it('blocks a charge ceiling above the actor\'s own', () => {
-    const answer = decideApify({
-      actor: VARNMILL,
-      input: { maxTotalChargeUsd: limits.actors[VARNMILL].maxTotalChargeUsd + 1 },
-    });
-
-    assert.equal(answer.decision, 'deny');
-    assert.match(answer.reason, /maxTotalChargeUsd/);
   });
 
   it('blocks an item limit above the actor\'s page size', () => {
@@ -219,8 +218,7 @@ describe('the limits it injects or verifies', () => {
     assert.match(answer.reason, /maxItems/);
   });
 
-  it('blocks a charge ceiling or item limit that is not a positive number', () => {
-    assert.equal(decideApify({ actor: VARNMILL, input: { maxTotalChargeUsd: 0 } }).decision, 'deny');
+  it('blocks an item limit that is not a positive number', () => {
     assert.equal(decideApify({ actor: VARNMILL, input: { maxItems: 0 } }).decision, 'deny');
     assert.equal(decideApify({ actor: VARNMILL, input: { maxItems: 'all' } }).decision, 'deny');
   });
@@ -245,21 +243,21 @@ describe('the limits it injects or verifies', () => {
     const answer = decideApify({ actor: VARNMILL, query: 'coca cola' });
 
     assert.equal(answer.decision, 'allow');
-    assert.equal(answer.updatedInput.maxTotalChargeUsd, limits.actors[VARNMILL].maxTotalChargeUsd);
+    assert.equal(answer.updatedInput.maxItems, limits.actors[VARNMILL].pageSize);
     assert.equal(answer.updatedInput.actor, VARNMILL);
     assert.equal(answer.updatedInput.query, 'coca cola');
   });
 });
 
-describe('the per-run caps', () => {
-  it('counts every allowed call and the charge it committed to', () => {
-    const first = decideApify({ actor: VARNMILL, input: { maxTotalChargeUsd: 0.01 } });
+describe('the per-run call cap', () => {
+  it('counts every allowed call, and no charge', () => {
+    const first = decideApify({ actor: VARNMILL, input: { query: 'coca cola' } });
 
     assert.equal(first.state.actorCalls, 1);
-    assert.equal(first.state.chargeUsd, 0.01);
+    assert.equal(Object.hasOwn(first.state, 'chargeUsd'), false);
 
     const second = decide({
-      event: apifyEvent({ actor: VARNMILL, input: { maxTotalChargeUsd: 0.02 } }),
+      event: apifyEvent({ actor: VARNMILL, input: { query: 'tim tams' } }),
       limits,
       state: first.state,
       outputDir: '/work/price-collector-out',
@@ -268,7 +266,6 @@ describe('the per-run caps', () => {
 
     assert.equal(second.decision, 'allow', second.reason);
     assert.equal(second.state.actorCalls, 2);
-    assert.equal(Math.round(second.state.chargeUsd * 100) / 100, 0.03);
   });
 
   it('blocks the call that would pass the run\'s call cap', () => {
@@ -279,16 +276,6 @@ describe('the per-run caps', () => {
     assert.equal(answer.decision, 'deny');
     assert.match(answer.reason, /calls/i);
     assert.equal(answer.state.actorCalls, limits.perRun.maxActorCalls);
-  });
-
-  it('blocks the call that would pass the run\'s charge cap, and keeps the earlier spend', () => {
-    const state = { ...emptyState(), chargeUsd: limits.perRun.maxTotalChargeUsd };
-
-    const answer = decideApify({ actor: VARNMILL }, { state });
-
-    assert.equal(answer.decision, 'deny');
-    assert.match(answer.reason, /charge/i);
-    assert.equal(answer.state.chargeUsd, limits.perRun.maxTotalChargeUsd);
   });
 });
 
@@ -389,10 +376,10 @@ describe('everything else', () => {
 });
 
 describe('the hook as the process runs it', () => {
-  it('keeps the run\'s spend in its state file and blocks once the cap is reached', async () => {
+  it('keeps the run\'s call count in its state file and blocks once the cap is reached', async () => {
     dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
     const env = { [GUARD_STATE_ENV]: join(dir, 'state.json'), [OUTPUT_DIR_ENV]: dir };
-    const call = () => runGuard({ event: apifyEvent({ actor: VARNMILL }), env, limits: { ...limits, perRun: { maxActorCalls: 2, maxTotalChargeUsd: 99 } } });
+    const call = () => runGuard({ event: apifyEvent({ actor: VARNMILL }), env, limits: { ...limits, perRun: { maxActorCalls: 2 } } });
 
     const first = await call();
     const second = await call();
@@ -425,9 +412,9 @@ describe('the hook as the process runs it', () => {
 });
 
 const decisionOf = (answer) => JSON.parse(answer.out).hookSpecificOutput;
-const capped = (maxActorCalls, maxTotalChargeUsd) => ({ ...limits, perRun: { maxActorCalls, maxTotalChargeUsd } });
-const varnmillCall = () => apifyEvent({ actor: VARNMILL, input: { maxTotalChargeUsd: 0.01 } });
-const accounting = (fields) => `${JSON.stringify({ schemaVersion: STATE_SCHEMA_VERSION, actorCalls: 3, chargeUsd: 0.5, updatedAtUtc: '2026-10-30T02:00:00.000Z', ...fields }, null, 2)}\n`;
+const capped = (maxActorCalls) => ({ ...limits, perRun: { maxActorCalls } });
+const varnmillCall = () => apifyEvent({ actor: VARNMILL, input: { query: 'coca cola' } });
+const accounting = (fields) => `${JSON.stringify({ schemaVersion: STATE_SCHEMA_VERSION, actorCalls: 3, updatedAtUtc: '2026-10-30T02:00:00.000Z', ...fields }, null, 2)}\n`;
 
 describe('the accounting the caps are counted in', () => {
   it('starts a run that has made no call from zero, and reserves the call before allowing it', async () => {
@@ -437,7 +424,7 @@ describe('the accounting the caps are counted in', () => {
     const answer = await runGuard({
       event: varnmillCall(),
       env: { [GUARD_STATE_ENV]: statePath },
-      limits: capped(2, 99),
+      limits: capped(2),
       now: () => new Date('2026-10-30T02:00:00Z'),
     });
 
@@ -445,7 +432,6 @@ describe('the accounting the caps are counted in', () => {
     assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), {
       schemaVersion: STATE_SCHEMA_VERSION,
       actorCalls: 1,
-      chargeUsd: 0.01,
       updatedAtUtc: '2026-10-30T02:00:00.000Z',
     });
   });
@@ -454,7 +440,7 @@ describe('the accounting the caps are counted in', () => {
     dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
     await writeFile(join(dir, 'occupied.txt'), 'not a folder', 'utf8');
     const env = { [GUARD_STATE_ENV]: join(dir, 'occupied.txt', 'state.json') };
-    const call = () => runGuard({ event: varnmillCall(), env, limits: capped(1, 99) });
+    const call = () => runGuard({ event: varnmillCall(), env, limits: capped(1) });
 
     const first = decisionOf(await call());
     const second = decisionOf(await call());
@@ -470,22 +456,22 @@ describe('the accounting the caps are counted in', () => {
     const corruptions = [
       'not json at all',
       '[]',
-      JSON.stringify({ actorCalls: 3, chargeUsd: 0.5 }),
-      accounting({ schemaVersion: 2 }),
+      JSON.stringify({ actorCalls: 3 }),
+      accounting({ schemaVersion: 1, chargeUsd: 0.5 }),
       accounting({ actorCalls: -1 }),
       accounting({ actorCalls: 2.5 }),
-      accounting({ chargeUsd: 'free' }),
-      accounting({ chargeUsd: Number.NaN }),
+      accounting({ actorCalls: '3' }),
+      accounting({ actorCalls: null }),
     ];
 
     for (const corrupt of corruptions) {
       await writeFile(statePath, corrupt, 'utf8');
 
-      const answer = decisionOf(await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600, 12) }));
+      const answer = decisionOf(await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600) }));
 
       assert.equal(answer.permissionDecision, 'deny', corrupt);
       assert.match(answer.permissionDecisionReason, /accounting/i);
-      assert.equal(await readFile(statePath, 'utf8'), corrupt, 'a corrupt accounting is never written over with an empty budget');
+      assert.equal(await readFile(statePath, 'utf8'), corrupt, 'a corrupt accounting is never written over with an empty count');
     }
   });
 
@@ -502,7 +488,7 @@ describe('the accounting the caps are counted in', () => {
     };
 
     const answer = decisionOf(
-      await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600, 12), storage }),
+      await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600), storage }),
     );
 
     assert.equal(answer.permissionDecision, 'deny');
@@ -520,7 +506,7 @@ describe('the accounting the caps are counted in', () => {
     };
 
     const answer = decisionOf(
-      await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: join(dir, 'state.json') }, limits: capped(600, 12), storage }),
+      await runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: join(dir, 'state.json') }, limits: capped(600), storage }),
     );
 
     assert.equal(answer.permissionDecision, 'deny');
@@ -530,7 +516,7 @@ describe('the accounting the caps are counted in', () => {
   it('releases the lock it took, so the next call is decided rather than refused', async () => {
     dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
     const statePath = join(dir, 'state.json');
-    const call = () => runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600, 12) });
+    const call = () => runGuard({ event: varnmillCall(), env: { [GUARD_STATE_ENV]: statePath }, limits: capped(600) });
 
     const first = decisionOf(await call());
     const second = decisionOf(await call());
@@ -544,14 +530,14 @@ describe('the accounting the caps are counted in', () => {
   it('writes nothing for a call it refuses, because a call that was never made spends nothing', async () => {
     dir = await mkdtemp(join(tmpdir(), 'price-collector-guard-'));
     const statePath = join(dir, 'state.json');
-    const stored = accounting({ actorCalls: 3, chargeUsd: 0.5 });
+    const stored = accounting({ actorCalls: 3 });
     await writeFile(statePath, stored, 'utf8');
 
     const answer = decisionOf(
       await runGuard({
         event: apifyEvent({ actor: UNCONFIRMED[1], input: { query: 'coca cola' } }),
         env: { [GUARD_STATE_ENV]: statePath },
-        limits: capped(600, 12),
+        limits: capped(600),
       }),
     );
 
@@ -592,7 +578,7 @@ const runnerSource = () =>
     '  event: {',
     "    hook_event_name: 'PreToolUse',",
     "    tool_name: 'mcp__apify__call-actor',",
-    `    tool_input: { actor: ${JSON.stringify(VARNMILL)}, input: { maxTotalChargeUsd: 0.02 } },`,
+    `    tool_input: { actor: ${JSON.stringify(VARNMILL)}, input: { query: 'coca cola' } },`,
     '  },',
     `  env: { ${JSON.stringify(GUARD_STATE_ENV)}: statePath },`,
     '  limits: loadLimits(limitsPath),',
@@ -623,26 +609,19 @@ async function race(perRun, processes) {
 
 describe('parallel hook invocations', () => {
   it('lets exactly one of four parallel calls take the last call reservation', async () => {
-    const { decisions, stored } = await race({ maxActorCalls: 1, maxTotalChargeUsd: 99 }, 4);
+    const { decisions, stored } = await race({ maxActorCalls: 1 }, 4);
 
     assert.equal(decisions.filter((decision) => decision === 'allow').length, 1, decisions.join(','));
     assert.equal(decisions.filter((decision) => decision === 'deny').length, 3);
     assert.equal(stored.actorCalls, 1);
   });
 
-  it('lets exactly one of four parallel calls take the last charge reservation', async () => {
-    const { decisions, stored } = await race({ maxActorCalls: 600, maxTotalChargeUsd: 0.02 }, 4);
-
-    assert.equal(decisions.filter((decision) => decision === 'allow').length, 1, decisions.join(','));
-    assert.equal(stored.chargeUsd, 0.02);
-  });
-
   it('accounts for every one of four parallel calls it allows, losing no increment', async () => {
-    const { decisions, stored } = await race({ maxActorCalls: 4, maxTotalChargeUsd: 99 }, 4);
+    const { decisions, stored } = await race({ maxActorCalls: 4 }, 4);
 
     assert.deepEqual(decisions, ['allow', 'allow', 'allow', 'allow']);
     assert.equal(stored.actorCalls, 4);
-    assert.equal(Math.round(stored.chargeUsd * 100) / 100, 0.08);
+    assert.equal(Object.hasOwn(stored, 'chargeUsd'), false);
   });
 });
 
