@@ -1,0 +1,30 @@
+<span class="relative inline-flex align-middle" (mouseenter)="onPointerEnter()" (mouseleave)="onPointerLeave()" (focusout)="onFocusOut($event)">
+  <button
+    #trigger
+    type="button"
+    class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-transparent p-0 text-rr-caption hover:text-rr-teal"
+    [attr.aria-label]="label"
+    [attr.aria-expanded]="open"
+    [attr.aria-controls]="panelId"
+    [attr.aria-describedby]="open ? panelId : null"
+    (click)="toggle()"
+    (keydown)="onKeydown($event)"
+    (focus)="onFocus()"
+  ><app-icon name="info" [size]="16" /></button>
+  @if (open) {
+    <!--
+      `popover` puts the panel in the browser's top layer, so no `overflow` on the card or on the
+      scrolling table around it can clip it, and `place()` sets its position from the button's own
+      rectangle. It is rendered only while open, which is what keeps it out of the accessibility
+      tree and out of the page's text when it is closed, in a browser and under Jest alike.
+    -->
+    <span
+      #panel
+      popover="manual"
+      role="tooltip"
+      [id]="panelId"
+      data-testid="help-toggletip-panel"
+      class="fixed z-50 block rounded-md-card border border-rr-line bg-white p-3 text-left text-sm font-normal normal-case tracking-normal text-rr-muted shadow-md-lg"
+    ><ng-content /></span>
+  }
+</span>
