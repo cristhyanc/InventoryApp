@@ -142,7 +142,9 @@ Invoke-ExternalCommand -Label 'Test price collector scripts' -Command {
         (Join-Path $RepositoryRoot 'scripts/price-collector/submit-results.test.mjs') `
         (Join-Path $RepositoryRoot 'scripts/price-collector/apify-guard.test.mjs') `
         (Join-Path $RepositoryRoot 'scripts/price-collector/output-schema.test.mjs') `
-        (Join-Path $RepositoryRoot 'scripts/price-collector/pagination.test.mjs')
+        (Join-Path $RepositoryRoot 'scripts/price-collector/pagination.test.mjs') `
+        (Join-Path $RepositoryRoot 'scripts/price-collector/workflow.test.mjs') `
+        (Join-Path $RepositoryRoot 'scripts/price-collector/workflow-contract.test.mjs')
 }
 
 Invoke-ExternalCommand -Label 'Restore backend' -Command {

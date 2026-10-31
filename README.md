@@ -922,7 +922,9 @@ The owner-confirmed actor identities are `abotapi/kmart-au-scraper`,
 31 October 2026). Their exact search/fallback inputs are in `scripts/price-collector/prompt.md`.
 The guard forces reviews and unnecessary enrichment off and bounds internal search pages.
 The three actors remain `actorIdConfirmed: false`: metadata verification is not the paid dry run
-required by #926. Do not enable calls until a bounded live sample has verified output and cost.
+required by #926. Regular activation waits for output and cost evidence; the manual test workflow
+can explicitly permit these already verified actors in one private, bounded sample to obtain it,
+without changing the repository flags.
 The repository sets no dollar cap (owner decision, 31 October 2026): spending is capped by the
 Apify account usage limit, which must keep overage disabled so it suspends runs instead of billing
 more; the guard's per-run call cap is what stops a run that loops.
@@ -957,6 +959,16 @@ To see what the run itself would do without spending anything, read `scripts/pri
 **What the guard refuses, and why it refuses more than you might expect.** `apify-guard.mjs` is the `PreToolUse` hook that decides every Apify call in its own process, and it allows no call it cannot count. It calls only an actor `apify-limits.json` lists **and** marks `actorIdConfirmed: true` — the three actors whose ids and input field names the owner has still to confirm in the bounded dry run are refused outright, so today Varnmill is the only Apify actor a run may call (the JB Metro route is not an Apify actor) and confirming another is a one-line change in that file. Each allowed call is **reserved** before it is allowed: the run's call count is read, compared against the per-run call cap and written inside a cross-process lock, and flushed to the disk before the answer comes back, so two calls at once cannot take the same remaining allowance. Only a state file that does not exist yet is read as a run with no calls; an accounting that cannot be read, is corrupt, cannot be locked or cannot be written refuses the paid call instead of starting the count again. The guard sets and counts no dollar amount: the Apify account usage limit is the spending cap. A refused call leaves the accounting untouched, and a `Write` is guarded without consulting it at all — a broken state file can stop a run from spending and can never make the output folder permissive.
 
 **What the collector can and cannot reach.** One controller, and nothing else in the API. Its request carries no business at all, so every tenant query filter and the central write enforcement stay fully in force, and the only tenant-owned data it may read is the deduplicated product **search text** of the shared catalogue — a product name, a unit label and a folded key, none of which says whose product it is. No response carries a business id, business name, business product id or price. The tables it writes belong to no business, with one reviewed exception: an automatic match (#941) sets the status, master product and match source of the price-tracking mappings that carry the key it matched, and may write nothing else about them — see [docs/architecture.md § Collector product matching](docs/architecture.md#collector-product-matching-issue-941). **Nothing it reports becomes a price by itself**: a reading of a listing nobody has confirmed is held where a person can see it, and the [Super Admin supplier price review](#super-admin-supplier-price-review) is what confirms, corrects or refuses it. Reverting is clearing the two settings: no deployment, schema change or data step is involved, and the runs and work items already stored are retained.
+
+### Manual collector integration test (#929)
+
+The actor choices have already been tested; the next check is the complete collector flow against
+a disposable **test API**. The `Price collector (manual test)` workflow issues a small sample,
+runs Claude without the Restockroo bearer token, then submits finished results and completes the
+run even if the model step fails. There is no cron or production API input. See
+[Manual collector test](docs/price-collector-testing.md) for Entra/OIDC and GitHub environment setup,
+the normal and interrupted runs, sample limits, and actual provider cost evidence. Human review,
+release to `main`, environment setup and dispatch are separate from implementing the workflow.
 
 ## Platform diagnostics API
 

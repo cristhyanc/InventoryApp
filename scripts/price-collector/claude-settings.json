@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Bash(node scripts/price-collector/read-work.mjs)",
+      "Bash(node scripts/price-collector/jbmetro-lookup.mjs *)",
+      "Bash(node scripts/price-collector/pagination.mjs *)",
+      "Write(./price-collector-out/**)",
+      "mcp__apify__*"
+    ],
+    "deny": ["Read", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task", "Skill"]
+  },
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": ".*",
+      "hooks": [{
+        "type": "command",
+        "command": "node scripts/price-collector/workflow-tool-guard.mjs",
+        "timeout": 15,
+        "onFailure": "block"
+      }]
+    }]
+  }
+}

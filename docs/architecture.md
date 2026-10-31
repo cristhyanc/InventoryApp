@@ -14884,6 +14884,33 @@ The pack quantity is compared here and excluded there, and the two are not in te
 
 **What proves it.** `jbmetro-lookup.test.mjs` runs on recorded fixtures and makes **no live call**, in `scripts/validate.sh` and `scripts/validate.ps1`: a single-page search, a multi-page search read to its end, truncation at the page cap, a normal SKU batch, a missing SKU, a SKU batch read over two pages, the page cap stopping a SKU batch so its unseen SKU is `unresolved` and not `notFound`, a GraphQL error returned with 200, a timeout and a 5xx retried and then answered, a 4xx not retried, a leading-zero barcode kept as a string, a product mapped with no derived special flag, batches that keep going after one fails, and a refused host that makes no request at all.
 
+### Manual collector orchestration (issue #929, stage 1)
+
+The first rollout is a manual, test-API-only workflow, not a production schedule. A trusted
+`workflow.mjs prepare` process exchanges GitHub OIDC with the pinned Entra tenant, issues work once,
+and stores a small sample privately. Claude reads that snapshot with `read-work.mjs`; it never
+receives the Restockroo token or the GitHub/OIDC request credentials. The model process runs in a
+separate temporary workspace/home with only the explicitly allowed environment and settings.
+`workflow-tool-guard.mjs` denies arbitrary shell, file reads, edits and other tools; approved actor
+calls still pass through the existing atomic `apify-guard.mjs`. A native hook failure blocks the
+tool rather than silently bypassing the guard. Literal helper arguments cannot expand shell
+commands, and sample writes must name an issued work item or matching key of that same run.
+
+The workflow's `always()` finalizer obtains a fresh short-lived API token, filters regular files
+to the issued sample, and calls the existing independent file validator/batch/outcome/run-complete
+submission path. Finished results survive an interrupted model step; unselected or unanswered
+work is `not_searched`. Job cancellation/hard timeout can still skip finalisation, so backend
+expiry remains the backstop. Only allowlisted numeric counts/statuses and reported Claude cost
+reach the public logs; transcripts, prices, names, raw errors and output files are not published.
+Cleanup removes private temporary data and the per-job CLI installation; reset/ephemeral isolation
+is still mandatory for credentialed self-hosted jobs.
+
+Manual limits and the explicit retailer-test checkbox apply only to that run's private limits;
+they do not turn on repository actor activation or production scheduling. The later Sydney
+schedule and production activation remain under #929 after real end-to-end/cost evidence. See
+[Manual collector test](price-collector-testing.md) for setup, bounds and the interruption check,
+and [automation](automation.md#manual-supplier-price-collector-929-stage-1) for the workflow boundary.
+
 ### The collector prompt, the Apify limits and the helper scripts (issue #926)
 
 [The collector work list](#collector-work-list-issue-924) issues the work, [Collector results](#collector-results-issue-937) takes back what was read off a shelf and [Collector product matching](#collector-product-matching-issue-941) takes back which product a search was for. This section is the **collector side** of all three, the seventh task of [#817](https://github.com/cristhyanc/InventoryApp/issues/817): the prompt a scheduled Claude Code run follows, the Apify configuration and per-actor rules it may call, the hook that enforces them, and the two scripts that talk to this API. Everything here lives in `scripts/price-collector/` and nothing in the API, the database or any report reads any of it. The workflow that runs it, its schedule, its CLI flags, its permission settings and its secrets are [#929](https://github.com/cristhyanc/InventoryApp/issues/929)'s.
@@ -14893,7 +14920,7 @@ The owner's decision of 27 October 2026 is what shapes it: **Claude, not scraper
 ```text
 prompt.md            the run's instructions: match, search by name, keep the real matches, write files
 get-work.mjs         GET /api/price-collector/work  → the run, the suppliers, one entry per search
-   (run by Claude)
+   (run by trusted preparation; Claude reads the snapshot through read-work.mjs)
 apify-mcp.json       the Apify MCP server, offered exactly the actors apify-limits.json allows
 apify-limits.json    per-actor page size, page cap, forced-off inputs; the per-run call cap
 apify-guard.mjs      PreToolUse hook: enforces every line of that file, and the write-once folder

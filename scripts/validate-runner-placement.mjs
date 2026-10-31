@@ -77,6 +77,7 @@ export const VISIBLE_ISOLATION_GATE_WORKFLOWS = [
   '.github/workflows/agent-head-update.yml',
   '.github/workflows/agent-review-request.yml',
   '.github/workflows/agent-branch-cleanup.yml',
+  '.github/workflows/price-collector.yml',
 ];
 const NODE_INVOCATION = /(^|[\s;(|&"'`$])node\s+(--test\b|-e\b|"|\$|[\w./-]+\.m?js\b)/m;
 
