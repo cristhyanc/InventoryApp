@@ -21,6 +21,7 @@ import { ToastService } from '../../services/toast.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
+import { providePlanPicksStore } from './plan-picks-store.spec-helpers';
 
 function product(overrides: Partial<Product>): Product {
   return {
@@ -81,7 +82,8 @@ async function render(
       { provide: ToastService, useValue: toast },
       { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
-      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
+      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
+      providePlanPicksStore()
     ]
   }).compileComponents();
 

@@ -25,6 +25,8 @@ import { BusinessTimeZoneService } from '../../formatting/business-time-zone.ser
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService } from '../../services/nayax-connection.service';
 import { providerAvailabilityDouble } from '../../provider/provider-availability.spec-helpers';
+import { PlanPicksStoreDouble, PlanPicksStoreDoubleOptions, planPicksStoreDouble, providePlanPicksStore } from './plan-picks-store.spec-helpers';
+import { StoredPlanPicks } from './plan-picks-storage';
 
 /**
  * Plan picks (issue #996): editable planning overrides, completion, refresh/retry, stale-response
@@ -34,11 +36,18 @@ import { providerAvailabilityDouble } from '../../provider/provider-availability
  * Issue #1008 replaced the pencil and its confirm/cancel with an always-visible quantity box
  * between a minus and a plus button: every valid keystroke is the override, and text the plan
  * cannot use is held as pending work beside the last valid quantity rather than being coerced.
+ *
+ * Issue #1021 keeps the plan in the browser tab: it is written on every change, restored with its
+ * own snapshot when the page opens again, and a departure no longer warns about planning work the
+ * tab has actually stored. A tab that cannot store it warns exactly as before.
  */
 
 function machine(machineID: number, machineName: string, overrides: Partial<Machine> = {}): Machine {
   return {
     machineID,
+    // This business's own machine record, which is what a stored plan is bound to (issue #1021); a
+    // test that is about a provider machine with no record of its own passes `null` for it.
+    localMachineId: machineID + 100,
     machineName,
     machineNumber: null,
     todayDirectProfit: null,
@@ -110,25 +119,40 @@ interface Harness {
   component: PickListComponent;
   getPickList: jest.Mock;
   toast: { success: jest.Mock; error: jest.Mock; warning: jest.Mock; info: jest.Mock };
+
+  /** This tab's Plan picks storage (issue #1021); the default one accepts and keeps what it is given. */
+  store: PlanPicksStoreDouble;
 }
 
-function createHarness(
-  options: { getPickList?: jest.Mock; machines?: Machine[]; sites?: Observable<SiteListItem[]>; getSiteList?: jest.Mock } = {}
-): Harness {
+interface HarnessOptions {
+  getPickList?: jest.Mock;
+  machines?: Machine[];
+
+  /** The fleet read as an observable, for a spec about what happens before it answers. */
+  machineList?: Observable<Machine[]>;
+  sites?: Observable<SiteListItem[]>;
+  getSiteList?: jest.Mock;
+  queryParams?: Record<string, string>;
+  store?: PlanPicksStoreDoubleOptions;
+}
+
+function createHarness(options: HarnessOptions = {}): Harness {
   const machines = options.machines ?? [machine(10, 'Drinks'), machine(20, 'Snacks')];
   const getPickList = options.getPickList ?? jest.fn(() => of(snapshot()));
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
+  const store = planPicksStoreDouble(options.store);
   const component = new PickListComponent(
-    { getAll: jest.fn(() => of(machines)) } as unknown as MachineService,
+    { getAll: jest.fn(() => options.machineList ?? of(machines)) } as unknown as MachineService,
     { getAll: jest.fn(() => of([product(1, 'Coke', 1), product(2, 'Chips', 2), product(3, 'Water', 1)])) } as unknown as ProductService,
     { get: getPickList } as unknown as PickListService,
     toast as unknown as ToastService,
     providerAvailabilityDouble(),
-    { snapshot: { queryParamMap: convertToParamMap({}) } } as unknown as ActivatedRoute,
-    { getList: options.getSiteList ?? jest.fn(() => options.sites ?? of([])) } as unknown as SiteService
+    { snapshot: { queryParamMap: convertToParamMap(options.queryParams ?? {}) } } as unknown as ActivatedRoute,
+    { getList: options.getSiteList ?? jest.fn(() => options.sites ?? of([])) } as unknown as SiteService,
+    store.service
   );
   component.ngOnInit();
-  return { component, getPickList, toast };
+  return { component, getPickList, toast, store };
 }
 
 function applyMachines(component: PickListComponent, machineIds: number[]): void {
@@ -719,9 +743,23 @@ describe('Plan picks guards pending invalid text (issue #1008)', () => {
     expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
   });
 
-  it('guards leaving the page and reloading or closing the tab, and a cancelled departure keeps the text', () => {
+  it('leaves the page freely once this tab has stored the pending text (issue #1021)', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const { component } = createHarness();
+    applyMachines(component, [10, 20]);
+    typeInvalid(component);
+
+    expect(component.confirmLeave()).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+
+    const unload = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    component.onBeforeUnload(unload);
+    expect(unload.defaultPrevented).toBe(false);
+  });
+
+  it('still guards the page and the tab when the pending text could not be stored, and a cancelled departure keeps it', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness({ store: { writable: false } });
     applyMachines(component, [10, 20]);
     typeInvalid(component);
 
@@ -910,9 +948,20 @@ describe('Pick List departure guard (issue #996)', () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
-  it('asks before leaving planning work, and a cancelled departure keeps it', () => {
+  it('no longer asks before leaving planning work this tab has stored (issue #1021)', () => {
     const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
-    const { component } = createHarness();
+    const { component, store } = createHarness();
+    applyMachines(component, [10]);
+    type(component, 1, 10, '2');
+
+    expect(component.confirmLeave()).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(store.stored()?.overrides).toEqual([{ key: '1:10', quantity: 2 }]);
+  });
+
+  it('asks before leaving planning work this tab could not store, and a cancelled departure keeps it', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component } = createHarness({ store: { writable: false } });
     applyMachines(component, [10]);
     type(component, 1, 10, '2');
 
@@ -930,7 +979,8 @@ describe('Pick List departure guard (issue #996)', () => {
   });
 
   it('asks the browser to confirm a reload or close only while there is work to lose', () => {
-    const { component } = createHarness();
+    // A tab whose storage refuses the plan: a ticked pick really would be lost by a reload.
+    const { component } = createHarness({ store: { writable: false } });
     applyMachines(component, [10]);
     const quiet = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
     component.onBeforeUnload(quiet);
@@ -948,6 +998,428 @@ describe('Pick List departure guard (issue #996)', () => {
 
     expect(run(true)).toBe(true);
     expect(run(false)).toBe(false);
+  });
+});
+
+/**
+ * The plan kept in the browser tab (issue #1021). Nothing here may read the pick list again: coming
+ * back restores the snapshot the plan was made against, with the instant it was actually read at.
+ */
+describe('Plan picks kept in the browser tab (issue #1021)', () => {
+  /** A plan an earlier visit left in this tab: two machines, an override, a tick and pending text. */
+  function planLeftBehind(options: { machines?: Machine[]; machineIds?: number[] } = {}): StoredPlanPicks {
+    const earlier = createHarness({ machines: options.machines });
+    applyMachines(earlier.component, options.machineIds ?? [10, 20]);
+    type(earlier.component, 1, 10, '9');
+    earlier.component.togglePicked(row(earlier.component, 2), 10);
+    type(earlier.component, 2, 20, '1x');
+    return earlier.store.stored()!;
+  }
+
+  it('stores the applied run, the snapshot and every adjustment as they change', () => {
+    const { component, store } = createHarness();
+    expect(store.stored()).toBeNull();
+
+    applyMachines(component, [10, 20]);
+
+    expect(store.stored()?.appliedMachines).toEqual([
+      { machineId: 10, localMachineId: 110 },
+      { machineId: 20, localMachineId: 120 }
+    ]);
+    expect(store.stored()?.appliedProductIds).toEqual([1, 2, 3]);
+    expect(store.stored()?.products.map((p) => p.productId)).toEqual([1, 2, 3]);
+    expect(store.stored()?.lastRefreshedAt).toBe(component.lastRefreshedAt?.toISOString());
+
+    type(component, 1, 10, '9');
+    component.togglePicked(row(component, 2), 10);
+    type(component, 2, 20, '1x');
+
+    expect(store.stored()?.overrides).toEqual([{ key: '1:10', quantity: 9 }]);
+    expect(store.stored()?.pickedCells).toEqual(['2:10']);
+    expect(store.stored()?.invalidQuantities).toEqual([{ key: '2:20', text: '1x', error: PICK_QUANTITY_INVALID_MESSAGE }]);
+  });
+
+  it('restores the run, the snapshot, its original time and every adjustment, reading no pick list', () => {
+    const stored = planLeftBehind();
+
+    const { component, getPickList } = createHarness({ store: { stored } });
+
+    expect(getPickList).not.toHaveBeenCalled();
+    expect(component.appliedMachineIds).toEqual([10, 20]);
+    expect(component.stagedMachineIds).toEqual([10, 20]);
+    expect(component.appliedProductIds).toEqual([1, 2, 3]);
+    expect(component.pickListProducts.map((p) => p.productId)).toEqual([1, 2, 3]);
+    expect(component.lastRefreshedAt?.toISOString()).toBe(stored.lastRefreshedAt);
+    expect(component.loadState.loaded).toBe(true);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(9);
+    expect(component.isPicked(2, 10)).toBe(true);
+    expect(component.quantityInputValue(2, cellOf(component, 2, 20))).toBe('1x');
+    expect(component.hasPlanningWork()).toBe(true);
+  });
+
+  it('leaves the restored plan stored, so leaving again still asks nothing', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { component, store } = createHarness({ store: { stored: planLeftBehind() } });
+
+    expect(component.confirmLeave()).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(store.stored()?.overrides).toEqual([{ key: '1:10', quantity: 9 }]);
+  });
+
+  it('keeps the restored Products selection when the catalogue read answers', () => {
+    const earlier = createHarness();
+    earlier.component.stagedProductIds = [1];
+    applyMachines(earlier.component, [10]);
+    const stored = earlier.store.stored()!;
+    expect(stored.appliedProductIds).toEqual([1]);
+
+    const { component } = createHarness({ store: { stored } });
+
+    expect(component.appliedProductIds).toEqual([1]);
+    expect(component.stagedProductIds).toEqual([1]);
+  });
+
+  it('restores no display state: search, category, status filter, sort and machine focus start fresh', () => {
+    const earlier = createHarness();
+    applyMachines(earlier.component, [10, 20]);
+    earlier.component.search = 'coke';
+    earlier.component.categoryId = 1;
+    earlier.component.statusFilter = 'remaining';
+    earlier.component.sortBy('mdbCode');
+    earlier.component.focusMachine(20);
+    type(earlier.component, 1, 10, '9');
+
+    const { component } = createHarness({ store: { stored: earlier.store.stored()! } });
+
+    expect(component.search).toBe('');
+    expect(component.categoryId).toBe('');
+    expect(component.statusFilter).toBe('all');
+    expect(component.sortColumn).toBeNull();
+    expect(component.focusedMachineId).toBeNull();
+  });
+
+  it('still warns about Record refill work, which this feature never stores', () => {
+    const { component } = createHarness();
+    applyMachines(component, [10]);
+    type(component, 1, 10, '2');
+    expect(component.leaveWarning()).toBeNull();
+
+    // Record refill's own typed quantities belong to it and are not part of the stored plan.
+    (component as unknown as { manualView: { hasEnteredQuantities(): boolean; unresolvedSubmission: null } }).manualView = {
+      hasEnteredQuantities: () => true,
+      unresolvedSubmission: null
+    };
+    expect(component.leaveWarning()).toBe(UNSAVED_WORK_LEAVE_WARNING);
+
+    component.onManualSaveInFlightChange(true);
+    expect(component.leaveWarning()).toBe(UNRESOLVED_SAVE_LEAVE_WARNING);
+  });
+
+  it('Reset discards the stored plan too', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component, store } = createHarness();
+    applyMachines(component, [10, 20]);
+    type(component, 1, 10, '9');
+
+    component.resetAll();
+
+    expect(store.stored()).toBeNull();
+  });
+
+  it('Refresh replaces the stored plan with the new snapshot and no planning work', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component, store } = createHarness();
+    applyMachines(component, [10, 20]);
+    type(component, 1, 10, '9');
+
+    component.refresh();
+
+    expect(store.stored()?.appliedMachines.map((m) => m.machineId)).toEqual([10, 20]);
+    expect(store.stored()?.overrides).toEqual([]);
+    expect(store.stored()?.pickedCells).toEqual([]);
+  });
+
+  it('an Apply that adds a machine stores the new snapshot without the discarded work', () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component, store } = createHarness();
+    applyMachines(component, [10]);
+    type(component, 1, 10, '9');
+
+    applyMachines(component, [10, 20]);
+
+    expect(store.stored()?.appliedMachines.map((m) => m.machineId)).toEqual([10, 20]);
+    expect(store.stored()?.overrides).toEqual([]);
+  });
+
+  it('removing a machine drops only that machine keys from the stored plan', () => {
+    const { component, store } = createHarness();
+    applyMachines(component, [10, 20]);
+    type(component, 1, 10, '9');
+    type(component, 2, 20, '1x');
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+
+    component.removeMachine(20);
+
+    expect(store.stored()?.appliedMachines.map((m) => m.machineId)).toEqual([10]);
+    expect(store.stored()?.overrides).toEqual([{ key: '1:10', quantity: 9 }]);
+    expect(store.stored()?.invalidQuantities).toEqual([]);
+  });
+
+  it('a cancelled confirmation changes neither the page nor the stored plan', () => {
+    const { component, store } = createHarness();
+    applyMachines(component, [10, 20]);
+    type(component, 1, 10, '9');
+    const writes = store.writes();
+    const clears = store.clears();
+    jest.spyOn(window, 'confirm').mockReturnValue(false);
+
+    component.refresh();
+    component.resetAll();
+    component.removeMachine(10);
+
+    expect(store.writes()).toBe(writes);
+    expect(store.clears()).toBe(clears);
+    expect(store.stored()?.overrides).toEqual([{ key: '1:10', quantity: 9 }]);
+    expect(component.isOverridden(1, 10)).toBe(true);
+  });
+
+  it('a refused write takes the stored plan with it rather than leaving an older one as the newest', () => {
+    const { component, store } = createHarness({ store: { writable: false } });
+    applyMachines(component, [10]);
+
+    expect(store.stored()).toBeNull();
+    expect(store.clears()).toBeGreaterThan(0);
+    expect(component.leaveWarning()).toBeNull();
+
+    type(component, 1, 10, '9');
+    expect(component.leaveWarning()).toBe(UNSAVED_WORK_LEAVE_WARNING);
+  });
+
+  it('drops a stored machine the fleet no longer lists, with its keys, and keeps the rest', () => {
+    const stored = planLeftBehind();
+
+    const { component, getPickList } = createHarness({ machines: [machine(10, 'Drinks')], store: { stored } });
+
+    expect(getPickList).not.toHaveBeenCalled();
+    expect(component.appliedMachineIds).toEqual([10]);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(9);
+    expect(component.isPicked(2, 10)).toBe(true);
+    expect(component.hasInvalidQuantity(2, 20)).toBe(false);
+    expect(component.pickListProducts.every((p) => p.machineQuantities.every((mq) => mq.machineId === 10))).toBe(true);
+    // The trimmed plan is what is stored now, so the machine cannot come back on the next visit.
+    expect(component.appliedMachineIds).toEqual([10]);
+  });
+
+  it('ignores and forgets a stored plan whose machines have all gone', () => {
+    const stored = planLeftBehind();
+
+    const { component, getPickList, store } = createHarness({ machines: [machine(30, 'New')], store: { stored } });
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.lastRefreshedAt).toBeNull();
+    expect(store.stored()).toBeNull();
+    expect(getPickList).not.toHaveBeenCalled();
+  });
+
+  it('opens exactly as it always did when the tab holds nothing to restore', () => {
+    const { component, getPickList, store } = createHarness({ store: { stored: null } });
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.appliedProductIds).toEqual([1, 2, 3]);
+    expect(component.lastRefreshedAt).toBeNull();
+    expect(component.loadState.loaded).toBe(false);
+    expect(getPickList).not.toHaveBeenCalled();
+    expect(store.clears()).toBe(0);
+  });
+
+  it('drops a restored plan whose account, business or session context has since changed', () => {
+    const stored = planLeftBehind();
+
+    const { component, getPickList } = createHarness({ store: { stored, scopeCurrent: false } });
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.hasPlanningWork()).toBe(false);
+    expect(getPickList).not.toHaveBeenCalled();
+  });
+
+  it('opens normally while the stored-plan read is still waiting for the signed-in context', () => {
+    const { component, getPickList } = createHarness({ store: { stored: planLeftBehind(), restore: 'never' } });
+
+    expect(component.appliedMachineIds).toEqual([]);
+    applyMachines(component, [10]);
+
+    expect(getPickList).toHaveBeenCalledWith([10]);
+    expect(component.pickListProducts.length).toBeGreaterThan(0);
+  });
+
+  it('does not replace a selection the operator applied before the stored plan arrived', () => {
+    const stored = planLeftBehind();
+    const { component, store } = createHarness({ store: { stored, restore: 'deferred' } });
+    applyMachines(component, [20]);
+
+    store.answerRestore();
+
+    expect(component.appliedMachineIds).toEqual([20]);
+    expect(component.hasPlanningWork()).toBe(false);
+  });
+
+  it('restores the plan once the signed-in context answers, after the machine list already has', () => {
+    const stored = planLeftBehind();
+    const { component, store } = createHarness({ store: { stored, restore: 'deferred' } });
+    expect(component.appliedMachineIds).toEqual([]);
+
+    store.answerRestore();
+
+    expect(component.appliedMachineIds).toEqual([10, 20]);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(9);
+  });
+
+  it('keeps the Record refill link preselection and restores the plan behind it', () => {
+    const stored = planLeftBehind();
+
+    const { component } = createHarness({ queryParams: { mode: 'manual', machineId: '5' }, store: { stored } });
+
+    expect(component.mode).toBe('manual');
+    expect(component.preselectedMachineId).toBe(5);
+    expect(component.appliedMachineIds).toEqual([10, 20]);
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(9);
+  });
+
+  it('hands Record refill the restored snapshot own suggestions, never a restored override', () => {
+    const machines = [machine(10, 'Drinks', { localMachineId: 5 }), machine(20, 'Snacks', { localMachineId: null })];
+    const stored = planLeftBehind({ machines });
+
+    const { component } = createHarness({ machines, store: { stored } });
+
+    expect(component.plannedQuantity(1, cellOf(component, 1, 10))).toBe(9);
+    expect(component.refillSuggestions.get(refillCellKey(1, 5))).toBe(4);
+  });
+
+  /**
+   * The business a stored plan belongs to is proved by the machine records the fleet read names, not
+   * by the business name: one account moved to a different business of the same name matches the
+   * stored account and name perfectly well, and `GET /api/me/access` reports no business id to tell
+   * the two apart.
+   */
+  it('refuses a stored plan whose machines the fleet now lists under different machine records', () => {
+    const stored = planLeftBehind();
+
+    // The same account, the same business name, the same provider machine numbers - and this
+    // business's own machine records for them, which are somebody else's.
+    const { component, getPickList, store } = createHarness({
+      machines: [machine(10, 'Drinks', { localMachineId: 510 }), machine(20, 'Snacks', { localMachineId: 520 })],
+      store: { stored }
+    });
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.hasPlanningWork()).toBe(false);
+    expect(store.stored()).toBeNull();
+    expect(getPickList).not.toHaveBeenCalled();
+  });
+
+  it('refuses the whole stored plan when only one of its machines is listed under another record', () => {
+    const stored = planLeftBehind();
+
+    const { component } = createHarness({
+      machines: [machine(10, 'Drinks'), machine(20, 'Snacks', { localMachineId: 520 })],
+      store: { stored }
+    });
+
+    // Not trimmed down to the machine that happens to agree: the record is not this business's.
+    expect(component.appliedMachineIds).toEqual([]);
+  });
+
+  it('never stores a plan whose machines the fleet cannot identify, and goes on warning about it', () => {
+    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const machines = [machine(10, 'Drinks', { localMachineId: null })];
+    const { component, store } = createHarness({ machines });
+
+    applyMachines(component, [10]);
+    type(component, 1, 10, '9');
+
+    // No machine record, so nothing could prove whose plan it is when it was read back.
+    expect(store.stored()).toBeNull();
+    expect(component.leaveWarning()).toBe(UNSAVED_WORK_LEAVE_WARNING);
+    expect(component.confirmLeave()).toBe(false);
+    expect(confirm).toHaveBeenCalledWith(UNSAVED_WORK_LEAVE_WARNING);
+  });
+
+  it('stores a run that mixes an identified machine with one the business has no record of', () => {
+    const machines = [machine(10, 'Drinks'), machine(20, 'Snacks', { localMachineId: null })];
+    const { component, store } = createHarness({ machines });
+
+    applyMachines(component, [10, 20]);
+
+    expect(store.stored()?.appliedMachines).toEqual([
+      { machineId: 10, localMachineId: 110 },
+      { machineId: 20, localMachineId: null }
+    ]);
+    expect(component.leaveWarning()).toBeNull();
+  });
+
+  it('discards the plan on screen, and its stored copy, once the account or business changes', () => {
+    const { component, store } = createHarness();
+    applyMachines(component, [10, 20]);
+    type(component, 1, 10, '9');
+    expect(store.stored()).not.toBeNull();
+
+    store.changeScope();
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.stagedMachineIds).toEqual([]);
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.lastRefreshedAt).toBeNull();
+    expect(component.hasPlanningWork()).toBe(false);
+    expect(component.appliedProductIds).toEqual([1, 2, 3]);
+    expect(store.stored()).toBeNull();
+  });
+
+  it('discards the plan on screen when a support session or role preview starts, and stores nothing after', () => {
+    const { component, store } = createHarness();
+    applyMachines(component, [10]);
+    component.togglePicked(row(component, 1), 10);
+
+    store.changeScope({ eligible: false });
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.isPicked(1, 10)).toBe(false);
+    expect(store.stored()).toBeNull();
+
+    // Planning inside that context is memory-only, so the departure warning protects it again.
+    applyMachines(component, [10]);
+    type(component, 1, 10, '9');
+    expect(store.stored()).toBeNull();
+    expect(component.leaveWarning()).toBe(UNSAVED_WORK_LEAVE_WARNING);
+  });
+
+  it('never stores a snapshot read for the previous scope, nor shows it', () => {
+    const answer = new Subject<PickListResult>();
+    const getPickList = jest.fn(() => answer.asObservable());
+    const { component, store } = createHarness({ getPickList });
+    applyMachines(component, [10]);
+
+    store.changeScope();
+    answer.next(snapshot());
+    answer.complete();
+
+    expect(component.pickListProducts).toEqual([]);
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(store.stored()).toBeNull();
+  });
+
+  it('drops a stored plan that is still waiting for the machine list when the scope changes', () => {
+    const stored = planLeftBehind();
+    const fleet = new Subject<Machine[]>();
+    const { component, store } = createHarness({ store: { stored }, machineList: fleet });
+
+    // The plan has been read for the scope the page opened in, and is waiting for the fleet read.
+    store.changeScope();
+    fleet.next([machine(10, 'Drinks'), machine(20, 'Snacks')]);
+
+    expect(component.appliedMachineIds).toEqual([]);
+    expect(component.hasPlanningWork()).toBe(false);
   });
 });
 
@@ -972,7 +1444,8 @@ describe('Plan picks rendered (issues #996, #1008)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
-        { provide: SupportSessionService, useValue: { active$: of(false) } }
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        providePlanPicksStore()
       ]
     }).compileComponents();
     TestBed.inject(BusinessTimeZoneService).publish('Australia/Sydney');

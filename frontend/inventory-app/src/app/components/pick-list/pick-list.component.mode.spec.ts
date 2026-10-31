@@ -10,6 +10,7 @@ import { Machine, PickListResult, Product } from '../../models/models';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { SpecConnectionStatus, providerAvailabilityDouble } from '../../provider/provider-availability.spec-helpers';
 import { PickListComponent } from './pick-list.component';
+import { PlanPicksStoreDoubleOptions, planPicksStoreDouble } from './plan-picks-store.spec-helpers';
 
 function machine(overrides: Partial<Machine>): Machine {
   return {
@@ -98,6 +99,8 @@ function createHarness(
     /** A refusal to record against `machineStock` before the component reads it, simulating evidence an earlier screen in this session already produced. */
     machineStockAlreadyRefused?: boolean;
     queryParams?: Record<string, string>;
+    /** This tab's Plan picks storage (issue #1021); by default it holds nothing and accepts writes. */
+    store?: PlanPicksStoreDoubleOptions;
   } = {}
 ): Harness {
   const provider = providerAvailabilityDouble(options.status ?? 'Ready');
@@ -116,7 +119,8 @@ function createHarness(
 
   const component = new PickListComponent(
     machineService, productService, pickListService, toast, provider, routeStub(options.queryParams),
-    { getList: jest.fn(() => of([])) } as unknown as SiteService
+    { getList: jest.fn(() => of([])) } as unknown as SiteService,
+    planPicksStoreDouble(options.store).service
   );
   component.ngOnInit();
 
@@ -266,7 +270,8 @@ describe('PickListComponent mode selection (issue #744)', () => {
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
     const component = new PickListComponent(
       machineService, productService, pickListService, toast, providerAvailabilityDouble('Ready'), routeStub(),
-      { getList: jest.fn(() => of([])) } as unknown as SiteService
+      { getList: jest.fn(() => of([])) } as unknown as SiteService,
+      planPicksStoreDouble().service
     );
     component.ngOnInit();
     getAllProducts.mockClear();

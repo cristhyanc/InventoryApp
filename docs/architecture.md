@@ -10939,9 +10939,12 @@ below). Every piece of state the page adds on top of that projection -
 the applied machine/product filter selections, the matrix data for the applied machines, and which
 positive-pick cells the operator has marked picked (`pickedCells`), and since issue #996 the
 operator's per-cell planned-quantity overrides - lives only in the component
-instance. None of it is written to `localStorage`, a query parameter, or any backend store, so it is
-lost on every page refresh or navigation away, by design: the calculated view is a planning aid, not
-a record of what was actually picked. No selection, filter, or pick/unpick interaction in the
+instance. None of it is written to `localStorage`, a query parameter, or any backend store: the
+calculated view is a planning aid, not a record of what was actually picked. Since issue #1021 the
+plan does survive a navigation away and a reload, in this browser tab's own `sessionStorage` and
+nowhere else (see [Keeping the plan in the browser
+tab](#keeping-the-plan-in-the-browser-tab-issue-1021) below); it is still never sent to the backend
+and still records nothing. No selection, filter, or pick/unpick interaction in the
 calculated view ever calls a mutation endpoint, so it can never create a `MachineRefill`, a stock
 adjustment, or any other inventory movement on its own; the page's other view, manual entry, does
 record one - see [Manual pick-list entry and mode selection](#manual-pick-list-entry-and-mode-selection-issue-744)
@@ -10999,7 +11002,8 @@ and, since issue #996, drops only that machine's planning work without re-readin
 [Plan picks and Record refill](#plan-picks-and-record-refill-issue-996)). Reset
 clears both the staged and applied Products/Machines selections back to those same defaults, along
 with the matrix data, `pickedCells`, the overrides, the live filters and the snapshot timestamp,
-after confirming when there is planning work to lose (issue #996).
+after confirming when there is planning work to lose (issue #996) - and, since issue #1021, the
+copy this tab holds.
 
 **Matrix table layout.** (Issue #996 adds a site header row above this one, a left-sticky Product
 column and machine columns of at least 15rem; see [Plan picks and Record
@@ -11466,8 +11470,9 @@ total, shortage and progress figure (`productPlannedTotal`, `productShortage`, `
 `parsePickQuantity` is the one input rule: digits only, 0 to `MAXIMUM_PICK_QUANTITY` (int32 max),
 blank refused. Only a cell with a positive suggestion is editable. 0 is a skip - the cell has no checkbox and counts as no pick. A value
 that differs from the cell's previous planned quantity removes its `pickedCells` mark, because it is
-a different pick. Like the rest of the page's state, none of this reaches `localStorage`, a query
-parameter or any request.
+a different pick. None of it reaches `localStorage`, a query parameter or any request; since issue
+#1021 it is kept in this browser tab's own `sessionStorage` (see
+[Keeping the plan in the browser tab](#keeping-the-plan-in-the-browser-tab-issue-1021) below).
 
 **Every editable cell is edited in place, with no edit mode (issue #1008).** The owner's decision of
 30 October 2026 replaced #996's pencil and its confirm/cancel for Plan picks only: the shared
@@ -11502,9 +11507,96 @@ made against, so anything that replaces the snapshot discards them after `window
 (which re-reads the same `appliedMachineIds`, and is also the Retry of a failed read), `resetAll()`,
 and an Apply that adds machines. Removing machines (by chip or by Apply) only filters the snapshot, so
 it confirms only when a removed machine has planning work and drops just that machine's keys
-(`afterMachinesRemoved`). Search, category, the Only remaining / Only shortages status filter,
+(`afterMachinesRemoved`). Every one of those discards clears the stored copy too (issue #1021), and a
+cancelled confirmation changes neither the page nor the stored copy. Search, category, the Only
+remaining / Only shortages status filter,
 sorting and the phone layout's machine focus are derived views in `visibleProducts()` /
 `focusedProducts()` and never touch planning state.
+
+##### Keeping the plan in the browser tab (issue #1021)
+
+The owner's decision of 31 October 2026 was to keep a Plan picks plan in the browser rather than on
+the server, so leaving the Pick List and coming back no longer warns and then loses it. It remains
+frontend only: no endpoint, DTO, schema, Nayax call or stored business data changed, and the plan
+never travels in a request.
+
+**Two new files, with one responsibility each.**
+`frontend/inventory-app/src/app/components/pick-list/plan-picks-storage.ts` is the only code in the
+application that touches the `sessionStorage` entry `inventoryapp.planPicks`: it holds the stored
+format (`StoredPlanPicks`, versioned by `PLAN_PICKS_STORAGE_VERSION`), writes it, and validates
+everything read back. `plan-picks-store.service.ts` (`PlanPicksStoreService`, root-provided, injected
+by `PickListComponent` alone) decides whether anything may be stored or restored at all.
+
+**`sessionStorage`, not `localStorage`.** The plan carries the business's product names and storage
+figures, so it is kept in the narrowest storage that survives an in-app navigation and a reload: one
+tab, never shared with another tab or device, gone when the tab closes. Sharing a plan between tabs
+or devices is deliberately out of scope.
+
+**Eligibility is three questions, and all three must be answered before anything is read.** The
+scope is the signed-in identity (`activeAccountKey`, the key every other cached answer in this
+application is scoped by) and the business `GET /api/me/access` reports. `unread` access is "not read
+yet" and waits; `unavailable`
+is a refused or failed capability read and stores and restores nothing. A support session
+(`SupportSessionService.active$`) and a role preview (`RolePreviewService.active$`) are both
+memory-only contexts by design, and neither writes nor restores a plan. Every distinct scope answer
+takes a new token, and a plan read under one is refused by `isCurrentScope` if the identity, the
+business or the session context changed while the page was still waiting for its machine list.
+
+**The business name is the first filter on a stored plan, never the proof of whose it is.**
+`GET /api/me/access` reports a business **name** and no identifier, and a name is mutable and not
+unique: one account whose membership moved to a different business of the same name matches
+`PlanPicksScope` exactly. What binds a plan to one business is therefore the fleet read's own
+identity for each applied machine - `Machine.localMachineId`, this business's machine record, which
+the database assigns and no other business holds (`StoredPlanMachine`). `PickListComponent`
+re-verifies it on every restore (`verifiedRestoredMachineIds`): a machine the fleet no longer lists
+is dropped as before, a machine the fleet lists under a **different** machine record refuses the
+whole record rather than the part that disagrees, and a record whose surviving machines carry no
+machine record at all is refused too, because nothing in it can be checked. The same rule applies
+symmetrically when writing (`storableMachines`): a run no applied machine of which has a machine
+record is **not stored**, and the existing `UNSAVED_WORK_LEAVE_WARNING` goes on protecting it - a
+plan is never kept on a guarantee the frontend cannot verify. A business-scoped identifier on
+`GET /api/me/access` (for example `businessId`) is the missing contract that would make this exact,
+and would also let a same-name membership change be detected while a tab is open; adding it is a
+backend change the issue excludes and remains follow-up work.
+
+**A plan is bound to its scope for its whole life, not only until it is restored.** Every plan on
+screen carries the scope token it was read or planned under (`PickListComponent.planScopeToken`,
+captured when the snapshot is requested or restored), and `PlanPicksStoreService.save(plan,
+scopeToken)` requires it: planning work can never be written under a scope that became current after
+it was made. `scopeToken$` publishes every change of scope, and the page acts on it at once
+(`onScopeToken`/`discardPlanForScopeChange`): a restoration still waiting for the fleet read is
+dropped unapplied, and a plan already displayed is discarded with its stored copy, its applied
+machine selection and its Products filter, because it holds the previous business's product names
+and storage figures and the context now in effect - another account, another business, a started
+support session or role preview, capabilities being read again - may not see them. The snapshot
+generation is bumped with it, so a `GET /api/pick-list` read in flight for the previous scope cannot
+land either. Nothing asks the operator first: there is no longer a context to ask in.
+
+**Nothing read back is trusted.** A stored record is a payload from outside the running application,
+so `readStoredPlanPicks` checks the version (`PLAN_PICKS_STORAGE_VERSION`, 2 since the machine
+identity above; a version 1 record is discarded, never upgraded), the account and business it names,
+and then every machine entry, field, row, cell and `planCellKey` (`isPlanCellKey`) before returning
+anything; a record that is
+present but unusable is removed rather than answered with. Private mode, a quota and a refused
+storage access all surface as throws and are each caught: a failed read is "nothing stored", and a
+failed write answers `false` **and** removes the previous record, so an older plan is never left
+behind looking like the latest saved work.
+
+**What the page stores and restores.** `PickListComponent.persistPlan()` writes the complete plan -
+`appliedMachines` (each with its `localMachineId`, above), `appliedProductIds`, `pickListProducts`,
+the snapshot's own `lastRefreshedAt` as
+an ISO string, and the `overrides`, `pickedCells` and `invalidQuantities` entries - after every change
+to any of them, and `forgetPersistedPlan()` clears it on every discard. `restorePlanWhenReady()`
+applies the stored plan once both the stored-plan read and the fleet read have settled, trimmed to
+the machines the fleet still lists: a machine that is gone is dropped with its cells and keys, and a
+plan with nothing left is ignored and forgotten. Because the snapshot travels with the plan, a
+restore makes **no** `GET /api/pick-list` call and keeps the original "last refreshed" instant;
+`loadState` is settled without a request. Display state (search, category, status filter, sort, phone
+machine focus) is deliberately not restored, a restored plan never seeds Record refill (only the
+snapshot's own suggestions reach it, as before), and nothing here touches `mode` or
+`preselectedMachineId`, so `?mode=manual&machineId=<id>` still opens Record refill exactly as it did.
+Automatically refreshing a restored snapshot, and any "this plan is old" banner, are possible
+follow-up work and not in this release.
 
 **Stale responses are dropped by generation.** Each snapshot read captures `snapshotGeneration`
 (bumped by every fetch, Reset and empty selection) and the `ListLoadState` token; a response or error
@@ -11532,7 +11624,15 @@ only and nothing is copied automatically.
 **Leaving the page is guarded.** The `/pick-list` route has `canDeactivate: [confirmPickListLeave]`
 (`pick-list-leave.guard.ts`), which asks `PickListComponent.confirmLeave()`; a `window:beforeunload`
 listener covers reloads and closed tabs. Both use `leaveWarning()`: a save in flight or unresolved
-outranks entered Record refill quantities or Plan picks overrides and ticks.
+outranks entered Record refill quantities or planning work. Since issue #1021 planning work warns
+only while it is **unsaved** (`unsavedPlanningWork()`): the warning is withheld once
+`persistPlan()` has actually stored the complete plan, and anything that leaves it unstored - a
+refused write, a run whose business identity cannot be verified, a scope that moved on - leaves
+`planPersisted`
+false so the existing `UNSAVED_WORK_LEAVE_WARNING` goes on asking - the no-warning claim is
+conditional on a successful write, never on one having been attempted. Record refill is unchanged:
+typed quantities still give `UNSAVED_WORK_LEAVE_WARNING` and an in-flight or unresolved save still
+gives `UNRESOLVED_SAVE_LEAVE_WARNING`.
 
 **Layout.** Desktop renders both views as tables inside a `relative max-h-[70vh] overflow-auto`
 scroller with a left-sticky product column and top-sticky header rows (Plan picks adds the site row,
@@ -11549,8 +11649,25 @@ site grouping, suggestions, the departure guard, and the rendered summary and ph
 issue #1008 the always-visible box and its steppers, their bounds at 0 and `MAXIMUM_PICK_QUANTITY`,
 every refused input kept whole with its message and the retained last valid quantity, the blank box
 as incomplete input, completion cleared and blocked while a cell is unreadable, and pending text
-surviving filters, sorting, mode switching and machine focus)
-and the issue #996 describes in `manual-pick-list.component.spec.ts` (aggregate storage checks
+surviving filters, sorting, mode switching and machine focus; and for issue #1021 the plan written on
+every change, restored into a freshly created component with no pick-list read, the departure warning
+withheld only for a stored plan and still raised for a refused write and for Record refill work,
+every discard clearing the stored copy, a cancelled confirmation changing neither, a trimmed and an
+entirely vanished machine list, a stale scope, a restore that lands after the operator has applied a
+selection, the `?mode=manual` preselection surviving it, and - for the scope rules above - a stored
+plan whose machines the fleet now lists under different machine records refused whole, a run no
+machine of which can be identified never stored and still warned about, the displayed plan and its
+stored copy discarded when the account, business or support/role-preview context changes, a snapshot
+answering for the previous scope neither shown nor stored, and a restoration pending when the scope
+changes dropped). `plan-picks-storage.spec.ts` covers the
+stored format, the account/business scope and every refused payload - including a malformed or
+missing machine identity and a first-format record - plus storage that throws on
+read, write and remove; `plan-picks-store.service.spec.ts` covers the eligibility rules - unread and
+unavailable access, nobody signed in, a support session, a role preview - the scope token that
+invalidates a restoration in flight, what `scopeToken$` publishes, and `save` refusing a plan whose
+scope has moved on. `plan-picks-store.spec-helpers.ts` is the in-memory double the
+other Pick List specs use.
+These sit beside the issue #996 tests in `manual-pick-list.component.spec.ts` (aggregate storage checks
 including hidden rows, hidden-entry banner, Clear, the recorded summary, locked entries while
 unresolved, and Retry save despite a shortage).
 
