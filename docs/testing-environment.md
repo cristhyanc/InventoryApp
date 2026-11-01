@@ -260,11 +260,13 @@ exist. A green "switched off" run proves nothing about it.
 
 ## Manual supplier price collector against testing
 
-**Price collector (manual test)** (`.github/workflows/price-collector.yml`) stays manual-only with
-no schedule. Its call, item, page, turn, budget and time limits are unchanged. It now accepts a
-start from reviewed `develop` as well as `main`, so a human can run it against this test API from
-the code that is deployed there. It refuses every other ref and refuses the production API origin
-(the one in `frontend/inventory-app/src/assets/config.json`).
+**Price collector (manual)** (`.github/workflows/price-collector.yml`) stays manual-only with
+no schedule. Its call, item, page, turn, budget and time limits are unchanged. Its `test` target
+accepts a start from reviewed `develop` as well as `main`, so a human can run it against this test
+API from the code that is deployed there. It refuses every other ref, and a test run refuses the
+production API origin (the one in `frontend/inventory-app/src/assets/config.json`). The separate
+`production` target runs only from `main` in the `price-collector-production` environment; see
+[Production run](price-collector-testing.md#production-run).
 
 The collector authenticates separately from the deployment:
 

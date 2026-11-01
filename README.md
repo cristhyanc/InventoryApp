@@ -979,10 +979,13 @@ To see what the run itself would do without spending anything, read `scripts/pri
 ### Manual collector integration test (#929)
 
 The actor choices have already been tested; the next check is the complete collector flow against
-a disposable **test API**. The `Price collector (manual test)` workflow issues a small sample,
+a disposable **test API**. The `Price collector (manual)` workflow issues a small sample,
 runs Claude without the Restockroo bearer token, then submits finished results and completes the
-run even if the model step fails. There is no cron or production API input. See
+run even if the model step fails. There is no cron. Its default `test` target never reaches the
+production API; a separate `production` target runs only from `main`, in its own reviewer-protected
+`price-collector-production` environment. See
 [Manual collector test](docs/price-collector-testing.md) for Entra/OIDC and GitHub environment setup,
+the production checklist,
 the normal and interrupted runs, sample limits, and actual provider cost evidence. Human review,
 release to `main`, environment setup and dispatch are separate from implementing the workflow.
 
