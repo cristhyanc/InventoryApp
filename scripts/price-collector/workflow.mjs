@@ -327,7 +327,7 @@ export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1
     child.stdin.on('error', () => {});
     const limitsPath = join(env.PRICE_COLLECTOR_STATE_DIR ?? sandbox, 'limits.json');
     const enabled = existsSync(limitsPath) ? Object.entries(json(limitsPath).actors).filter(([, a]) => a.actorIdConfirmed).map(([id]) => id) : [];
-    child.stdin.end(`Run context: bounded manual test; enabled actors: ${enabled.join(', ')}. Process the prepared work using read-work.mjs. Write finished files, then stop.`);
+    child.stdin.end(`Run context: bounded manual test; enabled Apify actors: ${enabled.join(', ')}. JB Metro searches use jbmetro-lookup.mjs, which is always enabled. Process the prepared work using read-work.mjs. Write finished files, then stop.`);
     let finished = false;
     const finish = code => {
       if (finished) return;
