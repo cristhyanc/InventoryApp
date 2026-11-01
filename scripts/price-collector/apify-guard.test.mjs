@@ -641,7 +641,7 @@ describe('verified retailer input contracts', () => {
     assert.equal(input.includeClickAndCollect, false);
     assert.equal(input.verifyOnlineDelivery, false);
     assert.equal(input.incrementalMode, false);
-    assert.equal(input.maxPages, 3);
+    assert.equal(input.maxPages, limits.actors[actor].maxPages);
     assert.deepEqual(input.searchTerms, ['chocolate']);
   });
 
@@ -651,7 +651,7 @@ describe('verified retailer input contracts', () => {
       includeFullDetail: true, includePricing: false, includeReviewStats: true, includeReviews: true } }, { rules: confirming(actor) });
     assert.equal(answer.decision, 'allow');
     const input = inputOf(answer);
-    assert.equal(input.maxPagesPerQuery, 3);
+    assert.equal(input.maxPagesPerQuery, limits.actors[actor].maxPages);
     // A full-detail page is one more request per product; the search page already carries the price.
     assert.equal(input.includeFullDetail, false);
     // The actor refuses 0 (its schema minimum is 1); reviews stay off through includeReviews.
@@ -683,9 +683,15 @@ describe('verified retailer input contracts', () => {
     });
 
     it(`refuses a ${field} above the cap for ${actor}`, () => {
-      const answer = decideApify({ actor, input: { ...query, [field]: 4 } }, { rules: confirming(actor) });
+      const cap = limits.actors[actor].maxPages;
+      const answer = decideApify({ actor, input: { ...query, [field]: cap + 1 } }, { rules: confirming(actor) });
       assert.equal(answer.decision, 'deny');
-      assert.match(answer.reason, new RegExp(`${field} may be at most 3`));
+      assert.match(answer.reason, new RegExp(`${field} may be at most ${cap}`));
+    });
+
+    it(`caps ${actor} at 10 results on one page, because it charges per result (owner decision, 1 November 2026)`, () => {
+      assert.equal(limits.actors[actor].pageSize, 10);
+      assert.equal(limits.actors[actor].maxPages, 1);
     });
 
     it(`refuses a zero or malformed ${field} for ${actor}, which these actors read as every page`, () => {
