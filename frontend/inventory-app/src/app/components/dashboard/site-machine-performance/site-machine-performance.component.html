@@ -2,8 +2,9 @@
   Site and machine performance (issue #987): the owner-approved Stitch hierarchy, where each site is
   one summary row - pale lavender, like the mockup - that expands to the white machine rows standing
   at it, under one set of columns. Every figure, destination and unavailable state is the one the two
-  former cards already had, plus each machine's own stock level (issue #1013), which `GET api/sites`
-  publishes per machine; the component calculates nothing.
+  former cards already had, plus each machine's own stock level (issue #1013) and its own low and
+  empty counts (issue #1019), which `GET api/sites` publishes per machine; the component calculates
+  and counts nothing.
 -->
 <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="site-machine-performance-title">
   <div class="card-header flex-wrap gap-2">
@@ -200,8 +201,18 @@
                           <span class="value-muted">{{ machineStockText(group, machine) }}</span>
                         }
                       </td>
-                      <!-- Low/empty exists per site only, so a machine row still has none to state. -->
-                      <td class="table-cell value-muted" [attr.data-testid]="'machine-low-empty-' + machine.machineID">{{ machineFigureUnavailable }}</td>
+                      <!--
+                        The machine's own low and empty counts (issue #1019), from the same site
+                        read and in the same wording the site row above uses - never the site's
+                        counts repeated, and never a count made here. A machine that read does not
+                        cover says Unavailable instead; both numbers are written out, so colour
+                        carries nothing.
+                      -->
+                      <td
+                        class="table-cell"
+                        [ngClass]="machineAlertCountsClass(group, machine)"
+                        [attr.data-testid]="'machine-low-empty-' + machine.machineID"
+                      >{{ machineAlertCountsText(group, machine) }}</td>
                       @if (canViewFinancials) {
                         <td class="table-cell table-num">
                           <div>{{ machineSalesText(machine) }}</div>
@@ -349,6 +360,13 @@
                       } @else {
                         <p class="m-0 text-sm value-muted">{{ machineStockText(group, machine) }}</p>
                       }
+                      <!-- The same counts as the wide layout's Low / empty cell (issue #1019). -->
+                      <p class="m-0 mt-2 text-xs text-rr-muted">Selections</p>
+                      <p
+                        class="m-0 text-sm font-semibold"
+                        [ngClass]="machineAlertCountsClass(group, machine)"
+                        [attr.data-testid]="'machine-card-low-empty-' + machine.machineID"
+                      >{{ machineAlertCountsText(group, machine) }}</p>
                       @if (canViewFinancials) {
                         <p class="m-0 mt-2 text-xs text-rr-muted">{{ salesHeader }}</p>
                         <p class="m-0 text-sm font-semibold">{{ machineSalesText(machine) }}</p>

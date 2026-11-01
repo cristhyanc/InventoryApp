@@ -1,7 +1,8 @@
 namespace Inventory.Application.Sites;
 
 /// <summary>
-/// One machine standing at a site, with that machine's own stock percentage (issue #1013).
+/// One machine standing at a site, with that machine's own stock percentage (issue #1013) and its
+/// own low and empty product counts (issue #1019).
 ///
 /// <para><see cref="MachineId"/> is the provider's machine id - the same <c>MachineID</c> the fleet
 /// read and <c>GET api/machines</c> publish - because this row identifies a machine in the provider's
@@ -11,10 +12,26 @@ namespace Inventory.Application.Sites;
 /// <see cref="Inventory.Domain.Sites.SiteStockPolicy.CalculateMachineStockPercentage"/> over that
 /// machine's selections alone, so it is the site rule applied to a narrower group and never a share
 /// of the site figure. <see langword="null"/> means the machine reports <b>no capacity at all</b>,
-/// which is neither 0% nor the 100% the site rule answers for a site with no capacity. It is a stock
-/// figure rather than a financial one, so issue #697's redaction does not touch it.</para>
+/// which is neither 0% nor the 100% the site rule answers for a site with no capacity.</para>
+///
+/// <para><see cref="LowProductCount"/>/<see cref="EmptyProductCount"/> are
+/// <see cref="Inventory.Domain.Sites.SiteStockPolicy.CalculateAlertCounts"/> - the site's own alert
+/// rule, unchanged - over that machine's selections alone: only selections linked to an active
+/// catalogue product are evaluated, several slots of one product on this machine are summed first,
+/// and each is classified by <c>MachineRefillAlertPolicy.Classify</c>. They are counts rather than
+/// nullable figures, so <c>0</c> and <c>0</c> is a fact about a machine whose selections were read
+/// and hold nothing to alert on; a read that failed publishes no site and therefore no machine row
+/// at all. A site counts a product once over its machines' combined stock, so the site's counts
+/// deliberately need not equal the sum of its machines' counts.</para>
+///
+/// <para>Every figure here is a stock figure rather than a financial one, so issue #697's redaction
+/// does not touch any of them.</para>
 /// </summary>
-public sealed record SiteMachineStock(long MachineId, decimal? StockPercentage);
+public sealed record SiteMachineStock(
+    long MachineId,
+    decimal? StockPercentage,
+    int LowProductCount,
+    int EmptyProductCount);
 
 /// <summary>
 /// One site's dashboard row: its machine count, its stock state, and its recent completed-sale
@@ -36,12 +53,14 @@ public sealed record SiteMachineStock(long MachineId, decimal? StockPercentage);
 /// "not this caller's to see" and never "no sale was recorded": a period with no completed sale
 /// reports an honest <c>0</c> to a caller who may see it.</para>
 ///
-/// <para><b>Each machine's own stock percentage</b> (issue #1013). <see cref="MachineStocks"/> is the
-/// per-machine split of the selections <see cref="GetSiteSummaries"/> already fetches for
-/// <see cref="TotalStockPercentage"/>: one entry per machine standing at the site, in the order the
-/// fleet read returned them, so the figures cost no additional provider request.
-/// <see cref="TotalStockPercentage"/>, the alert counts and every other figure are unchanged - this
-/// publishes a split that was previously discarded rather than recalculating anything.</para>
+/// <para><b>Each machine's own stock percentage and alert counts</b> (issues #1013 and #1019).
+/// <see cref="MachineStocks"/> is the per-machine split of the selections
+/// <see cref="GetSiteSummaries"/> already fetches for <see cref="TotalStockPercentage"/> and the
+/// counts below: one entry per machine standing at the site, in the order the fleet read returned
+/// them, so the figures cost no additional provider request. <see cref="TotalStockPercentage"/>,
+/// <see cref="LowProductCount"/>, <see cref="EmptyProductCount"/> and every other figure are
+/// unchanged - this publishes a split that was previously discarded rather than recalculating
+/// anything.</para>
 /// </summary>
 public sealed record SiteSummary(
     long SiteId,

@@ -293,6 +293,13 @@ public record PurchaseResponseDto(
 // nor the 100 the site rule answers for a site with no capacity; it is a stock figure rather than a
 // financial one, so no role is sent a different value. Every other field, the route and the status
 // codes are unchanged.
+//
+// Each entry's lowProductCount/emptyProductCount are additive in the same way (issue #1019): the
+// site's own alert rule over that one machine's selections, from the same already-fetched
+// selections and with no new definition of low or empty. They are plain counts, so 0 and 0 mean a
+// machine whose selections were read and hold nothing to alert on. The site's own lowProductCount
+// and emptyProductCount are unchanged and are still counted over each product's combined stock
+// across the site's machines, so they need not equal the sum of the machine counts.
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
@@ -308,9 +315,14 @@ public record SiteSummaryDto(
     IReadOnlyList<SiteMachineStockDto> MachineStocks
 );
 
-// One machine on a GET /api/sites row (issue #1013); see SiteSummaryDto above and
-// Inventory.Application.Sites.SiteMachineStock for the rule behind the figure.
-public record SiteMachineStockDto(long MachineId, decimal? StockPercentage);
+// One machine on a GET /api/sites row (issues #1013 and #1019); see SiteSummaryDto above and
+// Inventory.Application.Sites.SiteMachineStock for the rules behind the figures.
+public record SiteMachineStockDto(
+    long MachineId,
+    decimal? StockPercentage,
+    int LowProductCount,
+    int EmptyProductCount
+);
 
 // One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id
 // a filter submits, the name it shows, and the number of machines the fleet has at that site. It is
