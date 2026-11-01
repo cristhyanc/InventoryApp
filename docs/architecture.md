@@ -9260,9 +9260,13 @@ renders it as five parts:
    persisted anywhere, and `keepReorderPageInRange` is the rule for a re-read: the same page when it
    still exists, the new last page when the list has shrunk past it, never an empty page. The two
    **enrichment reads are per reorder read, not per page**: `reorderPriorityIds` carries every listed
-   id, so the purchase-cost read (#788/#789) asks for all of them in its one request - still only
-   with `Dashboard.ViewFinancials`, and still never with an empty id list, which that endpoint reads
-   as "every product" - and turning a page issues no request at all. Last and Cheapest purchase are named by their own column headings;
+   id, so the purchase-cost read (#788/#789) asks for all of them as one logical load -
+   `ProductPurchaseCostService.getSummariesBatched` splits it into `GET`s of at most
+   `PURCHASE_COST_MAX_IDS_PER_REQUEST` (100) ids, because the ids travel as repeated query values and
+   310 real 15-digit ids in one `GET` already exceed Kestrel's default 8,192-byte request line; any
+   failed batch fails the whole load ("Unavailable" with Retry, never partial costs) - still only
+   with `Dashboard.ViewFinancials`, and still never with an empty id list or an empty batch, which
+   that endpoint reads as "every product" - and turning a page issues no request at all. Last and Cheapest purchase are named by their own column headings;
    the note row that used to repeat that they are historical costs was removed by issue #1016 and
    the sentence was not moved anywhere else. The **Cheapest supplier** column (issue #981, the same column #939
    asks for) reuses #930's `CheapestSuppliersComponent` and `CheapestSupplierCellComponent`

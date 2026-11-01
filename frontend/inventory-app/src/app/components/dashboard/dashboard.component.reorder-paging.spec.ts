@@ -20,7 +20,10 @@ import { ConfigService } from '../../services/config.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
-import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import {
+  PURCHASE_COST_MAX_IDS_PER_REQUEST,
+  ProductPurchaseCostService
+} from '../../services/product-purchase-cost.service';
 import { ProductService } from '../../services/product.service';
 import { SiteService } from '../../services/site.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -100,6 +103,17 @@ function product(id: number): Product {
 function reorderList(count: number): Product[] {
   return Array.from({ length: count }, (_, index) => product(index + 1));
 }
+
+/**
+ * `count` reorder products whose ids are 15 digits wide, the width real catalogue ids have. The
+ * request-size tests need these: short ids hide how long a repeated-query-value URL really gets.
+ */
+function realisticReorderList(count: number): Product[] {
+  return Array.from({ length: count }, (_, index) => product(100_000_000_000_001 + index));
+}
+
+/** Kestrel's default `MaxRequestLineSize` (8,192 bytes), which a purchase-cost `GET` must stay under. */
+const KESTREL_DEFAULT_MAX_REQUEST_LINE = 8192;
 
 function listing(products: Product[]): ReorderAlertListing {
   return { products, mode: 'MachineAware', machineNeedUnavailableReason: null };
@@ -194,7 +208,7 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
-      { provide: ProductPurchaseCostService, useValue: { getSummaries } },
+      { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: getSummaries } },
       { provide: CheapestSupplierService, useValue: { getSummary } },
       {
         provide: AccessService,
@@ -550,20 +564,82 @@ describe('Dashboard Reorder priorities enrichment reads (issue #1017)', () => {
     http.verify();
   });
 
-  it('reads the purchase costs once, for every listed id rather than the shown page', async () => {
-    const { http } = await renderOverHttp(reorderList(230));
+  // The requirement is one logical purchase-cost load per reorder read, not one HTTP request: one
+  // unbounded GET carrying 310 real 15-digit ids already exceeds Kestrel's default request line
+  // (review of 1 November 2026), so the load is split into bounded GETs and their answers joined.
+  it('reads the purchase costs for every listed id once, in bounded GETs safe for real id lengths', async () => {
+    const products = realisticReorderList(1000);
+    const { fixture, host, http } = await renderOverHttp(products);
     const requests = costRequests(http);
 
-    expect(requests).toHaveLength(1);
-    expect(requests[0].request.method).toBe('GET');
-    expect(requests[0].request.params.getAll('productIds')).toEqual(
-      reorderList(230).map((p) => String(p.id))
-    );
+    expect(requests).toHaveLength(Math.ceil(1000 / PURCHASE_COST_MAX_IDS_PER_REQUEST));
+    const batches = requests.map((request) => request.request.params.getAll('productIds') ?? []);
+    for (const request of requests) {
+      expect(request.request.method).toBe('GET');
+      const requestLine = `GET ${request.request.urlWithParams} HTTP/1.1`;
+      expect(requestLine.length).toBeLessThan(KESTREL_DEFAULT_MAX_REQUEST_LINE);
+    }
+    for (const batch of batches) {
+      expect(batch.length).toBeGreaterThan(0);
+      expect(batch.length).toBeLessThanOrEqual(PURCHASE_COST_MAX_IDS_PER_REQUEST);
+    }
+    // Every listed id is asked for exactly once, over the batches together, in the list's order.
+    expect(batches.flat()).toEqual(products.map((p) => String(p.id)));
 
-    requests[0].flush([]);
+    for (const request of requests) {
+      request.flush((request.request.params.getAll('productIds') ?? []).map((id) => costSummary(Number(id))));
+    }
     for (const request of supplierRequests(http)) {
       request.flush(cheapestSummary((request.request.body as { productIds: number[] }).productIds));
     }
+    fixture.detectChanges();
+
+    // A page whose products sit in a later batch shows their costs, and turning there sends nothing.
+    const rendered = { fixture, host };
+    for (let page = 2; page <= 200; page++) goNext(rendered);
+    expect(indicator(host)).toBe('Page 200 of 200');
+    expect(rowNames(host)).toEqual(products.slice(995).map((p) => p.name));
+    const rows = Array.from(reorderSection(host).querySelectorAll('tbody tr'));
+    for (const row of rows) expect(row.textContent).toContain('Acme · $1.25');
+    http.verify();
+  });
+
+  it('shows the reorder rows and no costs when one purchase-cost batch fails, with Retry', async () => {
+    const products = realisticReorderList(310);
+    const { fixture, host, http } = await renderOverHttp(products);
+    const requests = costRequests(http);
+    expect(requests.length).toBeGreaterThan(1);
+
+    // Every batch but the last answers; the last fails. No partial set of costs may be published,
+    // because a product missing from a partial answer would read as "no purchases recorded".
+    for (const request of requests.slice(0, -1)) {
+      request.flush((request.request.params.getAll('productIds') ?? []).map((id) => costSummary(Number(id))));
+    }
+    requests[requests.length - 1].flush('boom', { status: 500, statusText: 'Server Error' });
+    for (const request of supplierRequests(http)) {
+      request.flush(cheapestSummary((request.request.body as { productIds: number[] }).productIds));
+    }
+    fixture.detectChanges();
+
+    expect(rowNames(host)).toEqual(products.slice(0, REORDER_PAGE_SIZE).map((p) => p.name));
+    expect(range(host)).toBe('Showing 1–5 of 310 products');
+    const section = reorderSection(host);
+    expect(section.textContent).not.toContain('Acme · $1.25');
+    expect(section.textContent).toContain('Unavailable');
+    expect(section.textContent).toContain('The last and cheapest purchase costs could not be loaded.');
+    const retry = Array.from(section.querySelectorAll('button')).find((button) => text(button) === 'Retry');
+    expect(retry).toBeDefined();
+
+    // Retry is again one logical load over bounded batches, and its success fills the costs in.
+    retry?.click();
+    fixture.detectChanges();
+    const retried = costRequests(http);
+    expect(retried).toHaveLength(requests.length);
+    for (const request of retried) {
+      request.flush((request.request.params.getAll('productIds') ?? []).map((id) => costSummary(Number(id))));
+    }
+    fixture.detectChanges();
+    expect(reorderSection(host).textContent).toContain('Acme · $1.25');
     http.verify();
   });
 
@@ -574,7 +650,7 @@ describe('Dashboard Reorder priorities enrichment reads (issue #1017)', () => {
       request.flush(cheapestSummary((request.request.body as { productIds: number[] }).productIds));
     }
     for (const request of costRequests(rendered.http)) {
-      request.flush(reorderList(ids).map((p) => costSummary(p.id)));
+      request.flush((request.request.params.getAll('productIds') ?? []).map((id) => costSummary(Number(id))));
     }
     rendered.fixture.detectChanges();
 

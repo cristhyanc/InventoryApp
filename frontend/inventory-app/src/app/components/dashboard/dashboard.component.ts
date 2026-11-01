@@ -505,10 +505,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /**
    * Reads the last and cheapest recorded purchase cost of every product the Reorder Alerts table is
-   * about, in one request (issue #789, over issue #788's bulk endpoint), and is also what the Retry
-   * control calls. Since issue #1017 "every product the table is about" is the whole reorder list
-   * the card pages, not the five rows currently on screen: the read happens once per reorder read,
-   * which is what lets a page turn send nothing and still show costs on every page.
+   * about (issue #789, over issue #788's bulk endpoint), and is also what the Retry control calls.
+   * Since issue #1017 "every product the table is about" is the whole reorder list the card pages,
+   * not the five rows currently on screen: the read happens once per reorder read, which is what
+   * lets a page turn send nothing and still show costs on every page. That one logical load is split
+   * by `getSummariesBatched` into `GET`s of at most `PURCHASE_COST_MAX_IDS_PER_REQUEST` ids, so a
+   * long reorder list never builds a request line the server refuses; any failed batch fails the
+   * whole load, which shows "Unavailable" and the Retry rather than partial costs.
    *
    * It is the one place the three preconditions live, because each of them has to leave the columns
    * saying something different. Without `Dashboard.ViewFinancials` the request is never sent at all
@@ -533,7 +536,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
     if (!this.arePurchaseCostColumnsShown || !this.isFinancialsAccessAnswered || productIds.length === 0) return;
 
     this.purchaseCostState = 'loading';
-    this.productPurchaseCostService.getSummaries(productIds).subscribe({
+    this.productPurchaseCostService.getSummariesBatched(productIds).subscribe({
       next: (summaries) => {
         if (request !== this.purchaseCostRequest) return;
         this.purchaseCosts = new Map(summaries.map((summary) => [summary.productId, summary]));

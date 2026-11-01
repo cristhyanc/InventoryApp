@@ -164,7 +164,7 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
-      { provide: ProductPurchaseCostService, useValue: { getSummaries } },
+      { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: getSummaries } },
       { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => doubles.financials ?? of(true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
@@ -482,6 +482,8 @@ describe('Reorder priorities card (issues #972 and #1017)', () => {
    * Issue #1017's request rule: the costs are read once for every product the card pages, so the
    * rows of page 2 carry them too and turning a page sends nothing.
    */
+  // "Once" is one logical load (one `getSummariesBatched` call), not one HTTP request: the service
+  // splits a long id list into bounded GETs, which the reorder-paging transport tests pin.
   it('asks for the purchase costs of every listed product, once', async () => {
     const { fixture, host, getSummaries } = await render({
       alerts: [of(machineAwareAlerts(seven))],

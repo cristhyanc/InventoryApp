@@ -2420,7 +2420,9 @@ it is in, on the Machines pages.
 Since issue #972 this table is the dashboard's **Reorder priorities**, and since issue #1017 it pages
 the whole reorder list five products at a time (the link to Needs Ordering is still there). Its two
 cost columns are unchanged, and they are read once for every product on the list, so they are filled
-in on every page without a page turn asking for anything.
+in on every page without a page turn asking for anything. A long list is read in requests of at most
+100 products each, so the request never grows too long for the server; if any of them fails, both
+columns say "Unavailable" with a Retry rather than showing only some of the costs.
 
 Where the Reorder Alerts table used to carry a selling price, it now carries what you actually paid:
 a **Last purchase** column and a **Cheapest purchase** column, each showing the supplier and the unit

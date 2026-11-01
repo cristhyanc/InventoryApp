@@ -212,7 +212,7 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
       { provide: SupportSessionService, useValue: { active$: of(options.supportSession ?? false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
-      { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },
       { provide: CheapestSupplierService, useValue: { getSummary } },
       {
         provide: AccessService,
