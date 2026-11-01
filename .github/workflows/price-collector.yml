@@ -37,7 +37,7 @@ on:
         type: string
         default: '3'
       full_run:
-        description: Production-sized dry run - every issued search (up to 90) with production page sizes, in Claude batches of 6; sample_size is ignored
+        description: Production-sized dry run - every issued search (up to 576) with production page sizes, in Claude batches of 24 (3 products); sample_size is ignored
         required: true
         type: boolean
         default: false
@@ -128,7 +128,7 @@ jobs:
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     # Each target has its own protected environment, identity, API URL variable and provider secrets.
     environment: ${{ inputs.target == 'production' && 'price-collector-production' || 'price-collector' }}
-    timeout-minutes: 130
+    timeout-minutes: 160
     permissions:
       contents: read
       id-token: write
@@ -186,9 +186,9 @@ jobs:
 
       - name: Run the bounded Claude collector
         id: claude
-        # A backstop only: workflow.mjs stops Claude after 14 minutes for a sample and 90 for a full
+        # A backstop only: workflow.mjs stops Claude after 14 minutes for a sample and 120 for a full
         # run. The job leaves 30 minutes after this step for finalisation and cleanup.
-        timeout-minutes: 100
+        timeout-minutes: 130
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}

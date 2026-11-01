@@ -57,7 +57,7 @@ export function verifyCollectorWorkflow(text) {
   if (text.indexOf(RUN_LOG_STEP) > text.indexOf('      - name: Remove private work, files and CLI installation')) problems.push('The run log must be uploaded before cleanup.');
   requireText('      - name: Submit finished files and complete the issued run\n        if: always()\n        timeout-minutes: 15', 'Partial-result finalisation must run after failure with its own time budget.');
   requireText('      - name: Remove private work, files and CLI installation\n        if: always()', 'Private files must be cleaned after failure too.');
-  if (!collect.includes('    timeout-minutes: 130\n') || !collect.includes('        timeout-minutes: 100\n')) problems.push('The job must leave at least 15 minutes after Claude stops.');
+  if (!collect.includes('    timeout-minutes: 160\n') || !collect.includes('        timeout-minutes: 130\n')) problems.push('The job must leave at least 15 minutes after Claude stops.');
   if (problems.length) throw new Error(problems.join('\n'));
 }
 

@@ -24,8 +24,11 @@ const save = (path, value) => writeFileSync(path, `${JSON.stringify(value)}\n`, 
  * apify-limits.json (perRun.maxActorCalls) is shared by every batch because the guard's state is the
  * run's. Searches beyond the last batch, and batches the deadline does not reach, become not_searched.
  */
+// A full run covers the whole catalogue (owner decision, 1 November 2026): run 41303824929 reached
+// only 15 of 71 products, one product (8 searches) per session, at about 1.6 minutes and US$0.14 of
+// Claude per product. Sessions of 24 searches (3 products of 8) and 24 sessions reach 576 searches.
 export const FULL_RUN = Object.freeze({
-  batchSize: 6, maxBatches: 15, maxTurnsPerBatch: 60, maxBudgetUsdPerBatch: 1, deadlineMinutes: 90, batchMinutes: 14,
+  batchSize: 24, maxBatches: 24, maxTurnsPerBatch: 120, maxBudgetUsdPerBatch: 1, deadlineMinutes: 120, batchMinutes: 14,
 });
 export const SAMPLE_RUN = Object.freeze({ maxTurns: 40, maxBudgetUsd: 1 });
 

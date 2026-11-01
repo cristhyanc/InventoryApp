@@ -485,6 +485,16 @@ test('a full run keeps at most maxBatches batches; the rest is left for not_sear
   assert.equal(workBatches(full).length, FULL_RUN.maxBatches);
 });
 
+test('a full run reaches a 71-product catalogue of 8 searches each, 3 products per session', () => {
+  // Run 41303824929 was issued 568 searches (71 products x 8 suppliers) and reached only 120.
+  const searches = Array.from({ length: 71 * 8 }, (_, i) => search(i + 1, master(Math.floor(i / 8) + 1)));
+  const work = { runId: 1, searches, matching: { waitingProducts: [], masterProducts: [] } };
+  assert.equal(fullRunWork(work).searches.length, 568);
+  assert.deepEqual(new Set(workBatches(work).map(b => b.searches.length)), new Set([24, 16]));
+  assert.equal(workBatches(work).length, 24);
+  assert.ok(FULL_RUN.maxBatches * FULL_RUN.maxBudgetUsdPerBatch <= 24);
+});
+
 test('full-run limits are the production limits, with the reviewed retailers only on request', () => {
   const source = JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url)));
   const limits = fullRunLimits(source, false);
@@ -513,14 +523,14 @@ test('the full-run switch and its deadline are explicit', () => {
 test('a full run starts one capped Claude session per batch, each seeing only its batch', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-batches-'));
   try {
-    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 14 }, (_, i) => search(i + 1, master(i + 1))),
+    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 2 * FULL_RUN.batchSize + 2 }, (_, i) => search(i + 1, master(i + 1))),
       matching: { waitingProducts: [], masterProducts: [] } };
     const seen = [];
     const status = await collectBatches({ stateDir: dir, issued, deadlineMs: 60 * 60 * 1000, launch: async options => {
       seen.push({ ids: JSON.parse(readFileSync(join(dir, 'work.json'), 'utf8')).searches.map(s => s.workItemId), options });
       return { status: 'completed', costUsd: 0.25, turns: 10, subtype: 'success' };
     } });
-    assert.deepEqual(seen.map(s => s.ids.length), [6, 6, 2]);
+    assert.deepEqual(seen.map(s => s.ids.length), [FULL_RUN.batchSize, FULL_RUN.batchSize, 2]);
     assert.ok(seen.every(s => s.options.maxTurns === FULL_RUN.maxTurnsPerBatch && s.options.maxBudgetUsd === FULL_RUN.maxBudgetUsdPerBatch));
     assert.ok(seen.every(s => s.options.timeoutMs <= FULL_RUN.batchMinutes * 60 * 1000));
     assert.deepEqual(status, { status: 'completed', costUsd: 0.75, turns: 30, subtype: 'success', batchesRun: 3, batchCount: 3 });
@@ -531,7 +541,7 @@ test('a full run starts one capped Claude session per batch, each seeing only it
 test('a full run stops at the first session that does not complete, and at the deadline', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-batches-stop-'));
   try {
-    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 18 }, (_, i) => search(i + 1, master(i + 1))),
+    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 3 * FULL_RUN.batchSize }, (_, i) => search(i + 1, master(i + 1))),
       matching: { waitingProducts: [], masterProducts: [] } };
     let launches = 0;
     const limited = await collectBatches({ stateDir: dir, issued, deadlineMs: 60 * 60 * 1000, launch: async () => {

@@ -1056,11 +1056,11 @@ without enabling them in repository configuration. Claude has 40 turns, a US$1 b
 14-minute deadline. The **full_run** checkbox is the production-sized dry run the schedule waits
 for, still manual and still against the test API: it ignores the sample size, keeps the production
 limits in `apify-limits.json` (the 600-call run cap and full page sizes), and works through every
-issued search (at most 90) in fresh Claude sessions of about 6 searches, never splitting one
+issued search (at most 576) in fresh Claude sessions of about 24 searches, never splitting one
 product's searches. JB Metro's lookup reads up to 5 pages of 20 in a full run (1 page of 5 in a
-sample); the hook appends those caps to every call. Each session has 60 turns and a US$1 budget, so 15 sessions cap Claude at
-US$15; the whole phase has a 90-minute deadline, and the run stops at the first session that does
-not complete. The Claude step's 100-minute timeout is only a backstop, and the 130-minute job leaves
+sample); the hook appends those caps to every call. Each session has 120 turns and a US$1 budget, so 24 sessions cap Claude at
+US$24; the whole phase has a 120-minute deadline, and the run stops at the first session that does
+not complete. The Claude step's 130-minute timeout is only a backstop, and the 160-minute job leaves
 a 15-minute finalisation step. The hook allows the
 free Apify result reads (`get-dataset-items` with a capped limit, `get-actor-run`,
 `abort-actor-run`) because actor calls return only storage ids, but only for runs this collector

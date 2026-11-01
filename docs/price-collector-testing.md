@@ -71,8 +71,8 @@ In GitHub → Actions → **Price collector (manual)** → Run workflow:
 
 The sample allows at most **12 Apify calls**, at most **5 returned items** per call (Dromb still 1),
 and **1 internal page**. Claude runs with at most **40 turns**, a **US$1 Claude budget**, and a
-**14-minute internal deadline**. The Claude step's 100-minute timeout is only a backstop; the job has
-130 minutes, and finalisation has its own 15-minute step. Supplier calls can cost money even if no matching product is found.
+**14-minute internal deadline**. The Claude step's 130-minute timeout is only a backstop; the job has
+160 minutes, and finalisation has its own 15-minute step. Supplier calls can cost money even if no matching product is found.
 Incomplete searches remain `truncated`; a successful actor run alone is not proof of completeness.
 
 The summary also says how many turns Claude took and its result subtype, and one line per tool
@@ -142,12 +142,17 @@ and currency there. No observed supplier price changes purchases, GST accounting
 Tick **full_run** to see what a real run costs before any schedule is enabled. It is still manual
 and still refuses the production API. It ignores **sample_size**, keeps the production limits in
 `apify-limits.json` (up to 600 actor calls, full page sizes and up to 3 pages per search, except Kmart and BIG W) and gives
-Claude every issued search, at most 90, in batches of about 6. Each batch is a fresh Claude session
-with 60 turns and a US$1 budget, so no session's context grows with the whole catalogue and Claude
-can spend at most US$15 in one run. One product's searches always stay in the same batch, because its
-match file can be written only once. The whole Claude phase has 90 minutes; the run stops at the
+Claude every issued search, at most 576, in batches of about 24 (3 products of 8 searches). Each
+batch is a fresh Claude session with 120 turns and a US$1 budget, so no session's context grows with
+the whole catalogue and Claude can spend at most US$24 in one run. One product's searches always stay
+in the same batch, because its match file can be written only once. The whole Claude phase has 120
+minutes; the run stops at the
 first batch that does not complete, and every search no batch reached becomes `not_searched`.
 Tick **include_verified_retailers** too, or Kmart and BIG W searches become `not_searched`.
+A full run covers the whole catalogue (owner decision, 1 November 2026): run 41303824929 used one
+product per session and 15 sessions, so it reached only 15 of 71 products (120 of 568 searches) and
+the other 56 were never searched. It took about 1.6 minutes and US$0.14 of Claude per product, so
+the 71 products need about 115 minutes and US$10.
 JB Metro (not an Apify actor) reads up to 5 pages of 20 products per search in a full run, with 2
 attempts of 15 seconds per page; a sample reads one page of 5 with one attempt. The guard appends
 these caps to every JB Metro call, so Claude cannot widen them.
