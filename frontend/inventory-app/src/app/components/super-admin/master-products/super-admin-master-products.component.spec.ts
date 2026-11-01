@@ -1,4 +1,5 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { Subject, of, throwError } from 'rxjs';
 import {
   MASTER_PRODUCT_PAGE_SIZE,
@@ -8,6 +9,7 @@ import {
   SuperAdminMasterProductsService
 } from '../../../services/super-admin-master-products.service';
 import { MasterProductSizeUnit, SupplierListingMatchStatus } from '../../../services/super-admin-price-catalogue-review.service';
+import { MasterProductFormComponent } from './master-product-form.component';
 import { SuperAdminMasterProductsComponent } from './super-admin-master-products.component';
 
 function product(overrides: Partial<SuperAdminMasterProduct> = {}): SuperAdminMasterProduct {
@@ -433,6 +435,130 @@ describe('SuperAdminMasterProductsComponent (issues #1023 and #1024)', () => {
       component.startEditing(product({ id: 7 }));
       component.previousPage();
       expect(component.formOpen).toBe(false);
+    });
+
+    /**
+     * The page keeps New and every row's Edit available while a write is in flight, and it serves
+     * both rows with **one** form instance. The reported defect is what that allows: correct row A,
+     * open row B before A's answer arrives, type into B, and A's answer would close B's form and
+     * throw away what was typed - or show A's refusal as B's own.
+     *
+     * The write itself is never treated as undone. An accepted one is announced and the catalogue is
+     * re-read; the form on screen is simply left alone.
+     */
+    describe('a write that answers after the form has moved on', () => {
+      function openForm(fixture: ComponentFixture<SuperAdminMasterProductsComponent>) {
+        const form = fixture.debugElement.query(By.directive(MasterProductFormComponent));
+        expect(form).not.toBeNull();
+        return form.componentInstance as MasterProductFormComponent;
+      }
+
+      const rowA = product({ id: 7, brand: 'Coke', name: 'Clasic', updatedAtUtc: '2026-10-31T01:02:03Z' });
+      const rowB = product({ id: 9, brand: 'Pepsi', name: 'Maxx', updatedAtUtc: '2026-10-31T04:05:06Z' });
+
+      it('keeps the row being corrected, and still says what the accepted write did', async () => {
+        const pending = new Subject<SuperAdminMasterProduct>();
+        const list = jest.fn(() => of(page({ products: [rowA, rowB], totalCount: 2 })));
+        const { component, host, fixture } = await render({ list, update: jest.fn(() => pending) });
+
+        testId(host, 'master-product-edit-7').click();
+        fixture.detectChanges();
+        const form = openForm(fixture);
+        form.brand = 'Coca-Cola';
+        form.submit();
+
+        testId(host, 'master-product-edit-9').click();
+        fixture.detectChanges();
+        // The same instance: it is handed the other row rather than being built again, which is why
+        // an answer has to know which form it belongs to.
+        expect(openForm(fixture)).toBe(form);
+        form.name = 'Max';
+
+        pending.next(product({ id: 7, brand: 'Coca-Cola', name: 'Clasic' }));
+        pending.complete();
+        fixture.detectChanges();
+
+        expect(component.formOpen).toBe(true);
+        expect(component.editing).toBe(rowB);
+        expect(form.brand).toBe('Pepsi');
+        expect(form.name).toBe('Max');
+        expect(form.submitting).toBe(false);
+        expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+        expect(testId(host, 'master-product-form').textContent).toContain('Edit master product');
+        // The correction did happen, so it is reported and the catalogue is read again.
+        expect(list).toHaveBeenCalledTimes(2);
+        expect(testId(host, 'master-product-saved').textContent).toContain('Coca-Cola Clasic was corrected.');
+      });
+
+      it('does not show an earlier refusal on the row being corrected, and re-reads nothing', async () => {
+        const pending = new Subject<SuperAdminMasterProduct>();
+        const list = jest.fn(() => of(page({ products: [rowA, rowB], totalCount: 2 })));
+        const { component, host, fixture } = await render({ list, update: jest.fn(() => pending) });
+
+        testId(host, 'master-product-edit-7').click();
+        fixture.detectChanges();
+        const form = openForm(fixture);
+        form.submit();
+
+        testId(host, 'master-product-edit-9').click();
+        fixture.detectChanges();
+        form.name = 'Max';
+
+        pending.error({
+          status: 409,
+          error: { message: 'This master product has been changed since this page was read.' }
+        });
+        fixture.detectChanges();
+
+        expect(component.formOpen).toBe(true);
+        expect(component.editing).toBe(rowB);
+        expect(form.brand).toBe('Pepsi');
+        expect(form.name).toBe('Max');
+        expect(form.submitting).toBe(false);
+        expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+        // A refusal wrote nothing, so there is nothing to announce and nothing to re-read.
+        expect(list).toHaveBeenCalledTimes(1);
+        expect(host.querySelector('[data-testid="master-product-saved"]')).toBeNull();
+      });
+
+      /**
+       * Dismissing the form while a write is in flight and opening another row: the reopened form is
+       * that row's, with none of the dismissed submission's state. The write itself is not announced,
+       * because the form that sent it is gone - the catalogue is read again on the next search, page
+       * step or accepted write.
+       */
+      it('reopens a clean form for another row after a write was dismissed mid-flight', async () => {
+        const pending = new Subject<SuperAdminMasterProduct>();
+        const list = jest.fn(() => of(page({ products: [rowA, rowB], totalCount: 2 })));
+        const { component, host, fixture } = await render({ list, update: jest.fn(() => pending) });
+
+        testId(host, 'master-product-edit-7').click();
+        fixture.detectChanges();
+        const dismissed = openForm(fixture);
+        dismissed.brand = 'Coca-Cola';
+        dismissed.submit();
+
+        testId(host, 'master-product-form-cancel').click();
+        fixture.detectChanges();
+        expect(component.formOpen).toBe(false);
+
+        testId(host, 'master-product-edit-9').click();
+        fixture.detectChanges();
+        const reopened = openForm(fixture);
+        reopened.name = 'Max';
+
+        pending.next(product({ id: 7, brand: 'Coca-Cola', name: 'Clasic' }));
+        pending.complete();
+        fixture.detectChanges();
+
+        expect(component.formOpen).toBe(true);
+        expect(component.editing).toBe(rowB);
+        expect(reopened.brand).toBe('Pepsi');
+        expect(reopened.name).toBe('Max');
+        expect(reopened.submitting).toBe(false);
+        expect(reopened.error).toBeNull();
+        expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+      });
     });
   });
 });

@@ -21,6 +21,7 @@
     <app-super-admin-master-product-form
       [product]="editing"
       (saved)="savedChanges($event)"
+      (savedAfterMovingOn)="savedWhileFormMovedOn($event)"
       (cancelled)="closeForm()"
     ></app-super-admin-master-product-form>
   }

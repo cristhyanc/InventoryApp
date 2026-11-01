@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 import {
   SuperAdminMasterProduct,
   SuperAdminMasterProductsService
@@ -241,6 +241,129 @@ describe('MasterProductFormComponent (issue #1024)', () => {
       expect(testId(host, 'master-product-form-error').textContent).toContain(
         'A master product needs a brand, a name and a size.'
       );
+    });
+  });
+
+  /**
+   * One instance of this form serves both the row being corrected and the next one, and the page
+   * leaves New and Edit available while a write is in flight. An answer that arrives after the form
+   * has become a *different* form must therefore describe nothing on screen: it may not close that
+   * form, clear its submitting state or show the other product's refusal as that row's own. A write
+   * already sent is never treated as undone - an accepted one is reported to the page so the
+   * catalogue is re-read.
+   */
+  describe('an answer to a submission the form has moved on from', () => {
+    it('reports an accepted correction to the page without touching the row now being corrected', async () => {
+      const pending = new Subject<SuperAdminMasterProduct>();
+      const { component, fixture, host } = await render(
+        { update: jest.fn(() => pending) },
+        product({ id: 7, brand: 'Coke', name: 'Clasic' })
+      );
+      const saved = jest.fn();
+      const savedAfterMovingOn = jest.fn();
+      component.saved.subscribe(saved);
+      component.savedAfterMovingOn.subscribe(savedAfterMovingOn);
+
+      component.brand = 'Coca-Cola';
+      component.submit();
+
+      // The page hands the same instance another row while the correction above is still unanswered.
+      fixture.componentRef.setInput('product', product({ id: 9, brand: 'Pepsi', name: 'Maxx' }));
+      fixture.detectChanges();
+      component.name = 'Max';
+
+      pending.next(product({ id: 7, brand: 'Coca-Cola', name: 'Clasic' }));
+      pending.complete();
+      fixture.detectChanges();
+
+      expect(saved).not.toHaveBeenCalled();
+      expect(savedAfterMovingOn).toHaveBeenCalledWith('Coca-Cola Clasic was corrected.');
+      expect(component.brand).toBe('Pepsi');
+      expect(component.name).toBe('Max');
+      expect(component.submitting).toBe(false);
+      expect(component.error).toBeNull();
+      expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+    });
+
+    it('says nothing at all when the refused submission is one the form has moved on from', async () => {
+      const pending = new Subject<SuperAdminMasterProduct>();
+      const { component, fixture, host } = await render(
+        { update: jest.fn(() => pending) },
+        product({ id: 7, brand: 'Coke', name: 'Clasic' })
+      );
+      const saved = jest.fn();
+      const savedAfterMovingOn = jest.fn();
+      component.saved.subscribe(saved);
+      component.savedAfterMovingOn.subscribe(savedAfterMovingOn);
+
+      component.submit();
+
+      fixture.componentRef.setInput('product', product({ id: 9, brand: 'Pepsi', name: 'Maxx' }));
+      fixture.detectChanges();
+      component.name = 'Max';
+
+      pending.error({
+        status: 409,
+        error: { message: 'Another master product already describes this brand, name and size.' }
+      });
+      fixture.detectChanges();
+
+      expect(saved).not.toHaveBeenCalled();
+      expect(savedAfterMovingOn).not.toHaveBeenCalled();
+      expect(component.error).toBeNull();
+      expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+      expect(component.brand).toBe('Pepsi');
+      expect(component.name).toBe('Max');
+      expect(component.submitting).toBe(false);
+    });
+
+    /** A dismissed form is not the form that write was sent from either. */
+    it('does not report an accepted write as the dismissed form own outcome', async () => {
+      const pending = new Subject<SuperAdminMasterProduct>();
+      const { component } = await render({ create: jest.fn(() => pending) });
+      const saved = jest.fn();
+      const savedAfterMovingOn = jest.fn();
+      component.saved.subscribe(saved);
+      component.savedAfterMovingOn.subscribe(savedAfterMovingOn);
+
+      component.brand = 'Solo';
+      component.name = 'Lemon';
+      component.sizeValue = 600;
+      component.submit();
+      component.cancel();
+
+      expect(component.submitting).toBe(false);
+
+      pending.next(product({ brand: 'Solo', name: 'Lemon' }));
+      pending.complete();
+
+      expect(saved).not.toHaveBeenCalled();
+      expect(savedAfterMovingOn).toHaveBeenCalledWith('Solo Lemon was added to the catalogue.');
+      expect(component.error).toBeNull();
+    });
+
+    /** The next submission from the form on screen is answered normally. */
+    it('still answers the submission the form on screen did make', async () => {
+      const first = new Subject<SuperAdminMasterProduct>();
+      const update = jest
+        .fn()
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(of(product({ id: 9, brand: 'Pepsi', name: 'Max' })));
+      const { component, fixture } = await render({ update }, product({ id: 7, brand: 'Coke' }));
+      const saved = jest.fn();
+      component.saved.subscribe(saved);
+
+      component.submit();
+      fixture.componentRef.setInput('product', product({ id: 9, brand: 'Pepsi', name: 'Maxx' }));
+      fixture.detectChanges();
+
+      component.name = 'Max';
+      component.submit();
+      first.next(product({ id: 7, brand: 'Coke' }));
+      first.complete();
+
+      expect(saved).toHaveBeenCalledTimes(1);
+      expect(saved).toHaveBeenCalledWith('Pepsi Max was corrected.');
     });
   });
 

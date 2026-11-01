@@ -36,6 +36,12 @@ type CatalogueRead = { request: CatalogueRequest; result: SuperAdminMasterProduc
  * listing of the product is confirmed, and the refusal of an edit answering a page that has moved on.
  * The catalogue is re-read after every accepted write, so what is on screen is what is stored.
  *
+ * **A write that answers late is still reported, but only the form it was sent from closes.** New and
+ * every row's Edit stay available while a write is in flight, so an accepted correction of one row can
+ * arrive while another row is being corrected: it is said and the catalogue is re-read
+ * (`(savedAfterMovingOn)`), and the open form keeps what somebody is typing rather than being closed
+ * out from under them (`(saved)`).
+ *
  * The search and the paging are the **server's** too: this page sends what a person typed and which
  * page they asked for, and displays the page the server says it served. Nothing is filtered, sorted or
  * counted here - a client-side filter over one page of a paged catalogue would silently hide the
@@ -249,6 +255,22 @@ export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
     // The listings panel is closed too: it is keyed on a product whose description has just changed,
     // and re-reading the catalogue is what the page is now showing.
     this.selectedProductId = null;
+    this.load();
+  }
+
+  /**
+   * After a write the server accepted that the form has already moved on from - a correction of one
+   * row answered while another row is being corrected, because New and Edit stay available while a
+   * write is in flight.
+   *
+   * The catalogue did change, so what happened is said and the catalogue is re-read. What is *not*
+   * done is anything to the form: closing it, or clearing what somebody is half-way through typing
+   * into it, would throw away an unsaved correction of a different product because an earlier one
+   * answered late. The re-read leaves the open form alone because the row it was opened with is the
+   * same object it was handed, so the form is never told it is about something else.
+   */
+  savedWhileFormMovedOn(outcome: string): void {
+    this.saved = outcome;
     this.load();
   }
 }

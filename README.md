@@ -1259,7 +1259,9 @@ PUT    /api/super-admin/master-products/{id}                      correct one (t
   `GET /api/admin/diagnostics/access` confirms the signed-in actor; entering the URL directly works
   identically, because the policy decides access on every request. It has a **New master product**
   button and an **Edit** action on each row, shows the server's own refusal wording verbatim, and has
-  no Delete control. See
+  no Delete control. Adding or correcting another product while a change is still being saved is
+  allowed: the slower answer never closes the form you have moved on to or discards what you have
+  typed into it, and a change the server accepted is still announced and the list still refreshed. See
   [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issues-1023-and-1024).
 
 ## Super Admin option visibility
