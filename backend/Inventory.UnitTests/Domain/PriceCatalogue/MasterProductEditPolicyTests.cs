@@ -75,7 +75,8 @@ public class MasterProductEditPolicyTests
     /// <summary>With no confirmed listing there is no confirmed pack size to invalidate.</summary>
     [Fact]
     public void A_size_change_is_allowed_with_no_confirmed_listing() =>
-        MasterProductEditPolicy.RequireSizeMayChange(sizeChanged: true, confirmedListingCount: 0);
+        Assert.Null(Record.Exception(
+            () => MasterProductEditPolicy.RequireSizeMayChange(sizeChanged: true, confirmedListingCount: 0)));
 
     /// <summary>
     /// A brand or name edit is always allowed, confirmed listings or not: the brand and the name are
@@ -85,7 +86,8 @@ public class MasterProductEditPolicyTests
     [InlineData(0)]
     [InlineData(4)]
     public void An_edit_that_does_not_change_the_size_is_always_allowed(int confirmed) =>
-        MasterProductEditPolicy.RequireSizeMayChange(sizeChanged: false, confirmed);
+        Assert.Null(Record.Exception(
+            () => MasterProductEditPolicy.RequireSizeMayChange(sizeChanged: false, confirmed)));
 
     #endregion
 
@@ -107,7 +109,7 @@ public class MasterProductEditPolicyTests
     /// <summary>The value the row actually holds is what lets the edit through.</summary>
     [Fact]
     public void An_edit_presenting_the_stored_instant_is_current() =>
-        MasterProductEditPolicy.RequireCurrent(Stored, Stored);
+        Assert.Null(Record.Exception(() => MasterProductEditPolicy.RequireCurrent(Stored, Stored)));
 
     /// <summary>
     /// An edit that presents nothing at all is a <em>validation</em> failure rather than a conflict:
