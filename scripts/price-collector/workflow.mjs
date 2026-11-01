@@ -217,7 +217,7 @@ function submissionFolder(stateDir, outputDir, work) {
         ? name === `${file.workItemId}.json` && work.searches.some(s => s.workItemId === file.workItemId)
         : /^match-[a-zA-Z0-9_-]+\.json$/.test(name) && work.matching.waitingProducts.some(p => p.waitingKey === file.waitingKey);
       if (file.runId !== work.runId || !selected) throw new Error('Not a result for this sample.');
-      cpSync(path, join(dir, name), { errorOnExist: true, force: false });
+      cpSync(path, join(dir, name), { errorOnExist: true, force: false, preserveTimestamps: true });
     } catch { refused++; }
   }
   return { dir, refused };

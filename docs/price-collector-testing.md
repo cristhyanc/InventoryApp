@@ -84,6 +84,12 @@ A row's stock answer never drops it (owner decision, 1 November 2026): `stockSta
 The BIG W name search forces `maxReviewsPerProduct: 1` (the actor's minimum; 0 is refused as invalid
 input) with `includeReviews: false`, so no reviews are fetched.
 
+Claude never writes a row's observation time (owner decision, 1 November 2026): it has no clock, and
+in run 41259875824 it dated JB Metro rows after the submission, so the API refused them as
+`observed in the future`. `submit-results.mjs` sets every row's `observedAtUtc` to the time Claude
+wrote that search's file (its modification time, kept when the workflow copies it for submission),
+replacing any value in the file. Each run reads prices live, so that is the reading's time.
+
 ### Run log
 
 The owner decided on 31 October 2026 that a run must not be a black box: the run is logged in

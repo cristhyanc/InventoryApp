@@ -25,7 +25,7 @@
 // pending and rejected row counts with the reasons the API gave, the match outcomes, and the files it
 // skipped with why. No price, product name, supplier product id, base URL or token is printed.
 import { fileURLToPath } from 'node:url';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   ApiError,
@@ -118,6 +118,21 @@ export function normaliseStockStatus(file) {
   }
 }
 
+/**
+ * Every row's observation instant is when its file was written, never a time Claude states
+ * (owner decision, 1 November 2026). Claude has no clock: on 1 November it dated JB Metro rows
+ * minutes after the submission and the API refused them as observed in the future. Each run reads
+ * prices live and Claude writes a search's file as soon as it has read it, so the file's
+ * modification time - before the submission, after the run started - is the reading's instant.
+ * Whole seconds, rounded down, so it is never later than the file itself.
+ */
+export function stampObservedAt(file, writtenAt) {
+  const instant = new Date(Math.floor(writtenAt.getTime() / 1000) * 1000).toISOString().replace('.000Z', 'Z');
+  for (const row of Array.isArray(file?.rows) ? file.rows : []) {
+    if (row && typeof row === 'object') row.observedAtUtc = instant;
+  }
+}
+
 /** One file, read and validated on its own: a result, a match, or a reason it is skipped. */
 async function classifyOutputFile(dir, name) {
   if (!RESULT_FILE_NAME.test(name) && !MATCH_FILE_NAME.test(name)) {
@@ -132,7 +147,10 @@ async function classifyOutputFile(dir, name) {
   }
 
   const isResult = RESULT_FILE_NAME.test(name);
-  if (isResult) normaliseStockStatus(parsed);
+  if (isResult) {
+    normaliseStockStatus(parsed);
+    stampObservedAt(parsed, (await stat(join(dir, name))).mtime);
+  }
   const checked = isResult ? validateResultFile(parsed) : validateMatchFile(parsed);
   if (!checked.ok) return { skip: checked.problems[0] };
 

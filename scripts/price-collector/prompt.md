@@ -207,7 +207,6 @@ One entry of `searches` is one product at one supplier, identified by its `workI
       "isPromotion": true,
       "promotionEndsAtUtc": "2026-11-05T13:00:00Z",
       "stockStatus": "in_stock",
-      "observedAtUtc": "2026-10-30T02:15:00Z",
       "sourceReference": "varnmill run 9f2c",
       "sourceUrl": "https://www.coles.com.au/product/5216969"
     }
@@ -232,7 +231,8 @@ One entry of `searches` is one product at one supplier, identified by its `workI
   over from last night or sent as `0`. A barcode is text, so its leading zeros survive, and it needs
   its `barcodeScope` (`unit` or `carton`): without one, leave both out. Never infer a scope from
   another supplier's barcode or from the digits.
-- `observedAtUtc` is when you read the price, in UTC, and must be inside this run's window.
+- **Never write `observedAtUtc`.** You have no clock. The submitter records when each file was
+  written, so write a search's file as soon as you have read its prices.
 - `stockStatus` is `in_stock`, `out_of_stock` or `unknown`. Write `unknown` when the source gives
   none (an empty or `null` stock field). Stock never decides whether a row is kept: report every
   real match whatever its stock.
