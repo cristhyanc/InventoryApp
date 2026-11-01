@@ -329,6 +329,11 @@ jobs:
           client-id: ${{ vars.AGENT_AUTOMATION_APP_CLIENT_ID }}
           private-key: ${{ secrets.AGENT_AUTOMATION_APP_PRIVATE_KEY }}
           permission-contents: write
+          # GitHub checks a newly created branch's workflow files against the default branch (main), so a
+          # develop base carrying unreleased .github/workflows changes is refused for a contents-only token
+          # (runs 41254647266, 41254648386, 41254649996). The persist step still rejects any agent commit
+          # that touches .github, so this does not let the agent change a workflow.
+          permission-workflows: write
 
       - name: Diagnose persistence GitHub App token
         if: always() && steps.persistence_app_token.outcome == 'success' && steps.persistence_candidate.outputs.has_commit == 'true'
