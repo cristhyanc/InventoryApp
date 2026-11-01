@@ -526,8 +526,9 @@ public class SupplierPriceObservationStorageTests
     }
 
     /// <summary>
-    /// The shipped supplier master records carry the owner's two freshness limits as data: BIG W is
-    /// checked twice a week and holds 102 hours, and every other record holds the daily 30. It is
+    /// The shipped supplier master records carry the owner's freshness limits as data: BIG W and
+    /// Kmart are checked once a week (owner decision, 1 November 2026) and hold 174 hours, and every
+    /// other record holds the daily 30. It is
     /// asserted here because "stored per supplier master record, not hard-coded per supplier name" is
     /// the constraint this column exists for.
     /// </summary>
@@ -538,11 +539,10 @@ public class SupplierPriceObservationStorageTests
 
         var limits = await fixture.ShippedFreshnessLimitsAsync();
 
-        Assert.Equal(
-            SupplierPriceFreshnessPolicy.TwiceWeeklyCheckLimitHours,
-            limits["BIG W"]);
+        string[] weekly = ["BIG W", "KMART"];
+        Assert.All(weekly, name => Assert.Equal(SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours, limits[name]));
         Assert.All(
-            limits.Where(limit => limit.Key != "BIG W"),
+            limits.Where(limit => !weekly.Contains(limit.Key)),
             limit => Assert.Equal(SupplierPriceFreshnessPolicy.DailyCheckLimitHours, limit.Value));
     }
 
