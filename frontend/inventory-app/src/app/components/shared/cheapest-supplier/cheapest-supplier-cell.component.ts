@@ -146,10 +146,10 @@ export const STOCK_MAY_DIFFER_NOTE = 'Stock may differ';
  * from the comparison (owner decision, 1 November 2026), so every cheapest price carries it.
  */
 export function cheapestStockNote(state: CheapestSuppliersState, product: CheapestSupplierProduct | undefined): string | null {
-  if (state !== 'loaded' || !product || product.cheapestUnitPrice === null) {
+  if (state !== 'loaded' || (product?.cheapestUnitPrice ?? null) === null) {
     return null;
   }
-  return product.suppliers.some((offer) => offer.isCheapest) ? STOCK_MAY_DIFFER_NOTE : null;
+  return product?.suppliers.some((offer) => offer.isCheapest) ? STOCK_MAY_DIFFER_NOTE : null;
 }
 
 /**

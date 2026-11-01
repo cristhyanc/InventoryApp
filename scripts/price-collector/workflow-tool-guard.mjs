@@ -120,10 +120,8 @@ const failurePatterns = [
 export function failureCode(event) {
   if (event?.is_interrupt === true) return 'failed-interrupt';
   const error = String(event?.error ?? '');
-  for (const [code, pattern] of failurePatterns) {
-    if (pattern.test(error)) return code;
-  }
-  return 'failed-other';
+  const matched = failurePatterns.find(([, pattern]) => pattern.test(error));
+  return matched ? matched[0] : 'failed-other';
 }
 
 /** PostToolUseFailure: notes the fixed failure label of a failed Apify call, and decides nothing. */
