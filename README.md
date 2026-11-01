@@ -1195,21 +1195,25 @@ POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
 The review above is a **queue**: products awaiting a match, automatic matches to check, listings
 awaiting a decision. This page is the catalogue **itself** — every master product in the shared
 supplier price catalogue, searchable, with the supplier listings that hang from each one (issue #1023,
-the eighth task of #817). It exists because a product nothing was waiting on could not be found,
-searched for or inspected at all.
+the eighth task of #817) — and, since issue #1024, where that catalogue is **managed**: a master
+product can be added before any business asks for it, and a wrong brand, name or size corrected. It
+exists because a product nothing was waiting on could not be found, searched for or inspected at all.
 
-**It is read only.** Creating, editing and deleting a master product are separate tasks that follow
-this one, and the Supplier Price Review stays the only place a master product is created or corrected.
+**Deleting a master product is not here.** That is a separate task, and the API has no such route.
+This page and the Supplier Price Review are the only two places a master product is created or
+corrected; no automatic match and no business ever creates one.
 
 ```text
-GET /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
-GET /api/super-admin/master-products/{id}                      one product and its supplier listings
+GET    /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
+GET    /api/super-admin/master-products/{id}                      one product and its supplier listings
+POST   /api/super-admin/master-products                           add one   (brand, name, sizeValue, sizeUnit)
+PUT    /api/super-admin/master-products/{id}                      correct one (the same, plus lastChangedAtUtc)
 ```
 
 - **Who may use it.** Exactly the same answer as every Super Admin route above: the configured Entra
   `(tid, oid)` pair alone. An Owner, a Manager and an Operator are refused, and a member who presents
   a support-session id is still an ordinary member. The request resolves no business at all.
-- **Nothing about any business is in either response** — no business id, no business name, no
+- **Nothing about any business is in any request or response** — no business id, no business name, no
   business's product id, and **no count of who is tracking a product**. That count is the review's, and
   it is deliberately not here: this page is master-catalogue management only.
 - **Searching and paging happen on the server.** `search` matches the brand or the name, ignoring case
@@ -1225,12 +1229,38 @@ GET /api/super-admin/master-products/{id}                      one product and i
   currency, whether it includes GST, and when it was observed. A listing nobody has priced says
   **Never checked** rather than showing a zero, and an unpublished pack quantity stays **Unknown**.
   Nothing here is a per-unit price: that comparison is the Cheapest supplier column's.
+- **Adding one** takes the brand, the name or variant, and the individual size with its unit from the
+  closed list `ml`, `l`, `g`, `kg`, `each`. It is held to exactly the rules the Supplier Price Review's
+  own create is: the values are trimmed and required, the size must be above zero at no more than three
+  decimal places, and the same description is the same product however it is capitalised or spaced — so
+  a second attempt at one is refused with **"Another master product already describes this brand, name
+  and size. Match this product to that one instead of creating a second."** rather than quietly making
+  a duplicate.
+- **Correcting one keeps the same product.** The brand, the name and the size are corrected on the row
+  every business tracking that product already points at, so every supplier listing, match and
+  suggestion stays linked and nothing a business owns changes at all — not its own product name, size,
+  stock, cost or purchases. A brand or name edit changes the shared catalogue's **label**, not anybody's
+  product record, and correcting a master product never creates, confirms or refuses a supplier listing
+  and never matches or unmatches a business's tracked product.
+- **The size cannot be changed while a supplier listing of the product is confirmed.** Those listings'
+  pack sizes were confirmed against the current size, and every tracking business's per-unit price would
+  change without anybody confirming anything — so the page says so, and the server refuses it with that
+  reason. Decide those listings in Supplier Price Review first. The brand and the name can always be
+  corrected.
+- **Two tabs cannot overwrite each other.** A correction carries the "last changed" instant the page
+  read, and one that has been superseded is refused with **"This master product has been changed since
+  this page was read. Re-read the catalogue and make the correction again."** The catalogue is re-read
+  after every accepted change, so what is on screen is what is stored.
+- **Every change is recorded** — who made it, which master product, and when — on the same audit trail
+  the Supplier Price Review's decisions are written to. A refused change is not recorded, because
+  nothing happened.
 - **The page.** The Angular app offers it at `/super-admin/master-products`, shown as **Master
   Products** in the sidebar's **Super Admin** group beside Supplier Price Review and only while
   `GET /api/admin/diagnostics/access` confirms the signed-in actor; entering the URL directly works
-  identically, because the policy decides access on every request. It has no Add, Edit or Delete
-  control. See
-  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issue-1023).
+  identically, because the policy decides access on every request. It has a **New master product**
+  button and an **Edit** action on each row, shows the server's own refusal wording verbatim, and has
+  no Delete control. See
+  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issues-1023-and-1024).
 
 ## Super Admin option visibility
 
