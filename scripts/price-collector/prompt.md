@@ -226,9 +226,15 @@ One entry of `searches` is one product at one supplier, identified by its `workI
 - `priceBasis` is the supplier's own basis, which is the work list's `pricesIncludeGst` for that
   supplier (`inclusive_of_gst` when true, `exclusive_of_gst` when false). Never convert a price, and
   never GST-adjust one.
-- **Never invent a value.** A pack quantity, a price, a barcode, a size or a GST rate you did not
-  read is **left out of the row** — never guessed from a title, derived from another pack, carried
-  over from last night or sent as `0`. A barcode is text, so its leading zeros survive, and it needs
+- **`packQuantity` is how many items one pack price buys.** Take it from the supplier's own pack
+  field when it has one (JB Metro's `pickamntsoldas`), otherwise from the count the title states
+  (`24 Pack`, `x 30`, `18x375ml`, `2 Pack`, `10PK`). A title that names one item size and **no
+  count and no pack word** (`Kinder Bueno Bar 43g`, `Aero Peppermint Milk Chocolate Bar 40g`) is a
+  single item: write `1` (owner decision, 1 November 2026). When the title says it is a pack or
+  multipack but not how many (`Multipack`, `Value Pack`, `Box`), leave `packQuantity` out.
+- **Never invent any other value.** A price, a barcode, a size or a GST rate you did not read is
+  **left out of the row** — never guessed from a title, derived from another pack, carried over
+  from last night or sent as `0`. A barcode is text, so its leading zeros survive, and it needs
   its `barcodeScope` (`unit` or `carton`): without one, leave both out. Never infer a scope from
   another supplier's barcode or from the digits.
 - **Never write `observedAtUtc`.** You have no clock. The submitter records when each file was

@@ -90,6 +90,12 @@ in run 41259875824 it dated JB Metro rows after the submission, so the API refus
 wrote that search's file (its modification time, kept when the workflow copies it for submission),
 replacing any value in the file. Each run reads prices live, so that is the reading's time.
 
+A single item has a pack of 1 (owner decision, 1 November 2026). Varnmill, Kmart and BIG W publish
+no pack field, so `prompt.md` has Claude take the pack from the count in the title (`24 Pack`,
+`x 30`, `2 Pack`) and write `1` for a title that names one item size with no count or pack word
+(`Kinder Bueno Bar 43g`). Without it a single bar had no per-unit price and could never be the
+cheapest. A pack or multipack whose count the title does not state still has no pack quantity.
+
 ### Run log
 
 The owner decided on 31 October 2026 that a run must not be a black box: the run is logged in
