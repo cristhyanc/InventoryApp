@@ -101,8 +101,12 @@ export interface AttentionAlert {
   readonly iconClass: string;
 }
 
-/** How many products the Reorder priorities overview shows before linking to the full list. */
-export const REORDER_PRIORITY_LIMIT = 5;
+/**
+ * How many products one page of the Reorder priorities card shows (issue #1017). The size is fixed:
+ * the owner's decision is that the card pages the whole reorder list five rows at a time, with no
+ * "Rows per page" selector, and it supersedes issue #972's top-five-only requirement for this card.
+ */
+export const REORDER_PAGE_SIZE = 5;
 
 /**
  * What the Cheapest supplier column explains about itself (issue #1016). It is the sentence the row
@@ -157,10 +161,20 @@ export class DashboardComponent implements OnInit, OnDestroy {
   sites: Site[] = [];
 
   /**
-   * The ids of the products Reorder priorities shows, replaced only when the reorder list is, so
-   * the cheapest-supplier read (issue #981) is asked once per list rather than once per render.
+   * The ids of **every** product the paged Reorder priorities card lists (issue #1017), replaced
+   * only when the reorder list is, so the cheapest-supplier read (issue #981) is asked once per
+   * list rather than once per render - and, since the card pages that list, never once per page
+   * turn either. The component behind the column splits them into the batches its endpoint bounds.
    */
   reorderPriorityIds: readonly number[] = [];
+
+  /**
+   * The zero-based page of the reorder list the card shows (issue #1017). It is the one page state
+   * the desktop table and the narrow-screen cards both render, it starts at the first page on every
+   * visit - it is deliberately not remembered anywhere - and a re-read keeps it only while that
+   * page still exists (see {@link refreshLowStock}).
+   */
+  reorderPageIndex = 0;
 
   /**
    * The Cheapest supplier column's read for those products (issue #981, the shared component of
@@ -463,7 +477,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.productService.getLowStock().subscribe({
       next: (listing) => {
         this.lowStock = listing.products.filter((product) => product.isActive !== false);
-        this.reorderPriorityIds = this.reorderPriorities.map((product) => product.id);
+        // Every listed product, not the shown page: the enrichment reads below are asked once for
+        // the whole list, so turning a page needs no request (issue #1017).
+        this.reorderPriorityIds = this.lowStock.map((product) => product.id);
+        this.keepReorderPageInRange();
         this.reorderMode = listing.mode;
         this.reorderMachineNeedUnavailableReason = listing.machineNeedUnavailableReason;
         this.isLoadingLowStock = false;
@@ -473,6 +490,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
       error: (error: unknown) => {
         this.lowStock = [];
         this.reorderPriorityIds = [];
+        this.keepReorderPageInRange();
         // A mode nobody published must not survive the failure and label the next render.
         this.reorderMode = null;
         this.reorderMachineNeedUnavailableReason = null;
@@ -488,7 +506,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
   /**
    * Reads the last and cheapest recorded purchase cost of every product the Reorder Alerts table is
    * about, in one request (issue #789, over issue #788's bulk endpoint), and is also what the Retry
-   * control calls.
+   * control calls. Since issue #1017 "every product the table is about" is the whole reorder list
+   * the card pages, not the five rows currently on screen: the read happens once per reorder read,
+   * which is what lets a page turn send nothing and still show costs on every page.
    *
    * It is the one place the three preconditions live, because each of them has to leave the columns
    * saying something different. Without `Dashboard.ViewFinancials` the request is never sent at all
@@ -507,8 +527,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.purchaseCosts = new Map();
     this.purchaseCostState = 'idle';
 
-    // Only the products the overview actually shows (issue #972): the full list is a page of its own.
-    const productIds = this.reorderPriorities.map((product) => product.id);
+    // Every product the card lists, read once per reorder read (issue #1017): the card pages that
+    // one answer, so a page turn must not send a request and a later page must not be unenriched.
+    const productIds = this.reorderPriorityIds;
     if (!this.arePurchaseCostColumnsShown || !this.isFinancialsAccessAnswered || productIds.length === 0) return;
 
     this.purchaseCostState = 'loading';
@@ -915,11 +936,56 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The first {@link REORDER_PRIORITY_LIMIT} products of the reorder list, in the order the
-   * backend's reorder calculation published them: nothing here re-ranks the list.
+   * The current page's products, in the order the backend's reorder calculation published them:
+   * this slices the authoritative list and nothing here re-ranks or re-filters it, so the pages
+   * together hold every product exactly once (issue #1017).
    */
   get reorderPriorities(): readonly Product[] {
-    return this.lowStock.slice(0, REORDER_PRIORITY_LIMIT);
+    const start = this.reorderPageIndex * REORDER_PAGE_SIZE;
+    return this.lowStock.slice(start, start + REORDER_PAGE_SIZE);
+  }
+
+  /** At least 1, so the pager never reads "Page 1 of 0" for a list with one short page. */
+  get reorderPageCount(): number {
+    return Math.max(1, Math.ceil(this.lowStock.length / REORDER_PAGE_SIZE));
+  }
+
+  /**
+   * Whether to offer Previous and Next at all. With one page there is nowhere to go, so the range
+   * text stands alone rather than beside two permanently disabled controls; an empty, loading or
+   * failed list renders no pager at all, which the template decides by not rendering this section.
+   */
+  get isReorderPagerShown(): boolean {
+    return this.reorderPageCount > 1;
+  }
+
+  /**
+   * Which of the listed products are on screen, as the operator counts them: `Showing 6–7 of 7
+   * products`, in the singular for a list of one. The total is the list's own length, never the
+   * summary's count - the two are different reads and this sentence describes this one.
+   */
+  get reorderRangeLabel(): string {
+    const total = this.lowStock.length;
+    const first = total === 0 ? 0 : this.reorderPageIndex * REORDER_PAGE_SIZE + 1;
+    const last = Math.min((this.reorderPageIndex + 1) * REORDER_PAGE_SIZE, total);
+    return `Showing ${first}–${last} of ${plural(total, 'product')}`;
+  }
+
+  previousReorderPage(): void {
+    this.reorderPageIndex = Math.max(0, this.reorderPageIndex - 1);
+  }
+
+  nextReorderPage(): void {
+    this.reorderPageIndex = Math.min(this.reorderPageCount - 1, this.reorderPageIndex + 1);
+  }
+
+  /**
+   * Keeps the page the operator is on across a re-read of the list (a page load, or a read after a
+   * refresh): the same page when it still exists, and the new last page when the list has shrunk
+   * past it. Never an empty page, which is what a shrunken list would otherwise render.
+   */
+  private keepReorderPageInRange(): void {
+    this.reorderPageIndex = Math.min(this.reorderPageIndex, this.reorderPageCount - 1);
   }
 
   /** One product's cheapest-supplier answer, or `undefined` while the read has not settled it. */

@@ -321,12 +321,25 @@ describe('Dashboard machines under their sites (issues #980 and #987)', () => {
 describe('Dashboard Reorder priorities Cheapest supplier column (issue #981)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('reads the cheapest supplier once, for the five products shown only', async () => {
+  /**
+   * Issue #1017 pages this card, so the one read is for every product it lists rather than for the
+   * five rows on screen: that is the owner's requirement change, and it is what keeps a page turn
+   * from asking anything and keeps the rows of a later page from rendering without their prices.
+   */
+  it('reads the cheapest supplier once, for every listed product, and again for no page turn', async () => {
     const getSummary = jest.fn((ids: readonly number[]) => of(cheapest(ids)));
-    await render({ getSummary });
+    const { fixture, host } = await render({ getSummary });
 
     expect(getSummary).toHaveBeenCalledTimes(1);
-    expect(getSummary).toHaveBeenCalledWith([1, 2, 3, 4, 5]);
+    expect(getSummary).toHaveBeenCalledWith([1, 2, 3, 4, 5, 6, 7]);
+
+    host.querySelector<HTMLButtonElement>('[data-testid="reorder-next-page"]')?.click();
+    fixture.detectChanges();
+
+    expect(getSummary).toHaveBeenCalledTimes(1);
+    const cells = reorderSection(host).querySelectorAll('table [data-testid="cheapest-supplier-cell"]');
+    expect(cells).toHaveLength(2);
+    expect(cells[0].textContent).toContain('JB Metro');
   });
 
   it('shows each product cheapest supplier after the historical purchase columns', async () => {
