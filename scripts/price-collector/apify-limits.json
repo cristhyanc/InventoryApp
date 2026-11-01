@@ -55,8 +55,8 @@
       ],
       "role": "name_search",
       "itemLimitField": "maxItems",
-      "pageSize": 50,
-      "maxPages": 3,
+      "pageSize": 10,
+      "maxPages": 1,
       "forcedInput": {
         "mode": "search",
         "fetchReviews": false,
@@ -83,8 +83,8 @@
       ],
       "role": "name_search",
       "itemLimitField": "maxItems",
-      "pageSize": 48,
-      "maxPages": 3,
+      "pageSize": 10,
+      "maxPages": 1,
       "forcedInput": {
         "includeFullDetail": false,
         "includePricing": true,

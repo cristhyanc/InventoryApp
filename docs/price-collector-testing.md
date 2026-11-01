@@ -96,6 +96,12 @@ no pack field, so `prompt.md` has Claude take the pack from the count in the tit
 (`Kinder Bueno Bar 43g`). Without it a single bar had no per-unit price and could never be the
 cheapest. A pack or multipack whose count the title does not state still has no pack quantity.
 
+Kmart and BIG W are capped at **10 results on 1 page** per search, in every run (owner decision,
+1 November 2026). Both actors charge per result: full run 41264033898 asked for 50 and 48 and cost
+about US$0.14 per Kmart and up to US$0.21 per BIG W search (US$1.33 of the run's US$1.35 Apify
+spend, from the Apify Console), while every match they returned was in the top 5 of its search.
+Varnmill cost about US$0.02 for 15 searches and keeps its 50-result pages.
+
 ### Run log
 
 The owner decided on 31 October 2026 that a run must not be a black box: the run is logged in
@@ -126,7 +132,7 @@ and currency there. No observed supplier price changes purchases, GST accounting
 
 Tick **full_run** to see what a real run costs before any schedule is enabled. It is still manual
 and still refuses the production API. It ignores **sample_size**, keeps the production limits in
-`apify-limits.json` (up to 600 actor calls, full page sizes and up to 3 pages per search) and gives
+`apify-limits.json` (up to 600 actor calls, full page sizes and up to 3 pages per search, except Kmart and BIG W) and gives
 Claude every issued search, at most 90, in batches of about 6. Each batch is a fresh Claude session
 with 60 turns and a US$1 budget, so no session's context grows with the whole catalogue and Claude
 can spend at most US$15 in one run. One product's searches always stay in the same batch, because its

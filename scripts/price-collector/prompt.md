@@ -70,8 +70,10 @@ which is a true answer.
   and `maxPages`. The guard disables reviews (`fetchReviews: false`, `maxReviews: 0`),
   store lookups, Click & Collect, live delivery checks, connectors and incremental output.
 - Axlymxp BIG W uses `searchQueries: ["<product description>"]`, `maxItems` and
-  `maxPagesPerQuery`. The supplier returns 48 results per internal search page. Keep live
-  pricing enabled and reviews/rating enrichment disabled.
+  `maxPagesPerQuery`. Keep live pricing enabled and reviews/rating enrichment disabled.
+- Kmart and BIG W charge per result, so every search asks for **at most 10 results on 1 page**
+  (`maxItems: 10`, `maxPages`/`maxPagesPerQuery: 1`); the guard refuses more. The best matches
+  come first, so a product they sell is in those 10.
 - Dromb is only the fallback: `operation: "item"` with one known `item_id` (or its published
   product `url`). Its item-limit field is `limit`, not `maxItems`; an item lookup returns one
   product. Never use Dromb keyword search in this collector.
