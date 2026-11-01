@@ -102,6 +102,12 @@ about US$0.14 per Kmart and up to US$0.21 per BIG W search (US$1.33 of the run's
 spend, from the Apify Console), while every match they returned was in the top 5 of its search.
 Varnmill cost about US$0.02 for 15 searches and keeps its 50-result pages.
 
+BIG W and Kmart are searched **once a week** (owner decision, 1 November 2026): BIG W on Thursdays,
+when its catalogues start, and Kmart on Mondays. Their supplier records' price freshness limit is
+174 hours (a week plus the six-hour margin), so a price stays comparable until the next week's run.
+Choosing which suppliers a run includes on which day is the later scheduled-run part of #929; a
+manual run still searches every supplier it is given.
+
 ### Run log
 
 The owner decided on 31 October 2026 that a run must not be a black box: the run is logged in

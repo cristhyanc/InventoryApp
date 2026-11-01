@@ -34,6 +34,26 @@ public class SupplierPriceFreshnessPolicyTests
     }
 
     /// <summary>
+    /// The weekly limit (owner decision, 1 November 2026: BIG W on Thursdays, Kmart on Mondays) is
+    /// derived the same way: a week plus the margin, 174 hours.
+    /// </summary>
+    [Fact]
+    public void The_weekly_limit_is_a_week_plus_the_margin()
+    {
+        Assert.Equal(174, SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours);
+        Assert.Equal(
+            SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours,
+            SupplierPriceFreshnessPolicy.LimitForCheckInterval(
+                SupplierPriceFreshnessPolicy.WeeklyCheckIntervalHours));
+
+        var observedAt = new DateTime(2026, 11, 5, 21, 0, 0, DateTimeKind.Utc);
+        Assert.True(SupplierPriceFreshnessPolicy.IsFresh(
+            observedAt, observedAt.AddHours(173), SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours));
+        Assert.False(SupplierPriceFreshnessPolicy.IsFresh(
+            observedAt, observedAt.AddHours(174), SupplierPriceFreshnessPolicy.WeeklyCheckLimitHours));
+    }
+
+    /// <summary>
     /// The limit is the age at which a price stops being usable: fresh just under it, stale at it.
     /// The boundary belongs to one side deliberately rather than by accident.
     /// </summary>
