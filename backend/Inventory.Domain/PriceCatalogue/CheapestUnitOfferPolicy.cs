@@ -1,5 +1,4 @@
 using Inventory.Domain.Exceptions;
-using Inventory.Domain.Gst;
 
 namespace Inventory.Domain.PriceCatalogue;
 
@@ -211,21 +210,6 @@ public static class CheapestUnitOfferPolicy
     /// has paid.</para>
     /// </summary>
     public const decimal StandardGstRate = 0.10m;
-
-    /// <summary>
-    /// The rate a product's own GST rule implies: the standard rate for a taxable product, nothing at
-    /// all for a GST-free one, and <see langword="null"/> when no rule is configured.
-    ///
-    /// <para><c>GstRules.None</c> is a real state (issue #430) and stays one here: a product nobody
-    /// has classified is not a GST-free product, and reading it as one would compare a taxable
-    /// product's ex-GST price with another's inclusive price.</para>
-    /// </summary>
-    public static decimal? RateForProductRule(GstClassification productGstRule) => productGstRule switch
-    {
-        GstClassification.Taxable => StandardGstRate,
-        GstClassification.GstFree => 0m,
-        _ => null,
-    };
 
     /// <summary>
     /// The basis a business is shown, and therefore compared on: ex-GST for a GST-registered business,

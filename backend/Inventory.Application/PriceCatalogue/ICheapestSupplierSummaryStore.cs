@@ -1,4 +1,3 @@
-using Inventory.Domain.Gst;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Tenancy;
 
@@ -90,10 +89,6 @@ public sealed record TrackedListingPrice(
 /// Where the mapping has got to, or <see langword="null"/> when the business does not track this
 /// product at all. The two are different answers and neither is a label on the other.
 /// </param>
-/// <param name="ProductGstRule">
-/// The product's own GST rule (issue #430), which supplies the rate where a supplier publishes none.
-/// <c>GstRules.None</c> is no rule, and an offer no rate covers is shown and not compared.
-/// </param>
 /// <param name="Listings">
 /// The listings of the matched master product published by the business's own linked, not-hidden
 /// suppliers, and nothing else. Empty while the mapping is not matched, because there is no master
@@ -102,7 +97,6 @@ public sealed record TrackedListingPrice(
 public sealed record TrackedProductListings(
     long ProductId,
     ProductPriceTrackingStatus? TrackingStatus,
-    GstClassification ProductGstRule,
     IReadOnlyList<TrackedListingPrice> Listings);
 
 /// <summary>

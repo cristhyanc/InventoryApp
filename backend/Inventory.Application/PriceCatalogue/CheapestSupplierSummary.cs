@@ -253,7 +253,10 @@ public sealed class GetCheapestSupplierSummary
 
         var comparison = CheapestUnitOfferPolicy.Compare(
             [.. priced.Select(Candidate)],
-            CheapestUnitOfferPolicy.RateForProductRule(product.ProductGstRule),
+            // The standard rate converts each supplier's price from the basis its preset publishes
+            // (owner decision, 1 November 2026): the product's own GST rule plays no part here, and
+            // a supplier's own per-product rate, where it publishes one, still comes first.
+            CheapestUnitOfferPolicy.StandardGstRate,
             basis,
             asOfUtc);
 

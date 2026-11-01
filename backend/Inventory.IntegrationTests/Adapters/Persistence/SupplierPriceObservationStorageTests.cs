@@ -517,7 +517,7 @@ public class SupplierPriceObservationStorageTests
 
         var comparison = CheapestUnitOfferPolicy.Compare(
             candidates,
-            CheapestUnitOfferPolicy.RateForProductRule(Inventory.Domain.Gst.GstClassification.Taxable),
+            CheapestUnitOfferPolicy.StandardGstRate,
             CheapestUnitOfferPolicy.BasisFor(businessIsGstRegistered: true),
             RecordedAt);
 
