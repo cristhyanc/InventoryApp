@@ -36,7 +36,7 @@
         "items": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["supplierProductId", "packPrice", "currency", "priceBasis", "stockStatus", "observedAtUtc"],
+          "required": ["supplierProductId", "packPrice", "currency", "priceBasis", "observedAtUtc"],
           "properties": {
             "workItemId": { "type": "integer", "minimum": 1, "description": "Optional, and must be the file's own." },
             "supplierProductId": { "type": "string", "minLength": 1, "maxLength": 200 },
@@ -54,7 +54,7 @@
             "supplierGstRate": { "type": "number", "minimum": 0, "maximum": 1, "description": "A proportion, when the supplier publishes one." },
             "isPromotion": { "type": "boolean" },
             "promotionEndsAtUtc": { "type": "string", "format": "date-time" },
-            "stockStatus": { "type": "string", "enum": ["in_stock", "out_of_stock", "unknown"] },
+            "stockStatus": { "type": "string", "enum": ["in_stock", "out_of_stock", "unknown"], "description": "Optional: a missing or unrecognised value is submitted as unknown, never a reason to drop a row." },
             "observedAtUtc": { "type": "string", "format": "date-time" },
             "sourceReference": { "type": "string", "maxLength": 200 },
             "sourceUrl": { "type": "string", "maxLength": 2048, "description": "The supplier's own page the row was read from." }

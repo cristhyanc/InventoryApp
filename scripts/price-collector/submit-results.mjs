@@ -105,6 +105,19 @@ export function batchesOf(values, size) {
   return batches;
 }
 
+const STOCK_WORDS = new Set(['in_stock', 'out_of_stock', 'unknown']);
+
+/**
+ * A row's stock answer is never a reason to drop it (owner decision, 1 November 2026): suppliers'
+ * stock signals are unreliable and some publish none, so a missing, null or unrecognised value is
+ * submitted as `unknown` and the row is kept.
+ */
+export function normaliseStockStatus(file) {
+  for (const row of Array.isArray(file?.rows) ? file.rows : []) {
+    if (row && typeof row === 'object' && !STOCK_WORDS.has(row.stockStatus)) row.stockStatus = 'unknown';
+  }
+}
+
 /** One file, read and validated on its own: a result, a match, or a reason it is skipped. */
 async function classifyOutputFile(dir, name) {
   if (!RESULT_FILE_NAME.test(name) && !MATCH_FILE_NAME.test(name)) {
@@ -119,6 +132,7 @@ async function classifyOutputFile(dir, name) {
   }
 
   const isResult = RESULT_FILE_NAME.test(name);
+  if (isResult) normaliseStockStatus(parsed);
   const checked = isResult ? validateResultFile(parsed) : validateMatchFile(parsed);
   if (!checked.ok) return { skip: checked.problems[0] };
 

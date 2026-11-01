@@ -229,6 +229,9 @@ One entry of `searches` is one product at one supplier, identified by its `workI
   over from last night or sent as `0`. A barcode is text, so its leading zeros survive, and it needs
   its `barcodeScope` (`unit` or `carton`): without one, leave both out.
 - `observedAtUtc` is when you read the price, in UTC, and must be inside this run's window.
+- `stockStatus` is `in_stock`, `out_of_stock` or `unknown`. Write `unknown` when the source gives
+  none (an empty or `null` stock field). Stock never decides whether a row is kept: report every
+  real match whatever its stock.
 - `sourceUrl` is the supplier's own page. Leave it out rather than constructing one.
 - The schema is `scripts/price-collector/output.schema.json`. The submitter validates each file
   against it independently and skips a file that does not fit, so a file that does not fit is a
