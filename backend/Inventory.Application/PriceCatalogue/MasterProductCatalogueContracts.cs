@@ -99,6 +99,50 @@ public sealed record MasterProductCatalogueResult(
     int TotalCount);
 
 /// <summary>
+/// What a Super Admin submitted to add a master product to the shared catalogue (issue #1024): the
+/// four values that say what the product is, exactly as they were typed.
+///
+/// <para>Unvalidated on purpose - the brand may be blank, the size may be negative and the unit may
+/// be an integer no declared unit has, because a deserialized JSON number binds an arbitrary one.
+/// <c>MasterProductPolicy</c> is what decides whether this is a description at all, and it does so
+/// before anything is stored.</para>
+/// </summary>
+public sealed record MasterProductSubmission(
+    string? Brand,
+    string? Name,
+    decimal SizeValue,
+    MasterProductSizeUnit SizeUnit);
+
+/// <summary>
+/// What a Super Admin submitted to correct one master product (issue #1024): the same four values,
+/// plus the <c>UpdatedAtUtc</c> the page they were editing had read.
+///
+/// <para><see cref="ExpectedUpdatedAtUtc"/> is the expected-value half of the write. It is the row's
+/// own stored instant rather than a new column, and an edit that presents one the row no longer holds
+/// is refused rather than applied, so two Super Admin tabs cannot overwrite each other silently
+/// (<c>MasterProductEditPolicy</c>). It is nullable because a request may omit it, which is an
+/// incomplete request rather than a stale one.</para>
+/// </summary>
+public sealed record MasterProductEditSubmission(
+    string? Brand,
+    string? Name,
+    decimal SizeValue,
+    MasterProductSizeUnit SizeUnit,
+    DateTime? ExpectedUpdatedAtUtc);
+
+/// <summary>
+/// One validated correction as the persistence port receives it (issue #1024): the description that
+/// passed every rule of <c>MasterProductPolicy</c>, and the instant the edit expects the row to carry.
+///
+/// <para>The expected instant travels with the description rather than beside it, because the
+/// comparison and the write are one operation: the store reads the row, compares, and writes inside
+/// one transaction.</para>
+/// </summary>
+public sealed record MasterProductEdit(
+    NormalisedMasterProduct Description,
+    DateTime ExpectedUpdatedAtUtc);
+
+/// <summary>
 /// One bounded page of the shared catalogue. <see cref="Page"/>/<see cref="PageSize"/> are the
 /// resolved values the caller actually received, which may differ from what it requested.
 /// </summary>

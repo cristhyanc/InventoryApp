@@ -33,11 +33,13 @@ public static class SiteResponseMapper
         summary.PreviousComparableWeekRevenue,
         summary.LastWeekRevenue,
         summary.MonthToDateRevenue,
-        // Copied across, like every other figure: the machine ids and percentages are
-        // GetSiteSummaries'/SiteStockPolicy's, and this mapping neither re-groups the selections nor
-        // substitutes a value for a null percentage, which means "this machine reports no capacity".
+        // Copied across, like every other figure: the machine ids, percentages and (since issue
+        // #1019) alert counts are GetSiteSummaries'/SiteStockPolicy's, and this mapping neither
+        // re-groups the selections, re-counts an alert nor substitutes a value for a null
+        // percentage, which means "this machine reports no capacity".
         summary.MachineStocks
-            .Select(stock => new SiteMachineStockDto(stock.MachineId, stock.StockPercentage))
+            .Select(stock => new SiteMachineStockDto(
+                stock.MachineId, stock.StockPercentage, stock.LowProductCount, stock.EmptyProductCount))
             .ToList());
 
     /// <summary>

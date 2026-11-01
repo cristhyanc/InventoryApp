@@ -600,8 +600,18 @@ changed, and every "Unavailable" still means unavailable, never zero.
     and not 100% - and a machine under **Other machines** shows **Unavailable**, because the sites
     read does not cover it. If the sites read fails, every machine's stock shows as unavailable
     rather than as 0% or a stale figure.
-  - **The low/empty counts stay a site figure.** They come from the sites read and exist per site
-    only, so a machine row still shows them as unavailable, and the card says why.
+  - **Every machine row shows its own low and empty counts too** (issue #1019). The same sites read
+    already fetched those selections, so it now publishes each machine's own counts beside its
+    percentage, in the same `3 low · 1 empty` wording the site row uses and on both layouts. They
+    are worked out on the server by the site's own rule over that machine's selections alone: only
+    selections linked to an active catalogue product count, several slots of one product on that
+    machine are added together first, and nothing is counted in the browser. **A site's counts are
+    not the sum of its machines'**, and the card says so: a site counts each product once over the
+    combined stock of its machines, so a product that is low on two machines is two machine alerts
+    and one site alert, and a product the site reports as stocked can still be low on one machine.
+    A machine whose selections hold nothing to alert on shows an honest **0 low · 0 empty**; a
+    machine under **Other machines** shows **Unavailable** because the sites read does not cover it,
+    and if that read fails no machine shows a count at all rather than a fabricated zero.
   - **Actions are the existing ones**: **Products** opens that site's products, **Details** opens
     that machine, and a machine this business has no local record of gets no Details link at all
     rather than an invented one.
@@ -667,7 +677,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
-  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue` and `monthToDateRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — MDB codes, machine counts and the alert counts, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
+  - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue` and `monthToDateRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock — the site's `totalStockPercentage` and, since issue #1013, each machine's own percentage in `machineStocks` — MDB codes, machine counts and the alert counts, which since issue #1019 each `machineStocks` entry carries for its own machine as well, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
   - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. The catalogue `unitPrice` that decision also named is no longer a question: the field was removed, so no response carries it (see [A product carries no selling price](#a-product-carries-no-selling-price)). A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
   - **Every remaining Operator-readable endpoint has been audited, and the last two leaks are closed** (issue #700). Issue #700 walked every endpoint a role without `Dashboard.ViewFinancials` can reach — taken from the capability policies themselves — and classified each restricted figure on each one; the endpoint-by-endpoint table is in [docs/architecture.md § Operator-readable financial disclosure](docs/architecture.md#operator-readable-financial-disclosure-issue-700). Two figures were still being sent. A **stock movement's `inventoryValueAfter`** — the business's inventory value at cost after that movement, so the latest one reports the current valuation — is now `null` for a caller without the capability on `GET`/`POST api/products/{id}/stock`, on `GET api/stock-history`, and nested in a product's `stockAdjustments`. The **catalogue product nested in a purchase line or a supplier-order line** now withholds its `inventoryValue` on the `api/purchases` and `api/supplierorders` responses, the same way `api/products` has since #698 — otherwise listing purchases was a way around that. Never `0`: both fields already mean "no cost" or "no valuation yet" when they are `null`, and a withheld amount arriving as zero would be a false statement about the business. **Nothing else is withheld.** A movement's own `unitCost`, `totalCost` and `averageUnitCostAfter`, a purchase's `totalAmount`, delivery and package charges, each line's `unitCost` and `lineTotal` and its input-GST block, and a supplier order's quantities, `unitPrice` and `outstandingQuantity` all stay visible to every role, because they are purchasing and unit-cost data an Operator enters and has to be able to read back. Every other Operator-readable endpoint — the pick list, categories, take inventory, the price history and restock-cost suggestion, Sync Restock, the machine stock ledger, suppliers and the stored purchase document — carries no restricted figure at all. A Manager's and an Owner's responses are unchanged, and a new revenue, profit, margin, sales or inventory-value property on any of these responses now fails the build until somebody decides what happens to it.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Integrations or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
@@ -975,10 +985,13 @@ To see what the run itself would do without spending anything, read `scripts/pri
 ### Manual collector integration test (#929)
 
 The actor choices have already been tested; the next check is the complete collector flow against
-a disposable **test API**. The `Price collector (manual test)` workflow issues a small sample,
+a disposable **test API**. The `Price collector (manual)` workflow issues a small sample,
 runs Claude without the Restockroo bearer token, then submits finished results and completes the
-run even if the model step fails. There is no cron or production API input. See
+run even if the model step fails. There is no cron. Its default `test` target never reaches the
+production API; a separate `production` target runs only from `main`, in its own reviewer-protected
+`price-collector-production` environment. See
 [Manual collector test](docs/price-collector-testing.md) for Entra/OIDC and GitHub environment setup,
+the production checklist,
 the normal and interrupted runs, sample limits, and actual provider cost evidence. Human review,
 release to `main`, environment setup and dispatch are separate from implementing the workflow.
 
@@ -1201,21 +1214,25 @@ POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
 The review above is a **queue**: products awaiting a match, automatic matches to check, listings
 awaiting a decision. This page is the catalogue **itself** — every master product in the shared
 supplier price catalogue, searchable, with the supplier listings that hang from each one (issue #1023,
-the eighth task of #817). It exists because a product nothing was waiting on could not be found,
-searched for or inspected at all.
+the eighth task of #817) — and, since issue #1024, where that catalogue is **managed**: a master
+product can be added before any business asks for it, and a wrong brand, name or size corrected. It
+exists because a product nothing was waiting on could not be found, searched for or inspected at all.
 
-**It is read only.** Creating, editing and deleting a master product are separate tasks that follow
-this one, and the Supplier Price Review stays the only place a master product is created or corrected.
+**Deleting a master product is not here.** That is a separate task, and the API has no such route.
+This page and the Supplier Price Review are the only two places a master product is created or
+corrected; no automatic match and no business ever creates one.
 
 ```text
-GET /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
-GET /api/super-admin/master-products/{id}                      one product and its supplier listings
+GET    /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
+GET    /api/super-admin/master-products/{id}                      one product and its supplier listings
+POST   /api/super-admin/master-products                           add one   (brand, name, sizeValue, sizeUnit)
+PUT    /api/super-admin/master-products/{id}                      correct one (the same, plus lastChangedAtUtc)
 ```
 
 - **Who may use it.** Exactly the same answer as every Super Admin route above: the configured Entra
   `(tid, oid)` pair alone. An Owner, a Manager and an Operator are refused, and a member who presents
   a support-session id is still an ordinary member. The request resolves no business at all.
-- **Nothing about any business is in either response** — no business id, no business name, no
+- **Nothing about any business is in any request or response** — no business id, no business name, no
   business's product id, and **no count of who is tracking a product**. That count is the review's, and
   it is deliberately not here: this page is master-catalogue management only.
 - **Searching and paging happen on the server.** `search` matches the brand or the name, ignoring case
@@ -1231,12 +1248,40 @@ GET /api/super-admin/master-products/{id}                      one product and i
   currency, whether it includes GST, and when it was observed. A listing nobody has priced says
   **Never checked** rather than showing a zero, and an unpublished pack quantity stays **Unknown**.
   Nothing here is a per-unit price: that comparison is the Cheapest supplier column's.
+- **Adding one** takes the brand, the name or variant, and the individual size with its unit from the
+  closed list `ml`, `l`, `g`, `kg`, `each`. It is held to exactly the rules the Supplier Price Review's
+  own create is: the values are trimmed and required, the size must be above zero at no more than three
+  decimal places, and the same description is the same product however it is capitalised or spaced — so
+  a second attempt at one is refused with **"Another master product already describes this brand, name
+  and size. Match this product to that one instead of creating a second."** rather than quietly making
+  a duplicate.
+- **Correcting one keeps the same product.** The brand, the name and the size are corrected on the row
+  every business tracking that product already points at, so every supplier listing, match and
+  suggestion stays linked and nothing a business owns changes at all — not its own product name, size,
+  stock, cost or purchases. A brand or name edit changes the shared catalogue's **label**, not anybody's
+  product record, and correcting a master product never creates, confirms or refuses a supplier listing
+  and never matches or unmatches a business's tracked product.
+- **The size cannot be changed while a supplier listing of the product is confirmed.** Those listings'
+  pack sizes were confirmed against the current size, and every tracking business's per-unit price would
+  change without anybody confirming anything — so the page says so, and the server refuses it with that
+  reason. Decide those listings in Supplier Price Review first. The brand and the name can always be
+  corrected.
+- **Two tabs cannot overwrite each other.** A correction carries the "last changed" instant the page
+  read, and one that has been superseded is refused with **"This master product has been changed since
+  this page was read. Re-read the catalogue and make the correction again."** The catalogue is re-read
+  after every accepted change, so what is on screen is what is stored.
+- **Every change is recorded** — who made it, which master product, and when — on the same audit trail
+  the Supplier Price Review's decisions are written to. A refused change is not recorded, because
+  nothing happened.
 - **The page.** The Angular app offers it at `/super-admin/master-products`, shown as **Master
   Products** in the sidebar's **Super Admin** group beside Supplier Price Review and only while
   `GET /api/admin/diagnostics/access` confirms the signed-in actor; entering the URL directly works
-  identically, because the policy decides access on every request. It has no Add, Edit or Delete
-  control. See
-  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issue-1023).
+  identically, because the policy decides access on every request. It has a **New master product**
+  button and an **Edit** action on each row, shows the server's own refusal wording verbatim, and has
+  no Delete control. Adding or correcting another product while a change is still being saved is
+  allowed: the slower answer never closes the form you have moved on to or discards what you have
+  typed into it, and a change the server accepted is still announced and the list still refreshed. See
+  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issues-1023-and-1024).
 
 ## Super Admin option visibility
 

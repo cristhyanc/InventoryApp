@@ -6,8 +6,9 @@ import { join, resolve } from 'node:path';
  * The visual evidence for issue #972: the Restockroo Dashboard and authenticated navigation at
  * 360, 390, 768 and 1440px, plus the narrow layout's More sheet opened and scrolled to its end. The
  * dashboard captures also show issue #987's combined **Site and machine performance** card - each
- * site expanding to the machines standing at it, with issue #1013's own stock level on every machine
- * row - and issue #981's Cheapest supplier column in Reorder priorities.
+ * site expanding to the machines standing at it, with issue #1013's own stock level and issue
+ * #1019's own low and empty counts on every machine row - and issue #981's Cheapest supplier column
+ * in Reorder priorities.
  *
  * Like the other visual runs this starts no API and no database. Every `/api/` request is answered
  * in the browser with neutral synthetic figures - an Owner's capabilities, a connected business,
@@ -101,10 +102,13 @@ const sites = [
     previousComparableWeekRevenue: 75.9,
     lastWeekRevenue: 318.4,
     monthToDateRevenue: 1042.7,
-    // Each machine's own stock level (issue #1013), keyed by the provider machine id the machine
-    // read uses. The figures are deliberately not the site's, so a capture shows a machine row's
-    // own percentage rather than a repeated one.
-    machineStocks: [{ machineId: 1, stockPercentage: 80 }]
+    // Each machine's own stock level (issue #1013) and its own low/empty counts (issue #1019),
+    // keyed by the provider machine id the machine read uses. The figures are deliberately not the
+    // site's, so a capture shows a machine row's own percentage and counts rather than repeated
+    // ones. This site stands one machine, and a one-machine site groups each product exactly as
+    // that machine does, so its counts legitimately coincide with it here; the two-machine site
+    // below is where the figures differ.
+    machineStocks: [{ machineId: 1, stockPercentage: 80, lowProductCount: 8, emptyProductCount: 1 }]
   },
   {
     siteId: 2,
@@ -119,10 +123,13 @@ const sites = [
     lastWeekRevenue: 1187.25,
     monthToDateRevenue: 3904.8,
     // Two machines in different stock bands under one site in the warning band, so a capture shows
-    // the per-machine colours and words differing from the site's and from each other.
+    // the per-machine colours and words differing from the site's and from each other. Their
+    // low/empty counts differ from the site's 15 and 3 as well (issue #1019): a product low on both
+    // machines is two machine alerts and one site alert, so the machine counts sum to more than the
+    // site's rather than adding up to it.
     machineStocks: [
-      { machineId: 2, stockPercentage: 12 },
-      { machineId: 3, stockPercentage: 41 }
+      { machineId: 2, stockPercentage: 12, lowProductCount: 11, emptyProductCount: 2 },
+      { machineId: 3, stockPercentage: 41, lowProductCount: 7, emptyProductCount: 1 }
     ]
   },
   // A site the fleet read returned no machine for: issue #987 keeps it visible with its own empty

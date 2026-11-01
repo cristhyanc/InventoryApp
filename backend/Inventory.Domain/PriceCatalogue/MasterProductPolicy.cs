@@ -223,6 +223,35 @@ public static class MasterProductPolicy
             NormaliseSize(size, unit).ToString("0.###", CultureInfo.InvariantCulture),
             SizeUnitCode(unit));
 
+    /// <summary>
+    /// One submitted description held to every rule above at once: the four values as they are to be
+    /// stored, and the key they are compared by (issue #1024).
+    ///
+    /// <para>It exists so that a caller which has to store all five cannot validate four of them and
+    /// compute the fifth from something else. Nothing is rounded or corrected - a value this policy
+    /// does not accept is refused, and no part of the description is stored.</para>
+    /// </summary>
+    /// <exception cref="DomainValidationException">
+    /// The brand, name, size or unit is not one this policy accepts. Nothing is stored.
+    /// </exception>
+    public static NormalisedMasterProduct Normalise(
+        string? brand,
+        string? name,
+        decimal size,
+        MasterProductSizeUnit unit)
+    {
+        var normalisedBrand = NormaliseBrand(brand);
+        var normalisedName = NormaliseName(name);
+        var normalisedSize = NormaliseSize(size, unit);
+
+        return new NormalisedMasterProduct(
+            normalisedBrand,
+            normalisedName,
+            normalisedSize,
+            unit,
+            NormalisedKey(normalisedBrand, normalisedName, normalisedSize, unit));
+    }
+
     private static string NormaliseText(
         string? value,
         int maxLength,
@@ -241,3 +270,26 @@ public static class MasterProductPolicy
             : throw new DomainValidationException(tooLongMessage);
     }
 }
+
+/// <summary>
+/// One master-product description that has passed every rule of <see cref="MasterProductPolicy"/>
+/// (issue #1024): the four values as they are to be stored, and the key they are compared by.
+///
+/// <para>A description and never a row: it carries no key of its own, no instants and nothing about a
+/// supplier listing or a business, so a caller cannot mistake it for a stored master product.</para>
+/// </summary>
+/// <param name="Brand">The brand, trimmed.</param>
+/// <param name="Name">The name or variant, trimmed.</param>
+/// <param name="SizeValue">The individual size, as submitted and never rounded.</param>
+/// <param name="SizeUnit">What that size is measured in, from the closed list.</param>
+/// <param name="NormalisedKey">
+/// <see cref="MasterProductPolicy.NormalisedKey"/> of the four, which is what the catalogue's unique
+/// index compares - never published to a client, because whether two descriptions are one product is
+/// the database's answer.
+/// </param>
+public sealed record NormalisedMasterProduct(
+    string Brand,
+    string Name,
+    decimal SizeValue,
+    MasterProductSizeUnit SizeUnit,
+    string NormalisedKey);

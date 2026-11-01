@@ -4,7 +4,7 @@ import { RouterLink } from '@angular/router';
 import { plural } from '../../../formatting/plural';
 import { trendClass, trendLabel } from '../../../formatting/revenue-trend';
 import { siteStockClass, stockPercentageClass } from '../../../formatting/site-stock-status';
-import { Machine, Site } from '../../../models/models';
+import { Machine, Site, SiteMachineStock } from '../../../models/models';
 import { money } from '../../reports/report-formatting';
 import { IconComponent } from '../../shared/icon.component';
 
@@ -31,10 +31,11 @@ export interface SiteMachineGroup {
 export const OTHER_MACHINES_LABEL = 'Other machines';
 
 /**
- * What a machine row says for a figure the two responses do not publish for it: the low/empty
- * counts, which exist per **site** only, and - for a machine the sites read does not cover - its
- * stock percentage. {@link SiteMachinePerformanceComponent.machineStockNote} says why. A site's own
- * percentage is never repeated down its machines, and nothing here derives a machine's stock level.
+ * What a machine row says for a figure the sites read does not cover it for: its stock percentage
+ * and, since issue #1019, its low and empty counts - both published per machine by `GET api/sites`,
+ * so both are missing for exactly the same machines and for the same reason.
+ * {@link SiteMachinePerformanceComponent.machineStockNote} says why. A site's own figures are never
+ * repeated down its machines, and nothing here derives or counts one.
  */
 export const MACHINE_FIGURE_UNAVAILABLE = 'Unavailable';
 
@@ -59,6 +60,19 @@ export const MACHINE_NO_CAPACITY = 'No capacity set';
 export type MachineStockFigure =
   | { readonly kind: 'percentage'; readonly percentage: number }
   | { readonly kind: 'noCapacity' }
+  | { readonly kind: 'unavailable' };
+
+/**
+ * What one machine row can say in the Low / empty column (issue #1019).
+ *
+ * - `counts` - the server's own low and empty product counts for that machine. `0` and `0` is one
+ *   of them: it means selections that were read and hold nothing to alert on.
+ * - `unavailable` - the sites read published no counts for this machine, so none exist for it: a
+ *   machine under "Other machines", one its own site published no entry for, or a failed sites
+ *   read. Never a `0`, and never the site's counts.
+ */
+export type MachineAlertCountsFigure =
+  | { readonly kind: 'counts'; readonly low: number; readonly empty: number }
   | { readonly kind: 'unavailable' };
 
 /** What a row says for a period no comparison is published for; see {@link comparisonHeader}. */
@@ -116,12 +130,15 @@ export function groupSitesAndMachines(
  * week" belongs to This week and no other period borrows it - and the fleet totals are still taken
  * over the machine rows alone.
  *
- * Since issue #1013 the same response also publishes each site machine's own stock percentage, so a
- * machine row shows its own figure instead of reporting it unavailable. That is still the server's
- * figure: {@link SiteMachinePerformanceComponent.machineStock} looks a machine up in **its own
- * group's site** by the provider machine id and reports what it finds, a site's percentage is never
- * repeated down its machines, and the only thing done to a number here is holding a progress bar's
- * *width* inside the 0-100 its track can render - never the percentage the row states.
+ * Since issue #1013 the same response also publishes each site machine's own stock percentage, and
+ * since issue #1019 that machine's own low and empty product counts, so a machine row shows its own
+ * figures instead of reporting them unavailable. They are still the server's figures:
+ * {@link SiteMachinePerformanceComponent.machineStock} and
+ * {@link SiteMachinePerformanceComponent.machineAlertCounts} look a machine up in **its own group's
+ * site** by the provider machine id and report what they find, a site's percentage and counts are
+ * never repeated down its machines, no count is derived or added up here, and the only thing done to
+ * a number is holding a progress bar's *width* inside the 0-100 its track can render - never the
+ * percentage the row states.
  *
  * It is a dedicated feature component rather than more markup on the page (the page-composition
  * rule, `docs/architecture.md` § Page composition boundary): it owns substantial UI plus its own
@@ -158,9 +175,6 @@ export class SiteMachinePerformanceComponent {
   /** The period every sales figure in the card is shown for; see {@link PerformancePeriod}. */
   period: PerformancePeriod = 'week';
 
-  /** See {@link MACHINE_FIGURE_UNAVAILABLE}; the template needs it as a member. */
-  readonly machineFigureUnavailable = MACHINE_FIGURE_UNAVAILABLE;
-
   readonly periods: readonly { readonly id: PerformancePeriod; readonly label: string }[] = [
     { id: 'today', label: 'Today' },
     { id: 'week', label: 'This week' },
@@ -170,15 +184,18 @@ export class SiteMachinePerformanceComponent {
 
   /**
    * Said once in the card, in the same place it has always been said (moving it into a tooltip is
-   * issue #1015). Since issue #1013 a machine row carries its **own** stock percentage, so the
-   * stock half of the note describes that figure and names the one case it is missing for -
-   * "Other machines", which the sites read does not cover. The low/empty half is unchanged and
-   * still true: those counts exist per site only.
+   * issue #1015). Since issues #1013 and #1019 a machine row carries its **own** stock level and
+   * its **own** low and empty counts, so the note describes both and names the one case they are
+   * missing for - "Other machines", which the sites read does not cover. It no longer says machine
+   * counts are unavailable, and it states the one thing a reader could otherwise take for an error:
+   * a site counts each product once over its machines' combined stock, so its counts need not add
+   * up from its machines'.
    */
   readonly machineStockNote =
-    `Each machine row shows its own stock level, from the same site read as the site's. Machines under ` +
-    `"${OTHER_MACHINES_LABEL}" are not covered by that read, so their stock shows as unavailable. Low or ` +
-    'empty selection counts are published per site only, so machine rows show those as unavailable.';
+    `Each machine row shows its own stock level and its own low and empty counts, from the same site ` +
+    `read as the site's. Machines under "${OTHER_MACHINES_LABEL}" are not covered by that read, so ` +
+    'their figures show as unavailable. A site counts each product once across its machines, so its ' +
+    "low and empty counts need not equal the sum of its machines'.";
 
   /**
    * The sites whose machines the reader has collapsed, by group key. Collapsed rather than expanded
@@ -337,10 +354,41 @@ export class SiteMachinePerformanceComponent {
    * instead of a stale or invented figure.
    */
   machineStock(group: SiteMachineGroup, machine: Machine): MachineStockFigure {
-    const published = group.site?.machineStocks?.find((stock) => stock.machineId === machine.machineID);
+    const published = publishedMachineStock(group, machine);
     if (published === undefined) return { kind: 'unavailable' };
     if (published.stockPercentage == null) return { kind: 'noCapacity' };
     return { kind: 'percentage', percentage: published.stockPercentage };
+  }
+
+  /**
+   * What one machine row says in the Low / empty column (issue #1019). Looked up in the same
+   * published entry as {@link machineStock}, in the machine's **own** group's site, so a site's
+   * counts can never be read as a machine's and a machine the sites read does not cover has no
+   * counts rather than a `0 low · 0 empty` nothing published. A published `0` and `0` is kept as
+   * exactly that: selections were read for that machine and none of them is low or empty.
+   */
+  machineAlertCounts(group: SiteMachineGroup, machine: Machine): MachineAlertCountsFigure {
+    const published = publishedMachineStock(group, machine);
+    if (published?.lowProductCount == null || published.emptyProductCount == null) {
+      return { kind: 'unavailable' };
+    }
+    return { kind: 'counts', low: published.lowProductCount, empty: published.emptyProductCount };
+  }
+
+  /**
+   * The counts as the site row states them, or the reason there are none. Both numbers are always
+   * written out beside the words "low" and "empty", so nothing about them is carried by colour.
+   */
+  machineAlertCountsText(group: SiteMachineGroup, machine: Machine): string {
+    const figure = this.machineAlertCounts(group, machine);
+    return figure.kind === 'counts'
+      ? `${figure.low} low · ${figure.empty} empty`
+      : MACHINE_FIGURE_UNAVAILABLE;
+  }
+
+  /** Muted only when there are no counts to state, exactly as an unavailable sales figure is. */
+  machineAlertCountsClass(group: SiteMachineGroup, machine: Machine): string {
+    return this.machineAlertCounts(group, machine).kind === 'counts' ? '' : 'value-muted';
   }
 
   /** Whether this machine has a percentage to draw a bar and a badge for at all. */
@@ -530,6 +578,17 @@ export class SiteMachinePerformanceComponent {
       0
     );
   }
+}
+
+/**
+ * The entry `GET api/sites` published for one machine, looked up in **its own group's site** by the
+ * provider machine id the response keyed it by (issues #1013 and #1019). `undefined` means that
+ * read covers the machine with no entry at all - a machine under "Other machines", a site that
+ * published none for it, or a failed sites read, which leaves no site to look one up in - and is
+ * what makes every figure in those two columns fail together with the read they come from.
+ */
+function publishedMachineStock(group: SiteMachineGroup, machine: Machine): SiteMachineStock | undefined {
+  return group.site?.machineStocks?.find((stock) => stock.machineId === machine.machineID);
 }
 
 /**

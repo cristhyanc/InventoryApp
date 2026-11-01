@@ -244,10 +244,16 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         Assert.Equal(60m, operatorSite.GetProperty("totalStockPercentage").GetDecimal());
 
         // Including, since issue #1013, the site's own machine and that machine's own percentage,
-        // which an Operator is given exactly as a Manager is: stock is not a financial figure.
+        // which an Operator is given exactly as a Manager is: stock is not a financial figure. The
+        // machine's own low/empty counts (issue #1019) are published on the same terms and are
+        // counts rather than nullable figures: the seeded selection holds 6 of a product whose
+        // vend-out alert threshold is 2, so it is stocked and the honest answer is zero of each -
+        // the same answer the site row carries for the same one selection.
         var operatorMachineStock = Assert.Single(operatorSite.GetProperty("machineStocks").EnumerateArray());
         Assert.Equal(ApiFactory.SeededMachineId, operatorMachineStock.GetProperty("machineId").GetInt64());
         Assert.Equal(60m, operatorMachineStock.GetProperty("stockPercentage").GetDecimal());
+        Assert.Equal(0, operatorMachineStock.GetProperty("lowProductCount").GetInt32());
+        Assert.Equal(0, operatorMachineStock.GetProperty("emptyProductCount").GetInt32());
         Assert.Equal(ApiFactory.MdbCode, operatorProduct.GetProperty("mdbCode").GetInt32());
         Assert.Equal(6, operatorProduct.GetProperty("quantityInStock").GetInt32());
     }

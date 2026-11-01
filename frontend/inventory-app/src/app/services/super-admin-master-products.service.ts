@@ -100,15 +100,43 @@ export interface SuperAdminMasterProductDetail {
 }
 
 /**
- * The frontend client for `/api/super-admin/master-products` (issue #1023), consumed by the Super
- * Admin Master products page.
+ * What a new master product is submitted as (issue #1024): the four values that say what the product
+ * is, and nothing else.
  *
- * It is a thin wrapper over the two **read** endpoints: there is deliberately no `create`, `update`
- * or `delete` here, because the API has none - a master product is written only by the Super Admin
- * review of issue #928, and creating, editing and deleting one are separate issues that follow this.
+ * No normalised key - that is computed from these four by the server and is never a value a client
+ * chooses - no instants, which are the server's clock's, and nothing about a supplier listing or a
+ * business.
+ */
+export interface NewMasterProduct {
+  readonly brand: string;
+  readonly name: string;
+  readonly sizeValue: number;
+  readonly sizeUnit: MasterProductSizeUnit;
+}
+
+/**
+ * What a correction is submitted as (issue #1024): the same four values, plus the `updatedAtUtc` the
+ * page being corrected had read.
  *
- * It decides nothing. The page bound, the ordering and the search are the server's, and a blank
- * search is simply not sent.
+ * `lastChangedAtUtc` is the expected-value half of the write. The server refuses an edit that
+ * presents an instant the row no longer carries with a `409`, so two Super Admin tabs cannot
+ * overwrite each other silently - and this client always sends the instant it actually read rather
+ * than one it computed.
+ */
+export interface MasterProductCorrection extends NewMasterProduct {
+  readonly lastChangedAtUtc: string;
+}
+
+/**
+ * The frontend client for `/api/super-admin/master-products` (issues #1023 and #1024), consumed by
+ * the Super Admin Master products page.
+ *
+ * It is a thin wrapper over the two reads and the two writes. There is deliberately no `delete`:
+ * the API has none, because removing a master product is a separate task that follows this one.
+ *
+ * It decides nothing. The page bound, the ordering and the search are the server's; so are the
+ * normalisation, the duplicate rule, the size safeguard and the stale-edit refusal, and a refused
+ * write's own sentence is what the page shows rather than a second copy of the rule here.
  */
 @Injectable({ providedIn: 'root' })
 export class SuperAdminMasterProductsService {
@@ -143,6 +171,29 @@ export class SuperAdminMasterProductsService {
   /** One master product with its supplier listings. A `404` means no master product has that id. */
   get(id: number): Observable<SuperAdminMasterProductDetail> {
     return this.http.get<SuperAdminMasterProductDetail>(`${this.baseUrl}/${id}`);
+  }
+
+  /**
+   * Adds one master product to the shared catalogue (issue #1024).
+   *
+   * A `400` means the description is not one the catalogue stores and a `409` that another master
+   * product already describes it; both carry the server's own sentence.
+   */
+  create(product: NewMasterProduct): Observable<SuperAdminMasterProduct> {
+    return this.http.post<SuperAdminMasterProduct>(this.baseUrl, product);
+  }
+
+  /**
+   * Corrects one master product's brand, name and size (issue #1024), presenting the
+   * `lastChangedAtUtc` the page read.
+   *
+   * A `404` means no master product has that id. A `409` means one of three things, each with its
+   * own sentence from the server: another master product already describes this, the row has been
+   * changed since this page read it, or the **size** cannot change because a supplier listing of the
+   * product is confirmed.
+   */
+  update(id: number, correction: MasterProductCorrection): Observable<SuperAdminMasterProduct> {
+    return this.http.put<SuperAdminMasterProduct>(`${this.baseUrl}/${id}`, correction);
   }
 
   private get baseUrl(): string {
