@@ -18,6 +18,7 @@ import {
   lookupSkus,
   mapProduct,
   parseArguments,
+  stockStatus,
   resolveSiteUrl,
   runLookup,
   searchProducts,
@@ -103,6 +104,14 @@ describe('arguments', () => {
 });
 
 describe('product mapping', () => {
+  it('speaks the result file\'s stock words', () => {
+    assert.equal(stockStatus('IN_STOCK'), 'in_stock');
+    assert.equal(stockStatus('OUT_OF_STOCK'), 'out_of_stock');
+    assert.equal(stockStatus('BACKORDER'), 'unknown');
+    assert.equal(stockStatus(null), 'unknown');
+    assert.equal(stockStatus(undefined), 'unknown');
+  });
+
   const item = fixture('search-bundaberg-page-1').data.products.items[0];
 
   it('reports the fields the collector needs', () => {
@@ -110,7 +119,7 @@ describe('product mapping', () => {
       sku: 'BGB25',
       name: 'Bundaberg Ginger Beer 375ml Bottle',
       url: `${SITE}/bundaberg-ginger-beer-375ml-bottle.html`,
-      stockStatus: 'IN_STOCK',
+      stockStatus: 'in_stock',
       finalPrice: 31.2,
       regularPrice: 33.6,
       currency: 'AUD',
@@ -151,7 +160,7 @@ describe('product mapping', () => {
       sku: 'X',
       name: null,
       url: null,
-      stockStatus: null,
+      stockStatus: 'unknown',
       finalPrice: null,
       regularPrice: null,
       currency: null,

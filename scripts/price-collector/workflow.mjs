@@ -5,9 +5,10 @@ import { appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync,
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectorToken } from './workflow-auth.mjs';
-import { TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
+import { JB_METRO_CAPS, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { runGetWork } from './get-work.mjs';
 import { runSubmission } from './submit-results.mjs';
+import { appendLog, clip, logDir, readTrace, redact, secretsOf, textOf, trace } from './trace.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const reviewedActors = new Set(['abotapi/kmart-au-scraper', 'axlymxp/bigw-product-scraper', 'dromb/big-w-au-product-scraper']);
@@ -69,9 +70,13 @@ export function fullRunWork(work) {
   return selectWork(work, workBatches(work).slice(0, FULL_RUN.maxBatches).flatMap(batch => batch.searches));
 }
 
-/** The production limits unchanged, except that the reviewed retailers may be enabled for this run. */
+/**
+ * The production limits unchanged, except that the reviewed retailers may be enabled for this run,
+ * plus JB Metro's full-run page caps (it is not an Apify actor, so apify-limits.json has none).
+ */
 export function fullRunLimits(source, includeReviewed) {
   const limits = structuredClone(source);
+  limits.jbMetro = { ...JB_METRO_CAPS.full };
   for (const [id, actor] of Object.entries(limits.actors)) {
     if (includeReviewed && reviewedActors.has(id) && actor.schemaVerifiedAt === '2026-10-31') actor.actorIdConfirmed = true;
   }
@@ -81,6 +86,7 @@ export function fullRunLimits(source, includeReviewed) {
 export function sampleLimits(source, includeReviewed) {
   const limits = structuredClone(source);
   limits.perRun.maxActorCalls = Math.min(12, limits.perRun.maxActorCalls);
+  limits.jbMetro = { ...JB_METRO_CAPS.sample };
   for (const [id, actor] of Object.entries(limits.actors)) {
     actor.pageSize = Math.min(5, actor.pageSize);
     actor.maxPages = 1;
@@ -104,34 +110,63 @@ export function collectorEnvironment(env, home) {
   };
 }
 
-const reportPatterns = [
-  /^files: results \d+, matches \d+, skipped \d+$/,
-  /^matches: auto-matched \d+, tentative \d+, rejected \d+$/,
-  /^searches: complete \d+, truncated \d+, no_matches \d+, failed \d+; answered \d+, left without an outcome \d+$/,
-  /^rows: accepted \d+, sent to review \d+, pending \d+, rejected \d+$/,
-  /^run \d+: [a-z_ ]+; complete \d+, truncated \d+, no_matches \d+, failed \d+, not_searched \d+$/,
-  /^run \d+: not completed$/,
-  /^failed requests: \d+$/,
-];
-
-/**
- * A skipped file as the summary may show it: the work item number and the field the validator
- * names, never its message, which can quote a supplier product id. A match file is not named,
- * because its name carries the waiting product's key.
- */
-export function publicSkipLine(line) {
-  const skipped = /^ {2}skipped (\S+): (.*)$/.exec(line);
-  if (!skipped) return null;
-  const file = /^[1-9]\d{0,9}\.json$/.test(skipped[1]) ? skipped[1] : 'a match file';
-  const field = /^(file(?:\.[A-Za-z]{1,40}|\[\d{1,4}\]){0,6})(?= )/.exec(skipped[2]);
-  const reason = field ? `field ${field[1]}` : 'a file-level rule';
-  return `skipped ${file}: ${reason}`;
+/** The product a search is for, as a person reads it. */
+export function productLabel(product = {}) {
+  if (product.kind === 'master') {
+    const size = product.sizeValue == null ? '' : ` ${product.sizeValue}${product.sizeUnit ?? ''}`;
+    return `${[product.brand, product.name].filter(Boolean).join(' ')}${size} (master product ${product.masterProductId})`;
+  }
+  return `${product.searchName ?? '?'}${product.unitLabel ? ` - ${product.unitLabel}` : ''} (waiting product)`;
 }
 
-export function publicSubmissionReport(out) {
-  return String(out).split('\n')
-    .map(line => (reportPatterns.some(pattern => pattern.test(line)) ? line : publicSkipLine(line)))
-    .filter(line => line !== null).join('\n');
+const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
+const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+/** One row as written by Claude, with what the API decided for it. */
+function rowLine(row, decision) {
+  const price = row.packPrice == null ? 'no price' : `$${row.packPrice}`;
+  const pack = row.packQuantity == null ? '' : ` for ${row.packQuantity}`;
+  const verdict = decision ? `${decision.outcome}${decision.reason ? ` - ${oneLine(decision.reason)}` : ''}` : 'no API decision';
+  return `  - ${oneLine(row.title) || '(no title)'} [${oneLine(row.supplierProductId)}]: ${price}${pack}, ${oneLine(row.stockStatus)}, ${oneLine(row.sourceUrl)} -> **${verdict}**`;
+}
+
+/**
+ * What became of every search: the product and supplier, the file Claude wrote (or that it wrote
+ * none), every row in it with the API's decision, and the API's decision on match files.
+ */
+export function searchDetails(work, outputDir, decisions = []) {
+  const byRow = new Map(decisions.filter(d => d.workItemId != null).map(d => [`${d.workItemId}|${d.supplierProductId}`, d]));
+  const lines = ['### Searches', ''];
+  work.searches.forEach((search, index) => {
+    lines.push(`${index + 1}. **${oneLine(productLabel(search.product))}** at **${oneLine(search.supplierName ?? `supplier ${search.supplierPresetId}`)}** (${search.priceConnector ?? 'no connector'}${search.priceConnectorKey ? `:${search.priceConnectorKey}` : ''}), work item ${search.workItemId}`);
+    const file = readJson(join(outputDir, `${search.workItemId}.json`));
+    if (file === undefined) { lines.push('  - no result file written (not_searched)'); return; }
+    const failure = file.failureReason ? ` (${file.failureReason})` : '';
+    const rows = Array.isArray(file.rows) ? file.rows : [];
+    lines.push(`  - outcome **${oneLine(file.outcome)}**${failure}, ${rows.length} row(s)${file.notes ? `; notes: ${oneLine(file.notes)}` : ''}`);
+    for (const row of rows) lines.push(rowLine(row, byRow.get(`${search.workItemId}|${row.supplierProductId}`)));
+  });
+  const matches = decisions.filter(d => d.workItemId == null);
+  if (matches.length > 0) {
+    lines.push('', '### Match decisions', '');
+    for (const match of matches) lines.push(`- ${oneLine(match.waitingKey)} -> ${match.masterProductId ?? 'new'}: **${match.outcome}**${match.reason ? ` - ${oneLine(match.reason)}` : ''}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/** Every tool call of the run in order: the input, the hook's decision and the answer, shortened. */
+export function toolTimeline(stateDir, width = 600) {
+  const entries = readTrace(stateDir);
+  if (entries.length === 0) return 'No tool calls were traced.\n';
+  return `${entries.map(entry => {
+    const time = String(entry.at ?? '').slice(11, 19);
+    if (entry.event === 'call') return `${time} CALL ${entry.tool} ${entry.decision}${entry.code !== 'ok' ? ` (${entry.code}: ${oneLine(entry.reason)})` : ''} ${clip(oneLine(entry.input), width)}`;
+    if (entry.event === 'answer') return `${time}   -> ${entry.tool} answered: ${clip(oneLine(entry.response), width)}`;
+    if (entry.event === 'failed') return `${time}   -> ${entry.tool} FAILED (${entry.code}): ${clip(oneLine(entry.error), width)}`;
+    if (entry.event === 'batch') return `${time} SESSION ${entry.session} of ${entry.of}: work items ${(entry.workItemIds ?? []).join(', ')}`;
+    if (entry.event === 'session') return `${time} SESSION ${entry.session} ended: ${entry.subtype ?? entry.stopped ?? 'unknown'}, ${entry.turns ?? '?'} turns, $${entry.costUsd ?? '?'}; Claude said: ${clip(oneLine(entry.result), width)}`;
+    return `${time} ${oneLine(JSON.stringify(entry))}`;
+  }).join('\n')}\n`;
 }
 
 /** Only files issued to this sample reach the existing independent schema/batch validator. */
@@ -160,7 +195,7 @@ function submissionFolder(stateDir, outputDir, work) {
 /**
  * How the hook answered each tool, as counts: one line per tool label with allowed and denied
  * calls and the fixed codes of the denials and after-call records. Labels and codes are checked
- * against plain patterns again here, so nothing else from the log can reach the public summary.
+ * against plain patterns again here, so a tampered log line cannot change the counts' shape.
  */
 export function toolUseReport(stateDir) {
   const path = join(stateDir, TOOL_LOG_FILE);
@@ -197,19 +232,38 @@ export async function finaliseSample({ stateDir, outputDir, env, token, submit =
   const batches = Number.isInteger(status.batchesRun) && Number.isInteger(status.batchCount)
     ? `Claude batches: ${status.batchesRun} of ${status.batchCount}\n` : '';
   const subtype = typeof status.subtype === 'string' && /^[a-z_]{1,40}$/.test(status.subtype) ? status.subtype : 'unknown';
-  const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${batches}${toolUseReport(stateDir)}Searches given to Claude: ${work.searches.length}\nFiles refused before submission: ${refused}\n${publicSubmissionReport(result.out)}\nSubmission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
+  const errors = result.err ? `Submission errors:\n${result.err}` : '';
+  const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${batches}${toolUseReport(stateDir)}Searches given to Claude: ${work.searches.length}\nFiles refused before submission: ${refused}\n${result.out}${errors}Submission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
+  const details = searchDetails(work, outputDir, result.decisions ?? []);
+  appendLog(stateDir, 'submission.json', JSON.stringify({ out: result.out, err: result.err ?? '', decisions: result.decisions ?? [] }, null, 2), env);
+  appendLog(stateDir, 'summary.md', `${report}\n${details}`, env);
   save(join(stateDir, 'submission-status.json'), { ok: result.exitCode === 0 && refused === 0 });
-  return report;
+  return { report, details };
 }
 
-/** No raw CLI output or transcript is sent to stdout, stderr, Actions outputs or artifacts. */
-export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1000, maxTurns = SAMPLE_RUN.maxTurns, maxBudgetUsd = SAMPLE_RUN.maxBudgetUsd }) {
+/** The last `result` message of a stream-json transcript, or the whole text when it is one object. */
+export function claudeResult(text) {
+  const lines = String(text).split('\n').filter(line => line.trim() !== '');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const message = JSON.parse(lines[index]);
+      if (message?.type === 'result') return message;
+    } catch { /* A partial line is not the result. */ }
+  }
+  try { return JSON.parse(text) ?? {}; } catch { return {}; }
+}
+
+/**
+ * Runs one Claude session. Its whole transcript (stream-json: every message, tool call and answer)
+ * is written, masked, to the run's log folder as claude-session-<n>.jsonl for the run artifact.
+ */
+export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1000, maxTurns = SAMPLE_RUN.maxTurns, maxBudgetUsd = SAMPLE_RUN.maxBudgetUsd, session = 1 }) {
   // An absolute path to the job's own installation, never a `claude` looked up on PATH.
   if (typeof executable !== 'string' || !isAbsolute(executable)) {
     return Promise.reject(new Error('The collector needs the absolute path of the reviewed Claude CLI.'));
   }
   return new Promise(resolveResult => {
-    const args = ['-p', '--output-format', 'json', '--no-session-persistence', '--disable-slash-commands',
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--disable-slash-commands',
       '--setting-sources', '', '--settings', 'scripts/price-collector/claude-settings.json',
       '--permission-mode', 'dontAsk', '--tools', 'Bash,Write', '--strict-mcp-config',
       '--mcp-config', 'scripts/price-collector/apify-mcp.json', '--max-turns', String(maxTurns), '--max-budget-usd', String(maxBudgetUsd),
@@ -232,8 +286,9 @@ export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1
     const interrupt = () => stop('interrupted');
     process.once('SIGINT', interrupt);
     process.once('SIGTERM', interrupt);
+    const stateDir = env.PRICE_COLLECTOR_STATE_DIR;
     const capture = (chunk, stderr) => {
-      if (text.length + errorText.length + chunk.length > 2 * 1024 * 1024) { stop('output_limit'); return; }
+      if (text.length + errorText.length + chunk.length > 40 * 1024 * 1024) { stop('output_limit'); return; }
       if (stderr) errorText += chunk.toString(); else text += chunk.toString();
     };
     child.stdout.on('data', chunk => capture(chunk, false));
@@ -250,14 +305,16 @@ export function launchClaude({ executable, sandbox, env, timeoutMs = 14 * 60 * 1
       clearTimeout(forceKill);
       process.removeListener('SIGINT', interrupt);
       process.removeListener('SIGTERM', interrupt);
-      let result = {};
-      try { result = JSON.parse(text); } catch { /* Failure remains generic; output stays private. */ }
+      const result = claudeResult(text);
+      appendLog(stateDir, `claude-session-${session}.jsonl`, text.trimEnd(), env);
+      if (errorText.trim() !== '') appendLog(stateDir, `claude-session-${session}.stderr.txt`, errorText.trimEnd(), env);
+      trace(stateDir, { event: 'session', session, exitCode: code, stopped, subtype: result.subtype ?? null, turns: result.num_turns ?? null,
+        costUsd: result.total_cost_usd ?? null, result: textOf(result.result), stderr: clip(errorText, 4000) }, env);
       const combined = text + errorText;
       let status = stopped ?? (code === 0 && result.type === 'result' && result.is_error === false ? 'completed' : 'failed');
       if (!stopped && /enforced_spend_limit_reached|specified API usage limits|error_max_budget_usd|error_max_turns/.test(combined)) status = 'claude_limit';
       if (!stopped && /monthly-usage-hard-limit-exceeded|platform-feature-disabled/.test(combined)) status = 'apify_limit';
       const costUsd = typeof result.total_cost_usd === 'number' && Number.isFinite(result.total_cost_usd) ? result.total_cost_usd : null;
-      // Counts and the CLI's own result subtype only; never the result text.
       const turns = Number.isInteger(result.num_turns) && result.num_turns >= 0 ? result.num_turns : null;
       const subtype = typeof result.subtype === 'string' && /^[a-z_]{1,40}$/.test(result.subtype) ? result.subtype : null;
       resolveResult({ status, costUsd, turns, subtype });
@@ -326,6 +383,8 @@ async function prepare(env, stateDir) {
   const issued = JSON.parse(work.out);
   const sample = full ? fullRunWork(issued) : sampleWork(issued, size);
   save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full });
+  // The whole work list the API issued, including the searches a sample leaves unsearched.
+  appendLog(stateDir, 'issued-work.json', JSON.stringify(issued, null, 2), env);
   const source = json(join(here, 'apify-limits.json'));
   const includeReviewed = env.PRICE_COLLECTOR_INCLUDE_REVIEWED === 'true';
   const limits = full ? fullRunLimits(source, includeReviewed) : sampleLimits(source, includeReviewed);
@@ -360,11 +419,12 @@ export async function collectBatches({ stateDir, issued, deadlineMs, launch, now
   const endsAt = now() + deadlineMs;
   const total = { status: 'completed', costUsd: 0, turns: 0, subtype: null };
   if (full) Object.assign(total, { batchesRun: 0, batchCount: batches.length });
-  for (const batch of batches) {
+  for (const [index, batch] of batches.entries()) {
     const remainingMs = endsAt - now();
     if (remainingMs < 60 * 1000) { total.status = 'timeout'; break; }
     save(join(stateDir, 'work.json'), batch);
-    const result = await launch(sessionOptions(full, remainingMs));
+    trace(stateDir, { event: 'batch', session: index + 1, of: batches.length, workItemIds: batch.searches.map(search => search.workItemId) });
+    const result = await launch({ ...sessionOptions(full, remainingMs), session: index + 1 });
     if (full) total.batchesRun += 1;
     total.costUsd = addKnown(total.costUsd, result.costUsd, typeof result.costUsd === 'number');
     total.turns = addKnown(total.turns, result.turns, Number.isInteger(result.turns));
@@ -376,6 +436,8 @@ export async function collectBatches({ stateDir, issued, deadlineMs, launch, now
   save(join(stateDir, 'collector-status.json'), total);
   return total;
 }
+
+const issuedWork = stateDir => json(join(stateDir, ISSUED_WORK));
 
 async function main(env, mode) {
   const stateDir = stateDirectory(env);
@@ -399,9 +461,15 @@ async function main(env, mode) {
   if (mode === 'finalize') {
     // Always fetch a new short-lived token; no bearer is persisted between steps.
     const token = await collectorToken(env);
-    const report = await finaliseSample({ stateDir, outputDir: join(sandbox, 'price-collector-out'), env, token });
-    console.log(report);
-    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, report);
+    const outputDir = join(sandbox, 'price-collector-out');
+    const { report, details } = await finaliseSample({ stateDir, outputDir, env, token });
+    // Keep Claude's result files with the run's logs, so the artifact holds exactly what was submitted.
+    if (existsSync(outputDir)) cpSync(outputDir, join(logDir(stateDir), 'result-files'), { recursive: true });
+    const secrets = secretsOf({ ...env, PRICE_COLLECTOR_API_TOKEN: token });
+    console.log(redact(`${report}\n${details}\n### Tool calls\n${toolTimeline(stateDir)}`, secrets));
+    if (env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(env.GITHUB_STEP_SUMMARY, redact(`## Price collector run ${issuedWork(stateDir).runId}\n\n\`\`\`\n${report}\`\`\`\n\n${details}\nThe full log (every tool call with its input and answer, and each Claude session's transcript) is in this run's **price-collector-logs** artifact; the tool calls are also in the finalise step's log.\n`, secrets));
+    }
     if (!json(join(stateDir, 'submission-status.json')).ok) process.exitCode = 1;
     return;
   }

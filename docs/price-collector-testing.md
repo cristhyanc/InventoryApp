@@ -59,7 +59,8 @@ In GitHub → Actions → **Price collector (manual test)** → Run workflow:
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
-   or overrides backend supplier cadence.
+   or overrides the backend's supplier list. Every enabled supplier with a collection route is in
+   every run's work, however recently it was checked.
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.
@@ -73,8 +74,31 @@ Incomplete searches remain `truncated`; a successful actor run alone is not proo
 
 The summary also says how many turns Claude took and its result subtype, and one line per tool
 with how many calls the hook allowed and denied and the fixed reason codes (for example
-`write-wrong-run`, `not-own-dataset`, `not-recorded-string`). These are counts and codes only, so a
-run that writes nothing shows where it stopped without publishing its output.
+`write-wrong-run`, `not-own-dataset`, `not-recorded-string`). An Apify call that fails is counted
+with a fixed failure label (`failed-input`, `failed-auth`, `failed-limit`, `failed-rate-limit`,
+`failed-not-found`, `failed-timeout`, `failed-interrupt` or `failed-other`).
+
+### Run log
+
+The owner decided on 31 October 2026 that a run must not be a black box: the run is logged in
+full even though this repository's Actions logs are public. Each run shows:
+
+- **Job summary**: the submission output (every outcome count and every reason the API gave,
+  word for word, plus any submission error) and a **Searches** list: for each search, the product
+  and supplier, the outcome Claude reported (or that it wrote no file), and every row it wrote
+  (title, supplier product id, price, pack, stock, link) with what the API did with that row and why.
+- **Finalise step log**: the same, plus every tool call in order: its input as the guard allowed it,
+  the hook's decision, and the tool's answer or error, shortened to 600 characters each; and for each
+  Claude session, what Claude said at the end.
+- **`price-collector-logs` artifact** (kept 7 days): `trace.jsonl` (every call, answer and failure in
+  full, up to 20,000 characters per field), `claude-session-<n>.jsonl` (each Claude session's whole
+  stream-json transcript), `issued-work.json` (the whole work list the API issued), `result-files/`
+  (exactly what Claude wrote), `submission.json` (every API decision) and `summary.md`.
+
+Credentials are never logged: every value of the Claude and Apify keys, the API token and the GitHub
+tokens the step holds is masked, and so is any bearer token, JWT, `apify_api_` or `sk-ant-` value,
+before a line reaches a log file. On a public repository anyone signed in to GitHub can download the
+artifact, so treat it as public.
 
 Review the counts/statuses in the Actions summary, then inspect proposed listings, pending prices
 and match decisions through the test API's Super Admin pages. Confirm pack size, variant, tax basis
@@ -91,6 +115,9 @@ can spend at most US$15 in one run. One product's searches always stay in the sa
 match file can be written only once. The whole Claude phase has 90 minutes; the run stops at the
 first batch that does not complete, and every search no batch reached becomes `not_searched`.
 Tick **include_verified_retailers** too, or Kmart and BIG W searches become `not_searched`.
+JB Metro (not an Apify actor) reads up to 5 pages of 20 products per search in a full run, with 2
+attempts of 15 seconds per page; a sample reads one page of 5 with one attempt. The guard appends
+these caps to every JB Metro call, so Claude cannot widen them.
 
 The summary adds `Claude batches: N of M`, and Claude's cost and turns are totals across batches
 (unknown if any batch did not report them). Apify spend is limited only by the Apify account usage
@@ -116,13 +143,12 @@ Record the run link, search outcomes, counts, duration and actual Apify spend pe
 Apify Console. The Actions summary includes Claude's reported USD cost when available, never a
 guessed Apify cost. An interrupted CLI may not emit its final cost record; inspect Claude Console
 for that run's usage. Build the 71-product monthly estimate from representative actual supplier
-searches and their cadence, not one generic multiplier. Public evidence must contain only counts,
-statuses, duration and spend, not product names, prices, raw output or credentials.
+searches and their cadence, not one generic multiplier. Evidence may name products, queries and
+prices (see [Run log](#run-log)), never credentials.
 
-The workflow does not upload result files or transcripts. It captures CLI output privately,
-publishes only allowlisted counters, and deletes temporary state, CLI files and output in an
-`always()` cleanup step. A hard runner loss can skip cleanup; verified ephemeral/reset runners are
-still required in self-hosted mode. Do not add debug logging or attach the private directory to a PR.
+The workflow uploads the masked run log described above, then deletes temporary state, CLI files and
+output in an `always()` cleanup step. A hard runner loss can skip cleanup; verified ephemeral/reset
+runners are still required in self-hosted mode.
 
 ## Implementation and checks
 

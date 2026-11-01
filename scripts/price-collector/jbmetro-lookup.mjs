@@ -244,6 +244,18 @@ export function readCustomAttributes(container) {
   return attributes;
 }
 
+/**
+ * Magento's stock answer in the result file's own words: IN_STOCK and OUT_OF_STOCK map across,
+ * and anything else, or nothing, is unknown. The result schema accepts only these three, so a raw
+ * IN_STOCK copied into a result file would get the whole file skipped.
+ */
+export function stockStatus(value) {
+  const raw = text(value);
+  if (raw === 'IN_STOCK') return 'in_stock';
+  if (raw === 'OUT_OF_STOCK') return 'out_of_stock';
+  return 'unknown';
+}
+
 /** One product as the collector reads it. A value the site did not publish is `null`, never `0`. */
 export function mapProduct(item, siteUrl) {
   const product = item ?? {};
@@ -254,7 +266,7 @@ export function mapProduct(item, siteUrl) {
     sku: text(product.sku),
     name: text(product.name),
     url: urlKey === null ? null : `${siteUrl}/${urlKey}${text(product.url_suffix) ?? ''}`,
-    stockStatus: text(product.stock_status),
+    stockStatus: stockStatus(product.stock_status),
     finalPrice: amount(minimum.final_price?.value),
     regularPrice: amount(minimum.regular_price?.value),
     currency: text(minimum.final_price?.currency) ?? text(minimum.regular_price?.currency),

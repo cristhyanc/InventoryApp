@@ -648,10 +648,12 @@ describe('verified retailer input contracts', () => {
   it('bounds BIG W internal paging and keeps pricing without reviews', () => {
     const actor = 'axlymxp/bigw-product-scraper';
     const answer = decideApify({ actor, input: { searchQueries: ['chocolate'],
-      includePricing: false, includeReviewStats: true, includeReviews: true } }, { rules: confirming(actor) });
+      includeFullDetail: true, includePricing: false, includeReviewStats: true, includeReviews: true } }, { rules: confirming(actor) });
     assert.equal(answer.decision, 'allow');
     const input = inputOf(answer);
     assert.equal(input.maxPagesPerQuery, 3);
+    // A full-detail page is one more request per product; the search page already carries the price.
+    assert.equal(input.includeFullDetail, false);
     assert.equal(input.includePricing, true);
     assert.equal(input.includeReviews, false);
     assert.equal(input.includeReviewStats, false);

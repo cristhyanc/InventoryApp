@@ -228,10 +228,15 @@ function proposalFor(file) {
   return proposal;
 }
 
-/** Counts one outcome list of an answer, keeping each reason and how often it was given. */
-function tally(into, rows) {
+/**
+ * Counts one outcome list of an answer, keeping each reason and how often it was given, and - when
+ * given a list - each row's own decision, so the run log can say what became of every row.
+ */
+function tally(into, rows, outcome, decisions) {
   for (const row of Array.isArray(rows) ? rows : []) {
     into.count += 1;
+    decisions?.push({ outcome, workItemId: row?.workItemId ?? null, supplierProductId: row?.supplierProductId ?? null,
+      waitingKey: row?.waitingKey ?? null, masterProductId: row?.masterProductId ?? null, reason: row?.reason ?? null });
     const reason = typeof row?.reason === 'string' && row.reason.trim() !== '' ? row.reason.trim() : null;
     if (reason === null) continue;
     into.reasons.set(reason, (into.reasons.get(reason) ?? 0) + 1);
@@ -297,9 +302,9 @@ async function submitMatches({ matches, runId, batchSize, post, record, counted 
   for (const batch of batchesOf(matches, batchSize)) {
     try {
       const { body } = await post(MATCHES_PATH, { runId, proposals: batch.map((entry) => proposalFor(entry.file)) });
-      tally(counted.autoMatched, body?.autoMatched);
-      tally(counted.tentative, body?.tentative);
-      tally(counted.matchesRejected, body?.rejected);
+      tally(counted.autoMatched, body?.autoMatched, 'auto-matched', counted.decisions);
+      tally(counted.tentative, body?.tentative, 'tentative', counted.decisions);
+      tally(counted.matchesRejected, body?.rejected, 'match rejected', counted.decisions);
     } catch (error) {
       record(error);
     }
@@ -313,10 +318,10 @@ async function submitResultFile({ file, runId, batchSize, post, record, counted,
   for (const batch of batchesOf(file.rows, batchSize)) {
     try {
       const { body } = await post(RESULTS_PATH, { runId, rows: batch.map((row) => rowFor(file, row)) });
-      tally(counted.accepted, body?.accepted);
-      tally(counted.sentToReview, body?.sentToReview);
-      tally(counted.pending, body?.pending);
-      tally(counted.rejected, body?.rejected);
+      tally(counted.accepted, body?.accepted, 'accepted', counted.decisions);
+      tally(counted.sentToReview, body?.sentToReview, 'sent to review', counted.decisions);
+      tally(counted.pending, body?.pending, 'pending', counted.decisions);
+      tally(counted.rejected, body?.rejected, 'rejected', counted.decisions);
     } catch (error) {
       record(error);
       return false;
@@ -375,6 +380,7 @@ export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } =
     autoMatched: emptyTally(),
     tentative: emptyTally(),
     matchesRejected: emptyTally(),
+    decisions: [],
   };
   const searchCounts = { complete: 0, truncated: 0, no_matches: 0, failed: 0 };
   const errors = [];
@@ -424,6 +430,8 @@ export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } =
     exitCode: errors.length === 0 && found.skipped.length === 0 ? 0 : 1,
     out,
     err: errors.length === 0 ? '' : `${errors.join('\n')}\n`,
+    // Every row and match the API decided, for the run log; the CLI does not print it.
+    decisions: counted.decisions,
   };
 }
 

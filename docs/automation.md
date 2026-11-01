@@ -1055,7 +1055,8 @@ without enabling them in repository configuration. Claude has 40 turns, a US$1 b
 for, still manual and still against the test API: it ignores the sample size, keeps the production
 limits in `apify-limits.json` (the 600-call run cap and full page sizes), and works through every
 issued search (at most 90) in fresh Claude sessions of about 6 searches, never splitting one
-product's searches. Each session has 60 turns and a US$1 budget, so 15 sessions cap Claude at
+product's searches. JB Metro's lookup reads up to 5 pages of 20 in a full run (1 page of 5 in a
+sample); the hook appends those caps to every call. Each session has 60 turns and a US$1 budget, so 15 sessions cap Claude at
 US$15; the whole phase has a 90-minute deadline, and the run stops at the first session that does
 not complete. The Claude step's 100-minute timeout is only a backstop, and the 130-minute job leaves
 a 15-minute finalisation step. The hook allows the
@@ -1067,12 +1068,14 @@ The `always()` finalizer fetches a fresh token and submits independently validat
 then completes the issued run even after Claude fails or is stopped. Unanswered work becomes
 `not_searched`. Whole-job cancellation, hard timeout or runner loss may skip finalisation and
 cleanup; backend run expiry and verified reset/ephemeral self-hosted isolation remain necessary.
-The public summary includes only allowlisted counts/statuses, Claude's turns and result subtype,
-per-tool allow/deny counts with fixed reason codes, reported Claude spend, Claude batches run for
-a full run, and for each skipped result file only its work item number and the field the validator
-named (never the message, which can quote a supplier product id). No work,
-prices, product names, transcripts or raw provider errors are printed or uploaded. The cleanup step
-removes the private workspace, state and CLI installation.
+Since 31 October 2026 (owner decision) a run is logged in full: the job summary lists every search
+with the rows Claude wrote and the API's decision and reason for each, the finalise step prints every
+tool call with its input and answer, and a pinned `actions/upload-artifact` step keeps the masked run
+log (tool trace, Claude session transcripts, issued work, result files, API decisions) for 7 days as
+`price-collector-logs`, before cleanup. Credentials are masked by exact value and by format before
+any line is written (`scripts/price-collector/trace.mjs`); `workflow-contract.mjs` allows only that
+one artifact. See [Run log](price-collector-testing.md#run-log). The cleanup step then removes the
+private workspace, state and CLI installation.
 
 See [Manual collector test](price-collector-testing.md) for all environment variables/secrets,
 Entra setup, the normal and interruption tests, actual supplier cost evidence, and the later

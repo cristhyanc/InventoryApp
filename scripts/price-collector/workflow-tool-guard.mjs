@@ -5,6 +5,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runGuard } from './apify-guard.mjs';
 import { recordRun, reserveRead } from './workflow-run-ledger.mjs';
+import { textOf, trace } from './trace.mjs';
 
 export function permittedCommand(command) {
   if (typeof command !== 'string' || /[\x00-\x1f$`;&|<>\\!*?()[\]{}#]/.test(command)) return false;
@@ -14,7 +15,7 @@ export function permittedCommand(command) {
 }
 
 // `code` is a fixed, non-enumerable diagnostic label: it never reaches Claude Code's JSON, and it is
-// what the public summary counts instead of the reason text.
+// what the summary counts per tool; the full reason is in the run's trace (trace.mjs).
 const decision = (permissionDecision, permissionDecisionReason, updatedInput, code = 'ok') => Object.defineProperty(
   { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision, permissionDecisionReason, ...(updatedInput ? { updatedInput } : {}) } },
   'code', { value: code });
@@ -102,6 +103,33 @@ export async function recordDecision(event, env) {
   return {};
 }
 
+/**
+ * A fixed label for why an Apify call failed (PostToolUseFailure). The error text itself can quote
+ * the input or the actor's answer, so only these labels are kept; the order puts the most specific
+ * cause first.
+ */
+const failurePatterns = [
+  ['failed-rate-limit', /\b429\b|rate.?limit|too many requests/i],
+  ['failed-limit', /\b402\b|credit|quota|usage limit|monthly limit|insufficient/i],
+  ['failed-auth', /\b40[13]\b|unauthori[sz]ed|forbidden|token/i],
+  ['failed-not-found', /\b404\b|not found|does not exist/i],
+  ['failed-input', /input|schema|validat|invalid|required/i],
+  ['failed-timeout', /time.?out|timed out/i],
+];
+
+export function failureCode(event) {
+  if (event?.is_interrupt === true) return 'failed-interrupt';
+  const error = String(event?.error ?? '');
+  return failurePatterns.find(([, pattern]) => pattern.test(error))?.[0] ?? 'failed-other';
+}
+
+/** PostToolUseFailure: notes the fixed failure label of a failed Apify call, and decides nothing. */
+export function failureDecision(event, env) {
+  if (!String(event?.tool_name ?? '').startsWith('mcp__apify__')) return {};
+  noteToolUse(env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: 'failed', code: failureCode(event) });
+  return {};
+}
+
 function responseShape(response) {
   if (typeof response === 'string') return 'string';
   if (Array.isArray(response)) return 'array';
@@ -115,6 +143,29 @@ function dedicatedActorTools(limits) {
   ]);
 }
 
+/**
+ * JB Metro's caps per run type. A sample reads one page of 5; a full run reads up to 5 pages of 20
+ * (100 products), with 2 attempts of 15 s per page so one call stays inside the Bash tool's
+ * 2-minute limit. HARD is the ceiling a limits file can never exceed.
+ */
+export const JB_METRO_CAPS = Object.freeze({
+  sample: Object.freeze({ pageSize: 5, maxPages: 1, batchSize: 5, attempts: 1, timeoutMs: 15000 }),
+  full: Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 2, timeoutMs: 15000 }),
+});
+const JB_METRO_HARD = Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 2, timeoutMs: 15000 });
+const JB_METRO_FLAGS = Object.freeze({ pageSize: '--page-size', maxPages: '--max-pages', batchSize: '--batch-size', attempts: '--attempts', timeoutMs: '--timeout-ms' });
+
+/** The flags for this run's JB Metro caps; the sample caps when the limits name none or a bad one. */
+export function jbMetroFlags(stateDir) {
+  let caps = JB_METRO_CAPS.sample;
+  try {
+    const chosen = JSON.parse(readFileSync(join(stateDir, 'limits.json'), 'utf8')).jbMetro;
+    const valid = chosen && Object.keys(JB_METRO_HARD).every(key => Number.isInteger(chosen[key]) && chosen[key] >= 1 && chosen[key] <= JB_METRO_HARD[key]);
+    if (valid) caps = chosen;
+  } catch { /* Missing or unreadable limits keep the sample caps. */ }
+  return Object.entries(JB_METRO_FLAGS).map(([key, flag]) => `${flag} ${caps[key]}`).join(' ');
+}
+
 export async function toolDecision(event, env) {
   const name = event?.tool_name ?? '';
   if (name === 'Bash') {
@@ -122,9 +173,10 @@ export async function toolDecision(event, env) {
       return decision('deny', 'Only foreground collector helper commands with literal arguments are allowed.', undefined, 'not-helper');
     }
     const command = event.tool_input.command;
-    // A helper's numeric flags cannot turn the small manual sample into an unbounded JB run.
+    // The run's own JB Metro caps are appended last, and the lookup takes the last value given, so a
+    // flag Claude added cannot widen the run.
     const fixed = command.startsWith('node scripts/price-collector/jbmetro-lookup.mjs ')
-      ? `${command} --page-size 5 --max-pages 1 --batch-size 5 --attempts 1 --timeout-ms 15000` : command;
+      ? `${command} ${jbMetroFlags(env.PRICE_COLLECTOR_STATE_DIR)}` : command;
     return decision('allow', 'Approved collector helper.', { ...event.tool_input, command: fixed });
   }
   if (name !== 'Write' && !name.startsWith('mcp__apify__')) return decision('deny', 'This tool is outside the collector allowlist.', undefined, 'not-allowlisted');
@@ -155,18 +207,26 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     let raw = '';
     for await (const chunk of process.stdin) raw += chunk;
     event = JSON.parse(raw);
+    const stateDir = process.env.PRICE_COLLECTOR_STATE_DIR;
     if (event.hook_event_name === 'PostToolUse') {
+      trace(stateDir, { event: 'answer', tool: event.tool_name, toolUseId: event.tool_use_id, response: textOf(event.tool_response) }, process.env);
       process.stdout.write(JSON.stringify(await recordDecision(event, process.env)));
+    } else if (event.hook_event_name === 'PostToolUseFailure') {
+      trace(stateDir, { event: 'failed', tool: event.tool_name, toolUseId: event.tool_use_id, code: failureCode(event), error: textOf(event.error) }, process.env);
+      process.stdout.write(JSON.stringify(failureDecision(event, process.env)));
     } else {
       const answer = await toolDecision(event, process.env);
-      noteToolUse(process.env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: 'before',
+      noteToolUse(stateDir, { tool: toolLabel(event), event: 'before',
         decision: answer.hookSpecificOutput?.permissionDecision, code: answer.code ?? 'ok' });
+      const output = answer.hookSpecificOutput ?? {};
+      trace(stateDir, { event: 'call', tool: event.tool_name, toolUseId: event.tool_use_id, decision: output.permissionDecision,
+        code: answer.code ?? 'ok', reason: output.permissionDecisionReason, input: textOf(output.updatedInput ?? event.tool_input) }, process.env);
       process.stdout.write(JSON.stringify(answer));
     }
   } catch {
     // Hook errors cannot become a permissive response or leak the event/credentials.
     if (process.env.PRICE_COLLECTOR_STATE_DIR) {
-      noteToolUse(process.env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: event?.hook_event_name === 'PostToolUse' ? 'after' : 'before', decision: 'deny', code: 'hook-error' });
+      noteToolUse(process.env.PRICE_COLLECTOR_STATE_DIR, { tool: toolLabel(event), event: { PostToolUse: 'after', PostToolUseFailure: 'failed' }[event?.hook_event_name] ?? 'before', decision: 'deny', code: 'hook-error' });
     }
     process.stdout.write(JSON.stringify(decision('deny', 'Collector policy could not verify this call.')));
     process.exitCode = 2;

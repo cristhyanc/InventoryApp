@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { verifyCollectorWorkflow } from './workflow-contract.mjs';
+import { RUN_LOG_STEP, verifyCollectorWorkflow } from './workflow-contract.mjs';
 
 const workflow = readFileSync(new URL('../../.github/workflows/price-collector.yml', import.meta.url), 'utf8');
 
@@ -9,12 +9,16 @@ test('the repository workflow satisfies the manual-only credential and finalisat
   assert.doesNotThrow(() => verifyCollectorWorkflow(workflow));
 });
 
-test('a cron, a write token, artifact publication or a non-always finalizer breaks the contract', () => {
+test('a cron, a write token, a second or unpinned artifact, a missing run log or a non-always finalizer breaks the contract', () => {
   for (const changed of [
     workflow.replace('  workflow_dispatch:', "  schedule:\n    - cron: '0 0 * * *'\n  workflow_dispatch:"),
     workflow.replace('      contents: read', '      contents: write'),
     workflow.replace('        if: always()', '        if: success()'),
     workflow + '\n# uses: actions/upload-artifact@v4\n',
+    workflow.replace(RUN_LOG_STEP, ''),
+    workflow.replace('          retention-days: 7', '          retention-days: 90'),
+    // Uploaded after cleanup, the log folder would already be gone.
+    workflow.replace(RUN_LOG_STEP, '') + `\n${RUN_LOG_STEP}`,
     workflow.replace("(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')", "github.ref != ''"),
     workflow.replace("(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')", "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/'))"),
     workflow.replace('            refs/heads/main|refs/heads/develop) ;;', '            refs/heads/*) ;;'),
@@ -35,6 +39,11 @@ test('the settings fail closed when a policy hook cannot run and expose no gener
   assert.equal(recorders[0].matcher, '^mcp__apify__');
   assert.equal(recorders[0].hooks[0].command, 'node scripts/price-collector/workflow-tool-guard.mjs');
   assert.equal(recorders[0].hooks[0].onFailure, 'block');
+  // A failed Apify call is labelled by the same script, so the summary can say why it failed.
+  const failures = settings.hooks.PostToolUseFailure;
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].matcher, '^mcp__apify__');
+  assert.equal(failures[0].hooks[0].command, 'node scripts/price-collector/workflow-tool-guard.mjs');
   assert.ok(!settings.permissions.allow.includes('Bash'));
   for (const tool of ['Edit', 'WebFetch', 'WebSearch', 'Agent']) assert.ok(settings.permissions.deny.includes(tool));
   // A bare Read deny rule also refuses every Write in Claude Code 2.1.316, before the hook runs, so

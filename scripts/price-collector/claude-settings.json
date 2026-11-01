@@ -28,6 +28,15 @@
         "timeout": 15,
         "onFailure": "block"
       }]
+    }],
+    "PostToolUseFailure": [{
+      "matcher": "^mcp__apify__",
+      "hooks": [{
+        "type": "command",
+        "command": "node scripts/price-collector/workflow-tool-guard.mjs",
+        "timeout": 15,
+        "onFailure": "block"
+      }]
     }]
   }
 }
