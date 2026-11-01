@@ -281,20 +281,19 @@ public class CheapestUnitOfferPolicyTests
     }
 
     /// <summary>
-    /// Out of stock is not an offer. An unknown stock answer <strong>is</strong> compared: a supplier
-    /// that publishes a price and says nothing about availability has not said the product is gone.
+    /// No stock answer withdraws an offer (owner decision, 1 November 2026): suppliers' stock answers
+    /// are unreliable, so an out-of-stock price is compared - and can be the cheapest - like any other.
     /// </summary>
     [Theory]
-    [InlineData(SupplierStockStatus.InStock, null)]
-    [InlineData(SupplierStockStatus.Unknown, null)]
-    [InlineData(SupplierStockStatus.OutOfStock, SupplierOfferIneligibility.OutOfStock)]
-    public void Only_a_stated_out_of_stock_answer_withdraws_an_offer(
-        SupplierStockStatus status,
-        SupplierOfferIneligibility? expected)
+    [InlineData(SupplierStockStatus.InStock)]
+    [InlineData(SupplierStockStatus.Unknown)]
+    [InlineData(SupplierStockStatus.OutOfStock)]
+    public void No_stock_answer_withdraws_an_offer(SupplierStockStatus status)
     {
         var result = Compare([Offer(1, packPrice: 24.00m, stockStatus: status)]);
 
-        Assert.Equal(expected, Assert.Single(result.Offers).Ineligibility);
+        Assert.Null(Assert.Single(result.Offers).Ineligibility);
+        Assert.Equal(1L, Assert.Single(result.Cheapest).SupplierListingId);
     }
 
     /// <summary>
@@ -400,15 +399,10 @@ public class CheapestUnitOfferPolicyTests
             SupplierOfferIneligibility.GstRateUnknown,
             Assert.Single(Compare([confirmedAndStale], productGstRate: null).Offers).Ineligibility);
 
-        Assert.Equal(
-            SupplierOfferIneligibility.OutOfStock,
-            Assert.Single(Compare([confirmedAndStale]).Offers).Ineligibility);
-
+        // Out of stock is not a reason (1 November 2026), so the next one in order is reported.
         Assert.Equal(
             SupplierOfferIneligibility.PromotionEnded,
-            Assert.Single(
-                Compare([confirmedAndStale with { StockStatus = SupplierStockStatus.InStock }]).Offers)
-                .Ineligibility);
+            Assert.Single(Compare([confirmedAndStale]).Offers).Ineligibility);
     }
 
     /// <summary>
@@ -422,7 +416,7 @@ public class CheapestUnitOfferPolicyTests
             [
                 Offer(1, packPrice: 24.00m, unitsPerPack: null),
                 Offer(2, packPrice: 12.00m, confirmed: false),
-                Offer(3, packPrice: 6.00m, stockStatus: SupplierStockStatus.OutOfStock),
+                Offer(3, packPrice: 6.00m, promotionEndsAtUtc: Now.AddDays(-1)),
             ]);
 
         Assert.Empty(result.Cheapest);

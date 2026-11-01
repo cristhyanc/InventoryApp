@@ -193,7 +193,6 @@ public class CheapestSupplierSummaryTests
     [InlineData(SupplierOfferIneligibility.PackSizeUnknown)]
     [InlineData(SupplierOfferIneligibility.ListingNotConfirmed)]
     [InlineData(SupplierOfferIneligibility.GstRateUnknown)]
-    [InlineData(SupplierOfferIneligibility.OutOfStock)]
     [InlineData(SupplierOfferIneligibility.PromotionEnded)]
     [InlineData(SupplierOfferIneligibility.Stale)]
     public async Task An_offer_that_cannot_be_compared_is_published_with_its_reason(
@@ -210,10 +209,6 @@ public class CheapestSupplierSummaryTests
                 },
             SupplierOfferIneligibility.GstRateUnknown =>
                 Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
-            SupplierOfferIneligibility.OutOfStock =>
-                WithPrice(
-                    Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
-                    price => price with { StockStatus = SupplierStockStatus.OutOfStock }),
             SupplierOfferIneligibility.PromotionEnded =>
                 WithPrice(
                     Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
@@ -264,7 +259,7 @@ public class CheapestSupplierSummaryTests
             [
                 WithPrice(
                     Listing(ColesPreset, 1, 0.50m, SupplierPriceBasis.InclusiveOfGst),
-                    price => price with { StockStatus = SupplierStockStatus.OutOfStock }),
+                    price => price with { IsPromotion = true, PromotionEndsAtUtc = Now.AddHours(-1) }),
                 Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
             ]));
 
@@ -272,7 +267,34 @@ public class CheapestSupplierSummaryTests
 
         Assert.Equal(["JB Metro", "Coles"], product.Suppliers.Select(offer => offer.SupplierName));
         Assert.Equal(22.80m / 24, product.CheapestUnitPrice);
-        Assert.Equal(SupplierOfferIneligibility.OutOfStock, product.Suppliers[1].Ineligibility);
+        Assert.Equal(SupplierOfferIneligibility.PromotionEnded, product.Suppliers[1].Ineligibility);
+    }
+
+    /// <summary>
+    /// A supplier that says it is out of stock is still compared, and can be the cheapest, with its
+    /// stock answer published beside the price (owner decision, 1 November 2026).
+    /// </summary>
+    [Fact]
+    public async Task An_out_of_stock_offer_is_still_compared_and_can_be_the_cheapest()
+    {
+        var store = Store(
+            gstRegistered: false,
+            [JbMetro, Coles],
+            Matched(7,
+            [
+                WithPrice(
+                    Listing(ColesPreset, 1, 0.50m, SupplierPriceBasis.InclusiveOfGst),
+                    price => price with { StockStatus = SupplierStockStatus.OutOfStock }),
+                Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
+            ]));
+
+        var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
+
+        var coles = Assert.Single(product.Suppliers, offer => offer.SupplierName == "Coles");
+        Assert.True(coles.IsCheapest);
+        Assert.Null(coles.Ineligibility);
+        Assert.Equal(SupplierStockStatus.OutOfStock, coles.StockStatus);
+        Assert.Equal(0.50m, product.CheapestUnitPrice);
     }
 
     #endregion

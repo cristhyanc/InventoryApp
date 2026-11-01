@@ -34,7 +34,12 @@ public enum SupplierOfferIneligibility
     /// </summary>
     GstRateUnknown = 3,
 
-    /// <summary>The supplier said it could not be bought. A price nobody can act on is not an offer.</summary>
+    /// <summary>
+    /// No longer produced. Stock never makes an offer uncomparable (owner decision, 1 November 2026):
+    /// suppliers' stock answers are unreliable, so an out-of-stock price is compared like any other
+    /// and the page says that stock may differ. The number stays reserved so an older client never
+    /// reads 4 as something else.
+    /// </summary>
     OutOfStock = 4,
 
     /// <summary>
@@ -382,11 +387,6 @@ public static class CheapestUnitOfferPolicy
         if (rate is null)
         {
             return SupplierOfferIneligibility.GstRateUnknown;
-        }
-
-        if (offer.StockStatus == SupplierStockStatus.OutOfStock)
-        {
-            return SupplierOfferIneligibility.OutOfStock;
         }
 
         // At the stated end instant the promotion has finished: a special that runs "until Sunday" is

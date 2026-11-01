@@ -29,8 +29,9 @@ public enum SupplierPriceBasis
 /// <para><see cref="Unknown"/> is a real answer and is deliberately not <see cref="InStock"/>: a
 /// supplier that publishes a price and says nothing about availability has not said the product is
 /// there, and a page that silently read "no answer" as "in stock" would send somebody to a shop for
-/// nothing. It is also not <see cref="OutOfStock"/>, which is why only that one makes an offer
-/// uncomparable - see <see cref="CheapestUnitOfferPolicy"/>.</para>
+/// nothing. No stock answer makes an offer uncomparable (owner decision, 1 November 2026): the
+/// answer is shown beside the price, and <see cref="CheapestUnitOfferPolicy"/> compares the price
+/// whatever it says.</para>
 ///
 /// <para>Numbered from 1, for the reason every other persisted enum in this application is.</para>
 /// </summary>
