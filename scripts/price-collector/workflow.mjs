@@ -250,12 +250,12 @@ export function toolUseReport(stateDir) {
   }).join('');
 }
 
-export async function finaliseSample({ stateDir, outputDir, env, token, submit = runSubmission }) {
+export async function finaliseSample({ stateDir, outputDir, env, apiUrl, token, submit = runSubmission }) {
   const work = json(join(stateDir, ISSUED_WORK));
   const status = existsSync(join(stateDir, 'collector-status.json')) ? json(join(stateDir, 'collector-status.json')) : { status: 'not_started', costUsd: null };
   const { dir, refused } = submissionFolder(stateDir, outputDir, work);
   const result = await submit({ argv: ['--dir', dir, '--run-id', String(work.runId)],
-    env: { PRICE_COLLECTOR_API_BASE_URL: env.PRICE_COLLECTOR_TEST_API_URL, PRICE_COLLECTOR_API_TOKEN: token } });
+    env: { PRICE_COLLECTOR_API_BASE_URL: apiUrl, PRICE_COLLECTOR_API_TOKEN: token } });
   const allowedStatuses = ['completed', 'failed', 'timeout', 'interrupted', 'output_limit', 'claude_limit', 'apify_limit', 'not_started'];
   const label = allowedStatuses.includes(status.status) ? status.status : 'failed';
   const cost = typeof status.costUsd === 'number' && Number.isFinite(status.costUsd) && status.costUsd >= 0 ? status.costUsd.toFixed(6) : 'unknown';
@@ -376,21 +376,40 @@ function stateDirectory(env) {
   return dir;
 }
 
-// The production API origin, from the production frontend's own runtime configuration. The
-// collector is a test-only stage: it must never issue work from, or submit results to, production.
+// The production API origin, from the production frontend's own runtime configuration. A test run
+// must never issue work from, or submit results to, production; a production run must reach exactly it.
 export function productionApiOrigin(configPath = join(here, '../../frontend/inventory-app/src/assets/config.json')) {
   return new URL(json(configPath).apiBaseUrl).origin;
 }
 
-// Reviewed main or develop only (develop to run against the hosted testing API), an HTTPS test API
-// URL without credentials, query or fragment, and never the production API.
+const cleanHttpsUrl = (value, label) => {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error(`Configure an HTTPS ${label} URL.`);
+  return url;
+};
+
+// Reviewed main or develop only, and an explicit target. A test run (main or develop, the latter
+// for the hosted testing API) needs an HTTPS test API URL without credentials, query or fragment
+// that is never the production API. A production run (owner decision, 1 November 2026) starts only
+// from main, in the reviewer-protected price-collector-production environment, and its URL must be
+// the production API origin the production frontend uses, so it cannot point anywhere else.
 export function collectorTarget(env, production = productionApiOrigin()) {
   if (!['refs/heads/main', 'refs/heads/develop'].includes(env.GITHUB_REF)) throw new Error('Only the reviewed main or develop workflow may issue a run.');
-  const url = new URL(env.PRICE_COLLECTOR_TEST_API_URL);
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Configure an HTTPS test API URL.');
-  if (url.origin === new URL(production).origin) throw new Error('The collector test API must not be the production API.');
+  const productionOrigin = new URL(production).origin;
+  if (env.PRICE_COLLECTOR_TARGET === 'production') {
+    if (env.GITHUB_REF !== 'refs/heads/main') throw new Error('Only the reviewed main workflow may run against production.');
+    const url = cleanHttpsUrl(env.PRICE_COLLECTOR_PRODUCTION_API_URL, 'production API');
+    if (url.origin !== productionOrigin || url.pathname !== '/') throw new Error('The production target must be the production API origin.');
+    return url;
+  }
+  if (env.PRICE_COLLECTOR_TARGET !== 'test') throw new Error('Choose the test or production target.');
+  const url = cleanHttpsUrl(env.PRICE_COLLECTOR_TEST_API_URL, 'test API');
+  if (url.origin === productionOrigin) throw new Error('The collector test API must not be the production API.');
   return url;
 }
+
+/** The validated target as the base URL the collector scripts take (they add `/api`). */
+export const collectorApiBaseUrl = env => collectorTarget(env).href.replace(/\/$/, '');
 
 /** Whether this is a production-sized run; anything but an explicit true or false is refused. */
 export function fullRunRequested(value) {
@@ -399,7 +418,7 @@ export function fullRunRequested(value) {
 }
 
 async function prepare(env, stateDir) {
-  const url = collectorTarget(env);
+  const apiUrl = collectorApiBaseUrl(env);
   const full = fullRunRequested(env.PRICE_COLLECTOR_FULL_RUN);
   const size = Number(env.PRICE_COLLECTOR_SAMPLE_SIZE);
   // Validate all local configuration before issuing a run (GET work writes a run). A full run
@@ -409,8 +428,8 @@ async function prepare(env, stateDir) {
   if (!['true', 'false'].includes(env.PRICE_COLLECTOR_INCLUDE_REVIEWED)) throw new Error('Specify whether verified retailer actors may run.');
   mkdirSync(stateDir, { mode: 0o700 }); // Refuse a previous attempt's directory; never reuse output.
   const token = await collectorToken(env);
-  const work = await runGetWork({ env: { PRICE_COLLECTOR_API_BASE_URL: url.href.replace(/\/$/, ''), PRICE_COLLECTOR_API_TOKEN: token } });
-  if (work.exitCode !== 0) throw new Error('The test API did not issue usable work.');
+  const work = await runGetWork({ env: { PRICE_COLLECTOR_API_BASE_URL: apiUrl, PRICE_COLLECTOR_API_TOKEN: token } });
+  if (work.exitCode !== 0) throw new Error('The collector API did not issue usable work.');
   const issued = JSON.parse(work.out);
   const sample = full ? fullRunWork(issued) : sampleWork(issued, size);
   save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full });
@@ -491,9 +510,11 @@ async function main(env, mode) {
   }
   if (mode === 'finalize') {
     // Always fetch a new short-lived token; no bearer is persisted between steps.
+    // The same validated target the run was issued from.
+    const apiUrl = collectorApiBaseUrl(env);
     const token = await collectorToken(env);
     const outputDir = join(sandbox, 'price-collector-out');
-    const { report, details } = await finaliseSample({ stateDir, outputDir, env, token });
+    const { report, details } = await finaliseSample({ stateDir, outputDir, env, apiUrl, token });
     // Keep Claude's result files with the run's logs, so the artifact holds exactly what was submitted.
     if (existsSync(outputDir)) cpSync(outputDir, join(logDir(stateDir), 'result-files'), { recursive: true });
     const secrets = secretsOf({ ...env, PRICE_COLLECTOR_API_TOKEN: token });

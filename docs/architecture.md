@@ -15036,12 +15036,16 @@ GET  api/super-admin/master-products/{id}
 
 ### Manual collector orchestration (issue #929, stage 1)
 
-The first rollout is a manual, test-API-only workflow, not a production schedule. A human starts it
-from reviewed `main` or reviewed `develop` (develop to run against the hosted testing API that Deploy
-Testing deploys from it; see `docs/testing-environment.md`). `workflow.mjs`'s `collectorTarget`
-refuses every other ref and refuses the production API origin, read from the production frontend's
-`assets/config.json`. The collector's GitHub environment (`price-collector`) and federated identity
-are its own and separate from the testing deployment identity. A trusted
+The rollout is a manual workflow, not a schedule, with an explicit `target` input. A **test** run
+starts from reviewed `main` or reviewed `develop` (develop to run against the hosted testing API that
+Deploy Testing deploys from it; see `docs/testing-environment.md`), and `workflow.mjs`'s
+`collectorTarget` refuses every other ref and refuses the production API origin, read from the
+production frontend's `assets/config.json`. A **production** run (owner decision, 1 November 2026)
+starts only from `main`, in its own reviewer-protected `price-collector-production` environment, and
+`collectorTarget` accepts only that same production origin from its own
+`PRICE_COLLECTOR_PRODUCTION_API_URL` variable; an absent or unknown target is refused. Each
+collector environment and federated identity is its own and separate from the testing deployment
+identity; see `docs/price-collector-testing.md` § Production run. A trusted
 `workflow.mjs prepare` process exchanges GitHub OIDC with the pinned Entra tenant, issues work once,
 and stores a small sample privately. Claude reads that snapshot with `read-work.mjs`; it never
 receives the Restockroo token or the GitHub/OIDC request credentials. The model process runs in a

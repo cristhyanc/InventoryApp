@@ -1,19 +1,33 @@
-name: Price collector (manual test)
+name: Price collector (manual)
 
-# #929 rollout stage 1: no cron and no production API. A separately reviewed change enables
-# the Sydney schedule only after the owner sees the end-to-end test and actual provider costs.
-# A human may start it from reviewed main or from reviewed develop, normally against the hosted
-# testing API that Deploy Testing deploys from develop (docs/testing-environment.md). Either way
-# it runs in the price-collector environment with the collector's own federated identity, which is
-# separate from the testing deployment identity, and it refuses the production API.
+# #929 rollout: manual only, no cron. A separately reviewed change enables the Sydney schedule.
+# target test: a human starts it from reviewed main or develop, normally against the hosted testing
+# API that Deploy Testing deploys from develop (docs/testing-environment.md), in the price-collector
+# environment with the collector's own federated identity, and it refuses the production API.
+# target production (owner decision, 1 November 2026): reviewed main only, in the separate
+# price-collector-production environment (main-only deployment branch rule and a required
+# reviewer), with that environment's own identity, and only to the production API origin.
 # full_run is the production-sized dry run the schedule waits for: every issued search with the
 # production page sizes, in fresh Claude sessions of a few searches each, still manual and still
 # against the test API, so the owner sees a full run's real duration and provider cost first.
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: test = the disposable test API (main or develop); production = the production API (main only, needs the environment reviewer's approval)
+        required: true
+        type: choice
+        options:
+          - test
+          - production
+        default: test
       confirm_test_api:
-        description: The price-collector environment points to a disposable test API; provider spend limits are set
+        description: For target test only - the price-collector environment points to a disposable test API; provider spend limits are set
+        required: true
+        type: boolean
+        default: false
+      confirm_production_api:
+        description: For target production only - this run writes prices to the production API; provider spend limits are set
         required: true
         type: boolean
         default: false
@@ -68,19 +82,34 @@ jobs:
             exit 1
           fi
 
-      - name: Require main or develop and the owner's test confirmation
+      - name: Require main or develop and the owner's confirmation for the chosen target
         env:
           RUN_REF: ${{ github.ref }}
+          TARGET: ${{ inputs.target }}
           CONFIRM_TEST_API: ${{ inputs.confirm_test_api }}
+          CONFIRM_PRODUCTION_API: ${{ inputs.confirm_production_api }}
         run: |
           case "$RUN_REF" in
             refs/heads/main|refs/heads/develop) ;;
             *) echo '::error::Start the reviewed workflow from main or develop; feature branches never receive collector credentials.'; exit 1 ;;
           esac
-          if [ "$CONFIRM_TEST_API" != 'true' ]; then
-            echo '::error::Confirm the disposable test API and provider limits.'
-            exit 1
-          fi
+          case "$TARGET" in
+            test)
+              if [ "$CONFIRM_TEST_API" != 'true' ] || [ "$CONFIRM_PRODUCTION_API" != 'false' ]; then
+                echo '::error::For the test target, confirm the disposable test API and provider limits, and leave the production confirmation off.'
+                exit 1
+              fi ;;
+            production)
+              if [ "$RUN_REF" != 'refs/heads/main' ]; then
+                echo '::error::Only the reviewed main workflow may run against production.'
+                exit 1
+              fi
+              if [ "$CONFIRM_PRODUCTION_API" != 'true' ] || [ "$CONFIRM_TEST_API" != 'false' ]; then
+                echo '::error::For the production target, confirm the production API and provider limits, and leave the test confirmation off.'
+                exit 1
+              fi ;;
+            *) echo '::error::Choose the test or production target.'; exit 1 ;;
+          esac
 
       - name: Require verified runner isolation for credentialed jobs
         env:
@@ -93,17 +122,20 @@ jobs:
           fi
 
   collect:
-    name: Collect and finalise the test sample
+    name: Collect and finalise the run
     needs: gate
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (inputs.target == 'test' || (inputs.target == 'production' && github.ref == 'refs/heads/main')) && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
-    environment: price-collector
+    # Each target has its own protected environment, identity, API URL variable and provider secrets.
+    environment: ${{ inputs.target == 'production' && 'price-collector-production' || 'price-collector' }}
     timeout-minutes: 130
     permissions:
       contents: read
       id-token: write
     env:
+      PRICE_COLLECTOR_TARGET: ${{ inputs.target }}
       PRICE_COLLECTOR_TEST_API_URL: ${{ vars.PRICE_COLLECTOR_TEST_API_URL }}
+      PRICE_COLLECTOR_PRODUCTION_API_URL: ${{ vars.PRICE_COLLECTOR_PRODUCTION_API_URL }}
       PRICE_COLLECTOR_TENANT_ID: ${{ vars.PRICE_COLLECTOR_TENANT_ID }}
       PRICE_COLLECTOR_CLIENT_ID: ${{ vars.PRICE_COLLECTOR_CLIENT_ID }}
       PRICE_COLLECTOR_API_SCOPE: ${{ vars.PRICE_COLLECTOR_API_SCOPE }}
@@ -143,7 +175,7 @@ jobs:
         timeout-minutes: 5
         run: npm install --prefix "$RUNNER_TEMP/price-collector-cli-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --no-audit --no-fund @anthropic-ai/claude-code@2.1.316 > /dev/null 2>&1
 
-      - name: Issue test work using a short-lived OIDC token
+      - name: Issue work using a short-lived OIDC token
         timeout-minutes: 2
         env:
           PRICE_COLLECTOR_SAMPLE_SIZE: ${{ inputs.sample_size }}

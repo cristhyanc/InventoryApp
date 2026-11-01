@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { RUN_LOG_STEP, verifyCollectorWorkflow } from './workflow-contract.mjs';
+import { COLLECT_ENVIRONMENT, RUN_LOG_STEP, verifyCollectorWorkflow } from './workflow-contract.mjs';
 
 const workflow = readFileSync(new URL('../../.github/workflows/price-collector.yml', import.meta.url), 'utf8');
 
@@ -23,6 +23,24 @@ test('a cron, a write token, a second or unpinned artifact, a missing run log or
     workflow.replace("(github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')", "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/'))"),
     workflow.replace('            refs/heads/main|refs/heads/develop) ;;', '            refs/heads/*) ;;'),
     workflow.replace("|| github.ref == 'refs/heads/develop')", "|| github.ref == 'refs/heads/feature')"),
+  ]) assert.throws(() => verifyCollectorWorkflow(changed));
+});
+
+test('production is main only, in its own environment with its own API setting, and an unknown target is refused', () => {
+  for (const changed of [
+    // The credentialed job would accept production from develop.
+    workflow.replace("(inputs.target == 'production' && github.ref == 'refs/heads/main')", "inputs.target == 'production'"),
+    // The gate would accept production from develop, or without its own confirmation.
+    workflow.replace("              if [ \"$RUN_REF\" != 'refs/heads/main' ]; then\n                echo '::error::Only the reviewed main workflow may run against production.'", "              if false; then\n                echo '::error::Only the reviewed main workflow may run against production.'"),
+    workflow.replace(`if [ "$CONFIRM_PRODUCTION_API" != 'true' ] || [ "$CONFIRM_TEST_API" != 'false' ]; then`, 'if false; then'),
+    workflow.replace("            *) echo '::error::Choose the test or production target.'; exit 1 ;;", '            *) ;;'),
+    // Production credentials from the test environment, or one environment for both targets.
+    workflow.replace("'price-collector-production' || 'price-collector'", "'price-collector' || 'price-collector'"),
+    workflow.replace(COLLECT_ENVIRONMENT, '    environment: price-collector\n'),
+    // A second job in a credentialed environment.
+    workflow.replace("    timeout-minutes: 5\n    permissions: {}", "    timeout-minutes: 5\n    environment: price-collector-production\n    permissions: {}"),
+    workflow.replace('      PRICE_COLLECTOR_TARGET: ${{ inputs.target }}\n', ''),
+    workflow.replace('      PRICE_COLLECTOR_PRODUCTION_API_URL: ${{ vars.PRICE_COLLECTOR_PRODUCTION_API_URL }}\n', ''),
   ]) assert.throws(() => verifyCollectorWorkflow(changed));
 });
 

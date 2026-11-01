@@ -1037,9 +1037,11 @@ Runs for one issue are queued rather than cancelled by a newer invocation, so a 
 
 ## Manual supplier price collector (#929, stage 1)
 
-`price-collector.yml` is a **manual test workflow**, with no schedule, no production API input and
-no deployment. It runs only reviewed `main` or reviewed `develop` (develop to test against the hosted
-testing API) in the protected `price-collector` environment, refuses the production API origin, shares
+`price-collector.yml` is a **manual workflow**, with no schedule and no deployment. Its `test` target
+runs only reviewed `main` or reviewed `develop` (develop to test against the hosted testing API) in
+the protected `price-collector` environment and refuses the production API origin; its `production`
+target runs only reviewed `main` in the separate, reviewer-protected `price-collector-production`
+environment and accepts only the production API origin. It shares
 one non-cancelling concurrency group, and uses only `contents: read` and `id-token: write`. The
 usual runner-mode selector and credentialed self-hosted isolation gate apply. Humans configure
 the environment and Entra federation; the workflow changes none of them.

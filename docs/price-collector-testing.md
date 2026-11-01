@@ -3,8 +3,9 @@
 The actor choices have already been tested. This run tests the **integration**: issue work from a
 disposable Restockroo test API, let Claude search and match through the guard, submit each finished
 file, and complete the run. It makes real paid supplier calls and writes the **test catalogue**.
-It has no production API input and no cron. #926 stays open until real output/cost evidence exists;
-#929 stays open for the later Sydney schedule and production rollout.
+It has no cron. A **test** run (the default `target`) never reaches the production API; a
+**production** run is a separate, main-only target described in [Production run](#production-run).
+#926 stays open until real output/cost evidence exists; #929 stays open for the later Sydney schedule.
 
 ## One-time human setup
 
@@ -52,10 +53,12 @@ It has no production API input and no cron. #926 stays open until real output/co
 
 ## First run
 
-In GitHub → Actions → **Price collector (manual test)** → Run workflow:
+In GitHub → Actions → **Price collector (manual)** → Run workflow:
 
-1. Select **develop** (to test the code the hosted testing API runs) or **main**.
-2. Confirm that the environment points to a disposable test API and provider limits are set.
+1. Select **develop** (to test the code the hosted testing API runs) or **main**, and leave
+   **target** on `test`.
+2. Tick **confirm_test_api** to confirm that the environment points to a disposable test API and
+   provider limits are set. Leave **confirm_production_api** off; the gate refuses a test run with it on.
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
@@ -158,6 +161,71 @@ When a result file fails validation, the summary shows `skipped <work item>.json
 validator's message. One skipped file marks the submission failed, but every other file is still
 submitted and the run is still completed.
 
+## Production run
+
+A **production** run (owner decision, 1 November 2026) collects real supplier prices into the
+production catalogue. It is the same workflow, still manual with no schedule, with **target**
+`production`. What keeps it apart from a test run:
+
+- The gate and the credentialed job's own condition refuse it unless it was started from reviewed
+  **main**; a test run still refuses the production API origin, from either ref.
+- It runs in its **own** GitHub environment, `price-collector-production`, never `price-collector`,
+  so it gets only that environment's variables, secrets and federated identity, and its required
+  reviewer must approve every run.
+- Its URL comes from its own variable, `PRICE_COLLECTOR_PRODUCTION_API_URL`, and
+  `workflow.mjs`'s `collectorTarget` accepts only the production API origin there (the one in
+  `frontend/inventory-app/src/assets/config.json`, with no path), so it cannot point at another host.
+- It needs **confirm_production_api** ticked and **confirm_test_api** off; the target must be
+  exactly `test` or `production`, and the scripts refuse anything else rather than picking one.
+
+Running it changes no purchase, GST record or inventory: as in testing, a reading of a listing
+nobody has confirmed is held for the Super Admin supplier price review.
+
+### One-time production setup (human)
+
+Do these in order. None of them is done by the workflow, and no id or key belongs in a commit or
+public comment.
+
+1. **Release and deploy.** Merge a release PR from `develop` into `main` that carries the collector
+   and this workflow, then run **Deploy Production** from `main` so the production API has the
+   collector endpoints and migrations (including the BIG W/Kmart weekly freshness change).
+2. **Collector identity for production.** Create a **separate** collector app registration for
+   production (recommended), so a token from the test environment is never one production accepts.
+   On the API app registration the production API uses, assign it the `PriceCollector.Run`
+   application role and grant admin consent. No client secret, certificate or delegated permission.
+3. **Federated credential** on that production collector registration:
+   - Issuer: `https://token.actions.githubusercontent.com`
+   - Audience: `api://AzureADTokenExchange`
+   - Subject: `repo:cristhyanc/InventoryApp:environment:price-collector-production`
+4. **Production App Service settings.** Set `PriceCollector__TenantId` and
+   `PriceCollector__ClientId` to the tenant and the **production** collector registration's client
+   id, and `PriceCollector__RunExpiryHours` (for example `6`), then restart the API. Until these are
+   set, production refuses every collector token.
+5. **GitHub environment `price-collector-production`.** Required reviewer: you. Deployment branches:
+   **main only** (selected branches, `main`). Environment variables:
+
+   | Variable | Value |
+   | --- | --- |
+   | `PRICE_COLLECTOR_PRODUCTION_API_URL` | The production API origin, **without** `/api` (the origin of `apiBaseUrl` in `frontend/inventory-app/src/assets/config.json`) |
+   | `PRICE_COLLECTOR_TENANT_ID` | Collector tenant GUID |
+   | `PRICE_COLLECTOR_CLIENT_ID` | The production collector registration's client GUID |
+   | `PRICE_COLLECTOR_API_SCOPE` | The production API application ID URI followed by `/.default` |
+
+   Environment **secrets** `ANTHROPIC_API_KEY` and `APIFY_TOKEN` (the same keys as testing, or
+   separate ones to see production spend on its own). Do not set `PRICE_COLLECTOR_TEST_API_URL` here.
+6. **Provider limits.** Check the Apify account monthly usage limit and the Claude Console spend
+   limit cover production runs as well as testing.
+7. **Products to search.** In production, turn on **Track supplier prices** for the products to
+   collect, and make sure the supplier presets have their collection routes. A run issues work only
+   for tracked products.
+
+### Running it
+
+Actions → **Price collector (manual)** → Run workflow from **main**, **target** `production`, tick
+**confirm_production_api**, leave **confirm_test_api** off, choose a sample or **full_run** (tick
+**include_verified_retailers** for Kmart and BIG W), and approve the environment job. Then confirm
+proposed listings and pending prices in production's Super Admin supplier price review.
+
 ## Interruption run and cost evidence
 
 Repeat with **stop_after_minutes** set to a whole number of minutes (1 to 14). Pick a value
@@ -200,7 +268,7 @@ as actor calls. Every other Apify account tool stays denied. Claude is launched 
 The finalizer obtains a **fresh** API token, copies only this sample's regular result files to a
 private submission folder, and delegates independent schema validation, batching, outcome ordering
 and completion to `submit-results.mjs`. It never prints raw error bodies or supplier-provided text.
-There is no automatic retry loop or production schedule.
+There is no automatic retry loop or schedule.
 
 ```bash
 node --test scripts/price-collector/*.test.mjs

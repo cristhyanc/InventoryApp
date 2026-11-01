@@ -194,7 +194,7 @@ setInterval(() => {}, 1000);\n`, { mode: 0o700 });
     writeFileSync(join(outputDir, '2.json'), '{');
     writeFileSync(join(outputDir, '99.json'), JSON.stringify({ runId: 41, workItemId: 99 }));
     writeFileSync(join(outputDir, 'match-a.json'), JSON.stringify({ runId: 40, waitingKey: 'a' }));
-    const { report } = await finaliseSample({ stateDir: dir, outputDir, env: { PRICE_COLLECTOR_TEST_API_URL: server.baseUrl }, token: 'test-token' });
+    const { report } = await finaliseSample({ stateDir: dir, outputDir, env: {}, apiUrl: server.baseUrl, token: 'test-token' });
     assert.deepEqual(server.requests.map(r => r.path), ['/api/price-collector/work-items/1/outcome', '/api/price-collector/runs/41/complete']);
     assert.ok(server.requests.every(r => r.authorization === 'Bearer test-token'));
     assert.ok(report.includes('not_searched 1'));
@@ -324,22 +324,48 @@ test('a dedicated actor tool records its run, and get-actor-run may add a datase
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('a run is issued only from reviewed main or develop, to an HTTPS test API that is not production', () => {
+test('a test run is issued only from reviewed main or develop, to an HTTPS test API that is not production', () => {
   const production = productionApiOrigin();
   assert.equal(production, new URL(JSON.parse(readFileSync(new URL('../../frontend/inventory-app/src/assets/config.json', import.meta.url), 'utf8')).apiBaseUrl).origin);
   const testApi = 'https://restockroo-testing-api.azurewebsites.net';
+  const test = (GITHUB_REF, url) => collectorTarget({ GITHUB_REF, PRICE_COLLECTOR_TARGET: 'test', PRICE_COLLECTOR_TEST_API_URL: url,
+    PRICE_COLLECTOR_PRODUCTION_API_URL: production });
   for (const ref of ['refs/heads/main', 'refs/heads/develop']) {
-    assert.equal(collectorTarget({ GITHUB_REF: ref, PRICE_COLLECTOR_TEST_API_URL: testApi }).origin, testApi);
+    assert.equal(test(ref, testApi).origin, testApi);
   }
   for (const ref of ['refs/heads/feature', 'refs/heads/developer', 'refs/tags/v1', 'refs/pull/1/merge', undefined]) {
-    assert.throws(() => collectorTarget({ GITHUB_REF: ref, PRICE_COLLECTOR_TEST_API_URL: testApi }), /main or develop/);
+    assert.throws(() => test(ref, testApi), /main or develop/);
   }
-  for (const url of [production, `${production}/`, production.toUpperCase()]) {
-    assert.throws(() => collectorTarget({ GITHUB_REF: 'refs/heads/develop', PRICE_COLLECTOR_TEST_API_URL: url }), /not be the production API/);
+  for (const url of [production, `${production}/`, `${production}/api`, production.toUpperCase()]) {
+    assert.throws(() => test('refs/heads/develop', url), /not be the production API/);
   }
   for (const url of ['http://restockroo-testing-api.azurewebsites.net', 'https://user:pw@restockroo-testing-api.azurewebsites.net', `${testApi}?x=1`]) {
-    assert.throws(() => collectorTarget({ GITHUB_REF: 'refs/heads/develop', PRICE_COLLECTOR_TEST_API_URL: url }), /HTTPS test API URL/);
+    assert.throws(() => test('refs/heads/develop', url), /HTTPS test API URL/);
   }
+  // No target, or an unknown one, is refused rather than defaulting to either API.
+  for (const target of [undefined, '', 'Production', 'prod', 'testing']) {
+    assert.throws(() => collectorTarget({ GITHUB_REF: 'refs/heads/main', PRICE_COLLECTOR_TARGET: target, PRICE_COLLECTOR_TEST_API_URL: testApi }), /test or production target/);
+  }
+});
+
+test('a production run is issued only from reviewed main, and only to the production API origin', () => {
+  const production = productionApiOrigin();
+  const testApi = 'https://restockroo-testing-api.azurewebsites.net';
+  const run = (GITHUB_REF, url) => collectorTarget({ GITHUB_REF, PRICE_COLLECTOR_TARGET: 'production', PRICE_COLLECTOR_PRODUCTION_API_URL: url,
+    PRICE_COLLECTOR_TEST_API_URL: testApi });
+  assert.equal(run('refs/heads/main', production).origin, production);
+  assert.equal(run('refs/heads/main', `${production}/`).origin, production);
+  for (const ref of ['refs/heads/develop', 'refs/heads/feature', undefined]) {
+    assert.throws(() => run(ref, production), /main/);
+  }
+  // Never the test API or another host, and never a path: the scripts add /api themselves.
+  for (const url of [testApi, 'https://example.com', `${production}/api`]) {
+    assert.throws(() => run('refs/heads/main', url), /production API origin/);
+  }
+  for (const url of [production.replace('https:', 'http:'), `${production}?x=1`]) {
+    assert.throws(() => run('refs/heads/main', url), /HTTPS production API URL/);
+  }
+  assert.throws(() => run('refs/heads/main', undefined));
 });
 
 test('a run is read from the leading JSON of an answer even when a summary follows it, and from nowhere else', () => {
