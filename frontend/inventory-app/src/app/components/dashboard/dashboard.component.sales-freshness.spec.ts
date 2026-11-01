@@ -107,7 +107,7 @@ function createComponent(doubles: Doubles = {}): DashboardComponent {
     { getAll: () => of([SITE]) } as unknown as SiteService,
     { syncLatest: doubles.syncLatest ?? (() => of(RAN)) } as unknown as NayaxSalesSyncService,
     { getSummary: () => doubles.summary$ ?? of(SUMMARY) } as unknown as DashboardService,
-    { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
+    { getSummariesBatched: () => of([]) } as unknown as ProductPurchaseCostService,
     { active$: doubles.sessionActive ?? of(false) } as unknown as SupportSessionService,
     { allows: () => of(true) } as unknown as AccessService
   );
@@ -126,7 +126,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
         useValue: { syncLatest: doubles.syncLatest ?? (() => of(RAN)) }
       },
       { provide: DashboardService, useValue: { getSummary: () => doubles.summary$ ?? of(SUMMARY) } },
-      { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },
       { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => of(false) } },
       { provide: SupportSessionService, useValue: { active$: doubles.sessionActive ?? of(false) } },

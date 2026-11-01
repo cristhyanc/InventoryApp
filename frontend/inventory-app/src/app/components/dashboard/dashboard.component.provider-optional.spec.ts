@@ -208,7 +208,7 @@ function createComponent(doubles: Doubles = {}): DashboardComponent {
     { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } as unknown as DashboardService,
     // Issue #789's purchase-cost columns are `dashboard.component.purchase-costs.spec.ts`'s
     // subject; this file is about the provider-optional states of the page around them.
-    { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
+    { getSummariesBatched: () => of([]) } as unknown as ProductPurchaseCostService,
     { active$: doubles.sessionActive ?? of(false) } as unknown as SupportSessionService,
     { allows: () => of(doubles.canViewFinancials ?? true) } as unknown as AccessService
   );
@@ -228,7 +228,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       { provide: NayaxSalesSyncService, useValue: { syncLatest: doubles.syncLatest ?? (() => of(SYNC_RAN)) } },
       { provide: SupportSessionService, useValue: { active$: doubles.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } },
-      { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },
       { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => of(doubles.canViewFinancials ?? true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
@@ -296,7 +296,7 @@ describe('Dashboard without a usable provider (issue #727)', () => {
       { getAll: sites } as unknown as SiteService,
       { syncLatest: () => of(SYNC_RAN) } as unknown as NayaxSalesSyncService,
       { getSummary: () => of(NOT_CONNECTED_SUMMARY) } as unknown as DashboardService,
-      { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
+      { getSummariesBatched: () => of([]) } as unknown as ProductPurchaseCostService,
       { active$: of(false) } as unknown as SupportSessionService,
       { allows: () => of(true) } as unknown as AccessService
     );
@@ -366,7 +366,7 @@ describe('Dashboard for a business whose plan does not include the sales provide
       { getAll: sites } as unknown as SiteService,
       { syncLatest } as unknown as NayaxSalesSyncService,
       { getSummary: () => of(PLAN_REQUIRED_SUMMARY) } as unknown as DashboardService,
-      { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
+      { getSummariesBatched: () => of([]) } as unknown as ProductPurchaseCostService,
       { active$: of(false) } as unknown as SupportSessionService,
       { allows: () => of(true) } as unknown as AccessService
     );
@@ -587,7 +587,7 @@ describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
         }
       } as unknown as NayaxSalesSyncService,
       { getSummary: () => of(CONNECTED_SUMMARY) } as unknown as DashboardService,
-      { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
+      { getSummariesBatched: () => of([]) } as unknown as ProductPurchaseCostService,
       { active$: of(false) } as unknown as SupportSessionService,
       { allows: () => of(true) } as unknown as AccessService
     );

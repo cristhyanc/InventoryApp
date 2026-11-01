@@ -9250,16 +9250,31 @@ renders it as five parts:
    and since issue #1019 that machine's own low and empty product counts beside it (see
    [Per-machine low and empty counts on the site read](#per-machine-low-and-empty-counts-on-the-site-read-issue-1019)),
    and `GET api/machines` for the machine rows and the fleet totals.
-4. **Reorder priorities**: `reorderPriorities` is the first `REORDER_PRIORITY_LIMIT` (5) rows of the
-   authoritative low-stock list in its own order, and `reorderViewAllLabel` names the list's real
-   length. The purchase-cost read (#788/#789) is requested only for those rows and still only with
-   `Dashboard.ViewFinancials`. Last and Cheapest purchase are named by their own column headings;
+4. **Reorder priorities**: since issue #1017 the card pages the whole authoritative low-stock list in
+   its own order, `REORDER_PAGE_SIZE` (5) rows to a page, and `reorderViewAllLabel` still names the
+   list's real length. `reorderPriorities` is the current page - `lowStock.slice()` at
+   `reorderPageIndex`, so nothing re-ranks or re-filters the list and the pages hold every product
+   exactly once - and `reorderPageCount`, `reorderRangeLabel` and `isReorderPagerShown` are what the
+   one pager renders for both the desktop table and the narrow-screen cards, which therefore cannot
+   disagree about which page is shown. The page size is fixed (no selector), the page is not
+   persisted anywhere, and `keepReorderPageInRange` is the rule for a re-read: the same page when it
+   still exists, the new last page when the list has shrunk past it, never an empty page. The two
+   **enrichment reads are per reorder read, not per page**: `reorderPriorityIds` carries every listed
+   id, so the purchase-cost read (#788/#789) asks for all of them as one logical load -
+   `ProductPurchaseCostService.getSummariesBatched` splits it into `GET`s of at most
+   `PURCHASE_COST_MAX_IDS_PER_REQUEST` (100) ids, because the ids travel as repeated query values and
+   310 real 15-digit ids in one `GET` already exceed Kestrel's default 8,192-byte request line; any
+   failed batch fails the whole load ("Unavailable" with Retry, never partial costs) - still only
+   with `Dashboard.ViewFinancials`, and still never with an empty id list or an empty batch, which
+   that endpoint reads as "every product" - and turning a page issues no request at all. Last and Cheapest purchase are named by their own column headings;
    the note row that used to repeat that they are historical costs was removed by issue #1016 and
    the sentence was not moved anywhere else. The **Cheapest supplier** column (issue #981, the same column #939
    asks for) reuses #930's `CheapestSuppliersComponent` and `CheapestSupplierCellComponent`
    unchanged, beside - never in place of - the historical columns: `reorderPriorityIds` is set once
-   per reorder read, so the component makes one summary request for the five ids and re-reads only
-   when the list changes. It follows the endpoint's `Dashboard.View`, so it shows without
+   per reorder read and the component asks for all of those ids then, splitting them into the
+   `CHEAPEST_SUPPLIER_MAX_IDS` (200) batches its endpoint bounds, and re-reads only when the list
+   changes - never when a page turns, which is what keeps a later page's rows priced from that one
+   read. It follows the endpoint's `Dashboard.View`, so it shows without
    `Dashboard.ViewFinancials`; its failure (with Retry) and support-session "unavailable" states are
    the component's own and leave the rest of the dashboard alone. That these are observed supplier
    prices and not costs paid is said by a help button rather than by a row: issue #1016 put the

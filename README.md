@@ -621,8 +621,13 @@ changed, and every "Unavailable" still means unavailable, never zero.
   - The sites and the machines are still read separately: if one read fails the card keeps the
     other's results and says which one is unavailable, and a failed read is never shown as an empty
     business. On a phone the same hierarchy is expandable site cards holding machine cards.
-- **Reorder priorities** shows the first five products of the reorder list, in the list's own order,
-  and a link naming how many there really are ("View all 7 products needing ordering") to Products →
+- **Reorder priorities** shows every product on the reorder list, in the list's own order, **five per
+  page** (issue #1017): below the rows it says which of them you are looking at ("Showing 6-7 of 7
+  products") and offers **Previous** and **Next**, with **Previous** unavailable on the first page and
+  **Next** on the last. The page size is fixed, there is no rows-per-page choice, and every visit
+  starts on page 1. Turning a page only changes which of the products already read are shown; it
+  sends no request, and the phone card list turns with the table. The link naming how many there
+  really are ("View all 7 products needing ordering") still goes to Products →
   Needs Ordering. Its columns are product, storage stock, machine need, need to order, the last and
   cheapest purchase, and **Cheapest supplier** (issue #981). Last and cheapest purchase are
   **historical costs from your own purchases**; Cheapest supplier is the lowest price your own
@@ -631,7 +636,8 @@ changed, and every "Unavailable" still means unavailable, never zero.
   and beside the same label on each narrow-screen card (issue #1016): press, tap or focus it to read
   the sentence beside the column, and press Escape or click away to close it again. The supplier
   column is the same cell and popup as
-  [on Needs Ordering](#the-cheapest-supplier-on-needs-ordering): one request for the five products,
+  [on Needs Ordering](#the-cheapest-supplier-on-needs-ordering): read once for every product on the
+  list, however many pages it fills, so each page is priced from that one read,
   shown to everyone who sees the dashboard, unavailable in a read-only support view, and a failed
   read says so with a **Retry** without affecting the rest of the dashboard.
 
@@ -2411,8 +2417,12 @@ it is in, on the Machines pages.
 
 ## What you paid, on the dashboard's Reorder Alerts
 
-Since issue #972 this table is the dashboard's **Reorder priorities** (its first five products, with
-a link to all of them on Needs Ordering), and its two cost columns are unchanged.
+Since issue #972 this table is the dashboard's **Reorder priorities**, and since issue #1017 it pages
+the whole reorder list five products at a time (the link to Needs Ordering is still there). Its two
+cost columns are unchanged, and they are read once for every product on the list, so they are filled
+in on every page without a page turn asking for anything. A long list is read in requests of at most
+100 products each, so the request never grows too long for the server; if any of them fails, both
+columns say "Unavailable" with a Retry rather than showing only some of the costs.
 
 Where the Reorder Alerts table used to carry a selling price, it now carries what you actually paid:
 a **Last purchase** column and a **Cheapest purchase** column, each showing the supplier and the unit

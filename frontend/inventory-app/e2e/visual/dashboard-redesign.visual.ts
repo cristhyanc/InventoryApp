@@ -18,7 +18,9 @@ import { join, resolve } from 'node:path';
  *
  * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule.
  * Issue #1016's evidence is here too - the Cheapest supplier help panel opened from the desktop
- * heading at 1440px and from a narrow-screen card at 360px. Issue #987's own interaction evidence
+ * heading at 1440px and from a narrow-screen card at 360px - and issue #1017's: Reorder priorities
+ * is paged five rows to a page, so the seven reorder products give two pages, and the second page
+ * is captured at 1440 and 390px after turning it with the pager. Issue #987's own interaction evidence
  * is here as well: a collapsed group at 1440 and 390px, the
  * shared period control switched to Last week, and the keyboard focus ring on a site expander with
  * the group toggled from the keyboard alone. The More sheet's modality is exercised in the browser
@@ -390,6 +392,38 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       // The viewport, not the document: the panel is in the top layer, which a full-page capture
       // stitched from a taller viewport would move away from the button it is anchored to.
       await page.screenshot({ path: join(screenshotDirectory, `reorder-supplier-help-${width}px.png`) });
+    });
+  }
+
+  /**
+   * Issue #1017's own evidence: Reorder priorities paged, five rows to a page. The seven synthetic
+   * reorder products give exactly two pages, so page 2 is the partial one - "Showing 6-7 of 7
+   * products", with Next at the end of the list and Previous now available. It is a real interaction
+   * at both widths, which is also what shows the desktop table and the phone cards turning the one
+   * shared page.
+   */
+  for (const width of [1440, 390]) {
+    test(`Reorder priorities second page at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+      await page.locator('section[aria-labelledby="reorder-priorities-title"]').scrollIntoViewIfNeeded();
+
+      await expect(page.getByTestId('reorder-range')).toHaveText(/Showing 1.5 of 7 products/);
+      await expect(page.getByTestId('reorder-previous-page')).toBeDisabled();
+      await page.getByTestId('reorder-next-page').click();
+
+      await expect(page.getByTestId('reorder-range')).toHaveText(/Showing 6.7 of 7 products/);
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText(/Page 2 of 2/);
+      await expect(page.getByTestId('reorder-next-page')).toBeDisabled();
+      await expect(page.getByTestId('reorder-previous-page')).toBeEnabled();
+      // The last two products of the list, and none of the first page's, in both layouts.
+      await expect(page.getByText('Mount Franklin Water 600mL').filter({ visible: true })).toBeVisible();
+      await expect(page.getByText('Coca-Cola 375mL').filter({ visible: true })).toBeVisible();
+      await expect(page.getByText('Cadbury Dairy Milk 45g').filter({ visible: true })).toHaveCount(0);
+      await expectNoHorizontalOverflow(page);
+
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width, height });
+      await page.screenshot({ path: join(screenshotDirectory, `reorder-page-2-${width}px.png`) });
     });
   }
 
