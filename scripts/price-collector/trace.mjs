@@ -25,7 +25,7 @@ export function redact(text, secrets = []) {
   let out = String(text);
   for (const secret of secrets) out = out.split(secret).join('***');
   return out
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi, '$1***')
+    .replace(/([Bb]earer\s+)[A-Za-z0-9._~+/=-]{8,}/g, '$1***')
     .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '***')
     .replace(/(apify_api_)[A-Za-z0-9]{8,}/g, '$1***')
     .replace(/(sk-ant-)[A-Za-z0-9_-]{8,}/g, '$1***');

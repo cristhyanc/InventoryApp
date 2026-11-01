@@ -110,24 +110,52 @@ export function collectorEnvironment(env, home) {
   };
 }
 
+/** `prefix + value` when there is a value, otherwise nothing. */
+const part = (prefix, value) => (value === null || value === undefined || value === '' ? '' : prefix + value);
+
 /** The product a search is for, as a person reads it. */
 export function productLabel(product = {}) {
   if (product.kind === 'master') {
-    const size = product.sizeValue == null ? '' : ` ${product.sizeValue}${product.sizeUnit ?? ''}`;
-    return `${[product.brand, product.name].filter(Boolean).join(' ')}${size} (master product ${product.masterProductId})`;
+    const name = [product.brand, product.name].filter(Boolean).join(' ');
+    const size = product.sizeValue == null ? '' : ' ' + product.sizeValue + (product.sizeUnit ?? '');
+    return name + size + ' (master product ' + product.masterProductId + ')';
   }
-  return `${product.searchName ?? '?'}${product.unitLabel ? ` - ${product.unitLabel}` : ''} (waiting product)`;
+  return (product.searchName ?? '?') + part(' - ', product.unitLabel) + ' (waiting product)';
 }
 
 const readJson = path => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
 const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim();
 
+/** What the API did with a row or match, with its reason when it gave one. */
+function verdictOf(decision) {
+  if (!decision) return 'no API decision';
+  return decision.outcome + part(' - ', decision.reason && oneLine(decision.reason));
+}
+
 /** One row as written by Claude, with what the API decided for it. */
 function rowLine(row, decision) {
-  const price = row.packPrice == null ? 'no price' : `$${row.packPrice}`;
-  const pack = row.packQuantity == null ? '' : ` for ${row.packQuantity}`;
-  const verdict = decision ? `${decision.outcome}${decision.reason ? ` - ${oneLine(decision.reason)}` : ''}` : 'no API decision';
-  return `  - ${oneLine(row.title) || '(no title)'} [${oneLine(row.supplierProductId)}]: ${price}${pack}, ${oneLine(row.stockStatus)}, ${oneLine(row.sourceUrl)} -> **${verdict}**`;
+  const price = row.packPrice == null ? 'no price' : '$' + row.packPrice;
+  const title = oneLine(row.title) || '(no title)';
+  return `  - ${title} [${oneLine(row.supplierProductId)}]: ${price}${part(' for ', row.packQuantity)}, ${oneLine(row.stockStatus)}, ${oneLine(row.sourceUrl)} -> **${verdictOf(decision)}**`;
+}
+
+/** The heading line of one search: product, supplier, route and work item. */
+function searchHeading(search, index) {
+  const supplier = oneLine(search.supplierName ?? 'supplier ' + search.supplierPresetId);
+  const route = (search.priceConnector ?? 'no connector') + part(':', search.priceConnectorKey);
+  return `${index + 1}. **${oneLine(productLabel(search.product))}** at **${supplier}** (${route}), work item ${search.workItemId}`;
+}
+
+/** The lines for one search's result file, or that Claude wrote none. */
+function searchResultLines(search, outputDir, byRow) {
+  const file = readJson(join(outputDir, `${search.workItemId}.json`));
+  if (file === undefined) return ['  - no result file written (not_searched)'];
+  const rows = Array.isArray(file.rows) ? file.rows : [];
+  const notes = part('; notes: ', file.notes && oneLine(file.notes));
+  return [
+    `  - outcome **${oneLine(file.outcome)}**${part(' ', file.failureReason && '(' + file.failureReason + ')')}, ${rows.length} row(s)${notes}`,
+    ...rows.map(row => rowLine(row, byRow.get(`${search.workItemId}|${row.supplierProductId}`))),
+  ];
 }
 
 /**
@@ -137,36 +165,39 @@ function rowLine(row, decision) {
 export function searchDetails(work, outputDir, decisions = []) {
   const byRow = new Map(decisions.filter(d => d.workItemId != null).map(d => [`${d.workItemId}|${d.supplierProductId}`, d]));
   const lines = ['### Searches', ''];
-  work.searches.forEach((search, index) => {
-    lines.push(`${index + 1}. **${oneLine(productLabel(search.product))}** at **${oneLine(search.supplierName ?? `supplier ${search.supplierPresetId}`)}** (${search.priceConnector ?? 'no connector'}${search.priceConnectorKey ? `:${search.priceConnectorKey}` : ''}), work item ${search.workItemId}`);
-    const file = readJson(join(outputDir, `${search.workItemId}.json`));
-    if (file === undefined) { lines.push('  - no result file written (not_searched)'); return; }
-    const failure = file.failureReason ? ` (${file.failureReason})` : '';
-    const rows = Array.isArray(file.rows) ? file.rows : [];
-    lines.push(`  - outcome **${oneLine(file.outcome)}**${failure}, ${rows.length} row(s)${file.notes ? `; notes: ${oneLine(file.notes)}` : ''}`);
-    for (const row of rows) lines.push(rowLine(row, byRow.get(`${search.workItemId}|${row.supplierProductId}`)));
-  });
+  work.searches.forEach((search, index) => lines.push(searchHeading(search, index), ...searchResultLines(search, outputDir, byRow)));
   const matches = decisions.filter(d => d.workItemId == null);
   if (matches.length > 0) {
     lines.push('', '### Match decisions', '');
-    for (const match of matches) lines.push(`- ${oneLine(match.waitingKey)} -> ${match.masterProductId ?? 'new'}: **${match.outcome}**${match.reason ? ` - ${oneLine(match.reason)}` : ''}`);
+    for (const match of matches) lines.push(`- ${oneLine(match.waitingKey)} -> ${match.masterProductId ?? 'new'}: **${verdictOf(match)}**`);
   }
-  return `${lines.join('\n')}\n`;
+  return lines.join('\n') + '\n';
+}
+
+/** One trace entry as a line of the step log. */
+function timelineLine(entry, width) {
+  const time = String(entry.at ?? '').slice(11, 19);
+  switch (entry.event) {
+    case 'call': {
+      const refusal = entry.code === 'ok' ? '' : ` (${entry.code}: ${oneLine(entry.reason)})`;
+      return `${time} CALL ${entry.tool} ${entry.decision}${refusal} ${clip(oneLine(entry.input), width)}`;
+    }
+    case 'answer': return `${time}   -> ${entry.tool} answered: ${clip(oneLine(entry.response), width)}`;
+    case 'failed': return `${time}   -> ${entry.tool} FAILED (${entry.code}): ${clip(oneLine(entry.error), width)}`;
+    case 'batch': return `${time} SESSION ${entry.session} of ${entry.of}: work items ${(entry.workItemIds ?? []).join(', ')}`;
+    case 'session': {
+      const ending = entry.subtype ?? entry.stopped ?? 'unknown';
+      return `${time} SESSION ${entry.session} ended: ${ending}, ${entry.turns ?? '?'} turns, $${entry.costUsd ?? '?'}; Claude said: ${clip(oneLine(entry.result), width)}`;
+    }
+    default: return `${time} ${oneLine(JSON.stringify(entry))}`;
+  }
 }
 
 /** Every tool call of the run in order: the input, the hook's decision and the answer, shortened. */
 export function toolTimeline(stateDir, width = 600) {
   const entries = readTrace(stateDir);
   if (entries.length === 0) return 'No tool calls were traced.\n';
-  return `${entries.map(entry => {
-    const time = String(entry.at ?? '').slice(11, 19);
-    if (entry.event === 'call') return `${time} CALL ${entry.tool} ${entry.decision}${entry.code !== 'ok' ? ` (${entry.code}: ${oneLine(entry.reason)})` : ''} ${clip(oneLine(entry.input), width)}`;
-    if (entry.event === 'answer') return `${time}   -> ${entry.tool} answered: ${clip(oneLine(entry.response), width)}`;
-    if (entry.event === 'failed') return `${time}   -> ${entry.tool} FAILED (${entry.code}): ${clip(oneLine(entry.error), width)}`;
-    if (entry.event === 'batch') return `${time} SESSION ${entry.session} of ${entry.of}: work items ${(entry.workItemIds ?? []).join(', ')}`;
-    if (entry.event === 'session') return `${time} SESSION ${entry.session} ended: ${entry.subtype ?? entry.stopped ?? 'unknown'}, ${entry.turns ?? '?'} turns, $${entry.costUsd ?? '?'}; Claude said: ${clip(oneLine(entry.result), width)}`;
-    return `${time} ${oneLine(JSON.stringify(entry))}`;
-  }).join('\n')}\n`;
+  return entries.map(entry => timelineLine(entry, width)).join('\n') + '\n';
 }
 
 /** Only files issued to this sample reach the existing independent schema/batch validator. */
