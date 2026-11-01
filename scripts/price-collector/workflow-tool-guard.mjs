@@ -120,7 +120,8 @@ const failurePatterns = [
 export function failureCode(event) {
   if (event?.is_interrupt === true) return 'failed-interrupt';
   const error = String(event?.error ?? '');
-  return failurePatterns.find(([, pattern]) => pattern.test(error))?.[0] ?? 'failed-other';
+  const matched = failurePatterns.find(([, pattern]) => pattern.test(error));
+  return matched ? matched[0] : 'failed-other';
 }
 
 /** PostToolUseFailure: notes the fixed failure label of a failed Apify call, and decides nothing. */
@@ -166,19 +167,22 @@ export function jbMetroFlags(stateDir) {
   return Object.entries(JB_METRO_FLAGS).map(([key, flag]) => `${flag} ${caps[key]}`).join(' ');
 }
 
+/** A Bash call: a foreground collector helper only, with the run's JB Metro caps appended. */
+function bashDecision(input, env) {
+  if (input?.run_in_background || !permittedCommand(input?.command)) {
+    return decision('deny', 'Only foreground collector helper commands with literal arguments are allowed.', undefined, 'not-helper');
+  }
+  const command = input.command;
+  // The run's own JB Metro caps are appended last, and the lookup takes the last value given, so a
+  // flag Claude added cannot widen the run.
+  const fixed = command.startsWith('node scripts/price-collector/jbmetro-lookup.mjs ')
+    ? `${command} ${jbMetroFlags(env.PRICE_COLLECTOR_STATE_DIR)}` : command;
+  return decision('allow', 'Approved collector helper.', { ...input, command: fixed });
+}
+
 export async function toolDecision(event, env) {
   const name = event?.tool_name ?? '';
-  if (name === 'Bash') {
-    if (event.tool_input?.run_in_background || !permittedCommand(event.tool_input?.command)) {
-      return decision('deny', 'Only foreground collector helper commands with literal arguments are allowed.', undefined, 'not-helper');
-    }
-    const command = event.tool_input.command;
-    // The run's own JB Metro caps are appended last, and the lookup takes the last value given, so a
-    // flag Claude added cannot widen the run.
-    const fixed = command.startsWith('node scripts/price-collector/jbmetro-lookup.mjs ')
-      ? `${command} ${jbMetroFlags(env.PRICE_COLLECTOR_STATE_DIR)}` : command;
-    return decision('allow', 'Approved collector helper.', { ...event.tool_input, command: fixed });
-  }
+  if (name === 'Bash') return bashDecision(event.tool_input, env);
   if (name !== 'Write' && !name.startsWith('mcp__apify__')) return decision('deny', 'This tool is outside the collector allowlist.', undefined, 'not-allowlisted');
   const limits = JSON.parse(readFileSync(join(env.PRICE_COLLECTOR_STATE_DIR, 'limits.json'), 'utf8'));
   const dedicated = dedicatedActorTools(limits);

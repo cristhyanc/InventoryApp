@@ -78,6 +78,18 @@ with how many calls the hook allowed and denied and the fixed reason codes (for 
 with a fixed failure label (`failed-input`, `failed-auth`, `failed-limit`, `failed-rate-limit`,
 `failed-not-found`, `failed-timeout`, `failed-interrupt` or `failed-other`).
 
+A row's stock answer never drops it (owner decision, 1 November 2026): `stockStatus` is optional in
+`output.schema.json`, and `submit-results.mjs` submits a missing, `null` or unrecognised value as
+`unknown`, because suppliers' stock signals are unreliable and ALDI's Varnmill results carry none.
+The BIG W name search forces `maxReviewsPerProduct: 1` (the actor's minimum; 0 is refused as invalid
+input) with `includeReviews: false`, so no reviews are fetched.
+
+Claude never writes a row's observation time (owner decision, 1 November 2026): it has no clock, and
+in run 41259875824 it dated JB Metro rows after the submission, so the API refused them as
+`observed in the future`. `submit-results.mjs` sets every row's `observedAtUtc` to the time Claude
+wrote that search's file (its modification time, kept when the workflow copies it for submission),
+replacing any value in the file. Each run reads prices live, so that is the reading's time.
+
 ### Run log
 
 The owner decided on 31 October 2026 that a run must not be a black box: the run is logged in

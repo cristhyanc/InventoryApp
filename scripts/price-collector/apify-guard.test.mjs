@@ -654,6 +654,8 @@ describe('verified retailer input contracts', () => {
     assert.equal(input.maxPagesPerQuery, 3);
     // A full-detail page is one more request per product; the search page already carries the price.
     assert.equal(input.includeFullDetail, false);
+    // The actor refuses 0 (its schema minimum is 1); reviews stay off through includeReviews.
+    assert.equal(input.maxReviewsPerProduct, 1);
     assert.equal(input.includePricing, true);
     assert.equal(input.includeReviews, false);
     assert.equal(input.includeReviewStats, false);

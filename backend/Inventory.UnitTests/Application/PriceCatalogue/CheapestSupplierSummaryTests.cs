@@ -1,6 +1,5 @@
 using Inventory.Application.PriceCatalogue;
 using Inventory.Domain.Exceptions;
-using Inventory.Domain.Gst;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Gst;
@@ -192,8 +191,6 @@ public class CheapestSupplierSummaryTests
     [Theory]
     [InlineData(SupplierOfferIneligibility.PackSizeUnknown)]
     [InlineData(SupplierOfferIneligibility.ListingNotConfirmed)]
-    [InlineData(SupplierOfferIneligibility.GstRateUnknown)]
-    [InlineData(SupplierOfferIneligibility.OutOfStock)]
     [InlineData(SupplierOfferIneligibility.PromotionEnded)]
     [InlineData(SupplierOfferIneligibility.Stale)]
     public async Task An_offer_that_cannot_be_compared_is_published_with_its_reason(
@@ -208,12 +205,6 @@ public class CheapestSupplierSummaryTests
                 {
                     ListingConfirmed = false,
                 },
-            SupplierOfferIneligibility.GstRateUnknown =>
-                Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
-            SupplierOfferIneligibility.OutOfStock =>
-                WithPrice(
-                    Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
-                    price => price with { StockStatus = SupplierStockStatus.OutOfStock }),
             SupplierOfferIneligibility.PromotionEnded =>
                 WithPrice(
                     Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
@@ -227,19 +218,10 @@ public class CheapestSupplierSummaryTests
                 price => price with { ObservedAtUtc = Now.AddHours(-100) }),
         };
 
-        // The unknown-rate case is the one that needs the product's rule withheld as well: the
-        // supplier's own rate is what the other cases carry.
-        var rule = reason == SupplierOfferIneligibility.GstRateUnknown
-            ? GstRules.None
-            : GstClassification.Taxable;
-        var withoutSupplierRate = reason == SupplierOfferIneligibility.GstRateUnknown
-            ? WithPrice(listing, price => price with { SupplierGstRate = null })
-            : listing;
-
         var store = Store(
             gstRegistered: false,
             [JbMetro],
-            Matched(7, [withoutSupplierRate], rule));
+            Matched(7, [listing]));
 
         var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
 
@@ -264,7 +246,7 @@ public class CheapestSupplierSummaryTests
             [
                 WithPrice(
                     Listing(ColesPreset, 1, 0.50m, SupplierPriceBasis.InclusiveOfGst),
-                    price => price with { StockStatus = SupplierStockStatus.OutOfStock }),
+                    price => price with { IsPromotion = true, PromotionEndsAtUtc = Now.AddHours(-1) }),
                 Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
             ]));
 
@@ -272,7 +254,60 @@ public class CheapestSupplierSummaryTests
 
         Assert.Equal(["JB Metro", "Coles"], product.Suppliers.Select(offer => offer.SupplierName));
         Assert.Equal(22.80m / 24, product.CheapestUnitPrice);
-        Assert.Equal(SupplierOfferIneligibility.OutOfStock, product.Suppliers[1].Ineligibility);
+        Assert.Equal(SupplierOfferIneligibility.PromotionEnded, product.Suppliers[1].Ineligibility);
+    }
+
+    /// <summary>
+    /// A supplier that publishes no GST rate is converted from its preset's basis at the standard
+    /// 10% and compared (owner decision, 1 November 2026): the product's own GST rule plays no part,
+    /// so "GST rate unknown" never arises.
+    /// </summary>
+    [Fact]
+    public async Task A_price_with_no_supplier_rate_is_converted_at_the_standard_rate_and_compared()
+    {
+        var store = Store(
+            gstRegistered: true,
+            [JbMetro],
+            Matched(7,
+            [
+                WithPrice(
+                    Listing(JbMetroPreset, 24, 26.40m, SupplierPriceBasis.InclusiveOfGst),
+                    price => price with { SupplierGstRate = null }),
+            ]));
+
+        var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
+
+        var offer = Assert.Single(product.Suppliers);
+        Assert.Null(offer.Ineligibility);
+        Assert.True(offer.IsCheapest);
+        Assert.Equal(1.00m, product.CheapestUnitPrice);
+    }
+
+    /// <summary>
+    /// A supplier that says it is out of stock is still compared, and can be the cheapest, with its
+    /// stock answer published beside the price (owner decision, 1 November 2026).
+    /// </summary>
+    [Fact]
+    public async Task An_out_of_stock_offer_is_still_compared_and_can_be_the_cheapest()
+    {
+        var store = Store(
+            gstRegistered: false,
+            [JbMetro, Coles],
+            Matched(7,
+            [
+                WithPrice(
+                    Listing(ColesPreset, 1, 0.50m, SupplierPriceBasis.InclusiveOfGst),
+                    price => price with { StockStatus = SupplierStockStatus.OutOfStock }),
+                Listing(JbMetroPreset, 24, 22.80m, SupplierPriceBasis.InclusiveOfGst),
+            ]));
+
+        var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
+
+        var coles = Assert.Single(product.Suppliers, offer => offer.SupplierName == "Coles");
+        Assert.True(coles.IsCheapest);
+        Assert.Null(coles.Ineligibility);
+        Assert.Equal(SupplierStockStatus.OutOfStock, coles.StockStatus);
+        Assert.Equal(0.50m, product.CheapestUnitPrice);
     }
 
     #endregion
@@ -340,7 +375,7 @@ public class CheapestSupplierSummaryTests
         var store = Store(
             gstRegistered: false,
             [JbMetro],
-            new TrackedProductListings(7, status, GstClassification.Taxable, []));
+            new TrackedProductListings(7, status, []));
 
         var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
 
@@ -356,7 +391,7 @@ public class CheapestSupplierSummaryTests
         var store = Store(
             gstRegistered: false,
             [JbMetro],
-            new TrackedProductListings(7, null, GstClassification.Taxable, []));
+            new TrackedProductListings(7, null, []));
 
         var product = (await Summary(store).Handle([7], CancellationToken.None)).Products[0];
 
@@ -417,9 +452,8 @@ public class CheapestSupplierSummaryTests
     private static TrackedProductListings Matched(
         long productId,
         IReadOnlyList<TrackedListingPrice> listings,
-        GstClassification gstRule = GstClassification.Taxable,
         ProductPriceTrackingStatus status = ProductPriceTrackingStatus.Matched) =>
-        new(productId, status, gstRule, listings);
+        new(productId, status, listings);
 
     /// <summary>
     /// One supplier's listing with a fresh, in-stock, confirmed observation of its pack price: the
