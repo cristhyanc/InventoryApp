@@ -3,11 +3,28 @@
     <div>
       <h1 class="page-title">Master Products</h1>
       <p class="page-subtitle">
-        Every product in the shared supplier price catalogue. Searching and paging happen on the server, and nothing on
-        this page changes the catalogue — a product is created or corrected in Supplier Price Review.
+        Every product in the shared supplier price catalogue. Searching and paging happen on the server. Adding a
+        product and correcting its brand, name or size happen here; confirming a supplier's listing and matching a
+        business's product stay in Supplier Price Review.
       </p>
     </div>
+    <button type="button" class="btn btn-primary btn-sm" (click)="startCreating()" data-testid="master-product-new">
+      New master product
+    </button>
   </header>
+
+  @if (saved) {
+    <p class="text-sm text-green-700" role="status" data-testid="master-product-saved">{{ saved }}</p>
+  }
+
+  @if (formOpen) {
+    <app-super-admin-master-product-form
+      [product]="editing"
+      (saved)="savedChanges($event)"
+      (savedAfterMovingOn)="savedWhileFormMovedOn($event)"
+      (cancelled)="closeForm()"
+    ></app-super-admin-master-product-form>
+  }
 
   <section class="card">
     <div class="card-header">
@@ -94,6 +111,14 @@
                     [attr.data-testid]="'master-product-listings-' + product.id"
                   >
                     {{ selectedProductId === product.id ? 'Hide listings' : 'View listings' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm ml-2"
+                    (click)="startEditing(product)"
+                    [attr.data-testid]="'master-product-edit-' + product.id"
+                  >
+                    Edit
                   </button>
                 </td>
               </tr>

@@ -6,8 +6,9 @@ namespace Inventory.Application.PriceCatalogue;
 /// about an automatic match.
 ///
 /// <para><strong>What it may touch.</strong> It writes the platform tables of the catalogue -
-/// <c>MasterProducts</c> (this is their only writer, and the only way a master product is ever
-/// created), <c>SupplierListings</c>, <c>ProductMatchSuggestions</c>,
+/// <c>MasterProducts</c> (one of their two writers, the other being
+/// <see cref="IMasterProductCatalogueWriteStore"/> - issue #1024's create and edit of a master
+/// product, which decides no match at all), <c>SupplierListings</c>, <c>ProductMatchSuggestions</c>,
 /// <c>SupplierPriceObservations</c> and <c>SupplierListingPendingObservations</c> - and the four match
 /// columns of the <c>ProductPriceTracking</c> rows that carry the key being decided. Nothing else is
 /// reachable through it: no method takes a business, a predicate, a column list, a page, a sort or a

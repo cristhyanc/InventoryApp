@@ -12,10 +12,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// #817): the two reads the Super Admin Master products page is built from.
 ///
 /// <para><strong>It is read-only, and there is nothing here that writes.</strong> No
-/// <c>SaveChanges</c>, no transaction and no write lease: a master product is still written by exactly
-/// one path in this application, the Super Admin review of issue #928
-/// (<see cref="EfPriceCatalogueReviewStore"/>), and creating, editing or deleting one from this
-/// surface is a separate issue.</para>
+/// <c>SaveChanges</c>, no transaction and no write lease. The two writes of the same surface are
+/// <see cref="EfMasterProductCatalogueWriteStore"/>'s (issue #1024) and the other writer of a master
+/// product is the Super Admin review of issue #928 (<see cref="EfPriceCatalogueReviewStore"/>);
+/// deleting one is a separate issue that follows.</para>
 ///
 /// <para><strong>Four platform tables, and no tenant-owned one at all.</strong>
 /// <c>MasterProducts</c>, <c>SupplierListings</c>, the <c>SupplierPresets</c> that publish those

@@ -125,7 +125,8 @@ describe('WaitingProductMatchComponent (issue #928)', () => {
 
   /**
    * A suggestion that describes a new master product says so before it is accepted, because
-   * accepting it is what creates that product - this surface is its only writer.
+   * accepting it is what creates that product - and this is the only surface that creates one *and*
+   * matches a key to it in the same action.
    */
   it('says when accepting a suggestion would create a master product', async () => {
     const described = suggestion({
