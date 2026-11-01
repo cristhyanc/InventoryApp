@@ -78,6 +78,15 @@ public static class SiteStockPolicy
     /// this site count and the home Dashboard's fleet refill count cannot come to disagree about what
     /// "low" and "empty" mean. Only the grouping differs: a site counts distinct products across its
     /// machines, the fleet counts selections per machine.
+    ///
+    /// <para>Since issue #1019 the same method is also called with <b>one machine's</b> selections,
+    /// to give that machine's row its own low and empty counts. That is this rule over a narrower
+    /// group and not a second rule: the grouping it then applies - distinct active products on that
+    /// one machine, several slots of one product summed first - is exactly the grouping
+    /// <see cref="MachineRefillAlertPolicy.Summarize"/> applies per machine. It is also why a site's
+    /// counts need not equal the sum of its machines': a product low on two machines is two machine
+    /// alerts and one site alert, and a product this method reports stocked over a site's combined
+    /// stock can still be low on one of the machines holding it.</para>
     /// </summary>
     public static (int LowProductCount, int EmptyProductCount) CalculateAlertCounts(
         IEnumerable<SiteMachineProductStockFact> facts)

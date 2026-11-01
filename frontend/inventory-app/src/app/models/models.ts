@@ -560,6 +560,20 @@ export interface Machine {
 export interface SiteMachineStock {
   machineId: number;
   stockPercentage?: number | null;
+  /**
+   * That machine's own low and empty product counts (issue #1019): the site's own alert rule over
+   * that machine's selections alone - only selections linked to an active catalogue product, its
+   * several slots of one product summed first - so a machine row never repeats its site's counts and
+   * nothing counts an alert in the browser.
+   *
+   * They are counts rather than figures that can be withheld, so `0` and `0` mean a machine whose
+   * selections were read and hold nothing to alert on. Absent or `null` means the response published
+   * no count for that machine, which a machine row shows as unavailable rather than as a zero. A
+   * site's own counts classify each product's combined stock across its machines, so they need not
+   * equal the sum of its machines' counts.
+   */
+  lowProductCount?: number | null;
+  emptyProductCount?: number | null;
 }
 
 /**

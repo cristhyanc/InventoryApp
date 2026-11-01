@@ -33,19 +33,22 @@ namespace Inventory.Application.Sites;
 /// from the window too (see <see cref="EarliestPublishedPeriodStartUtc"/>) rather than from a fixed
 /// day count, so every published period is read in full from its own first instant.</para>
 ///
-/// <para><b>Each machine's own stock percentage</b> (issue #1013). The per-machine selections this
-/// use case already fetches for the site percentage were previously flattened and the split
-/// discarded; they are now also published per machine, as
+/// <para><b>Each machine's own stock percentage and alert counts</b> (issues #1013 and #1019). The
+/// per-machine selections this use case already fetches for the site figures were previously
+/// flattened and the split discarded; they are now also published per machine, as
 /// <see cref="SiteSummary.MachineStocks"/>, through
 /// <see cref="SiteStockPolicy.CalculateMachineStockPercentage"/> - the site rule over one machine's
-/// selections, with <see langword="null"/> for a machine that reports no capacity at all. No
-/// additional Nayax request is made for them: they come from the same one cached
+/// selections, with <see langword="null"/> for a machine that reports no capacity at all - and
+/// through <see cref="SiteStockPolicy.CalculateAlertCounts"/>, the site's own low/empty rule over
+/// that same one machine's selections. No additional Nayax request is made for them: they come from
+/// the same one cached
 /// <see cref="INayaxLynxClient.GetMachineProductsAsync"/> call per machine the fan-out above already
 /// makes, so the request volume and the 60-second cache freshness are the site figure's own. Each
 /// machine's figure is attributed to the machine its request was made <em>for</em>, not to the
 /// <c>MachineID</c> a selection echoes back, and the site percentage and alert counts are built from
 /// the same facts concatenated in machine order, so they are unchanged for the same provider
-/// data.</para>
+/// data - a site classifies each product's combined stock across its machines and therefore need
+/// not report the sum of its machines' counts.</para>
 ///
 /// <para>A mapping's <c>NayaxProductID</c> is resolved to a local product through
 /// <see cref="INayaxProductLinkStore"/> (issue #733) before the stock facts are built, instead of
@@ -298,10 +301,24 @@ public sealed class GetSiteSummaries
         var stockFacts = stockFactsByMachine.SelectMany(facts => facts).ToList();
         var (lowProductCount, emptyProductCount) = SiteStockPolicy.CalculateAlertCounts(stockFacts);
 
+        // Each machine's own row: its percentage (issue #1013) and its own low/empty counts (issue
+        // #1019). The counts call the site's own CalculateAlertCounts over one machine's facts
+        // rather than a second rule, so a machine row and the site row above it cannot come to
+        // disagree about what "low" and "empty" mean; the only difference is the group, which is
+        // why a site - counting each product once over its machines' combined stock - need not
+        // report the sum of these counts.
         var machineStocks = machines
-            .Select((machine, index) => new SiteMachineStock(
-                machine.MachineID,
-                SiteStockPolicy.CalculateMachineStockPercentage(stockFactsByMachine[index])))
+            .Select((machine, index) =>
+            {
+                var facts = stockFactsByMachine[index];
+                var (machineLowCount, machineEmptyCount) = SiteStockPolicy.CalculateAlertCounts(facts);
+
+                return new SiteMachineStock(
+                    machine.MachineID,
+                    SiteStockPolicy.CalculateMachineStockPercentage(facts),
+                    machineLowCount,
+                    machineEmptyCount);
+            })
             .ToList();
 
         return new SiteSummary(
