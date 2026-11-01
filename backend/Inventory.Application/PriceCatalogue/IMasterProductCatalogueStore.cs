@@ -6,11 +6,12 @@ namespace Inventory.Application.PriceCatalogue;
 /// product with its supplier listings.
 ///
 /// <para><strong>It is read-only, and that is the whole of it.</strong> There is no method here that
-/// creates, edits or deletes anything: a master product is still written by exactly one path, the
-/// Super Admin review of issue #928 (<see cref="IPriceCatalogueReviewStore"/>), and creating, editing
-/// and deleting one from this surface are separate issues that follow this one. Nothing is written by
-/// anything behind this port, so it opens no write lease, takes no transaction and makes no
-/// <c>SaveChanges</c>.</para>
+/// creates, edits or deletes anything: nothing is written by anything behind this port, so it opens
+/// no write lease, takes no transaction and makes no <c>SaveChanges</c>. The two writes of the same
+/// surface are <see cref="IMasterProductCatalogueWriteStore"/>'s (issue #1024), deliberately a
+/// separate port so that "what reads the catalogue?" and "what changes it?" have separate answers;
+/// the only other writer of a master product is the Super Admin review of issue #928
+/// (<see cref="IPriceCatalogueReviewStore"/>), and deleting one is a separate issue that follows.</para>
 ///
 /// <para><strong>What it may touch.</strong> Four platform tables, all of them about products and
 /// suppliers and none of them about any business: <c>MasterProducts</c>, <c>SupplierListings</c>, the

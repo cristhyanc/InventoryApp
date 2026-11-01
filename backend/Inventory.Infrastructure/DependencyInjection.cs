@@ -276,8 +276,9 @@ public static class InfrastructureServiceCollectionExtensions
         // See EfPriceCollectorMatchStore and docs/architecture.md § Collector product matching.
         services.AddScoped<IPriceCollectorMatchStore, EfPriceCollectorMatchStore>();
         // And the Super Admin's review of all of it (issue #928): the queue and the four decisions.
-        // It is the only writer of MasterProducts in the application, the only path that confirms a
-        // supplier listing or a pack size, and the second path that writes a mapping's match columns
+        // It is one of the two writers of MasterProducts in the application (issue #1024's create and
+        // edit is the other), the only path that confirms a supplier listing or a pack size, and the
+        // second path that writes a mapping's match columns
         // under a denied scope - through the narrow review window AppDbContext grants and
         // BusinessOwnershipEnforcer bounds, and through one IgnoreQueryFilters read in one place.
         // Scoped on the request's own context like every adapter above, so nothing can hand it an
@@ -292,6 +293,15 @@ public static class InfrastructureServiceCollectionExtensions
         // context like every adapter above, so nothing can hand it an unscoped one. See
         // EfMasterProductCatalogueStore and docs/architecture.md § Super Admin master products.
         services.AddScoped<IMasterProductCatalogueStore, EfMasterProductCatalogueStore>();
+        // And managing that catalogue (issue #1024): the second writer of MasterProducts, and the
+        // last one - it adds a master product and corrects an existing one's brand, name or size. It
+        // writes that one platform table and reads one more, SupplierListings, for the single
+        // question the size safeguard turns on: how many of the product's listings are confirmed.
+        // Nothing tenant-owned is read or written, so it takes no lease and makes no
+        // IgnoreQueryFilters statement either. Scoped on the request's own context like every adapter
+        // above. See EfMasterProductCatalogueWriteStore and docs/architecture.md § Super Admin master
+        // products.
+        services.AddScoped<IMasterProductCatalogueWriteStore, EfMasterProductCatalogueWriteStore>();
         // The cheapest-supplier summary (issue #930): the read behind the Cheapest supplier column.
         // It reaches the platform catalogue only through the caller's own matched mappings and the
         // supplier records the caller holds a copy of, on the request's own scoped context like the

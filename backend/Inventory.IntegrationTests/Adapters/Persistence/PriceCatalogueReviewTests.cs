@@ -939,7 +939,8 @@ public class PriceCatalogueReviewTests
     /// <summary>
     /// Creating a master product from a suggestion: the row is created with the description the
     /// reviewer confirmed, the key is matched to it, and the suggestion that described it is accepted.
-    /// This surface is the only writer of <c>MasterProducts</c> in the application.
+    /// This is one of the two writers of <c>MasterProducts</c> in the application, and the only one
+    /// that matches a key to the product it creates (issue #1024's create does not).
     /// </summary>
     [Fact]
     public async Task Accepting_a_suggested_new_master_product_creates_it_and_matches_the_key()

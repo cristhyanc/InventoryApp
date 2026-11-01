@@ -12,8 +12,9 @@ namespace Inventory.Infrastructure.Persistence;
 /// the reads the Super Admin review page is built from and the writes its four decisions make.
 ///
 /// <para><strong>Five platform tables, and four columns of one tenant-owned row.</strong> It writes
-/// <c>MasterProducts</c> - this is their only writer in the application, and the only way a master
-/// product is ever created - <c>SupplierListings</c>, <c>ProductMatchSuggestions</c>,
+/// <c>MasterProducts</c> - one of their two writers in the application, the other being
+/// <see cref="EfMasterProductCatalogueWriteStore"/> (issue #1024), which creates and corrects a master
+/// product and decides no match - <c>SupplierListings</c>, <c>ProductMatchSuggestions</c>,
 /// <c>SupplierPriceObservations</c> and <c>SupplierListingPendingObservations</c>, and sets the
 /// status, the master product, the match source and the instant on the <c>ProductPriceTracking</c>
 /// rows that carry the key being decided. Nothing else is written, and the enforcer is what says so
