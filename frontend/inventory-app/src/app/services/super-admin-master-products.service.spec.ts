@@ -1,6 +1,7 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
 import { ConfigService } from './config.service';
+import { MasterProductSizeUnit } from './super-admin-price-catalogue-review.service';
 import {
   MASTER_PRODUCT_MAX_PAGE_SIZE,
   MASTER_PRODUCT_PAGE_SIZE,
@@ -10,6 +11,8 @@ import {
 
 interface HttpStub {
   get: jest.Mock;
+  post: jest.Mock;
+  put: jest.Mock;
 }
 
 const emptyPage: SuperAdminMasterProductPage = {
@@ -25,7 +28,9 @@ function createService(apiBaseUrl = '/api'): {
   http: HttpStub;
 } {
   const http: HttpStub = {
-    get: jest.fn((): Observable<unknown> => of(emptyPage))
+    get: jest.fn((): Observable<unknown> => of(emptyPage)),
+    post: jest.fn((): Observable<unknown> => of(undefined)),
+    put: jest.fn((): Observable<unknown> => of(undefined))
   };
 
   const service = new SuperAdminMasterProductsService(http as unknown as HttpClient, {
@@ -41,7 +46,7 @@ function queryOf(http: HttpStub): string {
   return options?.params.toString() ?? '';
 }
 
-describe('SuperAdminMasterProductsService (issue #1023)', () => {
+describe('SuperAdminMasterProductsService (issues #1023 and #1024)', () => {
   it('reads the catalogue from the master-products route', () => {
     const { service, http } = createService();
 
@@ -101,11 +106,56 @@ describe('SuperAdminMasterProductsService (issue #1023)', () => {
     expect(http.get.mock.calls[0][0]).toBe('/api/super-admin/master-products/7');
   });
 
-  it('offers no create, edit or delete, because the API has none', () => {
+  it('posts a new master product to the master-products route (issue #1024)', () => {
+    const { service, http } = createService();
+
+    service
+      .create({ brand: 'Solo', name: 'Lemon', sizeValue: 600, sizeUnit: MasterProductSizeUnit.Millilitre })
+      .subscribe();
+
+    expect(http.post).toHaveBeenCalledWith('/api/super-admin/master-products', {
+      brand: 'Solo',
+      name: 'Lemon',
+      sizeValue: 600,
+      sizeUnit: MasterProductSizeUnit.Millilitre
+    });
+  });
+
+  /**
+   * The correction carries the instant the page read, because that is what the server compares
+   * against: an edit that presented nothing could silently overwrite somebody else's correction.
+   */
+  it('puts a correction with the instant the page read (issue #1024)', () => {
+    const { service, http } = createService();
+
+    service
+      .update(7, {
+        brand: 'Coca-Cola',
+        name: 'Classic',
+        sizeValue: 375,
+        sizeUnit: MasterProductSizeUnit.Millilitre,
+        lastChangedAtUtc: '2026-11-01T06:00:00Z'
+      })
+      .subscribe();
+
+    expect(http.put).toHaveBeenCalledWith('/api/super-admin/master-products/7', {
+      brand: 'Coca-Cola',
+      name: 'Classic',
+      sizeValue: 375,
+      sizeUnit: MasterProductSizeUnit.Millilitre,
+      lastChangedAtUtc: '2026-11-01T06:00:00Z'
+    });
+  });
+
+  /**
+   * Deleting a master product is explicitly out of issue #1024's scope and the API has no such
+   * route, so there is nothing here that could call one.
+   */
+  it('offers no delete, because the API has none', () => {
     const { service } = createService();
 
     expect(Object.getOwnPropertyNames(Object.getPrototypeOf(service))).toEqual(
-      expect.not.arrayContaining(['create', 'update', 'delete', 'remove'])
+      expect.not.arrayContaining(['delete', 'remove'])
     );
   });
 });

@@ -10,6 +10,7 @@ import {
 } from '../../../services/super-admin-master-products.service';
 import { MASTER_PRODUCT_SIZE_UNIT_LABELS } from '../../../services/super-admin-price-catalogue-review.service';
 import { MasterProductDetailComponent } from './master-product-detail.component';
+import { MasterProductFormComponent } from './master-product-form.component';
 
 /** What one read of the catalogue asked the server for. */
 type CatalogueRequest = { search: string; page: number; pageSize: number };
@@ -18,26 +19,32 @@ type CatalogueRequest = { search: string; page: number; pageSize: number };
 type CatalogueRead = { request: CatalogueRequest; result: SuperAdminMasterProductPage | null };
 
 /**
- * The Super Admin Master products page (issue #1023), at `/super-admin/master-products`, over the two
- * read endpoints of the shared master-product catalogue.
+ * The Super Admin Master products page (issues #1023 and #1024), at `/super-admin/master-products`,
+ * over the shared master-product catalogue.
  *
  * It exists because the catalogue was only visible through the Supplier Price Review queue (issue
  * #928), which shows what is *waiting for a decision* - so a product nothing is waiting on could not
  * be found, searched for or inspected at all.
  *
- * **It is read only, and this page has no create, edit or delete control**: the API has none, a master
- * product is written only by the review of #928, and those three actions are separate issues that
- * follow this one.
+ * **Since #1024 it also manages the catalogue**: "New master product" adds one before any business
+ * has asked for its price, and an Edit action on each row corrects a wrong brand, name or size. There
+ * is deliberately **no delete control** - removing a master product is a separate task that follows
+ * this one, and the API has no such route.
  *
- * The search and the paging are the **server's**: this page sends what a person typed and which page
- * they asked for, and displays the page the server says it served. Nothing is filtered, sorted or
+ * **Every rule a write is held to is the server's**, and a refused write shows the server's own
+ * sentence: the normalisation, the duplicate rule, the refusal of a size change while a supplier
+ * listing of the product is confirmed, and the refusal of an edit answering a page that has moved on.
+ * The catalogue is re-read after every accepted write, so what is on screen is what is stored.
+ *
+ * The search and the paging are the **server's** too: this page sends what a person typed and which
+ * page they asked for, and displays the page the server says it served. Nothing is filtered, sorted or
  * counted here - a client-side filter over one page of a paged catalogue would silently hide the
  * matches on every other page.
  *
  * Per docs/architecture.md § Page composition boundary, the page owns the search box, the table and
- * the page controls, while one product's supplier listings - their own read, loading and error
- * lifecycle - are a dedicated feature component composed through `[productId]` and its `(closed)`
- * output.
+ * the page controls, while the two workflows with their own state and lifecycle are dedicated feature
+ * components: one product's supplier listings (`[productId]`/`(closed)`) and the create/edit form
+ * (`[product]`/`(saved)`/`(cancelled)`).
  *
  * **Nothing about any business is here**, in either direction: the API publishes no business id, name
  * or product id and no count of who is tracking what, so there is nothing of the kind for this page to
@@ -52,7 +59,13 @@ type CatalogueRead = { request: CatalogueRequest; result: SuperAdminMasterProduc
 @Component({
   selector: 'app-super-admin-master-products',
   standalone: true,
-  imports: [CommonModule, DatePipe, FormsModule, MasterProductDetailComponent],
+  imports: [
+    CommonModule,
+    DatePipe,
+    FormsModule,
+    MasterProductDetailComponent,
+    MasterProductFormComponent
+  ],
   templateUrl: './super-admin-master-products.component.html'
 })
 export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
@@ -73,6 +86,20 @@ export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
 
   /** The product whose supplier listings are open, or `null` when none is. */
   selectedProductId: number | null = null;
+
+  /**
+   * Whether the create/edit form is open, and for which product (issue #1024).
+   *
+   * `null` with {@link formOpen} set means "adding one", and a product means "correcting that row".
+   * Two fields rather than one, because `null` has to mean something different from "closed".
+   */
+  formOpen = false;
+
+  /** The row being corrected, or `null` while a new master product is being added. */
+  editing: SuperAdminMasterProduct | null = null;
+
+  /** What the last accepted write did, shown until the next action. */
+  saved: string | null = null;
 
   private readonly requested = new Subject<CatalogueRequest>();
   private readonly reads: Subscription;
@@ -133,6 +160,9 @@ export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
   search(): void {
     this.page = 1;
     this.selectedProductId = null;
+    // The open form is about a row of the page being replaced, and a correction prepared against a
+    // row nobody is looking at any more is not one worth keeping half-typed.
+    this.closeForm();
     this.load();
   }
 
@@ -147,6 +177,7 @@ export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
     }
     this.page -= 1;
     this.selectedProductId = null;
+    this.closeForm();
     this.load();
   }
 
@@ -156,6 +187,7 @@ export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
     }
     this.page += 1;
     this.selectedProductId = null;
+    this.closeForm();
     this.load();
   }
 
@@ -181,5 +213,42 @@ export class SuperAdminMasterProductsComponent implements OnInit, OnDestroy {
 
   closeListings(): void {
     this.selectedProductId = null;
+  }
+
+  /** Opens the form to add a master product (issue #1024). */
+  startCreating(): void {
+    this.formOpen = true;
+    this.editing = null;
+    this.saved = null;
+  }
+
+  /**
+   * Opens the form to correct one row, with that row's own values - including the `updatedAtUtc` the
+   * correction must present back, which is why the whole product is handed over rather than its id.
+   */
+  startEditing(product: SuperAdminMasterProduct): void {
+    this.formOpen = true;
+    this.editing = product;
+    this.saved = null;
+  }
+
+  closeForm(): void {
+    this.formOpen = false;
+    this.editing = null;
+  }
+
+  /**
+   * After a write the server accepted: the form closes, what happened is said, and the catalogue is
+   * re-read, so what is on screen is what is stored - a corrected brand changes the row's position in
+   * the server's own ordering, and a new product may not even be on this page.
+   */
+  savedChanges(outcome: string): void {
+    this.closeForm();
+    this.saved = outcome;
+
+    // The listings panel is closed too: it is keyed on a product whose description has just changed,
+    // and re-reading the catalogue is what the page is now showing.
+    this.selectedProductId = null;
+    this.load();
   }
 }

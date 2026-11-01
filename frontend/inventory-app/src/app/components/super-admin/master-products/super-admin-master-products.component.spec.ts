@@ -71,7 +71,7 @@ function testId(host: HTMLElement, id: string): HTMLElement {
   return match as HTMLElement;
 }
 
-describe('SuperAdminMasterProductsComponent (issue #1023)', () => {
+describe('SuperAdminMasterProductsComponent (issues #1023 and #1024)', () => {
   it('reads the first page on arrival and lists each product with its listing counts', async () => {
     const list = jest.fn(() =>
       of(
@@ -324,16 +324,16 @@ describe('SuperAdminMasterProductsComponent (issue #1023)', () => {
   });
 
   /**
-   * The issue's last criterion, as the page's own contract: this is a read-only screen. No Add, Edit
-   * or Delete control exists on it, because the API has none and those actions are separate issues.
+   * Deleting a master product is explicitly out of issue #1024's scope and the API has no such
+   * route, so the page offers no control that could ask for one. The create and edit controls
+   * *do* exist now, and are covered in their own describe below.
    */
-  it('offers no create, edit or delete control', async () => {
+  it('offers no delete control', async () => {
     const { host } = await render({ list: jest.fn(() => of(page())) });
 
     const labels = Array.from(host.querySelectorAll('button')).map((button) => button.textContent?.trim() ?? '');
-    expect(labels).not.toContain('Add master product');
-    expect(labels).not.toContain('Edit');
     expect(labels).not.toContain('Delete');
+    expect(labels).not.toContain('Remove');
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 
@@ -345,7 +345,94 @@ describe('SuperAdminMasterProductsComponent (issue #1023)', () => {
     const { host } = await render({ list: jest.fn(() => of(page())) });
 
     const text = host.textContent ?? '';
-    expect(text).not.toMatch(/business/i);
+    expect(text).not.toMatch(/\bbusinesses?\b/i);
     expect(text).not.toMatch(/tracking/i);
+  });
+
+  /**
+   * Issue #1024's own criteria on the page: the two ways in to the form, and the fact that an
+   * accepted write re-reads the catalogue, so what is on screen is what is stored.
+   */
+  describe('managing the catalogue (issue #1024)', () => {
+    it('opens the form with no product for a new master product', async () => {
+      const { component, host, fixture } = await render({ list: jest.fn(() => of(page())) });
+
+      testId(host, 'master-product-new').click();
+      fixture.detectChanges();
+
+      expect(component.formOpen).toBe(true);
+      expect(component.editing).toBeNull();
+      expect(testId(host, 'master-product-form').textContent).toContain('New master product');
+    });
+
+    /**
+     * Edit hands the form the whole product, not its id: the correction has to present the
+     * `updatedAtUtc` this page read, which is how the server refuses a stale edit.
+     */
+    it('opens the form with the row being corrected', async () => {
+      const row = product({ id: 7, brand: 'Coke', name: 'Clasic', updatedAtUtc: '2026-10-31T01:02:03Z' });
+      const { component, host, fixture } = await render({
+        list: jest.fn(() => of(page({ products: [row] })))
+      });
+
+      testId(host, 'master-product-edit-7').click();
+      fixture.detectChanges();
+
+      expect(component.formOpen).toBe(true);
+      expect(component.editing).toBe(row);
+      expect(testId(host, 'master-product-form').textContent).toContain('Edit master product');
+    });
+
+    it('re-reads the catalogue after an accepted write and says what happened', async () => {
+      const list = jest
+        .fn()
+        .mockReturnValueOnce(of(page({ products: [product({ id: 7, brand: 'Coke' })] })))
+        .mockReturnValueOnce(of(page({ products: [product({ id: 7, brand: 'Coca-Cola' })] })));
+      const { component, host, fixture } = await render({ list });
+
+      component.savedChanges('Coca-Cola Classic was corrected.');
+      fixture.detectChanges();
+
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(component.formOpen).toBe(false);
+      expect(component.editing).toBeNull();
+      expect(component.selectedProductId).toBeNull();
+      expect(component.products.map((match) => match.brand)).toEqual(['Coca-Cola']);
+      expect(testId(host, 'master-product-saved').textContent).toContain('was corrected');
+    });
+
+    it('closes the form on cancel without re-reading anything', async () => {
+      const list = jest.fn(() => of(page()));
+      const { component, fixture } = await render({ list });
+
+      component.startCreating();
+      component.closeForm();
+      fixture.detectChanges();
+
+      expect(component.formOpen).toBe(false);
+      expect(list).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A search or a page step replaces the rows the form is about, so a half-typed correction
+     * prepared against a row nobody is looking at any more is not kept.
+     */
+    it('closes the form when the search or the page changes', async () => {
+      // The server reports page 2 of more, so stepping in either direction really happens: the page
+      // displays the slice the server says it served, never the one that was asked for.
+      const { component } = await render({ list: jest.fn(() => of(page({ page: 2, hasMore: true }))) });
+
+      component.startEditing(product({ id: 7 }));
+      component.search();
+      expect(component.formOpen).toBe(false);
+
+      component.startEditing(product({ id: 7 }));
+      component.nextPage();
+      expect(component.formOpen).toBe(false);
+
+      component.startEditing(product({ id: 7 }));
+      component.previousPage();
+      expect(component.formOpen).toBe(false);
+    });
   });
 });
