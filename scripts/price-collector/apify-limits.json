@@ -86,10 +86,11 @@
       "pageSize": 48,
       "maxPages": 3,
       "forcedInput": {
+        "includeFullDetail": false,
         "includePricing": true,
         "includeReviews": false,
         "includeReviewStats": false,
-        "maxReviewsPerProduct": 0
+        "maxReviewsPerProduct": 1
       },
       "pageLimitField": "maxPagesPerQuery",
       "schemaVerifiedAt": "2026-10-31"

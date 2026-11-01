@@ -25,7 +25,7 @@
 // pending and rejected row counts with the reasons the API gave, the match outcomes, and the files it
 // skipped with why. No price, product name, supplier product id, base URL or token is printed.
 import { fileURLToPath } from 'node:url';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   ApiError,
@@ -105,6 +105,34 @@ export function batchesOf(values, size) {
   return batches;
 }
 
+const STOCK_WORDS = new Set(['in_stock', 'out_of_stock', 'unknown']);
+
+/**
+ * A row's stock answer is never a reason to drop it (owner decision, 1 November 2026): suppliers'
+ * stock signals are unreliable and some publish none, so a missing, null or unrecognised value is
+ * submitted as `unknown` and the row is kept.
+ */
+export function normaliseStockStatus(file) {
+  for (const row of Array.isArray(file?.rows) ? file.rows : []) {
+    if (row && typeof row === 'object' && !STOCK_WORDS.has(row.stockStatus)) row.stockStatus = 'unknown';
+  }
+}
+
+/**
+ * Every row's observation instant is when its file was written, never a time Claude states
+ * (owner decision, 1 November 2026). Claude has no clock: on 1 November it dated JB Metro rows
+ * minutes after the submission and the API refused them as observed in the future. Each run reads
+ * prices live and Claude writes a search's file as soon as it has read it, so the file's
+ * modification time - before the submission, after the run started - is the reading's instant.
+ * Whole seconds, rounded down, so it is never later than the file itself.
+ */
+export function stampObservedAt(file, writtenAt) {
+  const instant = new Date(Math.floor(writtenAt.getTime() / 1000) * 1000).toISOString().replace('.000Z', 'Z');
+  for (const row of Array.isArray(file?.rows) ? file.rows : []) {
+    if (row && typeof row === 'object') row.observedAtUtc = instant;
+  }
+}
+
 /** One file, read and validated on its own: a result, a match, or a reason it is skipped. */
 async function classifyOutputFile(dir, name) {
   if (!RESULT_FILE_NAME.test(name) && !MATCH_FILE_NAME.test(name)) {
@@ -119,6 +147,10 @@ async function classifyOutputFile(dir, name) {
   }
 
   const isResult = RESULT_FILE_NAME.test(name);
+  if (isResult) {
+    normaliseStockStatus(parsed);
+    stampObservedAt(parsed, (await stat(join(dir, name))).mtime);
+  }
   const checked = isResult ? validateResultFile(parsed) : validateMatchFile(parsed);
   if (!checked.ok) return { skip: checked.problems[0] };
 
@@ -228,10 +260,15 @@ function proposalFor(file) {
   return proposal;
 }
 
-/** Counts one outcome list of an answer, keeping each reason and how often it was given. */
-function tally(into, rows) {
+/**
+ * Counts one outcome list of an answer, keeping each reason and how often it was given, and - when
+ * given a list - each row's own decision, so the run log can say what became of every row.
+ */
+function tally(into, rows, outcome, decisions) {
   for (const row of Array.isArray(rows) ? rows : []) {
     into.count += 1;
+    decisions?.push({ outcome, workItemId: row?.workItemId ?? null, supplierProductId: row?.supplierProductId ?? null,
+      waitingKey: row?.waitingKey ?? null, masterProductId: row?.masterProductId ?? null, reason: row?.reason ?? null });
     const reason = typeof row?.reason === 'string' && row.reason.trim() !== '' ? row.reason.trim() : null;
     if (reason === null) continue;
     into.reasons.set(reason, (into.reasons.get(reason) ?? 0) + 1);
@@ -297,9 +334,9 @@ async function submitMatches({ matches, runId, batchSize, post, record, counted 
   for (const batch of batchesOf(matches, batchSize)) {
     try {
       const { body } = await post(MATCHES_PATH, { runId, proposals: batch.map((entry) => proposalFor(entry.file)) });
-      tally(counted.autoMatched, body?.autoMatched);
-      tally(counted.tentative, body?.tentative);
-      tally(counted.matchesRejected, body?.rejected);
+      tally(counted.autoMatched, body?.autoMatched, 'auto-matched', counted.decisions);
+      tally(counted.tentative, body?.tentative, 'tentative', counted.decisions);
+      tally(counted.matchesRejected, body?.rejected, 'match rejected', counted.decisions);
     } catch (error) {
       record(error);
     }
@@ -313,10 +350,10 @@ async function submitResultFile({ file, runId, batchSize, post, record, counted,
   for (const batch of batchesOf(file.rows, batchSize)) {
     try {
       const { body } = await post(RESULTS_PATH, { runId, rows: batch.map((row) => rowFor(file, row)) });
-      tally(counted.accepted, body?.accepted);
-      tally(counted.sentToReview, body?.sentToReview);
-      tally(counted.pending, body?.pending);
-      tally(counted.rejected, body?.rejected);
+      tally(counted.accepted, body?.accepted, 'accepted', counted.decisions);
+      tally(counted.sentToReview, body?.sentToReview, 'sent to review', counted.decisions);
+      tally(counted.pending, body?.pending, 'pending', counted.decisions);
+      tally(counted.rejected, body?.rejected, 'rejected', counted.decisions);
     } catch (error) {
       record(error);
       return false;
@@ -375,6 +412,7 @@ export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } =
     autoMatched: emptyTally(),
     tentative: emptyTally(),
     matchesRejected: emptyTally(),
+    decisions: [],
   };
   const searchCounts = { complete: 0, truncated: 0, no_matches: 0, failed: 0 };
   const errors = [];
@@ -424,6 +462,8 @@ export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } =
     exitCode: errors.length === 0 && found.skipped.length === 0 ? 0 : 1,
     out,
     err: errors.length === 0 ? '' : `${errors.join('\n')}\n`,
+    // Every row and match the API decided, for the run log; the CLI does not print it.
+    decisions: counted.decisions,
   };
 }
 

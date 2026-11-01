@@ -229,12 +229,12 @@ public sealed class CheapestSupplierSummaryApiTests
     }
 
     /// <summary>
-    /// The criterion: every ineligibility reason the comparison decides is published with the offer
-    /// it is about, which is what lets the popup say why a supplier is out of the comparison instead
-    /// of leaving it off the list.
+    /// A supplier that says it is out of stock is still compared (owner decision, 1 November 2026):
+    /// its offer has no ineligibility and its stock answer is published beside the price, so the
+    /// page can say that stock may differ instead of dropping the price.
     /// </summary>
     [Fact]
-    public async Task An_offer_that_cannot_be_compared_carries_its_reason()
+    public async Task An_out_of_stock_offer_is_compared_and_carries_its_stock_answer()
     {
         var client = _factory.BusinessA();
         var productId = await _factory.MatchedProductAsync(client);
@@ -244,9 +244,8 @@ public sealed class CheapestSupplierSummaryApiTests
             Suppliers(product),
             supplier => supplier.GetProperty("supplierName").GetString() == ApiFactory.OutOfStockSupplierName);
 
-        Assert.Equal(
-            (int)SupplierOfferIneligibility.OutOfStock,
-            outOfStock.GetProperty("ineligibility").GetInt32());
+        Assert.Equal(JsonValueKind.Null, outOfStock.GetProperty("ineligibility").ValueKind);
+        Assert.Equal((int)SupplierStockStatus.OutOfStock, outOfStock.GetProperty("stockStatus").GetInt32());
         Assert.False(outOfStock.GetProperty("isCheapest").GetBoolean());
         Assert.True(outOfStock.GetProperty("hasPrice").GetBoolean());
     }
@@ -635,7 +634,7 @@ public sealed class CheapestSupplierSummaryApiTests
 
             await AddOfferAsync(db, masterProductId, CheapSupplierName, CheapListingSku, CheapPackSize, CheapPackPrice, isPromotion: true, url: CheapListingUrl);
             await AddOfferAsync(db, masterProductId, DearSupplierName, "E2E-DEAR-SKU", 1, 1.27m);
-            await AddOfferAsync(db, masterProductId, OutOfStockSupplierName, "E2E-OOS-SKU", 1, 0.40m, stockStatus: SupplierStockStatus.OutOfStock);
+            await AddOfferAsync(db, masterProductId, OutOfStockSupplierName, "E2E-OOS-SKU", 1, 2.00m, stockStatus: SupplierStockStatus.OutOfStock);
             await AddOfferAsync(db, masterProductId, HiddenSupplierName, "E2E-HIDDEN-SKU", 30, 3.00m);
             await AddOfferAsync(db, masterProductId, UncopiedPresetName, "E2E-UNCOPIED-SKU", 30, 3.00m);
         }

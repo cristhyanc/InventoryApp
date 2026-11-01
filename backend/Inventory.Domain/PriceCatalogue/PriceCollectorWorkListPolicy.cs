@@ -3,16 +3,13 @@ using Inventory.Domain.Exceptions;
 namespace Inventory.Domain.PriceCatalogue;
 
 /// <summary>
-/// What one collector run is asked to do (issue #924, parent #817): which suppliers are due to be
+/// What one collector run is asked to do (issue #924, parent #817): which suppliers are
 /// searched, and how much work one run may be handed.
 ///
-/// <para><strong>A supplier's cadence is read from its own record, never from its name.</strong>
-/// <c>SupplierPreset.PriceCheckFreshnessHours</c> is the one stored cadence, and
-/// <see cref="SupplierPriceFreshnessPolicy"/> owns what it means for a <em>price</em>; this policy
-/// reads the same number for the other half of the question - when the next check is due - by
-/// inverting <see cref="SupplierPriceFreshnessPolicy.LimitForCheckInterval"/>. That is deliberately
-/// one number rather than two: a deployment that records "BIG W is checked twice a week" must not
-/// have to record it again in a second column that could disagree with the first.</para>
+/// <para><strong>Every collectable supplier is searched on every run</strong> (owner decision,
+/// 1 November 2026): there is no per-supplier cadence. How often a run happens is the workflow's
+/// schedule; how old a price may be before it stops being compared is still
+/// <see cref="SupplierPriceFreshnessPolicy"/>'s.</para>
 ///
 /// <para><strong>A supplier nothing collects is not due</strong>, however fresh or stale its prices
 /// are. A preset with no connector - Costco's state, and a real one - has no route to take, and a
@@ -103,55 +100,19 @@ public static class PriceCollectorWorkListPolicy
         "A price collector run must be allowed at least one work item.";
 
     /// <summary>
-    /// The gap between two checks of a supplier whose stored freshness limit is
-    /// <paramref name="freshnessLimitHours"/>: the limit less
-    /// <see cref="SupplierPriceFreshnessPolicy.MarginHours"/>, which is exactly the derivation
-    /// <see cref="SupplierPriceFreshnessPolicy.LimitForCheckInterval"/> made in the other direction.
+    /// Whether a supplier is searched on a run: every supplier the platform still suggests and that
+    /// something collects, on every run.
     ///
-    /// <para>A limit at or below the margin would invert to a non-positive interval, which is a
-    /// supplier that is always due; that is the answer this returns rather than an exception, because
-    /// "check it every time" is a coherent cadence and refusing a stored row at read time would take
-    /// the whole work list down over one supplier's configuration.</para>
-    /// </summary>
-    public static int CheckIntervalForLimit(int freshnessLimitHours) =>
-        Math.Max(freshnessLimitHours - SupplierPriceFreshnessPolicy.MarginHours, 0);
-
-    /// <summary>
-    /// Whether a supplier is due to be searched on a run starting at <paramref name="asOfUtc"/>.
-    ///
-    /// <para>A supplier that has never been successfully checked is due - that is every supplier the
-    /// first time the collector runs - and one that has is due once its own check interval has
-    /// elapsed since that check. A clock that disagrees with itself, leaving the last check in the
-    /// future, leaves the supplier not due, for the reason an observation from the future is treated
-    /// as fresh: the alternative is to re-search something that was just searched.</para>
+    /// <para><strong>There is no cadence here</strong> (owner decision, 1 November 2026, #929): a run
+    /// searches every product at every collectable supplier, whenever it was last checked. A
+    /// supplier-level "last checked" let one partial run mark a whole supplier as checked, so the
+    /// products that run never reached waited a full cycle. How often a supplier is searched is now
+    /// the schedule's decision, and a price's freshness is still
+    /// <see cref="SupplierPriceFreshnessPolicy"/>'s.</para>
     /// </summary>
     /// <param name="isEnabled">Whether the platform still suggests this supplier.</param>
     /// <param name="hasConnector">Whether anything collects this supplier's prices at all.</param>
-    /// <param name="lastCheckedAtUtc">
-    /// When this supplier was last checked successfully, or <see langword="null"/> while it never
-    /// has been.
-    /// </param>
-    /// <param name="freshnessLimitHours">The supplier's own stored freshness limit.</param>
-    /// <param name="asOfUtc">When the run is starting.</param>
-    public static bool IsSupplierDue(
-        bool isEnabled,
-        bool hasConnector,
-        DateTime? lastCheckedAtUtc,
-        int freshnessLimitHours,
-        DateTime asOfUtc)
-    {
-        if (!isEnabled || !hasConnector)
-        {
-            return false;
-        }
-
-        if (lastCheckedAtUtc is not { } lastChecked)
-        {
-            return true;
-        }
-
-        return asOfUtc - lastChecked >= TimeSpan.FromHours(CheckIntervalForLimit(freshnessLimitHours));
-    }
+    public static bool IsSupplierDue(bool isEnabled, bool hasConnector) => isEnabled && hasConnector;
 
     /// <summary>
     /// The work-item budget a run is issued with: the configured one, bounded by

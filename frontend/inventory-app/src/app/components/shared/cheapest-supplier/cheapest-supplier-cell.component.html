@@ -20,6 +20,9 @@
     data-testid="cheapest-supplier-cell"
   >{{ display }}</span>
 }
+@if (stockNote) {
+  <span class="block text-md-body value-muted" data-testid="cheapest-supplier-stock-note">{{ stockNote }}</span>
+}
 
 @if (open) {
   <!--

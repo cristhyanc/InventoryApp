@@ -6,6 +6,9 @@ name: Price collector (manual test)
 # testing API that Deploy Testing deploys from develop (docs/testing-environment.md). Either way
 # it runs in the price-collector environment with the collector's own federated identity, which is
 # separate from the testing deployment identity, and it refuses the production API.
+# full_run is the production-sized dry run the schedule waits for: every issued search with the
+# production page sizes, in fresh Claude sessions of a few searches each, still manual and still
+# against the test API, so the owner sees a full run's real duration and provider cost first.
 on:
   workflow_dispatch:
     inputs:
@@ -19,8 +22,13 @@ on:
         required: true
         type: string
         default: '3'
+      full_run:
+        description: Production-sized dry run - every issued search (up to 90) with production page sizes, in Claude batches of 6; sample_size is ignored
+        required: true
+        type: boolean
+        default: false
       include_verified_retailers:
-        description: Permit previously verified Kmart and BIG W actors for this small paid test only
+        description: Permit previously verified Kmart and BIG W actors for this paid test run
         required: true
         type: boolean
         default: false
@@ -90,7 +98,7 @@ jobs:
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     environment: price-collector
-    timeout-minutes: 45
+    timeout-minutes: 130
     permissions:
       contents: read
       id-token: write
@@ -139,13 +147,16 @@ jobs:
         timeout-minutes: 2
         env:
           PRICE_COLLECTOR_SAMPLE_SIZE: ${{ inputs.sample_size }}
+          PRICE_COLLECTOR_FULL_RUN: ${{ inputs.full_run }}
           PRICE_COLLECTOR_INCLUDE_REVIEWED: ${{ inputs.include_verified_retailers }}
           PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
         run: node scripts/price-collector/workflow.mjs prepare
 
       - name: Run the bounded Claude collector
         id: claude
-        timeout-minutes: 16
+        # A backstop only: workflow.mjs stops Claude after 14 minutes for a sample and 90 for a full
+        # run. The job leaves 30 minutes after this step for finalisation and cleanup.
+        timeout-minutes: 100
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
@@ -158,6 +169,15 @@ jobs:
         if: always()
         timeout-minutes: 15
         run: node scripts/price-collector/workflow.mjs finalize
+
+      - name: Upload the run log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: price-collector-logs
+          path: ${{ runner.temp }}/price-collector-${{ github.run_id }}-${{ github.run_attempt }}/logs
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Remove private work, files and CLI installation
         if: always()

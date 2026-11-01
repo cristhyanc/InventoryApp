@@ -138,6 +138,20 @@ export function cheapestSupplierDisplay(
   return `${names} ${money(product.cheapestUnitPrice)}/unit ${basisLabel(displayBasis)}${special}`.trim();
 }
 
+/** The note under a cheapest price: suppliers' stock answers are unreliable, so none is promised. */
+export const STOCK_MAY_DIFFER_NOTE = 'Stock may differ';
+
+/**
+ * The stock note for the cell, or `null` when the cell shows no price. Stock never removes a price
+ * from the comparison (owner decision, 1 November 2026), so every cheapest price carries it.
+ */
+export function cheapestStockNote(state: CheapestSuppliersState, product: CheapestSupplierProduct | undefined): string | null {
+  if (state !== 'loaded' || (product?.cheapestUnitPrice ?? null) === null) {
+    return null;
+  }
+  return product?.suppliers.some((offer) => offer.isCheapest) ? STOCK_MAY_DIFFER_NOTE : null;
+}
+
 /**
  * The Cheapest supplier cell and its popup (issue #930, parent #817) - one standalone component the
  * Dashboard's Reorder Alerts (#939), Needs Ordering and Products (#940) all use, so the three
@@ -214,6 +228,11 @@ export class CheapestSupplierCellComponent {
   /** The cell's own text: a cheapest supplier and its unit price, or the state that explains why not. */
   get display(): string {
     return cheapestSupplierDisplay(this.state, this.product, this.displayBasis);
+  }
+
+  /** "Stock may differ" under a cheapest price, and nothing otherwise. */
+  get stockNote(): string | null {
+    return cheapestStockNote(this.state, this.product);
   }
 
   /**

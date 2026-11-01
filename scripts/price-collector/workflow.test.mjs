@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, publicSubmissionReport, finaliseSample, launchClaude } from './workflow.mjs';
-import { permittedCommand, recordDecision, toolDecision } from './workflow-tool-guard.mjs';
-import { LEDGER_FILE, MAX_POLLS_PER_RUN, runFromResponse } from './workflow-run-ledger.mjs';
+import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, finaliseSample, launchClaude, toolUseReport, searchDetails, toolTimeline, claudeResult } from './workflow.mjs';
+import { JB_METRO_CAPS, failureCode, jbMetroFlags, permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
+import { LEDGER_FILE, MAX_POLLS_PER_RUN, leadingJsonObject, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
+import { clip, redact, secretsOf, trace } from './trace.mjs';
 
 const work = { runId: 41, searches: [
   { workItemId: 1, product: { kind: 'waiting', waitingKey: 'a' } },
@@ -73,13 +75,60 @@ test('tool policy refuses arbitrary shell, command substitution, redirects, extr
   assert.equal((await toolDecision({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/read-work.mjs', run_in_background: true } }, {})).hookSpecificOutput.permissionDecision, 'deny');
 });
 
-test('public report permits only numeric counters, not supplier text, error bodies or filenames', () => {
-  const raw = 'rows: accepted 1, sent to review 2, pending 0, rejected 0\n  rejected: private product\nfailed requests: 1\nrun 41: completed; complete 1, truncated 0, no_matches 0, failed 0, not_searched 7\nsecret token';
-  const safe = publicSubmissionReport(raw);
-  assert.ok(safe.includes('not_searched 7'));
-  assert.ok(safe.includes('accepted 1'));
-  assert.ok(!safe.includes('private'));
-  assert.ok(!safe.includes('secret'));
+test('the run report shows the submission output, its errors and every search in full', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-details-'));
+  try {
+    const issued = { runId: 41, searches: [
+      { workItemId: 1, supplierPresetId: 3, supplierName: 'ALDI', priceConnector: 'varnmill', priceConnectorKey: 'aldi',
+        product: { kind: 'master', masterProductId: 7, brand: 'Coca-Cola', name: 'Zero Sugar', sizeValue: 375, sizeUnit: 'ml' } },
+      { workItemId: 2, supplierPresetId: 4, supplierName: 'Coles', priceConnector: 'varnmill', product: { kind: 'waiting', searchName: 'CCs Tasty Cheese', unitLabel: '45g' } },
+    ], matching: { waitingProducts: [], masterProducts: [] } };
+    writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(issued));
+    writeFileSync(join(dir, 'collector-status.json'), JSON.stringify({ status: 'completed', costUsd: 0.2, turns: 5, subtype: 'success' }));
+    const outputDir = join(dir, 'out');
+    mkdirSync(outputDir);
+    writeFileSync(join(outputDir, '1.json'), JSON.stringify({ runId: 41, workItemId: 1, outcome: 'complete', rows: [
+      { supplierProductId: 'aldi-1', title: 'Coke Zero 18x375ml', packPrice: 20.99, packQuantity: 18, stockStatus: 'in_stock', sourceUrl: 'https://www.aldi.com.au/p/1' }] }));
+    const decisions = [{ outcome: 'rejected', workItemId: 1, supplierProductId: 'aldi-1', reason: "price basis differs from the supplier's published basis" }];
+    const { report, details } = await finaliseSample({ stateDir: dir, outputDir, env: {}, token: 't',
+      submit: async () => ({ exitCode: 1, out: 'rows: accepted 0, sent to review 0, pending 0, rejected 1\n', err: 'HTTP 500 on /results\n', decisions }) });
+    assert.match(report, /^rows: accepted 0, sent to review 0, pending 0, rejected 1$/m);
+    assert.match(report, /^Submission errors:\nHTTP 500 on \/results$/m);
+    assert.match(details, /1\. \*\*Coca-Cola Zero Sugar 375ml \(master product 7\)\*\* at \*\*ALDI\*\* \(varnmill:aldi\), work item 1/);
+    assert.match(details, /Coke Zero 18x375ml \[aldi-1\]: \$20\.99 for 18, in_stock, https:\/\/www\.aldi\.com\.au\/p\/1 -> \*\*rejected - price basis differs/);
+    assert.match(details, /CCs Tasty Cheese - 45g \(waiting product\)\*\* at \*\*Coles\*\*/);
+    assert.match(details, /no result file written \(not_searched\)/);
+    const saved = readFileSync(join(dir, 'logs', 'summary.md'), 'utf8');
+    assert.ok(saved.includes('Coke Zero 18x375ml'));
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'logs', 'submission.json'), 'utf8')).decisions, decisions);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the tool timeline shows each call, its answer or failure, and each session, with secrets masked', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-timeline-'));
+  try {
+    const env = { APIFY_TOKEN: 'apify_api_SECRETSECRET123' };
+    trace(dir, { event: 'batch', session: 1, of: 2, workItemIds: [1, 2] });
+    trace(dir, { event: 'call', tool: 'mcp__apify__call-actor', decision: 'allow', code: 'ok', input: '{"queries":["coke zero"],"token":"apify_api_SECRETSECRET123"}' }, env);
+    trace(dir, { event: 'answer', tool: 'mcp__apify__call-actor', response: '{"runId":"abc"}' }, env);
+    trace(dir, { event: 'failed', tool: 'mcp__apify__axlymxp--bigw-product-scraper', code: 'failed-input', error: 'Input is not valid' }, env);
+    trace(dir, { event: 'session', session: 1, subtype: 'success', turns: 4, costUsd: 0.1, result: 'Wrote 2 files' }, env);
+    const timeline = toolTimeline(dir);
+    assert.match(timeline, /SESSION 1 of 2: work items 1, 2/);
+    assert.match(timeline, /CALL mcp__apify__call-actor allow \{"queries":\["coke zero"\]/);
+    assert.match(timeline, /-> mcp__apify__call-actor answered: \{"runId":"abc"\}/);
+    assert.match(timeline, /FAILED \(failed-input\): Input is not valid/);
+    assert.match(timeline, /SESSION 1 ended: success, 4 turns, \$0\.1; Claude said: Wrote 2 files/);
+    assert.ok(!timeline.includes('SECRETSECRET'));
+    assert.equal(toolTimeline(join(dir, 'none')), 'No tool calls were traced.\n');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the session result is read from the last result message of a stream-json transcript', () => {
+  const stream = '{"type":"system","subtype":"init"}\n{"type":"assistant"}\n{"type":"result","subtype":"success","num_turns":3}\n';
+  assert.equal(claudeResult(stream).num_turns, 3);
+  assert.equal(claudeResult('{"type":"result","subtype":"error_max_turns"}').subtype, 'error_max_turns');
+  assert.deepEqual(claudeResult('not json'), {});
 });
 
 test('OIDC exchange uses the API application scope, never a stored API password, and does not retry refusal', async () => {
@@ -99,10 +148,10 @@ test('OIDC exchange uses the API application scope, never a stored API password,
   assert.equal(calls, 1);
 });
 
-test('finalisation runs after a collector timeout even with no result files and hides submission errors', async () => {
+test('finalisation runs after a collector timeout even with no result files and shows submission errors', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'collector-test-'));
   try {
-    writeFileSync(join(dir, 'work.json'), JSON.stringify(work));
+    writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(work));
     writeFileSync(join(dir, 'collector-status.json'), JSON.stringify({ status: 'timeout', costUsd: null }));
     const calls = [];
     const answer = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 'private-token', submit: async ({ argv }) => {
@@ -111,9 +160,11 @@ test('finalisation runs after a collector timeout even with no result files and 
     } });
     assert.equal(calls.length, 1);
     assert.ok(calls[0].includes('41'));
-    assert.ok(answer.includes('timeout'));
-    assert.ok(answer.includes('not_searched 2'));
-    assert.ok(!answer.includes('private'));
+    assert.ok(answer.report.includes('timeout'));
+    assert.ok(answer.report.includes('not_searched 2'));
+    // Submission errors are shown in full; the API token never is.
+    assert.ok(answer.report.includes('Submission errors:\nprivate'));
+    assert.ok(!answer.report.includes('private-token'));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -136,23 +187,26 @@ test('a real interrupted child leaves finished files for independent submission 
 fs.writeFileSync('price-collector-out/1.json', JSON.stringify({runId:41,workItemId:1,supplierPresetId:3,outcome:'no_matches',rows:[]}));
 console.error('secret transcript, product, price and token');
 setInterval(() => {}, 1000);\n`, { mode: 0o700 });
-    const status = await launchClaude({ executable: fake, sandbox, env: { PATH: process.env.PATH }, timeoutMs: 500 });
+    const status = await launchClaude({ executable: fake, sandbox, env: { PATH: process.env.PATH, PRICE_COLLECTOR_STATE_DIR: dir }, timeoutMs: 500 });
     assert.equal(status.status, 'timeout');
     saveTestWork(dir, status);
     // A malformed file, another work item, and a stale-run file cannot stop the valid one.
     writeFileSync(join(outputDir, '2.json'), '{');
     writeFileSync(join(outputDir, '99.json'), JSON.stringify({ runId: 41, workItemId: 99 }));
     writeFileSync(join(outputDir, 'match-a.json'), JSON.stringify({ runId: 40, waitingKey: 'a' }));
-    const report = await finaliseSample({ stateDir: dir, outputDir, env: { PRICE_COLLECTOR_TEST_API_URL: server.baseUrl }, token: 'test-token' });
+    const { report } = await finaliseSample({ stateDir: dir, outputDir, env: { PRICE_COLLECTOR_TEST_API_URL: server.baseUrl }, token: 'test-token' });
     assert.deepEqual(server.requests.map(r => r.path), ['/api/price-collector/work-items/1/outcome', '/api/price-collector/runs/41/complete']);
     assert.ok(server.requests.every(r => r.authorization === 'Bearer test-token'));
     assert.ok(report.includes('not_searched 1'));
     assert.ok(report.includes('Files refused before submission: 3'));
-    assert.ok(!report.includes('secret'));
+    // The session's stderr is kept in the run's log folder for the artifact.
+    assert.ok(readFileSync(join(dir, 'logs', 'claude-session-1.stderr.txt'), 'utf8').includes('secret transcript'));
   } finally { await server.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 function saveTestWork(dir, status) {
+  // The run's issued work (finalisation) and the current batch (read-work.mjs and the write guard).
+  writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(work));
   writeFileSync(join(dir, 'work.json'), JSON.stringify(work));
   writeFileSync(join(dir, 'collector-status.json'), JSON.stringify(status));
 }
@@ -286,4 +340,245 @@ test('a run is issued only from reviewed main or develop, to an HTTPS test API t
   for (const url of ['http://restockroo-testing-api.azurewebsites.net', 'https://user:pw@restockroo-testing-api.azurewebsites.net', `${testApi}?x=1`]) {
     assert.throws(() => collectorTarget({ GITHUB_REF: 'refs/heads/develop', PRICE_COLLECTOR_TEST_API_URL: url }), /HTTPS test API URL/);
   }
+});
+
+test('a run is read from the leading JSON of an answer even when a summary follows it, and from nowhere else', () => {
+  const run = { runId: 'Run7', status: 'SUCCEEDED', storages: { datasets: { default: { id: 'Data7', fields: ['name{x}', 'a"b'] } } } };
+  const joined = `${JSON.stringify(run)}\nRun Run7 succeeded with 5 items. Use get-dataset-items with datasetId=Data7.`;
+  for (const response of [joined, [{ type: 'text', text: joined }], { content: [{ type: 'text', text: `  ${joined}` }] }]) {
+    assert.deepEqual(runFromResponse(response), { runId: 'Run7', datasetIds: ['Data7'] });
+  }
+  // An object anywhere but the very start, or a second object after the first, is never read.
+  assert.equal(runFromResponse('Summary first {"runId":"Evil"}'), null);
+  assert.deepEqual(runFromResponse(`{"status":"RUNNING"}\n{"runId":"Evil"}`), null);
+  assert.equal(leadingJsonObject('{"a":"}"}trailing').a, '}');
+  assert.equal(leadingJsonObject('{"a":"\\"}"}x').a, '"}');
+  assert.equal(leadingJsonObject('{unterminated'), undefined);
+  assert.equal(leadingJsonObject(42), undefined);
+});
+
+test('the hook log becomes counts per tool with fixed codes, never reason text, inputs or invented labels', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-tool-log-'));
+  try {
+    const limits = sampleLimits(JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url))), false);
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(limits));
+    saveTestWork(dir, {});
+    const env = { PRICE_COLLECTOR_STATE_DIR: dir, PRICE_COLLECTOR_OUT_DIR: join(dir, 'out'), PRICE_COLLECTOR_GUARD_STATE: join(dir, 'state.json') };
+    const hook = event => spawnSync(process.execPath, [new URL('./workflow-tool-guard.mjs', import.meta.url).pathname],
+      { input: JSON.stringify(event), env: { ...env, PATH: process.env.PATH }, encoding: 'utf8' });
+    const write = (file, content) => ({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: join(dir, 'out', file), content } });
+    const answers = [
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/read-work.mjs' } }),
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'cat /etc/passwd secret-product' } }),
+      hook(write('1.json', JSON.stringify({ runId: 40, workItemId: 1 }))),
+      hook(write('1.json', 'not json')),
+      hook(write('99.json', JSON.stringify({ runId: 41, workItemId: 99 }))),
+      hook(write('1.json', JSON.stringify({ runId: 41, workItemId: 1 }))),
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'mcp__apify__get-dataset-items', tool_input: { datasetId: 'Data1' } }),
+      hook({ hook_event_name: 'PostToolUse', tool_name: 'mcp__apify__call-actor', tool_input: {}, tool_response: 'no run here' }),
+      hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/etc/passwd' } }),
+      hook({ hook_event_name: 'PostToolUseFailure', tool_name: 'mcp__apify__axlymxp--bigw-product-scraper', tool_input: { searchQueries: ['secret-product'] }, error: 'Input is not valid: field secret-product' }),
+      hook({ hook_event_name: 'PostToolUseFailure', tool_name: 'mcp__apify__axlymxp--bigw-product-scraper', tool_input: {}, error: 'something private happened' }),
+    ];
+    for (const answer of answers) {
+      // Claude Code receives exactly the documented shape: no diagnostic field leaks into it.
+      const out = JSON.parse(answer.stdout);
+      if (out.hookSpecificOutput) assert.deepEqual(Object.keys(out).sort(), ['hookSpecificOutput']);
+    }
+    const report = toolUseReport(dir);
+    assert.match(report, /^Tool Bash:other: allowed 0, denied 1; not-helper 1$/m);
+    assert.match(report, /^Tool Bash:read-work: allowed 1, denied 0$/m);
+    assert.match(report, /^Tool Write: allowed 1, denied 3; write-wrong-run 1, write-not-json 1, write-not-in-sample 1$/m);
+    assert.match(report, /^Tool mcp__apify__get-dataset-items: allowed 0, denied 1; not-own-dataset 1$/m);
+    assert.match(report, /^Tool mcp__apify__call-actor: allowed 0, denied 0; not-recorded-string 1$/m);
+    assert.match(report, /^Tool Read: allowed 0, denied 1; not-allowlisted 1$/m);
+    // A failed Apify call is counted by a fixed label; the error text and input never reach the summary.
+    assert.match(report, /^Tool mcp__apify__axlymxp--bigw-product-scraper: allowed 0, denied 0; failed-input 1, failed-other 1$/m);
+    assert.equal(JSON.parse(answers.at(-1).stdout).hookSpecificOutput, undefined);
+    for (const secret of ['passwd', 'secret-product', 'Data1', 'only', 'sample and its run']) assert.ok(!report.includes(secret), secret);
+    // A tampered log line cannot put free text into the summary.
+    writeFileSync(join(dir, TOOL_LOG_FILE), `${JSON.stringify({ tool: 'Write <b>price</b>', event: 'before', decision: 'deny', code: 'Coke $4' })}\n`, { flag: 'a' });
+    assert.match(toolUseReport(dir), /^Tool other: allowed 0, denied 1; other 1$/m);
+    assert.equal(toolLabel({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/pagination.mjs --x' } }), 'Bash:pagination');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a failed call gets one fixed label, most specific cause first', () => {
+  const code = error => failureCode({ error });
+  assert.equal(code('HTTP 429 Too Many Requests'), 'failed-rate-limit');
+  assert.equal(code('Monthly usage limit exceeded (402)'), 'failed-limit');
+  assert.equal(code('403 Forbidden'), 'failed-auth');
+  assert.equal(code('Actor not found'), 'failed-not-found');
+  assert.equal(code('Input is not valid: searchQueries is required'), 'failed-input');
+  assert.equal(code('Request timed out'), 'failed-timeout');
+  assert.equal(code('boom'), 'failed-other');
+  assert.equal(failureCode({ is_interrupt: true, error: '403' }), 'failed-interrupt');
+  assert.equal(failureCode(undefined), 'failed-other');
+});
+
+test('the summary carries Claude turns and result subtype, and says when no tool was called', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-turns-'));
+  try {
+    saveTestWork(dir, { status: 'completed', costUsd: 0.12, turns: 9, subtype: 'success' });
+    const { report } = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
+      submit: async () => ({ exitCode: 0, out: '' }) });
+    assert.match(report, /^Claude turns: 9; result: success$/m);
+    assert.match(report, /^Tool calls: none$/m);
+    rmSync(join(dir, 'submission'), { recursive: true, force: true });
+    saveTestWork(dir, { status: 'completed', costUsd: null, turns: 'many', subtype: 'Error: secret' });
+    const { report: unsafe } = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't',
+      submit: async () => ({ exitCode: 0, out: '' }) });
+    assert.match(unsafe, /^Claude turns: unknown; result: unknown$/m);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+const search = (workItemId, product) => ({ workItemId, product });
+const master = id => ({ kind: 'master', masterProductId: id });
+const waiting = key => ({ kind: 'waiting', waitingKey: key });
+
+test('a full run is split into batches that never separate one product\'s searches', () => {
+  const issued = { runId: 7, searches: [
+    search(1, master(10)), search(2, master(10)), search(3, waiting('w')), search(4, master(11)),
+    search(5, waiting('w')), search(6, master(12)), search(7, master(12)), search(8, master(12)),
+  ], matching: { waitingProducts: [{ waitingKey: 'w' }, { waitingKey: 'x' }], masterProducts: [] } };
+  const batches = workBatches(issued, 3);
+  assert.deepEqual(batches.map(b => b.searches.map(s => s.workItemId)), [[1, 2], [3, 5, 4], [6, 7, 8]]);
+  assert.deepEqual(batches.map(b => b.matching.waitingProducts.map(p => p.waitingKey)), [[], ['w'], []]);
+  assert.deepEqual(batches.map(b => b.matching.required), [false, true, false]);
+  assert.ok(batches.every(b => b.runId === 7));
+  // A product with more searches than a batch holds still goes whole into one batch.
+  assert.deepEqual(workBatches(issued, 2).map(b => b.searches.length), [2, 2, 1, 3]);
+  assert.deepEqual(workBatches({ ...issued, searches: [] }), []);
+});
+
+test('a full run keeps at most maxBatches batches; the rest is left for not_searched', () => {
+  const searches = Array.from({ length: FULL_RUN.batchSize * (FULL_RUN.maxBatches + 2) }, (_, i) => search(i + 1, master(i + 1)));
+  const full = fullRunWork({ runId: 1, searches, matching: { waitingProducts: [], masterProducts: [] } });
+  assert.equal(full.searches.length, FULL_RUN.batchSize * FULL_RUN.maxBatches);
+  assert.equal(full.searchCount, full.searches.length);
+  assert.equal(workBatches(full).length, FULL_RUN.maxBatches);
+});
+
+test('full-run limits are the production limits, with the reviewed retailers only on request', () => {
+  const source = JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url)));
+  const limits = fullRunLimits(source, false);
+  const { jbMetro, ...apify } = limits;
+  assert.deepEqual(apify, source);
+  assert.deepEqual(jbMetro, JB_METRO_CAPS.full);
+  assert.deepEqual(sampleLimits(source, false).jbMetro, JB_METRO_CAPS.sample);
+  assert.notEqual(limits, source);
+  const enabled = fullRunLimits(source, true);
+  assert.equal(enabled.actors['abotapi/kmart-au-scraper'].actorIdConfirmed, true);
+  assert.equal(enabled.actors['axlymxp/bigw-product-scraper'].actorIdConfirmed, true);
+  assert.equal(enabled.perRun.maxActorCalls, source.perRun.maxActorCalls);
+  assert.equal(enabled.actors['varnmill/au-supermarket-prices'].pageSize, source.actors['varnmill/au-supermarket-prices'].pageSize);
+  assert.equal(source.actors['abotapi/kmart-au-scraper'].actorIdConfirmed, false);
+});
+
+test('the full-run switch and its deadline are explicit', () => {
+  assert.equal(fullRunRequested('true'), true);
+  assert.equal(fullRunRequested('false'), false);
+  for (const bad of ['', undefined, 'yes', 'TRUE']) assert.throws(() => fullRunRequested(bad));
+  assert.equal(collectorDeadlineMinutes('', true), FULL_RUN.deadlineMinutes);
+  assert.equal(collectorDeadlineMinutes('3', true), 3);
+  assert.throws(() => collectorDeadlineMinutes('90', true));
+});
+
+test('a full run starts one capped Claude session per batch, each seeing only its batch', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-batches-'));
+  try {
+    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 14 }, (_, i) => search(i + 1, master(i + 1))),
+      matching: { waitingProducts: [], masterProducts: [] } };
+    const seen = [];
+    const status = await collectBatches({ stateDir: dir, issued, deadlineMs: 60 * 60 * 1000, launch: async options => {
+      seen.push({ ids: JSON.parse(readFileSync(join(dir, 'work.json'), 'utf8')).searches.map(s => s.workItemId), options });
+      return { status: 'completed', costUsd: 0.25, turns: 10, subtype: 'success' };
+    } });
+    assert.deepEqual(seen.map(s => s.ids.length), [6, 6, 2]);
+    assert.ok(seen.every(s => s.options.maxTurns === FULL_RUN.maxTurnsPerBatch && s.options.maxBudgetUsd === FULL_RUN.maxBudgetUsdPerBatch));
+    assert.ok(seen.every(s => s.options.timeoutMs <= FULL_RUN.batchMinutes * 60 * 1000));
+    assert.deepEqual(status, { status: 'completed', costUsd: 0.75, turns: 30, subtype: 'success', batchesRun: 3, batchCount: 3 });
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'collector-status.json'), 'utf8')), status);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a full run stops at the first session that does not complete, and at the deadline', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-batches-stop-'));
+  try {
+    const issued = { runId: 7, fullRun: true, searches: Array.from({ length: 18 }, (_, i) => search(i + 1, master(i + 1))),
+      matching: { waitingProducts: [], masterProducts: [] } };
+    let launches = 0;
+    const limited = await collectBatches({ stateDir: dir, issued, deadlineMs: 60 * 60 * 1000, launch: async () => {
+      launches += 1;
+      return launches === 2 ? { status: 'claude_limit', costUsd: null, turns: 60, subtype: 'error_max_turns' } : { status: 'completed', costUsd: 0.5, turns: 5, subtype: 'success' };
+    } });
+    assert.equal(launches, 2);
+    assert.deepEqual(limited, { status: 'claude_limit', costUsd: null, turns: 65, subtype: 'error_max_turns', batchesRun: 2, batchCount: 3 });
+
+    let clock = 0;
+    const timed = await collectBatches({ stateDir: dir, issued, deadlineMs: 10 * 60 * 1000, now: () => clock, launch: async ({ timeoutMs }) => {
+      assert.ok(timeoutMs <= 10 * 60 * 1000);
+      clock += 9.5 * 60 * 1000;
+      return { status: 'completed', costUsd: 0.1, turns: 3, subtype: 'success' };
+    } });
+    assert.equal(timed.status, 'timeout');
+    assert.equal(timed.batchesRun, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a sample run is still one session with the sample caps and no batch line', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-sample-'));
+  try {
+    const calls = [];
+    const status = await collectBatches({ stateDir: dir, issued: { ...work, fullRun: false }, deadlineMs: 14 * 60 * 1000,
+      launch: async options => { calls.push(options); return { status: 'timeout', costUsd: null, turns: null, subtype: null }; } });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(Object.keys(calls[0]), ['timeoutMs', 'session']);
+    assert.deepEqual(status, { status: 'timeout', costUsd: null, turns: null, subtype: null });
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'work.json'), 'utf8')).searches, work.searches);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the summary counts the batches that ran and the searches given to Claude', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-batch-report-'));
+  try {
+    saveTestWork(dir, { status: 'completed', costUsd: 1.5, turns: 90, subtype: 'success', batchesRun: 3, batchCount: 5 });
+    const { report: answer } = await finaliseSample({ stateDir: dir, outputDir: join(dir, 'missing'), env: {}, token: 't', submit: async () => ({ exitCode: 0, out: '' }) });
+    assert.match(answer, /^Claude batches: 3 of 5$/m);
+    assert.match(answer, /^Searches given to Claude: 2$/m);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('JB Metro calls get the run\'s own page caps, appended last, and the sample caps by default', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-jbmetro-'));
+  try {
+    const sample = '--page-size 5 --max-pages 1 --batch-size 5 --attempts 1 --timeout-ms 15000';
+    assert.equal(jbMetroFlags(dir), sample);
+    const source = JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url)));
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(sampleLimits(source, false)));
+    assert.equal(jbMetroFlags(dir), sample);
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(fullRunLimits(source, false)));
+    assert.equal(jbMetroFlags(dir), '--page-size 20 --max-pages 5 --batch-size 20 --attempts 2 --timeout-ms 15000');
+    // A limits file above the hard ceiling, or with a missing or non-integer cap, falls back to the sample.
+    for (const jbMetro of [{ ...JB_METRO_CAPS.full, maxPages: 50 }, { ...JB_METRO_CAPS.full, attempts: undefined }, { ...JB_METRO_CAPS.full, pageSize: 2.5 }, null]) {
+      writeFileSync(join(dir, 'limits.json'), JSON.stringify({ ...fullRunLimits(source, false), jbMetro }));
+      assert.equal(jbMetroFlags(dir), sample);
+    }
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(fullRunLimits(source, false)));
+    const answer = await toolDecision({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/jbmetro-lookup.mjs --search "Coke Classic" https://www.jbmetro.com.au --max-pages 99' } },
+      { PRICE_COLLECTOR_STATE_DIR: dir });
+    assert.equal(answer.hookSpecificOutput.permissionDecision, 'allow');
+    assert.match(answer.hookSpecificOutput.updatedInput.command, /--max-pages 99 --page-size 20 --max-pages 5 --batch-size 20 --attempts 2 --timeout-ms 15000$/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the run log masks every credential and keeps long answers to their head and tail', () => {
+  const secrets = secretsOf({ APIFY_TOKEN: 'abcdefgh12345678', ANTHROPIC_API_KEY: 'short', PRICE_COLLECTOR_API_TOKEN: 'api-token-value-1' });
+  assert.deepEqual(secrets, ['api-token-value-1', 'abcdefgh12345678']);
+  const masked = redact('token abcdefgh12345678 and api-token-value-1; Authorization: Bearer xyz123456789 apify_api_ABCDEFGHIJ sk-ant-api03-ABCDEFGHIJ eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJlMTIz', secrets);
+  for (const leaked of ['abcdefgh12345678', 'api-token-value-1', 'xyz123456789', 'ABCDEFGHIJ', 'eyJhbGciOiJIUzI1']) assert.ok(!masked.includes(leaked), leaked);
+  assert.match(masked, /Bearer \*\*\*/);
+  assert.equal(clip('short', 10), 'short');
+  const long = clip('a'.repeat(30) + 'b'.repeat(30), 20);
+  assert.match(long, /^a{10} … \[40 characters left out\] … b{10}$/);
 });

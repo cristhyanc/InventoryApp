@@ -28,10 +28,10 @@ public sealed record ProductAwaitingMatch(string WaitingKey, string SearchName, 
 /// One supplier master record as the collector work list reads it (issue #924, with the master
 /// fields of #931): what it is called, how its prices are collected, and when it was last checked.
 ///
-/// <para><strong>Whether it is due is not this record's answer.</strong> The record carries the
+/// <para><strong>Whether it is searched is not this record's answer.</strong> The record carries the
 /// stored facts - enabled, connector, cadence, last successful check - and
-/// <see cref="PriceCollectorWorkListPolicy.IsSupplierDue"/> is the one place they become a decision,
-/// so no adapter and no controller holds a second version of the cadence rule.</para>
+/// <see cref="PriceCollectorWorkListPolicy.IsSupplierDue"/> is the one place they become a decision
+/// (enabled and collectable; since 1 November 2026 the last check no longer delays a search).</para>
 /// </summary>
 /// <param name="SupplierPresetId">The supplier master record's own key.</param>
 /// <param name="Name">Its name, which is what a collector's log and a reviewer read.</param>

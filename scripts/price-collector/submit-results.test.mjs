@@ -8,13 +8,13 @@
 // batches succeeded and never after a failed one, the run completed once at the end so unanswered
 // searches become `not_searched`, and the token never printed.
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { API_BASE_URL_ENV, API_TOKEN_ENV } from './collector-api.mjs';
 import { startStubServer } from './stub-server.mjs';
-import { runSubmission } from './submit-results.mjs';
+import { normaliseStockStatus, readOutputFiles, runSubmission, stampObservedAt } from './submit-results.mjs';
 
 const MATCHES = 'POST /api/price-collector/matches';
 const RESULTS = 'POST /api/price-collector/results';
@@ -522,5 +522,53 @@ describe('the invocation itself', () => {
 
     assert.equal(answer.exitCode, 2);
     assert.equal(stub.requests.length, 0);
+  });
+});
+
+describe('stock status', () => {
+  it('never drops a row: a missing, null or unknown stock value becomes unknown', () => {
+    const file = { rows: [{ stockStatus: 'in_stock' }, {}, { stockStatus: null }, { stockStatus: 'IN_STOCK' }, { stockStatus: 'out_of_stock' }] };
+    normaliseStockStatus(file);
+    assert.deepEqual(file.rows.map(row => row.stockStatus), ['in_stock', 'unknown', 'unknown', 'unknown', 'out_of_stock']);
+    normaliseStockStatus({});
+    normaliseStockStatus({ rows: [null] });
+  });
+
+  it('keeps a result file whose row has no stock value (the ALDI case of run 41257024735)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'collector-stock-'));
+    try {
+      const withoutStock = { ...row('aldi:1') };
+      delete withoutStock.stockStatus;
+      await writeFile(join(dir, '7.json'), JSON.stringify(resultFile(7, { rows: [withoutStock] })));
+      const found = await readOutputFiles(dir);
+      assert.deepEqual(found.skipped, []);
+      assert.equal(found.results[0].file.rows[0].stockStatus, 'unknown');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('observation instant', () => {
+  it('replaces any stated instant with the write time, in whole seconds rounded down', () => {
+    const file = { rows: [{ observedAtUtc: '2026-11-01T01:20:00Z' }, {}] };
+    stampObservedAt(file, new Date('2026-11-01T01:14:28.987Z'));
+    assert.deepEqual(file.rows.map(r => r.observedAtUtc), ['2026-11-01T01:14:28Z', '2026-11-01T01:14:28Z']);
+    stampObservedAt({}, new Date());
+    stampObservedAt({ rows: [null] }, new Date());
+  });
+
+  it('dates every row by when its file was written, not by Claude (the future JB Metro rows of run 41259875824)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'collector-observed-'));
+    try {
+      const withoutInstant = { ...row('jb:1') };
+      delete withoutInstant.observedAtUtc;
+      const future = { ...row('jb:2'), observedAtUtc: '2099-01-01T00:00:00Z' };
+      const path = join(dir, '7.json');
+      await writeFile(path, JSON.stringify(resultFile(7, { rows: [withoutInstant, future] })));
+      const written = new Date('2026-11-01T01:14:28Z');
+      await utimes(path, written, written);
+      const found = await readOutputFiles(dir);
+      assert.deepEqual(found.skipped, []);
+      assert.deepEqual(found.results[0].file.rows.map(r => r.observedAtUtc), ['2026-11-01T01:14:28Z', '2026-11-01T01:14:28Z']);
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

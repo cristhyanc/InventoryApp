@@ -12,6 +12,8 @@ import {
   AUTOMATIC_MATCH_NOTE,
   CheapestSupplierCellComponent,
   OBSERVED_PRICES_NOTE,
+  STOCK_MAY_DIFFER_NOTE,
+  cheapestStockNote,
   cheapestSupplierDisplay
 } from './cheapest-supplier-cell.component';
 import { CheapestSuppliersState } from './cheapest-suppliers.component';
@@ -313,8 +315,8 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
         offer({
           supplierName: 'BIG W',
           isCheapest: false,
-          stockStatus: SupplierStockStatus.OutOfStock,
-          ineligibility: SupplierOfferIneligibility.OutOfStock
+          isSpecial: true,
+          ineligibility: SupplierOfferIneligibility.PromotionEnded
         }),
         offer({
           supplierId: 2,
@@ -335,9 +337,27 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
     fixture.detectChanges();
 
     const text = rows().map((row) => row.textContent ?? '');
-    expect(text[0]).toContain('Out of stock');
+    expect(text[0]).toContain('The special has ended');
     expect(text[1]).toContain('Not checked yet');
     expect(text[1]).toContain('Never');
+  });
+
+  it('says under a cheapest price that stock may differ, even when the cheapest supplier reports out of stock', async () => {
+    const { host } = await render({
+      suppliers: [offer({ stockStatus: SupplierStockStatus.OutOfStock })]
+    });
+
+    const note = host.querySelector('[data-testid="cheapest-supplier-stock-note"]');
+    expect(note?.textContent?.trim()).toBe(STOCK_MAY_DIFFER_NOTE);
+    expect(note?.textContent?.trim()).toBe('Stock may differ');
+  });
+
+  it('adds no stock note where the cell shows no price', async () => {
+    const { host } = await render({ cheapestUnitPrice: null, suppliers: [offer({ isCheapest: false })] });
+
+    expect(host.querySelector('[data-testid="cheapest-supplier-stock-note"]')).toBeNull();
+    expect(cheapestStockNote('loading', product())).toBeNull();
+    expect(cheapestStockNote('loaded', undefined)).toBeNull();
   });
 
   it('offers nothing to open when there is nothing to list', async () => {

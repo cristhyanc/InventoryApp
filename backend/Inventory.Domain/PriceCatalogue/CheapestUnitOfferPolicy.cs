@@ -1,5 +1,4 @@
 using Inventory.Domain.Exceptions;
-using Inventory.Domain.Gst;
 
 namespace Inventory.Domain.PriceCatalogue;
 
@@ -34,7 +33,12 @@ public enum SupplierOfferIneligibility
     /// </summary>
     GstRateUnknown = 3,
 
-    /// <summary>The supplier said it could not be bought. A price nobody can act on is not an offer.</summary>
+    /// <summary>
+    /// No longer produced. Stock never makes an offer uncomparable (owner decision, 1 November 2026):
+    /// suppliers' stock answers are unreliable, so an out-of-stock price is compared like any other
+    /// and the page says that stock may differ. The number stays reserved so an older client never
+    /// reads 4 as something else.
+    /// </summary>
     OutOfStock = 4,
 
     /// <summary>
@@ -208,21 +212,6 @@ public static class CheapestUnitOfferPolicy
     public const decimal StandardGstRate = 0.10m;
 
     /// <summary>
-    /// The rate a product's own GST rule implies: the standard rate for a taxable product, nothing at
-    /// all for a GST-free one, and <see langword="null"/> when no rule is configured.
-    ///
-    /// <para><c>GstRules.None</c> is a real state (issue #430) and stays one here: a product nobody
-    /// has classified is not a GST-free product, and reading it as one would compare a taxable
-    /// product's ex-GST price with another's inclusive price.</para>
-    /// </summary>
-    public static decimal? RateForProductRule(GstClassification productGstRule) => productGstRule switch
-    {
-        GstClassification.Taxable => StandardGstRate,
-        GstClassification.GstFree => 0m,
-        _ => null,
-    };
-
-    /// <summary>
     /// The basis a business is shown, and therefore compared on: ex-GST for a GST-registered business,
     /// inc-GST otherwise (the owner's decision of 27 October 2026).
     ///
@@ -382,11 +371,6 @@ public static class CheapestUnitOfferPolicy
         if (rate is null)
         {
             return SupplierOfferIneligibility.GstRateUnknown;
-        }
-
-        if (offer.StockStatus == SupplierStockStatus.OutOfStock)
-        {
-            return SupplierOfferIneligibility.OutOfStock;
         }
 
         // At the stated end instant the promotion has finished: a special that runs "until Sunday" is

@@ -1,5 +1,4 @@
 using Inventory.Application.PriceCatalogue;
-using Inventory.Domain.Gst;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
@@ -85,7 +84,7 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
         var products = await _db.Products
             .AsNoTracking()
             .Where(product => ids.Contains(product.Id))
-            .Select(product => new ProductRow(product.Id, product.GstRule))
+            .Select(product => new ProductRow(product.Id))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -196,7 +195,6 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
         return new TrackedProductListings(
             product.ProductId,
             mapping?.Status,
-            product.GstRule,
             listings);
     }
 
@@ -224,7 +222,7 @@ public sealed class EfCheapestSupplierSummaryStore : ICheapestSupplierSummarySto
                 : null);
 
     /// <summary>One of the caller's products, as a SQL projection can produce it.</summary>
-    private sealed record ProductRow(long ProductId, GstClassification GstRule);
+    private sealed record ProductRow(long ProductId);
 
     /// <summary>One of the caller's own price-tracking mappings.</summary>
     private sealed record MappingRow(

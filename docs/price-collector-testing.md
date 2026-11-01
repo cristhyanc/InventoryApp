@@ -59,7 +59,8 @@ In GitHub → Actions → **Price collector (manual test)** → Run workflow:
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
-   or overrides backend supplier cadence.
+   or overrides the backend's supplier list. Every enabled supplier with a collection route is in
+   every run's work, however recently it was checked.
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.
@@ -67,13 +68,77 @@ In GitHub → Actions → **Price collector (manual test)** → Run workflow:
 
 The sample allows at most **12 Apify calls**, at most **5 returned items** per call (Dromb still 1),
 and **1 internal page**. Claude runs with at most **40 turns**, a **US$1 Claude budget**, and a
-**14-minute internal deadline** (16-minute workflow step). The job has 45 minutes, and finalisation
-has its own 15-minute step. Supplier calls can cost money even if no matching product is found.
+**14-minute internal deadline**. The Claude step's 100-minute timeout is only a backstop; the job has
+130 minutes, and finalisation has its own 15-minute step. Supplier calls can cost money even if no matching product is found.
 Incomplete searches remain `truncated`; a successful actor run alone is not proof of completeness.
+
+The summary also says how many turns Claude took and its result subtype, and one line per tool
+with how many calls the hook allowed and denied and the fixed reason codes (for example
+`write-wrong-run`, `not-own-dataset`, `not-recorded-string`). An Apify call that fails is counted
+with a fixed failure label (`failed-input`, `failed-auth`, `failed-limit`, `failed-rate-limit`,
+`failed-not-found`, `failed-timeout`, `failed-interrupt` or `failed-other`).
+
+A row's stock answer never drops it (owner decision, 1 November 2026): `stockStatus` is optional in
+`output.schema.json`, and `submit-results.mjs` submits a missing, `null` or unrecognised value as
+`unknown`, because suppliers' stock signals are unreliable and ALDI's Varnmill results carry none.
+The BIG W name search forces `maxReviewsPerProduct: 1` (the actor's minimum; 0 is refused as invalid
+input) with `includeReviews: false`, so no reviews are fetched.
+
+Claude never writes a row's observation time (owner decision, 1 November 2026): it has no clock, and
+in run 41259875824 it dated JB Metro rows after the submission, so the API refused them as
+`observed in the future`. `submit-results.mjs` sets every row's `observedAtUtc` to the time Claude
+wrote that search's file (its modification time, kept when the workflow copies it for submission),
+replacing any value in the file. Each run reads prices live, so that is the reading's time.
+
+### Run log
+
+The owner decided on 31 October 2026 that a run must not be a black box: the run is logged in
+full even though this repository's Actions logs are public. Each run shows:
+
+- **Job summary**: the submission output (every outcome count and every reason the API gave,
+  word for word, plus any submission error) and a **Searches** list: for each search, the product
+  and supplier, the outcome Claude reported (or that it wrote no file), and every row it wrote
+  (title, supplier product id, price, pack, stock, link) with what the API did with that row and why.
+- **Finalise step log**: the same, plus every tool call in order: its input as the guard allowed it,
+  the hook's decision, and the tool's answer or error, shortened to 600 characters each; and for each
+  Claude session, what Claude said at the end.
+- **`price-collector-logs` artifact** (kept 7 days): `trace.jsonl` (every call, answer and failure in
+  full, up to 20,000 characters per field), `claude-session-<n>.jsonl` (each Claude session's whole
+  stream-json transcript), `issued-work.json` (the whole work list the API issued), `result-files/`
+  (exactly what Claude wrote), `submission.json` (every API decision) and `summary.md`.
+
+Credentials are never logged: every value of the Claude and Apify keys, the API token and the GitHub
+tokens the step holds is masked, and so is any bearer token, JWT, `apify_api_` or `sk-ant-` value,
+before a line reaches a log file. On a public repository anyone signed in to GitHub can download the
+artifact, so treat it as public.
 
 Review the counts/statuses in the Actions summary, then inspect proposed listings, pending prices
 and match decisions through the test API's Super Admin pages. Confirm pack size, variant, tax basis
 and currency there. No observed supplier price changes purchases, GST accounting or inventory.
+
+## Full (production-sized) run
+
+Tick **full_run** to see what a real run costs before any schedule is enabled. It is still manual
+and still refuses the production API. It ignores **sample_size**, keeps the production limits in
+`apify-limits.json` (up to 600 actor calls, full page sizes and up to 3 pages per search) and gives
+Claude every issued search, at most 90, in batches of about 6. Each batch is a fresh Claude session
+with 60 turns and a US$1 budget, so no session's context grows with the whole catalogue and Claude
+can spend at most US$15 in one run. One product's searches always stay in the same batch, because its
+match file can be written only once. The whole Claude phase has 90 minutes; the run stops at the
+first batch that does not complete, and every search no batch reached becomes `not_searched`.
+Tick **include_verified_retailers** too, or Kmart and BIG W searches become `not_searched`.
+JB Metro (not an Apify actor) reads up to 5 pages of 20 products per search in a full run, with 2
+attempts of 15 seconds per page; a sample reads one page of 5 with one attempt. The guard appends
+these caps to every JB Metro call, so Claude cannot widen them.
+
+The summary adds `Claude batches: N of M`, and Claude's cost and turns are totals across batches
+(unknown if any batch did not report them). Apify spend is limited only by the Apify account usage
+limit, so check it is set before a full run.
+
+When a result file fails validation, the summary shows `skipped <work item>.json: field <path>`
+(for example `field file.rows[2].packQuantity`), or `a file-level rule`, never the value or the
+validator's message. One skipped file marks the submission failed, but every other file is still
+submitted and the run is still completed.
 
 ## Interruption run and cost evidence
 
@@ -90,13 +155,12 @@ Record the run link, search outcomes, counts, duration and actual Apify spend pe
 Apify Console. The Actions summary includes Claude's reported USD cost when available, never a
 guessed Apify cost. An interrupted CLI may not emit its final cost record; inspect Claude Console
 for that run's usage. Build the 71-product monthly estimate from representative actual supplier
-searches and their cadence, not one generic multiplier. Public evidence must contain only counts,
-statuses, duration and spend, not product names, prices, raw output or credentials.
+searches and their cadence, not one generic multiplier. Evidence may name products, queries and
+prices (see [Run log](#run-log)), never credentials.
 
-The workflow does not upload result files or transcripts. It captures CLI output privately,
-publishes only allowlisted counters, and deletes temporary state, CLI files and output in an
-`always()` cleanup step. A hard runner loss can skip cleanup; verified ephemeral/reset runners are
-still required in self-hosted mode. Do not add debug logging or attach the private directory to a PR.
+The workflow uploads the masked run log described above, then deletes temporary state, CLI files and
+output in an `always()` cleanup step. A hard runner loss can skip cleanup; verified ephemeral/reset
+runners are still required in self-hosted mode.
 
 ## Implementation and checks
 
