@@ -296,6 +296,24 @@ export class SiteMachinePerformanceComponent {
     return `${group.label} machines`;
   }
 
+  /**
+   * The structural cue that marks a machine row - or an empty group's own "no machines" line -
+   * as the child of the row above it (issue #1014): a site's own row, or the "Other machines"
+   * heading. It is a left rule plus a fixed indent, built from existing tokens, so the
+   * relationship is never carried by background tint alone, and it reuses
+   * {@link isCollapsible} because that is exactly the groups with a heading row to hang a child
+   * presentation from: the one unheaded fallback group - no site was available at all - has
+   * none, so it keeps no indent or rule, same as before.
+   */
+  childRowIndentClass(group: SiteMachineGroup): string {
+    return this.isCollapsible(group) ? 'ml-10 border-l-2 border-rr-line pl-4' : '';
+  }
+
+  /** The same child presentation as {@link childRowIndentClass}, sized for the narrow card layout. */
+  childCardIndentClass(group: SiteMachineGroup): string {
+    return this.isCollapsible(group) ? 'ml-4 border-l-2 border-rr-line pl-3' : '';
+  }
+
   /** The id of the row group one site's machines are in, which its expander controls. */
   rowsRegionId(group: SiteMachineGroup): string {
     return `site-machines-${group.key}`;

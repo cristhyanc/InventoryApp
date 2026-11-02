@@ -9385,7 +9385,11 @@ sites. Sites start expanded; `collapsedKeys` remembers what the reader *closed*,
 arrives in a later read starts expanded and a refresh returning the same site ids keeps exactly the
 groups that were closed. Each group's machines are their own `tbody` (and `ul` on a narrow screen)
 whose `id` the expander's `aria-controls` names; collapsing renders no row at all, so a collapsed
-group exposes no focusable descendant.
+group exposes no focusable descendant. Since issue #1014 a machine row is indented well clear of its
+site's name and set off with a left rule (`childRowIndentClass`/`childCardIndentClass`, built from
+the `rr-line` token), rather than the site tint alone marking the relationship; "Other machines" gets
+the same treatment under its own heading, and the one unheaded fallback group - no site was available
+at all - is not `isCollapsible`, so it keeps neither indent nor rule.
 
 **One set of columns, one period.** Site and machine rows share Site / machine, Stock, Low / empty,
 the selected period's sales, the applicable comparison and Actions. One `<fieldset>` of Today / This
