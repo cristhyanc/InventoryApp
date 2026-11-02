@@ -6,6 +6,7 @@ import { trendClass, trendLabel } from '../../../formatting/revenue-trend';
 import { siteStockClass, stockPercentageClass } from '../../../formatting/site-stock-status';
 import { Machine, Site, SiteMachineStock } from '../../../models/models';
 import { money } from '../../reports/report-formatting';
+import { HelpToggletipComponent } from '../../shared/help-toggletip/help-toggletip.component';
 import { IconComponent } from '../../shared/icon.component';
 
 /**
@@ -148,7 +149,7 @@ export function groupSitesAndMachines(
 @Component({
   selector: 'app-site-machine-performance',
   standalone: true,
-  imports: [CommonModule, RouterLink, IconComponent],
+  imports: [CommonModule, RouterLink, IconComponent, HelpToggletipComponent],
   templateUrl: './site-machine-performance.component.html'
 })
 export class SiteMachinePerformanceComponent {
@@ -182,14 +183,22 @@ export class SiteMachinePerformanceComponent {
     { id: 'monthToDate', label: 'Month to date' }
   ];
 
+  /** The accessible name of the title's help button; it has to say what the panel explains. */
+  readonly figuresHelpLabel = 'About these figures';
+
   /**
-   * Said once in the card, in the same place it has always been said (moving it into a tooltip is
-   * issue #1015). Since issues #1013 and #1019 a machine row carries its **own** stock level and
-   * its **own** low and empty counts, so the note describes both and names the one case they are
-   * missing for - "Other machines", which the sites read does not cover. It no longer says machine
-   * counts are unavailable, and it states the one thing a reader could otherwise take for an error:
-   * a site counts each product once over its machines' combined stock, so its counts need not add
-   * up from its machines'.
+   * Said once in the card, and since issue #1015 behind the one help button beside the card title
+   * rather than in a full-width row above the table. It is held here as the card's single
+   * explanation string, so a later change to what the figures mean edits one place.
+   *
+   * Since issues #1013 and #1019 a machine row carries its **own** stock level and its **own** low
+   * and empty counts, so it describes both and names the one case they are missing for - "Other
+   * machines", which the sites read does not cover. It no longer says machine counts are
+   * unavailable, and it states the one thing a reader could otherwise take for an error: a site
+   * counts each product once over its machines' combined stock, so its counts need not add up from
+   * its machines'. The period note the card used to carry beside it is gone: since issue #1012
+   * `GET api/sites` publishes every period, so there is nothing left to explain about one, and the
+   * card has no financial-only sentence to show a role with `Dashboard.ViewFinancials`.
    */
   readonly machineStockNote =
     `Each machine row shows its own stock level and its own low and empty counts, from the same site ` +
@@ -232,6 +241,16 @@ export class SiteMachinePerformanceComponent {
   /** Whether there is a hierarchy to render at all: a site, or a machine, was read. */
   get hasRows(): boolean {
     return this.sites.length > 0 || this.machines.length > 0;
+  }
+
+  /**
+   * Whether the title's help button is there at all (issue #1015). It is exactly the condition the
+   * explanation row it replaced was rendered under - rows to explain, and not the card's own
+   * loading state - so loading, a failed read and an empty read offer no help about figures that
+   * are not on screen, and the states themselves are untouched.
+   */
+  get isFiguresHelpShown(): boolean {
+    return !this.isLoading && this.hasRows;
   }
 
   get isSitesEmpty(): boolean {

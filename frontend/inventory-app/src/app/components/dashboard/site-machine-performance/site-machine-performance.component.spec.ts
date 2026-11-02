@@ -175,6 +175,29 @@ function totals(host: HTMLElement): string {
   return table(host).querySelector('tfoot')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
 }
 
+/**
+ * The card title's one help button (issue #1015). It is found by the accessible name the criterion
+ * names rather than by a test id, because that name is what a reader actually hears.
+ */
+function helpButton(host: HTMLElement): HTMLButtonElement | null {
+  return host.querySelector<HTMLButtonElement>('button[aria-label="About these figures"]');
+}
+
+function helpPanel(host: HTMLElement): HTMLElement | null {
+  return host.querySelector<HTMLElement>('[data-testid="help-toggletip-panel"]');
+}
+
+/** Opens the title help panel the way a reader does - by pressing the button - and returns it. */
+function openHelp(fixture: ComponentFixture<SiteMachinePerformanceComponent>, host: HTMLElement): HTMLElement {
+  (helpButton(host) as HTMLButtonElement).click();
+  fixture.detectChanges();
+  return helpPanel(host) as HTMLElement;
+}
+
+function press(key: string, target: EventTarget): void {
+  target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+}
+
 describe('groupSitesAndMachines (issue #987)', () => {
   it('lists every site in the site order with its own machines, then the rest under Other machines', () => {
     const groups = groupSitesAndMachines([HARBOUR, PAVILLION], FLEET);
@@ -381,11 +404,17 @@ describe('Site and machine performance shared period controls (issue #987)', () 
     expect(siteRow().textContent).not.toContain('$0.00');
   });
 
-  it('no longer says a site publishes only some of the periods', async () => {
-    const { host } = await render();
+  /**
+   * Issue #1012 removed the period note itself; issue #1015 moved what explanations the card still
+   * has into the title help panel, so the claim must be gone from there too rather than reappear
+   * behind the button.
+   */
+  it('no longer says a site publishes only some of the periods, in the card or in its help panel', async () => {
+    const { fixture, host } = await render();
 
     expect(host.querySelector('[data-testid="site-period-note"]')).toBeNull();
     expect(host.textContent).not.toContain('Not published for sites');
+    expect(openHelp(fixture, host).textContent).not.toContain('Not published for sites');
   });
 
   it('keeps "vs same time last week" to the week comparison the API actually publishes', async () => {
@@ -530,9 +559,10 @@ describe('Site and machine performance machine stock (issue #1013)', () => {
     expect(machineStockCell(host, 'site-2', 4).querySelector<HTMLElement>('[data-testid="machine-stock-bar-4"]')?.style.width).toBe('100%');
   });
 
-  it("describes the machine figure and the Other machines exception in the card's note", async () => {
-    const { host } = await render();
-    const note = host.querySelector('[data-testid="machine-stock-note"]')?.textContent ?? '';
+  // Since issue #1015 the explanation is in the title help panel rather than in a row of its own.
+  it('describes the machine figure and the Other machines exception in the title help panel', async () => {
+    const { fixture, host } = await render();
+    const note = openHelp(fixture, host).textContent ?? '';
 
     expect(note).toContain('own stock');
     expect(note).toContain(OTHER_MACHINES_LABEL);
@@ -640,9 +670,10 @@ describe('Site and machine performance machine low and empty counts (issue #1019
     expect(machineLowEmptyCell(host, 'site-2', 1).textContent?.trim()).toBe('2 low · 1 empty');
   });
 
-  it('no longer says machine counts are unavailable in the card note', async () => {
-    const { host } = await render();
-    const note = host.querySelector('[data-testid="machine-stock-note"]')?.textContent ?? '';
+  // The same explanation, read where issue #1015 put it: the title help panel.
+  it('no longer says machine counts are unavailable in the title help panel', async () => {
+    const { fixture, host } = await render();
+    const note = openHelp(fixture, host).textContent ?? '';
 
     expect(note).toContain('own low and empty counts');
     expect(note).not.toContain('machine rows show those as unavailable');
@@ -819,6 +850,182 @@ describe('Site and machine performance without Dashboard.ViewFinancials (issue #
     expect(host.querySelector('[data-testid="site-stock-2"]')?.textContent).toContain('27%');
     expect(host.querySelector('[data-testid="site-products-2"]')?.getAttribute('href')).toBe('/sites/2/products');
     expect(host.querySelector('[data-testid="machine-details-501"]')?.getAttribute('href')).toBe('/machines/501');
+  });
+});
+
+/**
+ * The card's explanations behind one help button beside its title (issue #1015). The owner asked
+ * for a tooltip beside the words rather than two full-width rows above the table, so what is
+ * asserted here is that the rows are gone, that the one button names itself and reports the panel
+ * it controls, that the panel holds the card's own existing explanation, and that it opens and
+ * closes by pointer, by Enter/Space, by Escape with focus returned and by a click outside.
+ *
+ * The interaction itself belongs to the shared `HelpToggletipComponent` and has its own spec; what
+ * these cases cover is this card's use of it - the placement, the wording, the accessible name and
+ * when the button exists at all. The panel's placement and freedom from clipping are the platform's
+ * top layer and layout, which jsdom implements neither of, so they are proved in a real browser by
+ * `e2e/visual/dashboard-redesign.visual.ts`.
+ */
+describe('Site and machine performance title help (issue #1015)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows no explanation row, border or spacing between the header and the table', async () => {
+    const { host } = await render();
+    const body = host.querySelector('.card-body') as HTMLElement;
+
+    expect(host.querySelector('[data-testid="machine-stock-note"]')).toBeNull();
+    expect(body.querySelector('p.border-b')).toBeNull();
+    // With rows and no read state to report, the table wrapper is the first thing in the card body.
+    expect((body.firstElementChild as HTMLElement).querySelector('[data-testid="performance-table"]')).not.toBeNull();
+  });
+
+  it('puts one help button immediately after the card title and leaves the title text alone', async () => {
+    const { host } = await render();
+    const title = host.querySelector('#site-machine-performance-title') as HTMLElement;
+    const button = helpButton(host) as HTMLButtonElement;
+
+    // The section is named by this heading, so the button sits beside it rather than inside it.
+    expect(title.textContent?.trim()).toBe('Site and machine performance');
+    expect(title.querySelector('button')).toBeNull();
+    expect(title.nextElementSibling?.tagName.toLowerCase()).toBe('app-help-toggletip');
+    expect(button.closest('app-help-toggletip')).toBe(title.nextElementSibling);
+    expect(host.querySelectorAll('button[aria-label="About these figures"]')).toHaveLength(1);
+  });
+
+  it('reports the closed panel it controls, and adds no help button to a column heading', async () => {
+    const { host } = await render();
+    const button = helpButton(host) as HTMLButtonElement;
+
+    expect(button.getAttribute('type')).toBe('button');
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.getAttribute('aria-controls')).toMatch(/^help-toggletip-/);
+    expect(helpPanel(host)).toBeNull();
+    expect(table(host).querySelectorAll('thead app-help-toggletip')).toHaveLength(0);
+    expect(table(host).querySelectorAll('thead button')).toHaveLength(0);
+  });
+
+  it("opens the card's own explanation on click, and says that it is open", async () => {
+    const { fixture, host } = await render();
+    const button = helpButton(host) as HTMLButtonElement;
+    const panel = openHelp(fixture, host);
+
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(button.getAttribute('aria-controls')).toBe(panel.id);
+    expect(button.getAttribute('aria-describedby')).toBe(panel.id);
+    expect(panel.textContent).toContain('own stock level and its own low and empty counts');
+    expect(panel.textContent).toContain(OTHER_MACHINES_LABEL);
+  });
+
+  it('anchors the panel outside the card rather than in the flow above the table', async () => {
+    const { fixture, host } = await render();
+    const panel = openHelp(fixture, host);
+
+    // The top layer, not a z-index, is what keeps the overflow-hidden card from clipping it, and
+    // it is why no row of the table moves to make room. The rendered result is the browser's.
+    expect(panel.getAttribute('popover')).toBe('manual');
+    expect(Array.from(panel.classList)).toContain('fixed');
+    expect(panel.closest('.card-body')).toBeNull();
+    expect(panel.closest('table')).toBeNull();
+  });
+
+  it('toggles from the keyboard with Enter and with Space', async () => {
+    const { fixture, host } = await render();
+    const button = helpButton(host) as HTMLButtonElement;
+
+    for (const key of ['Enter', ' ']) {
+      press(key, button);
+      fixture.detectChanges();
+      expect(helpPanel(host)).not.toBeNull();
+
+      press(key, button);
+      fixture.detectChanges();
+      expect(helpPanel(host)).toBeNull();
+    }
+  });
+
+  it('opens on hover and lets go again when the pointer leaves', async () => {
+    const { fixture, host } = await render();
+    // `mouseenter`/`mouseleave` do not bubble; the toggletip answers them on the wrapper that holds
+    // both the button and the panel, so moving the pointer into the panel is not leaving it.
+    const wrapper = (helpButton(host) as HTMLButtonElement).parentElement as HTMLElement;
+
+    wrapper.dispatchEvent(new MouseEvent('mouseenter'));
+    fixture.detectChanges();
+    expect(helpPanel(host)?.textContent).toContain('own stock level');
+
+    wrapper.dispatchEvent(new MouseEvent('mouseleave'));
+    fixture.detectChanges();
+    expect(helpPanel(host)).toBeNull();
+  });
+
+  it('closes on Escape and returns focus to the button', async () => {
+    const { fixture, host } = await render();
+    const button = helpButton(host) as HTMLButtonElement;
+
+    button.focus();
+    openHelp(fixture, host);
+    press('Escape', document);
+    fixture.detectChanges();
+
+    expect(helpPanel(host)).toBeNull();
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('closes on a click outside it', async () => {
+    const { fixture, host } = await render();
+
+    openHelp(fixture, host);
+    (host.querySelector('#site-machine-performance-title') as HTMLElement).click();
+    fixture.detectChanges();
+
+    expect(helpPanel(host)).toBeNull();
+  });
+
+  /**
+   * The panel holds exactly the explanations the card itself holds, from its own constant, and the
+   * card has no financial-only sentence left to show: issue #1012 removed the period note when
+   * `GET api/sites` began publishing every period. So the panel reads the same for both roles, and
+   * says nothing about a period or a comparison being unavailable to either of them.
+   */
+  it('explains the same figures to a role without Dashboard.ViewFinancials', async () => {
+    const { fixture, host } = await render({ canViewFinancials: false });
+    const panel = openHelp(fixture, host);
+
+    expect(panel.textContent).toContain('own stock level and its own low and empty counts');
+    expect(panel.textContent).not.toContain('Not published for sites');
+    expect(panel.textContent).not.toContain('period');
+    expect(panel.textContent).not.toContain('comparison');
+  });
+
+  it('shows no help button while the card is loading, has failed, or is empty', async () => {
+    const loading = await render({ sites: [], machines: [], isLoadingSites: true, isLoadingMachines: true });
+    expect(helpButton(loading.host)).toBeNull();
+    expect(loading.host.querySelector('[data-testid="performance-loading"]')).not.toBeNull();
+    TestBed.resetTestingModule();
+
+    const empty = await render({ sites: [], machines: [] });
+    expect(helpButton(empty.host)).toBeNull();
+    expect(empty.host.textContent).toContain('No sites available yet');
+    expect(empty.host.textContent).toContain('No machines available yet');
+    TestBed.resetTestingModule();
+
+    const failed = await render({
+      sites: [],
+      machines: [],
+      sitesError: 'The Sites section could not be loaded.',
+      machinesError: 'The Machines section could not be loaded.'
+    });
+    expect(helpButton(failed.host)).toBeNull();
+    expect(failed.host.querySelector('[data-testid="sites-unavailable"]')).not.toBeNull();
+    expect(failed.host.querySelector('[data-testid="machines-unavailable"]')).not.toBeNull();
+  });
+
+  it('keeps the help button while one read failed and the other still has rows', async () => {
+    const { host } = await render({ sites: [], sitesError: 'The Sites section could not be loaded.' });
+
+    expect(helpButton(host)).not.toBeNull();
+    expect(host.querySelector('[data-testid="sites-unavailable"]')).not.toBeNull();
   });
 });
 

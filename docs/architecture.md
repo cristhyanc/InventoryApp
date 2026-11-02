@@ -9322,7 +9322,13 @@ Visual evidence at 360, 390, 768 and 1440px, with a no-horizontal-overflow asser
 `e2e/visual/dashboard-redesign.visual.ts`, written to `docs/screenshots/issue-972/`. Issue #987's
 collapsed-group, period-control and keyboard-focus captures are written beside them by the same run,
 and so are issue #1016's two help-panel captures (`reorder-supplier-help-1440px.png` and
-`reorder-supplier-help-360px.png`). Issue #1014's nesting is **measured** by that run rather than
+`reorder-supplier-help-360px.png`) and issue #1015's five (`performance-help-360px.png`,
+`-390px`, `-768px`, `-1440px` and `performance-help-focus-1440px.png`). Issue #1015's run is a
+measurement as well as a capture: at each of the four widths it measures that the help button sits
+on the *last line* of the title and 4px after its last word - which is what tells "beside the words"
+apart from "at the far end of the header" once the title wraps - and that the open panel does not
+cover its trigger, stays wholly inside the viewport, is the element hit-tested over its whole extent
+(the top layer, not a `z-index`) and leaves the table's box exactly where it was. Issue #1014's nesting is **measured** by that run rather than
 inferred from the Tailwind values, because where a machine name starts compared with its site's name
 is a layout outcome and no class assertion in jsdom can stand in for it: at 1440px it measures every
 machine name's left edge against its site's (at least the 1.5rem the issue asks for), that the
@@ -9433,10 +9439,11 @@ same published entry the percentage comes from, and the column states them in th
 `3 low · 1 empty` wording or reports them unavailable for a machine that read does not cover - never
 a `0 low · 0 empty` nothing published, and never the site's counts repeated (see
 [Per-machine low and empty counts on the site read](#per-machine-low-and-empty-counts-on-the-site-read-issue-1019)).
-`machineStockNote` - in its existing place; moving it into a tooltip is issue #1015 - describes both
-columns, no longer says machine counts are unavailable, and states the one thing a reader could
-otherwise take for an error: a site counts each product once across its machines, so its counts need
-not equal the sum of its machines'. Site and machine badges read one set of
+`machineStockNote` describes both columns, no longer says machine counts are unavailable, and
+states the one thing a reader could otherwise take for an error: a site counts each product once
+across its machines, so its counts need not equal the sum of its machines'. Since issue #1015 it is
+the card's one explanation string and is read from the help button beside the card title rather
+than from a row above the table (see **The title help button** below). Site and machine badges read one set of
 thresholds, `stockPercentageClass` (which `siteStockClass` now delegates to), and both write the
 level in words beside the number (Critically low / Low / Well stocked), so the state is never
 carried by colour alone and a machine row's colours cannot drift from the site row's above it. The
@@ -9454,6 +9461,32 @@ otherwise. The pre-existing inconsistency #972 reported is carried across unchan
 fixed here (a comparison change is out of scope): the fleet total's week comparison falls back to a
 machine's full `lastWeekGrossRevenue` when its `previousComparableWeekGrossRevenue` is `null`,
 mixing a full week into a part-week comparison.
+
+**The title help button (issue #1015).** The owner reviewed the card on 31 October 2026 and asked
+for the explanations beside the title rather than as full-width rows between the header and the
+table. The card therefore renders one
+[shared help toggletip](#shared-help-toggletip-issues-1015-and-1016) immediately after the words
+"Site and machine performance", named "About these figures" (`figuresHelpLabel`), holding
+`machineStockNote` - the card's one explanation string, so a later change to what the figures mean
+edits one place. There is nothing role-specific left to show: issue #1012 removed the period note
+when `GET api/sites` began publishing every period, so the panel reads the same with and without
+`Dashboard.ViewFinancials`, and the former `machine-stock-note` and `site-period-note` rows, their
+borders and their spacing are gone from both layouts.
+
+The button is a **sibling** of the `<h2>`, never a child, because the section is labelled by that
+heading (`aria-labelledby="site-machine-performance-title"`): anything inside it would join the
+section's accessible name. The heading is laid out `inline` so the button follows the last *word*
+rather than the heading's box, and the pair `pr-7` on the heading with `-ml-6` on the toggletip
+reserves the button's width at the end of the heading's inline box, so the browser breaks the
+title's line as though the button belonged to it - without it the words fill a 360px line exactly
+and the button alone wraps beneath them. The button exists only while `isFiguresHelpShown`, which is
+exactly the condition the row it replaced was rendered under (rows to explain, and not the card's
+own loading state), so loading, a failed read with nothing to show and an empty read offer no help
+about figures that are not on screen. Everything else - `aria-expanded`, `aria-controls`, pointer,
+Enter, Space, Escape with focus returned, outside click and the top-layer panel - is the shared
+component's, unchanged. The placement, the top layer and the untouched table are measured in a real
+browser by `e2e/visual/dashboard-redesign.visual.ts`, because jsdom implements neither layout nor a
+top layer.
 
 **Independent read states.** The sites and the machines are still two reads with two states. The
 card shows its skeleton only while **both** are outstanding; after that each contributes its own
