@@ -9283,7 +9283,12 @@ renders it as five parts:
    sentence behind one `HelpToggletipComponent` (see [Shared help toggletip](#shared-help-toggletip-issues-1015-and-1016))
    beside the **Cheapest supplier** heading and beside the same label on each narrow-screen card,
    with `CHEAPEST_SUPPLIER_HELP` held once on the component so the two cannot drift apart, and it is
-   rendered only while the list has rows.
+   rendered only while the list has rows. **Storage after refill** (issue #1020) is
+   `quantityInStock - machineReplenishmentNeed`, computed in the browser from the two figures the
+   row already carries - never a second reorder formula - and shown immediately after
+   **Machine need** on both the desktop table and the narrow-screen cards; it may be negative (a
+   shortfall, styled `value-negative`) and, like Machine need, is withheld in storage-only mode
+   because that mode's machine need is an unread `0` and the subtraction would be misleading.
 
 Financial gating (`canViewFinancials`), provider-optional rendering (`isLiveFleetShown`,
 `isProviderUsable`), the support-session behaviour and the business-timezone date rules (#499) are

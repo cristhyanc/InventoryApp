@@ -643,8 +643,10 @@ changed, and every "Unavailable" still means unavailable, never zero.
   starts on page 1. Turning a page only changes which of the products already read are shown; it
   sends no request, and the phone card list turns with the table. The link naming how many there
   really are ("View all 7 products needing ordering") still goes to Products →
-  Needs Ordering. Its columns are product, storage stock, machine need, need to order, the last and
-  cheapest purchase, and **Cheapest supplier** (issue #981). Last and cheapest purchase are
+  Needs Ordering. Its columns are product, storage stock, machine need, **storage after refill**
+  (issue #1020) - storage stock minus machine need, which can be negative - need to order, the last
+  and cheapest purchase, and **Cheapest supplier** (issue #981). Storage after refill is hidden
+  whenever machine need was not read, exactly like the machine need column it is derived from. Last and cheapest purchase are
   **historical costs from your own purchases**; Cheapest supplier is the lowest price your own
   suppliers **currently list** per unit - observed prices for purchasing guidance, not costs you have
   paid. That last explanation is behind a small help button beside the **Cheapest supplier** heading,
@@ -2783,7 +2785,8 @@ storage-management dashboard, and it says what the business has rather than what
 - **The storage-only figures say so.** The "Needs ordering" card and the reorder-alert list each
   carry a label — "Storage stock only: these figures do not include the machines' current
   replenishment need, because Nayax is not connected" — and the list drops its "Machine need"
-  column, whose values would otherwise be a column of zeroes stating that the machines need nothing.
+  column, whose values would otherwise be a column of zeroes stating that the machines need nothing,
+  and the "Storage after refill" column derived from it (issue #1020).
   The label is shown for an **empty** list too, because "nothing needs ordering" means something
   different when the machines were never read.
 - **No sales synchronization is attempted, and no sync warning is shown.** `POST

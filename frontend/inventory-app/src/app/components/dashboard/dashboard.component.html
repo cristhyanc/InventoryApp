@@ -348,6 +348,7 @@
                 <th scope="col" class="table-cell">Storage stock</th>
                 @if (isMachineNeedShownInReorderAlerts) {
                   <th scope="col" class="table-cell">Machine need</th>
+                  <th scope="col" class="table-cell">Storage after refill</th>
                 }
                 <th scope="col" class="table-cell">Need to Order</th>
                 @if (arePurchaseCostColumnsShown) {
@@ -367,6 +368,7 @@
                   <td class="table-cell"><span class="badge" [ngClass]="storageStockClass(p)">{{ p.quantityInStock }}</span></td>
                   @if (isMachineNeedShownInReorderAlerts) {
                     <td class="table-cell">{{ p.machineReplenishmentNeed }}</td>
+                    <td class="table-cell" [ngClass]="storageAfterRefillClass(p)">{{ storageAfterRefillDisplay(p) }}</td>
                   }
                   <td class="table-cell">
                     <span class="value-negative font-semibold">{{ p.needToOrder }}</span>
@@ -411,6 +413,10 @@
                   <div>
                     <dt class="text-xs text-rr-muted">Machine need</dt>
                     <dd class="m-0 font-semibold">{{ p.machineReplenishmentNeed }} units</dd>
+                  </div>
+                  <div>
+                    <dt class="text-xs text-rr-muted">Storage after refill</dt>
+                    <dd class="m-0 font-semibold" [ngClass]="storageAfterRefillClass(p)">{{ storageAfterRefillDisplay(p) }} units</dd>
                   </div>
                 }
                 @if (p.onOrderQuantity > 0) {
