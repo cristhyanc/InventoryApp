@@ -171,7 +171,11 @@
                           unheaded fallback group - no site was available at all - is not
                           `isCollapsible`, so its machines keep no indent or rule.
                         -->
-                        <div class="flex min-w-0 items-start gap-2" [ngClass]="childRowIndentClass(group)">
+                        <div
+                          class="flex min-w-0 items-start gap-2"
+                          [attr.data-testid]="'machine-row-indent-' + machine.machineID"
+                          [ngClass]="childRowIndentClass(group)"
+                        >
                           @if (machine.localMachineId != null) {
                             <a
                               class="table-row-anchor break-words"
