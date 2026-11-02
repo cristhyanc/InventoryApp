@@ -74,6 +74,11 @@ public class ProductsControllerTests
             new GetProductPriceTracking(trackingStore),
             new SetProductPriceTracking(trackingStore, new SystemClock()),
             new ListTrackedProducts(trackingStore),
+            // The business lookup of the shared master products (issue #1049). Its own behaviour is
+            // relational and is asserted over the real pipeline in MasterProductSuggestionApiTests
+            // and over the real migration history in MasterProductSuggestionStoreTests; these tests
+            // construct it only because the controller needs it.
+            new SuggestMasterProducts(new EfMasterProductSuggestionStore(db)),
             // An Owner, so the catalogue actions answer the full response; the role-dependent shape
             // itself is MachineAndProductFinancialRedactionApiTests, through the real pipeline.
             new CurrentCapabilities(

@@ -255,6 +255,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateMasterProduct>();
         services.AddScoped<UpdateMasterProduct>();
 
+        // And the business lookup of the same catalogue (issue #1049): the bounded, searchable read a
+        // member who may create products makes to find the product they are adding, with the Name and
+        // unit label to fill the form in with. Scoped like every use case here. It is a different
+        // surface from the two above and not a widening of them - it publishes the reviewed
+        // member-facing field set and reads one platform table, so no business's data is reachable
+        // through it in either direction.
+        services.AddScoped<SuggestMasterProducts>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed

@@ -302,6 +302,15 @@ public static class InfrastructureServiceCollectionExtensions
         // above. See EfMasterProductCatalogueWriteStore and docs/architecture.md § Super Admin master
         // products.
         services.AddScoped<IMasterProductCatalogueWriteStore, EfMasterProductCatalogueWriteStore>();
+        // And the business lookup of the same master products (issue #1049): the one read a member
+        // makes of them, behind the ordinary business endpoint authorization. One statement over one
+        // platform table and five columns of it - no listing, no price, no mapping, no product and no
+        // business - so it writes nothing, takes no lease and makes no IgnoreQueryFilters statement,
+        // and it answers the same catalogue under a business scope as under a denied one because a
+        // platform table has no filter to apply. Scoped on the request's own context like every
+        // adapter above. See EfMasterProductSuggestionStore and docs/architecture.md § Tenant
+        // ownership.
+        services.AddScoped<IMasterProductSuggestionStore, EfMasterProductSuggestionStore>();
         // The cheapest-supplier summary (issue #930): the read behind the Cheapest supplier column.
         // It reaches the platform catalogue only through the caller's own matched mappings and the
         // supplier records the caller holds a copy of, on the request's own scoped context like the
