@@ -386,7 +386,7 @@ function measureHelpButtonPlacement(page: Page): Promise<{ onTitleLastLine: bool
     const text = document.createRange();
     text.selectNodeContents(heading);
     const lines = Array.from(text.getClientRects());
-    const lastLine = lines[lines.length - 1];
+    const lastLine = lines.at(-1)!;
     const box = button.getBoundingClientRect();
 
     return {
