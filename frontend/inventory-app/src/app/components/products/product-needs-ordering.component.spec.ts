@@ -1317,3 +1317,117 @@ describe('ProductNeedsOrderingComponent Mark as ordered in the toolbar (issue #8
     expect(Array.from(filterCard.classList)).toContain('mb-6');
   });
 });
+
+/**
+ * The Stock column displays only the quantity, not the unit label (issue #1068). The product's
+ * unit field remains stored and editable; it is just not shown in this column.
+ */
+describe('ProductNeedsOrderingComponent Stock column rendering (issue #1068)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(products: Product[] = []) {
+    await TestBed.configureTestingModule({
+      imports: [ProductNeedsOrderingComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: ProductService,
+          useValue: {
+            getLowStock: () => of({ products, mode: 'MachineAware', machineNeedUnavailableReason: null })
+          }
+        },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierOrderService, useValue: { create: jest.fn(() => of(undefined)) } },
+        { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+        { provide: CheapestSupplierService, useValue: { getSummary: () => of(noCheapestSuppliers) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductNeedsOrderingComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  }
+
+  it('renders only the quantity in the Stock cell, without the unit label, for a positive quantity', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Widget',
+        quantityInStock: 12,
+        unit: 'cans',
+        isActive: true,
+        isReorderAlert: false
+      })
+    ]);
+
+    const stockCell = host.querySelector('tbody tr td:nth-child(4)') as HTMLTableCellElement;
+    expect(stockCell.textContent?.trim()).toBe('12');
+    expect(stockCell.textContent).not.toContain('cans');
+  });
+
+  it('renders zero quantity without a unit label in the Stock cell', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Widget',
+        quantityInStock: 0,
+        unit: 'ea',
+        isActive: true,
+        isReorderAlert: false
+      })
+    ]);
+
+    const stockCell = host.querySelector('tbody tr td:nth-child(4)') as HTMLTableCellElement;
+    expect(stockCell.textContent?.trim()).toBe('0');
+    expect(stockCell.textContent).not.toContain('ea');
+  });
+
+  it('renders negative quantity without a unit label in the Stock cell', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Widget',
+        quantityInStock: -5,
+        unit: 'bag',
+        isActive: true,
+        isReorderAlert: false
+      })
+    ]);
+
+    const stockCell = host.querySelector('tbody tr td:nth-child(4)') as HTMLTableCellElement;
+    expect(stockCell.textContent?.trim()).toBe('-5');
+    expect(stockCell.textContent).not.toContain('bag');
+  });
+
+  it('preserves badge color classes based on active/reorder-alert state, independent of the unit removal', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Active-NoAlert',
+        quantityInStock: 20,
+        unit: 'ea',
+        isActive: true,
+        isReorderAlert: false
+      }),
+      product({
+        id: 2,
+        name: 'Active-WithAlert',
+        quantityInStock: 2,
+        unit: 'unit',
+        isActive: true,
+        isReorderAlert: true
+      })
+    ]);
+
+    const stockCells = Array.from(host.querySelectorAll('tbody tr td:nth-child(4)')) as HTMLTableCellElement[];
+    expect(stockCells).toHaveLength(2);
+
+    const badges = stockCells.map((cell) => cell.querySelector('.badge'));
+    expect(badges[0]?.classList.contains('badge-success')).toBe(true);
+    expect(badges[1]?.classList.contains('badge-danger')).toBe(true);
+  });
+});
