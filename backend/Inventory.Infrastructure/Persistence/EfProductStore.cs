@@ -1,6 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Products;
 using Inventory.Domain.Gst;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Products;
 using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
@@ -56,6 +57,15 @@ public sealed class EfProductStore : IProductStore
     /// exactly what AGENTS.md § Inventory and historical costing invariants forbids. Now nothing at
     /// all is committed unless all three succeed; disposing the transaction without the commit rolls
     /// the product back with them.</para>
+    ///
+    /// <para><strong>Since issue #1051 a fourth write can join them: the price-tracking mapping of a
+    /// product created from a master product suggestion</strong> (see
+    /// <see cref="SelectedMasterProductLink"/>). It is the same transaction for the same reason - a
+    /// product the operator asked to be linked and tracked is not half created - and the transaction
+    /// is now <see cref="SqliteWriteLockTransaction"/>'s <c>BEGIN IMMEDIATE</c> so the master product
+    /// the link rests on is read with the write lock already held, rather than one statement before
+    /// it. For a create carrying no selection that is the only difference: the same four refusals, the
+    /// same rows, the same single commit.</para>
     /// </summary>
     public async Task<ProductWriteAttempt> CreateAsync(
         ProductCreateFields fields, CancellationToken cancellationToken)
@@ -72,12 +82,29 @@ public sealed class EfProductStore : IProductStore
         if (ProductCataloguePolicy.NormalizeUnit(fields.Unit) is not { } unit)
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.UnitRequiredMessage);
 
-        await using var transaction = _db.Database.IsRelational()
-            ? await _db.Database.BeginTransactionAsync(cancellationToken)
-            : null;
+        // BEGIN IMMEDIATE: the write lock is taken when the transaction opens, before the reads a
+        // master product link is decided from (issue #1051). An InMemory provider gets no transaction
+        // at all, exactly as this method's own BeginTransactionAsync did.
+        await using var transaction = await SqliteWriteLockTransaction
+            .BeginAsync(_db, cancellationToken);
 
         if (!await CategoryIsOwnedAsync(fields.CategoryId, cancellationToken))
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.UnknownCategoryMessage);
+
+        // The selected master product is resolved before anything is inserted, so a conflict leaves
+        // nothing to roll back: the operator asked for a linked product, and a product with no link
+        // is not the one they asked for. The opt-out is the Domain's answer, not this adapter's - with
+        // "track supplier prices" off there is no selection to resolve and no catalogue read at all.
+        SelectedMasterProductLink.ResolvedLink? link = null;
+        if (MasterProductSelectionPolicy.SelectedMasterProductId(
+            fields.SelectedMasterProductId,
+            fields.TrackSupplierPrices) is { } selectedMasterProductId)
+        {
+            link = await SelectedMasterProductLink.ResolveAsync(
+                _db, selectedMasterProductId, name, unit, cancellationToken);
+
+            if (link.Refusal is { } conflict) return conflict;
+        }
 
         var product = new Product
         {
@@ -119,7 +146,16 @@ public sealed class EfProductStore : IProductStore
             }
         }
 
-        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        if (link is not null)
+        {
+            // One Matched mapping naming the master product the operator created this product from,
+            // with the search text the tracking switch itself would have captured. Nothing shared is
+            // written: the master product, the suggestions and the supplier listings were read only.
+            SelectedMasterProductLink.Add(_db, product.Id, link, product.CreatedAt);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
         return ProductWriteAttempt.Succeeded(product.Id);
     }
 

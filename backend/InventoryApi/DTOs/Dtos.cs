@@ -35,6 +35,18 @@ namespace InventoryApi.DTOs;
 /// <c>null</c> - but a null, empty or whitespace value is refused with <c>400</c> and
 /// <c>Inventory.Domain.Products.ProductCataloguePolicy.UnitRequiredMessage</c>, and nothing is
 /// stored. An accepted label is stored trimmed. The length and type limits are unchanged.</para>
+///
+/// <para><strong>Since issue #1051 it may also carry the master product suggestion the operator
+/// created the product from</strong> (parent #817). Both values are optional and a client that sends
+/// neither - every client that existed before - gets exactly the create it always did:
+/// <c>selectedMasterProductId</c> is the key <c>GET api/products/master-product-suggestions</c>
+/// published (issue #1049), and <c>trackSupplierPrices</c> defaults to <see langword="true"/> when a
+/// selection is sent, because the link <em>is</em> the tracking row. The server believes the
+/// selection only while <see cref="Name"/> and <see cref="Unit"/> are still the two values it
+/// recomputes from that master product; otherwise the whole create is refused <c>409</c> with a
+/// stable code (<c>master_product_unavailable</c>, <c>master_product_changed</c> or
+/// <c>master_product_refused</c>) and nothing is stored. A <c>trackSupplierPrices</c> of
+/// <see langword="false"/> ignores the selection and creates the product unlinked and untracked.</para>
 /// </summary>
 public record ProductCreateDto(
     string Name,
@@ -46,7 +58,9 @@ public record ProductCreateDto(
     string? Unit,
     long? CategoryId,
     bool IsActive,
-    decimal? InitialUnitCost = null
+    decimal? InitialUnitCost = null,
+    long? SelectedMasterProductId = null,
+    bool? TrackSupplierPrices = null
 );
 
 /// <summary>
