@@ -1945,6 +1945,24 @@ does not manage.
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **Create a product from a catalogue suggestion, and have its supplier prices tracked from the
+  start** (issue #1051). `POST /api/products` takes two optional extras: `selectedMasterProductId` —
+  one of the shared catalogue products the lookup `GET /api/products/master-product-suggestions`
+  answered (issue #1049) — and `trackSupplierPrices`, which is `true` unless you say otherwise. With
+  a selection the server creates the product **and** records that it is that catalogue product, so
+  its supplier prices are tracked straight away without waiting for the matcher or a Super Admin:
+  the product's **Track supplier prices** panel shows it as **Matched**, naming the catalogue
+  product. `trackSupplierPrices: false` is the opt-out — the selection is ignored and you get the
+  ordinary unlinked, untracked product, because the link *is* the tracking request.
+  **The Name and the unit label have to be the ones the suggestion filled in.** The server recomputes
+  them from the catalogue product as it stands at that moment and links only when what you submitted
+  still matches, apart from spacing and capitals. If it does not, nothing is created at all and the
+  create is refused with `409` and a code to act on: `master_product_unavailable` (the catalogue
+  product is gone), `master_product_changed` (you edited the Name or unit label, or the catalogue was
+  corrected since you looked it up) or `master_product_refused` (a Super Admin has ruled that pairing
+  out). Choose the product again to fill both values in afresh, or create the product with no
+  selection. A request that sends neither extra behaves exactly as it always did. The **New Product**
+  form that offers the picker is issue #1052; this is the API behind it.
 - **Unit Label is required** (issue #895). It is what a quantity of this product is counted in — a
   bag, a can, a bottle — and every product you create or edit by hand has one. **Products → New
   Product** and **Products → Edit Product** mark the field with `*`, refuse to save while it is
@@ -2203,7 +2221,14 @@ product you have not switched on.
   supplier** column — see
   [The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering).
 - **New Product** has no switch — there is no product yet to track. The form says so, and the switch
-  is on that product's **Edit** page once it exists.
+  is on that product's **Edit** page once it exists. **A product created from a catalogue suggestion
+  is the one exception, and it is not the switch** (issue #1051): the create itself can record which
+  catalogue product the new product is, so it arrives **Matched** instead of awaiting a match, and
+  its prices are tracked from the start. That happens only while the Name and unit label are still
+  the ones the suggestion filled in, only on the create, and never for a product that already exists
+  — see **Create a product from a catalogue suggestion** under
+  [Products and categories](#products-and-categories). Turning the product's switch off afterwards
+  withdraws the request like any other, and a Super Admin can still undo the match.
 - **Who may use it.** The same permission that edits a product (`Inventory.Operate`); no new
   permission is involved. It is unavailable while you are looking at a business in read-only support
   view, and while a Super Admin is previewing a role, like every other write in those states.
