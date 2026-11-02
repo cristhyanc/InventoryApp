@@ -101,7 +101,7 @@
                         [attr.aria-controls]="rowsRegionId(group)"
                         (click)="toggle(group)"
                       >
-                        <span class="text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                        <span class="inline-flex w-4 shrink-0 justify-center text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                         <span class="font-semibold">{{ group.site.siteName }}</span>
                       </button>
                       <span class="block px-1 text-xs text-rr-caption">{{ machineCountLabel(group.machines.length) }}</span>
@@ -147,7 +147,7 @@
                         [attr.aria-controls]="rowsRegionId(group)"
                         (click)="toggle(group)"
                       >
-                        <span class="text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                        <span class="inline-flex w-4 shrink-0 justify-center text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                         {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
                       </button>
                     </td>
@@ -164,17 +164,25 @@
                 @if (isExpanded(group)) {
                   @for (machine of group.machines; track machine.machineID) {
                     <tr class="table-row table-row-link bg-white" (click)="followMachineRowLink($event)" (keydown.enter)="followMachineRowLink($event)">
-                      <td class="table-cell pl-8">
-                        @if (machine.localMachineId != null) {
-                          <a
-                            class="table-row-anchor"
-                            [routerLink]="['/machines', machine.localMachineId]"
-                            [attr.data-testid]="'machine-name-' + machine.machineID"
-                            [attr.aria-label]="'View details for ' + machineName(machine)"
-                          >{{ machineName(machine) }}</a>
-                        } @else {
-                          <span [attr.data-testid]="'machine-name-' + machine.machineID">{{ machineName(machine) }}</span>
-                        }
+                      <td class="table-cell">
+                        <!--
+                          The structural cue (issue #1014): a left rule and a fixed indent mark the
+                          row as this group's child, so the hierarchy is not colour alone. The one
+                          unheaded fallback group - no site was available at all - is not
+                          `isCollapsible`, so its machines keep no indent or rule.
+                        -->
+                        <div class="flex min-w-0 items-start gap-2" [ngClass]="childRowIndentClass(group)">
+                          @if (machine.localMachineId != null) {
+                            <a
+                              class="table-row-anchor break-words"
+                              [routerLink]="['/machines', machine.localMachineId]"
+                              [attr.data-testid]="'machine-name-' + machine.machineID"
+                              [attr.aria-label]="'View details for ' + machineName(machine)"
+                            >{{ machineName(machine) }}</a>
+                          } @else {
+                            <span class="break-words" [attr.data-testid]="'machine-name-' + machine.machineID">{{ machineName(machine) }}</span>
+                          }
+                        </div>
                       </td>
                       <!--
                         The machine's own stock level (issue #1013), from the site read that fetched
@@ -237,7 +245,9 @@
                   }
                   @if (group.machines.length === 0) {
                     <tr>
-                      <td class="table-cell value-muted" [attr.colspan]="columnCount">{{ emptyGroupText }}</td>
+                      <td class="table-cell value-muted" [attr.colspan]="columnCount">
+                        <span class="block" [ngClass]="childRowIndentClass(group)">{{ emptyGroupText }}</span>
+                      </td>
                     </tr>
                   }
                 }
@@ -288,7 +298,7 @@
                     [attr.aria-controls]="cardsRegionId(group)"
                     (click)="toggle(group)"
                   >
-                    <span class="text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                    <span class="inline-flex w-4 shrink-0 justify-center text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                     <span class="min-w-0 break-words font-semibold">{{ group.site.siteName }}</span>
                   </button>
                   <span class="badge shrink-0" [ngClass]="siteStockClass(group.site)">{{ group.site.totalStockPercentage.toFixed(0) }}% stock</span>
@@ -324,12 +334,17 @@
                   [attr.aria-controls]="cardsRegionId(group)"
                   (click)="toggle(group)"
                 >
-                  <span class="text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                  <span class="inline-flex w-4 shrink-0 justify-center text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                   {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
                 </button>
               }
 
-              <ul [id]="cardsRegionId(group)" class="m-0 mt-2 flex list-none flex-col gap-2 p-0">
+              <!--
+                The structural cue (issue #1014): a left rule and indent on the whole list mark
+                every machine card, and the empty-group line below, as this group's child. The
+                one unheaded fallback group is not `isCollapsible`, so it gets neither.
+              -->
+              <ul [id]="cardsRegionId(group)" class="m-0 mt-2 flex list-none flex-col gap-2 p-0" [ngClass]="childCardIndentClass(group)">
                 @if (isExpanded(group)) {
                   @for (machine of group.machines; track machine.machineID) {
                     <li class="rounded-lg border border-rr-line bg-white p-3" [attr.data-testid]="'performance-machine-card-' + machine.machineID">
