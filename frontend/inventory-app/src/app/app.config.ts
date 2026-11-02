@@ -1,5 +1,5 @@
-import { ApplicationConfig, APP_INITIALIZER } from '@angular/core';
-import { provideRouter } from '@angular/router';
+import { ApplicationConfig, APP_INITIALIZER, inject, provideEnvironmentInitializer } from '@angular/core';
+import { provideRouter, withInMemoryScrolling } from '@angular/router';
 import { provideHttpClient, withInterceptors, withInterceptorsFromDi } from '@angular/common/http';
 import { routes } from './app.routes';
 import { ConfigService } from './services/config.service';
@@ -9,6 +9,7 @@ import { rolePreviewInterceptor } from './role-preview/role-preview.interceptor'
 import { supportSessionInterceptor } from './support-session/support-session.interceptor';
 import { supportSessionMessageInterceptor } from './support-session/support-session-message.interceptor';
 import { browserAuthProviders } from './auth/browser-auth-providers';
+import { ScrollOnNavigationService } from './layout/scroll-on-navigation.service';
 import { MsalService } from '@azure/msal-angular';
 import { firstValueFrom } from 'rxjs';
 
@@ -22,7 +23,15 @@ export function initializeMsal(msal: MsalService) {
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideRouter(routes),
+    // `withInMemoryScrolling` is configured with both options disabled so the router still emits
+    // the deferred `Scroll` event this feature requires, but never performs its own built-in
+    // restoration - which resets to the top on every forward navigation, including a same-path one
+    // (issue #1048). `ScrollOnNavigationService`, started below, is what decides what that event
+    // does instead.
+    provideRouter(routes, withInMemoryScrolling({ scrollPositionRestoration: 'disabled', anchorScrolling: 'disabled' })),
+    // Starts the router's one central scroll-on-navigation handler (issue #1048); see
+    // `ScrollOnNavigationService` for the rule it applies.
+    provideEnvironmentInitializer(() => inject(ScrollOnNavigationService)),
     // The three `403` interceptors and the order they run in are `FORBIDDEN_INTERCEPTORS`, which
     // documents each one's job and is the same list the composed-chain regression test installs
     // (issues #528, #529, #602). `supportSessionMessageInterceptor` runs right after them - still
