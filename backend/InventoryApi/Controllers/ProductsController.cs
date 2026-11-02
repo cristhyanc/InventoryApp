@@ -46,6 +46,16 @@ namespace InventoryApi.Controllers;
 /// method rules rather than by anything written here. The matched status publishes the shared master
 /// product's name and size, which is a member-facing read of a platform table bounded by that issue's
 /// own review; see docs/architecture.md § Tenant ownership.</para>
+///
+/// <para><b>Issue #1049 added the business lookup of the shared master products on the same
+/// capability</b>: <c>GET master-product-suggestions</c>. Looking a product up in order to create it
+/// is the same catalogue work as creating it, so it declares nothing of its own and is the same
+/// authorization class as <see cref="Create"/> - no platform-admin policy and no new class. It is the
+/// second member-facing read of a platform table on this controller and the wider one: the owner
+/// decided on 1 November 2026 that a business may see a master product's id, brand, name and size
+/// through this lookup, which is why it is a separately reviewed read rather than a widening of
+/// #938's name-and-size limit, and that limit is unchanged. See docs/architecture.md § Tenant
+/// ownership.</para>
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -74,6 +84,13 @@ public class ProductsController : ControllerBase
     private readonly GetProductPriceTracking _getProductPriceTracking;
     private readonly SetProductPriceTracking _setProductPriceTracking;
     private readonly ListTrackedProducts _listTrackedProducts;
+
+    /// <summary>
+    /// The business lookup of the shared master products (issue #1049): the read behind
+    /// <see cref="MasterProductSuggestions"/>, which the product form's Name autocomplete (#1052)
+    /// will call and the create that links a product to one (#1051) will build on.
+    /// </summary>
+    private readonly SuggestMasterProducts _suggestMasterProducts;
     private readonly CurrentCapabilities _capabilities;
 
     public ProductsController(
@@ -90,9 +107,11 @@ public class ProductsController : ControllerBase
         GetProductPriceTracking getProductPriceTracking,
         SetProductPriceTracking setProductPriceTracking,
         ListTrackedProducts listTrackedProducts,
+        SuggestMasterProducts suggestMasterProducts,
         CurrentCapabilities capabilities)
     {
         _capabilities = capabilities;
+        _suggestMasterProducts = suggestMasterProducts;
         _getProductGstRule = getProductGstRule;
         _setProductGstRule = setProductGstRule;
         _getProductPriceTracking = getProductPriceTracking;
@@ -483,6 +502,77 @@ public class ProductsController : ControllerBase
             ProductPriceTrackingWriteOutcome.Refused => BadRequest(RefusalProblem(result.Refusal!)),
             _ => NoContent(),
         };
+    }
+
+    /// <summary>
+    /// The business lookup of the shared master products (issue #1049, parent #817): what a member
+    /// who may create products searches to find the product they are about to add, with the Name and
+    /// unit label to fill the form in with.
+    ///
+    /// <para><strong>It declares no capability of its own.</strong> The controller's existing
+    /// <c>Inventory.Operate</c> is the capability that creates a product here, and looking a product
+    /// up in order to create it is the same day-to-day catalogue work - so this is the same
+    /// authorization class as <see cref="Create"/> and no platform-admin policy, marker or new class
+    /// is involved. A caller whose business does not resolve is refused by that policy exactly as the
+    /// create is, never answered with an unfiltered lookup; and because it is a <c>GET</c> it is
+    /// readable in a read-only support session and in a role preview by those features' own method
+    /// rules, which is the same central rule that refuses the create as a <c>POST</c>.</para>
+    ///
+    /// <para><strong>It is a member-facing read of a platform table, and its field set is the
+    /// reviewed limit</strong> (the owner's decision of 1 November 2026): per master product the id,
+    /// the brand, the name, the size and the two prefill values, and nothing else at all - no
+    /// normalised key, no instants, no supplier listing, no observed price, no match suggestion and
+    /// no mapping. Nothing about any other business can appear in it, because a master product
+    /// carries no business identity and the one table behind this read holds none; see
+    /// docs/architecture.md § Tenant ownership.</para>
+    ///
+    /// <para><strong>It changes nothing.</strong> No master product is created or corrected by a
+    /// lookup - that is the Super Admin's work (#1024 and #928) - and no mapping, product or price is
+    /// written. Linking a created product to one of these is issue #1051's, and the Name autocomplete
+    /// that calls this is issue #1052's.</para>
+    /// </summary>
+    /// <param name="q">
+    /// What to look for, matched against the brand or the name without regard to case. Required, and
+    /// bounded by <c>MasterProductSuggestionPaging</c>: at least 2 characters and at most 200.
+    /// </param>
+    /// <param name="page">Which page of the matches, counting from one. Absent is the first.</param>
+    /// <param name="pageSize">
+    /// How many per page. Absent is 10, and more than 20 is served as 20 - the server's decision, and
+    /// the size actually served is in the answer.
+    /// </param>
+    /// <param name="ct">The request's cancellation token.</param>
+    /// <response code="200">The bounded page of matches, in the server's fixed order.</response>
+    /// <response code="400">
+    /// The search term is absent, blank, shorter than 2 characters or longer than 200, with the
+    /// rule's own sentence. Nothing is read.
+    /// </response>
+    [HttpGet("master-product-suggestions")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<MasterProductSuggestionPageResponse>> MasterProductSuggestions(
+        [FromQuery] string? q,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        CancellationToken ct)
+    {
+        var suggestions = await _suggestMasterProducts.Handle(
+            new MasterProductSuggestionQuery(q, page, pageSize),
+            ct);
+
+        return Ok(new MasterProductSuggestionPageResponse(
+            suggestions.Products
+                .Select(master => new MasterProductSuggestionResponse(
+                    master.Id,
+                    master.Brand,
+                    master.Name,
+                    master.SizeValue,
+                    MasterProductPolicy.SizeUnitCode(master.SizeUnit),
+                    master.ProductName,
+                    master.UnitLabel))
+                .ToList(),
+            suggestions.Page,
+            suggestions.PageSize,
+            suggestions.HasMore));
     }
 
     /// <summary>

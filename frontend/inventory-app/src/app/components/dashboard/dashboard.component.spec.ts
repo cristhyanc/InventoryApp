@@ -113,7 +113,7 @@ function createComponent(
     dashboardService,
     // The Reorder Alerts purchase-cost columns (issue #789) are
     // `dashboard.component.purchase-costs.spec.ts`'s subject; here the read simply answers nothing.
-    { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
+    { getSummariesBatched: () => of([]) } as unknown as ProductPurchaseCostService,
     { active$: overrides.sessionActive ?? of(false) } as unknown as SupportSessionService,
     { allows: () => of(overrides.canViewFinancials ?? true) } as unknown as AccessService
   );
@@ -469,7 +469,7 @@ async function renderDashboard(
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(SYNC_RAN) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
-      { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+      { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },
       { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
       // its own component with its own tests, and not what this page's own tests are about.

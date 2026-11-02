@@ -296,7 +296,7 @@
     <div class="card-header flex-wrap gap-2">
       <div>
         <h2 id="reorder-priorities-title" class="card-title text-lg font-semibold text-rr-navy">Reorder priorities</h2>
-        <p class="m-0 text-sm text-rr-muted">The first products on the reorder list</p>
+        <p class="m-0 text-sm text-rr-muted">Every product on the reorder list, five per page</p>
       </div>
       <a routerLink="/products/needs-ordering" class="rr-button-secondary" data-testid="reorder-view-all">{{ reorderViewAllLabel }} <app-icon name="arrow_forward" [size]="16" /></a>
     </div>
@@ -441,6 +441,34 @@
             </li>
           }
         </ul>
+
+        <!--
+          Paging over the list already read (issue #1017), in the shape of Machine detail → Latest
+          sales (issue #886): the table and the cards above render the same `reorderPageIndex`, and
+          turning a page re-reads nothing - the Cheapest supplier and purchase-cost answers were
+          asked once for every listed product. The page size is fixed, so there is no selector; with
+          one page the range text stands without Previous and Next.
+        -->
+        <div class="page-actions border-t border-md-gray-200 p-4" data-testid="reorder-pagination">
+          <output class="text-sm value-muted" data-testid="reorder-range">{{ reorderRangeLabel }}</output>
+          @if (isReorderPagerShown) {
+            <button
+              type="button"
+              class="btn btn-sm btn-secondary"
+              data-testid="reorder-previous-page"
+              [disabled]="reorderPageIndex === 0"
+              (click)="previousReorderPage()">Previous</button>
+            <span class="text-sm value-muted" data-testid="reorder-page-indicator">
+              Page {{ reorderPageIndex + 1 }} of {{ reorderPageCount }}
+            </span>
+            <button
+              type="button"
+              class="btn btn-sm btn-secondary"
+              data-testid="reorder-next-page"
+              [disabled]="reorderPageIndex >= reorderPageCount - 1"
+              (click)="nextReorderPage()">Next</button>
+          }
+        </div>
       }
     </div>
   </section>

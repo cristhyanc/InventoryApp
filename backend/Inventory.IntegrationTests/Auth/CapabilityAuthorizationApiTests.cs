@@ -95,6 +95,18 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Inventory.Operate", "GET", "/api/products/price-tracking", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
         { "Inventory.Operate", "PUT", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
+        // Issue #1049. The business lookup of the shared master products declares no capability of
+        // its own either: it is the capability that creates a product, because looking a product up
+        // in order to create it is the same catalogue work. Safe to call in both directions - it is
+        // a read, and this search matches nothing - and this row is also what asserts the issue's
+        // criterion for a caller whose business does not resolve, through the no-membership theory
+        // below: refused, never answered with an unfiltered lookup.
+        {
+            "Inventory.Operate",
+            "GET",
+            "/api/products/master-product-suggestions?q=zz",
+            "Operator,Manager,Owner"
+        },
         // Issue #930. The cheapest-supplier summary is on Dashboard.View, which every role holds:
         // an observed shelf price is purchasing guidance about a pack nobody has bought, not a
         // recorded cost, so it is not behind the financial capability that guards what the business

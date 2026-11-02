@@ -235,7 +235,8 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     /// <summary>
     /// The read-only master-product catalogue store as a platform-admin request reaches it (issue
     /// #1023): the real adapter on a context whose caller has no business at all, which is the scope
-    /// every <c>api/super-admin/master-products</c> request has.
+    /// every <c>api/super-admin/master-products</c> request has. The write half of the same surface is
+    /// <see cref="DeniedMasterProductWriteStore"/> (issue #1024).
     ///
     /// <para>That is the shape that matters here too. The adapter reads four platform tables and no
     /// tenant-owned one, so unlike the review store beside it, it needs no filter-ignoring read and no
@@ -244,6 +245,63 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     /// </summary>
     public IMasterProductCatalogueStore DeniedMasterProductStore() =>
         new EfMasterProductCatalogueStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>
+    /// The business lookup of the master products as a <strong>member's</strong> request reaches it
+    /// (issue #1049): the real adapter on a context scoped to one business, which is the scope every
+    /// <c>GET api/products/master-product-suggestions</c> request has.
+    ///
+    /// <para>That is the shape that matters here, and it is the opposite of the two stores above: this
+    /// read is made by a member of a business, under their own resolved scope, and it must answer the
+    /// shared catalogue anyway - because a master product carries no business key and so no central
+    /// filter narrows it. It still reaches no mapping, no product and no business, which is what
+    /// <see cref="UnscopedSuggestionStore"/> beside it is for.</para>
+    /// </summary>
+    public IMasterProductSuggestionStore SuggestionStoreFor(int businessId) =>
+        new EfMasterProductSuggestionStore(Track(TestAppDbContext.For(_options, businessId)));
+
+    /// <summary>
+    /// The same store over a context with no filter at all. Setup-shaped, kept so a test can state
+    /// that a member's own scoped read answers exactly what a completely unfiltered one does: what
+    /// bounds this read is its reviewed field set and the endpoint's authorization, not the scope the
+    /// request carries.
+    /// </summary>
+    public IMasterProductSuggestionStore UnscopedSuggestionStore() =>
+        new EfMasterProductSuggestionStore(Track(TestAppDbContext.Unrestricted(_options)));
+
+    /// <summary>
+    /// The master-product write store as a platform-admin request reaches it (issue #1024): the real
+    /// adapter on a context whose caller has no business at all, which is the scope every
+    /// <c>api/super-admin/master-products</c> request has.
+    ///
+    /// <para>A new context each time, for the reason the collector and review stores get one: every
+    /// create and every edit is its own request, and a reused change tracker would assert against
+    /// entities the previous call left behind rather than against what was stored.</para>
+    ///
+    /// <para>The denied scope is also what proves the write needs no reviewed lease: it writes one
+    /// platform table that carries no business key, so <c>BusinessOwnershipEnforcer</c> stays fully in
+    /// force over everything tenant-owned and the write passes anyway.</para>
+    /// </summary>
+    public IMasterProductCatalogueWriteStore DeniedMasterProductWriteStore() =>
+        new EfMasterProductCatalogueWriteStore(Track(TestAppDbContext.Denied(_options)));
+
+    /// <summary>
+    /// The same store on a context scoped to <em>one business</em>, for the test that says a
+    /// catalogue write is a platform write: it must behave identically there, because what bounds it
+    /// is authorization rather than a scope, and it must still not reach a tenant-owned row.
+    /// </summary>
+    public IMasterProductCatalogueWriteStore MasterProductWriteStoreFor(int businessId) =>
+        new EfMasterProductCatalogueWriteStore(Track(TestAppDbContext.For(_options, businessId)));
+
+    /// <summary>One master product by its key, from outside the boundary, for verifying a write.</summary>
+    public async Task<MasterProduct?> MasterProductAsync(long masterProductId)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.MasterProducts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(master => master.Id == masterProductId);
+    }
 
     /// <summary>
     /// Holds one reading against a listing, as the collector results of #937 do when a reading is not

@@ -419,10 +419,10 @@ export const priceCatalogueReviewNavLink: NavLink = {
 };
 
 /**
- * The Master Products page (issue #1023): the shared supplier price catalogue itself - every master
- * product, searchable, with its supplier listings - read only, beside the review above that decides
- * anything about it. Like the four links above it declares no capability, because no business role
- * grants it: only the platform-admin probe below does.
+ * The Master Products page (issues #1023 and #1024): the shared supplier price catalogue itself -
+ * every master product, searchable, with its supplier listings - and where one is added or corrected,
+ * beside the review above that decides a listing or a match. Like the four links above it declares no
+ * capability, because no business role grants it: only the platform-admin probe below does.
  */
 export const masterProductsNavLink: NavLink = {
   kind: 'link',

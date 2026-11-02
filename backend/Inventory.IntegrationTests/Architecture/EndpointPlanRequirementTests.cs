@@ -266,6 +266,11 @@ public class EndpointPlanRequirementTests
         new("ProductsController.GetPriceTracking", PlanRequirementKind.None), // GET api/Products/{id:long}/price-tracking
         new("ProductsController.InventoryValueSummary", PlanRequirementKind.None), // GET api/Products/inventory-value-summary
         new("ProductsController.LowStock", PlanRequirementKind.ViaProviderGate), // GET api/Products/alerts/low-stock
+        // The business lookup of the shared master products (issue #1049). On every plan, like the
+        // create it serves: it publishes a master product's identity and the Name and unit label to
+        // prefill, and no supplier price at all - what a supplier charges is the one thing issue
+        // #977's feature gates, and none of it is reachable here.
+        new("ProductsController.MasterProductSuggestions", PlanRequirementKind.None), // GET api/Products/master-product-suggestions
         new("ProductsController.PriceHistory", PlanRequirementKind.None), // GET api/Products/{id:long}/price-history
         new("ProductsController.PriceTracking", PlanRequirementKind.None), // GET api/Products/price-tracking
         new("ProductsController.SetGstRule", PlanRequirementKind.None), // PUT api/Products/{id:long}/gst-rule
@@ -330,8 +335,10 @@ public class EndpointPlanRequirementTests
         new("SuperAdminBusinessesController.Reactivate", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reactivate
         new("SuperAdminBusinessesController.Reject", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reject
         new("SuperAdminBusinessesController.ReleaseMember", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/members/{membershipId:int}/release
+        new("SuperAdminMasterProductsController.Create", PlanRequirementKind.None), // POST api/super-admin/master-products
         new("SuperAdminMasterProductsController.Get", PlanRequirementKind.None), // GET api/super-admin/master-products/{id:long}
         new("SuperAdminMasterProductsController.List", PlanRequirementKind.None), // GET api/super-admin/master-products
+        new("SuperAdminMasterProductsController.Update", PlanRequirementKind.None), // PUT api/super-admin/master-products/{id:long}
         new("SuperAdminOptionVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/option-visibility
         new("SuperAdminPriceCatalogueReviewController.ConfirmAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm
         new("SuperAdminPriceCatalogueReviewController.DecideListing", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/listings/{supplierListingId:long}/decision
@@ -569,6 +576,10 @@ public class EndpointPlanRequirementTests
     [InlineData("ProductsController.SetPriceTracking")]
     [InlineData("ProductsController.GetPriceTracking")]
     [InlineData("ProductsController.PriceTracking")]
+    // And issue #1049's lookup: finding the product you are about to add is part of creating it,
+    // which is Free's own feature. It serves no supplier price, so #977's feature has nothing to
+    // gate here.
+    [InlineData("ProductsController.MasterProductSuggestions")]
     public void The_listed_endpoints_are_included_in_every_plan(string endpointKey) =>
         Assert.Equal(
             PlanRequirementKind.None,

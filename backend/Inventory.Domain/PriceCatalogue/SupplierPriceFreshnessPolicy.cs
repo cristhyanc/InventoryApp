@@ -62,6 +62,18 @@ public static class SupplierPriceFreshnessPolicy
     /// </summary>
     public const int TwiceWeeklyCheckLimitHours = TwiceWeeklyCheckIntervalHours + MarginHours;
 
+    /// <summary>The gap between two checks made on the same day each week.</summary>
+    public const int WeeklyCheckIntervalHours = 7 * 24;
+
+    /// <summary>
+    /// The freshness limit of a supplier checked once a week: 174 hours, the owner's decision of
+    /// 1 November 2026 that BIG W is checked on Thursdays (its catalogues start then) and Kmart on
+    /// Mondays, because both charge per searched result. The BIG W and Kmart records carry it
+    /// because <c>SetWeeklySupplierPriceFreshness</c> wrote it to them, not because this policy knows
+    /// which suppliers they are.
+    /// </summary>
+    public const int WeeklyCheckLimitHours = WeeklyCheckIntervalHours + MarginHours;
+
     /// <summary>
     /// The longest limit this application stores: 30 days. It bounds a submitted or stored value
     /// rather than expressing a rule - a price that may be five weeks old is not purchasing guidance -

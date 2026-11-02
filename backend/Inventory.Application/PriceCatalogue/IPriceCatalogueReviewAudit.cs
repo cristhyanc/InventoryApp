@@ -1,11 +1,16 @@
 namespace Inventory.Application.PriceCatalogue;
 
 /// <summary>
-/// Which decision one price-catalogue review audit event is about (issue #928).
+/// Which decision one price-catalogue audit event is about (issues #928 and #1024).
 ///
-/// <para>Nine values, because each is a different thing a reviewer did and an audit trail that merged
-/// any two of them could not answer "who decided this, and what did they decide". Numbered from 1.
-/// </para>
+/// <para>Ten values, because each is a different thing an administrator did and an audit trail that
+/// merged any two of them could not answer "who decided this, and what did they decide". Numbered
+/// from 1.</para>
+///
+/// <para>Nine of them are the review's own decisions (issue #928). The tenth,
+/// <see cref="MasterProductEdited"/>, is the Master Products page's correction of an existing master
+/// product (issue #1024), which is a change to the shared catalogue and belongs on the same trail
+/// rather than on a second one an investigation would have to know about.</para>
 /// </summary>
 public enum PriceCatalogueReviewAction
 {
@@ -28,8 +33,10 @@ public enum PriceCatalogueReviewAction
     ProductMatched = 4,
 
     /// <summary>
-    /// A master product was created. Emitted beside <see cref="ProductMatched"/>, because creating
-    /// one and matching a key to it are two facts and this surface is the only writer of that table.
+    /// A master product was created. Emitted beside <see cref="ProductMatched"/> when the review
+    /// created one as part of deciding a match, because creating one and matching a key to it are two
+    /// facts; and emitted on its own when the Master Products page added one to the catalogue
+    /// (issue #1024), which matches no key at all.
     /// </summary>
     MasterProductCreated = 5,
 
@@ -44,6 +51,16 @@ public enum PriceCatalogueReviewAction
 
     /// <summary>An automatic match was undone.</summary>
     AutomaticMatchUndone = 9,
+
+    /// <summary>
+    /// An existing master product's brand, name or size was corrected from the Master Products page
+    /// (issue #1024). Its own value rather than a second
+    /// <see cref="MasterProductCreated"/>, because a correction to a row every tracking business
+    /// already points at is a different fact from a new row - and because the one change this surface
+    /// refuses outright, a size change under a confirmed supplier listing, is only legible against a
+    /// trail that says which edits went through.
+    /// </summary>
+    MasterProductEdited = 10,
 }
 
 /// <summary>
@@ -100,11 +117,16 @@ public sealed record PriceCatalogueReviewAuditEntry(
     DateTime OccurredAtUtc);
 
 /// <summary>
-/// The audit sink for the Super Admin's price-catalogue review decisions, implemented at the
+/// The audit sink for every Super Admin change to the shared price catalogue, implemented at the
 /// InventoryApi boundary over <c>ILogger</c> (issue #928) for the same reasons as the platform-admin
 /// audits beside it: the event carries the request's correlation id, which is a transport fact, and an
 /// audit row in the same database the decision was made in would be evidence kept inside the thing it
 /// is evidence about.
+///
+/// <para>It is the review's decisions (issue #928) <strong>and</strong> the Master Products page's
+/// create and edit (issue #1024). One sink rather than two, because both write the same shared
+/// catalogue and an investigation of "who changed this master product" must not depend on knowing
+/// which surface did it.</para>
 /// </summary>
 public interface IPriceCatalogueReviewAudit
 {

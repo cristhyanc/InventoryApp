@@ -239,13 +239,29 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<DecideProductMatchReview>();
         services.AddScoped<DecideAutomaticProductMatchReview>();
 
-        // And the Super Admin's read-only view of the master products themselves (issue #1023): one
-        // bounded, searchable page of the shared catalogue and one product with its supplier
-        // listings. Scoped like the surfaces above and for the same reason, and read-only - creating,
-        // editing and deleting a master product are separate issues, and the review of #928 remains
-        // the only writer of one.
+        // And the Super Admin's view of the master products themselves (issue #1023): one bounded,
+        // searchable page of the shared catalogue and one product with its supplier listings. Scoped
+        // like the surfaces above and for the same reason.
         services.AddScoped<ListMasterProducts>();
         services.AddScoped<GetMasterProduct>();
+
+        // And managing that catalogue (issue #1024): adding a master product before any business
+        // asks for one, and correcting a wrong brand, name or size on one that exists. Scoped for
+        // the reason the review's decisions are: each write runs inside one BEGIN IMMEDIATE
+        // transaction on the request's own AppDbContext, which carries a denied business scope. They
+        // are the review's companion rather than a second authority - the same MasterProductPolicy,
+        // the same duplicate rule and the same audit sink - and deleting a master product is a
+        // separate issue that follows this one.
+        services.AddScoped<CreateMasterProduct>();
+        services.AddScoped<UpdateMasterProduct>();
+
+        // And the business lookup of the same catalogue (issue #1049): the bounded, searchable read a
+        // member who may create products makes to find the product they are adding, with the Name and
+        // unit label to fill the form in with. Scoped like every use case here. It is a different
+        // surface from the two above and not a widening of them - it publishes the reviewed
+        // member-facing field set and reads one platform table, so no business's data is reachable
+        // through it in either direction.
+        services.AddScoped<SuggestMasterProducts>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are

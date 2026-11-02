@@ -575,11 +575,26 @@ changed, and every "Unavailable" still means unavailable, never zero.
   reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
 - **Site and machine performance** is one card (issue #987): each site is a summary row - its name,
   how many machines it has, its stock level in words as well as in colour, its low and empty
-  selections and its sales - and an expand button under the site's name reveals that site's machines
-  indented directly beneath it. Sites start expanded, collapsing one leaves the others alone, and a
+  selections and its sales - and an expand button under the site's name reveals that site's machines,
+  each indented well clear of the site's own name and set off with a left rule, so the relationship
+  is never carried by the site's tint alone (issue #1014). Sites start expanded, collapsing one leaves the others alone, and a
   refresh keeps whichever groups you closed. Machines with no site, or at a site that was not
-  returned, come last under **Other machines**, and a site the fleet read returned no machine for
-  stays visible saying so. Every machine appears exactly once.
+  returned, come last under **Other machines**, which gets the same indent and rule under its own
+  heading. When no site is available at all - an empty or failed sites read - the whole fleet is one
+  unheaded group with no heading to nest under, so it is deliberately left un-indented and
+  connector-free rather than looking like it belongs to a site, an error or an empty message. A
+  site the fleet read returned no machine for stays visible saying so, presented as that site's own
+  child. Every machine appears exactly once.
+  - **What the figures mean is behind one help button** beside the words "Site and machine
+    performance", on a wide screen and on a phone (issue #1015), instead of a full-width row of
+    explanation above the table. Pressing, tapping or tabbing to it - or just hovering over it -
+    opens a short panel beside it with the card's one explanation: that every machine row carries
+    its own stock level and its own low and empty counts, that machines under **Other machines**
+    show theirs as unavailable, and that a site's counts need not add up from its machines'. The
+    panel sits beside the button rather than pushing the table down, Escape or a press outside
+    closes it, and Escape hands focus back to the button. It appears only when the card has rows:
+    while it is loading, after a failed read with nothing to show, or when the business has no
+    sites or machines, there is no help button, exactly as there was no explanation row before.
   - **One period at a time, shared by both layouts.** The Today / This week / Last week / Month to
     date buttons above the table choose the period for every row, and the sales column names it. The
     comparison column shows the published "vs same time last week" figure while This week is
@@ -606,7 +621,7 @@ changed, and every "Unavailable" still means unavailable, never zero.
     are worked out on the server by the site's own rule over that machine's selections alone: only
     selections linked to an active catalogue product count, several slots of one product on that
     machine are added together first, and nothing is counted in the browser. **A site's counts are
-    not the sum of its machines'**, and the card says so: a site counts each product once over the
+    not the sum of its machines'**, and the card's help button says so: a site counts each product once over the
     combined stock of its machines, so a product that is low on two machines is two machine alerts
     and one site alert, and a product the site reports as stocked can still be low on one machine.
     A machine whose selections hold nothing to alert on shows an honest **0 low · 0 empty**; a
@@ -621,8 +636,13 @@ changed, and every "Unavailable" still means unavailable, never zero.
   - The sites and the machines are still read separately: if one read fails the card keeps the
     other's results and says which one is unavailable, and a failed read is never shown as an empty
     business. On a phone the same hierarchy is expandable site cards holding machine cards.
-- **Reorder priorities** shows the first five products of the reorder list, in the list's own order,
-  and a link naming how many there really are ("View all 7 products needing ordering") to Products →
+- **Reorder priorities** shows every product on the reorder list, in the list's own order, **five per
+  page** (issue #1017): below the rows it says which of them you are looking at ("Showing 6-7 of 7
+  products") and offers **Previous** and **Next**, with **Previous** unavailable on the first page and
+  **Next** on the last. The page size is fixed, there is no rows-per-page choice, and every visit
+  starts on page 1. Turning a page only changes which of the products already read are shown; it
+  sends no request, and the phone card list turns with the table. The link naming how many there
+  really are ("View all 7 products needing ordering") still goes to Products →
   Needs Ordering. Its columns are product, storage stock, machine need, need to order, the last and
   cheapest purchase, and **Cheapest supplier** (issue #981). Last and cheapest purchase are
   **historical costs from your own purchases**; Cheapest supplier is the lowest price your own
@@ -631,7 +651,8 @@ changed, and every "Unavailable" still means unavailable, never zero.
   and beside the same label on each narrow-screen card (issue #1016): press, tap or focus it to read
   the sentence beside the column, and press Escape or click away to close it again. The supplier
   column is the same cell and popup as
-  [on Needs Ordering](#the-cheapest-supplier-on-needs-ordering): one request for the five products,
+  [on Needs Ordering](#the-cheapest-supplier-on-needs-ordering): read once for every product on the
+  list, however many pages it fills, so each page is priced from that one read,
   shown to everyone who sees the dashboard, unavailable in a read-only support view, and a failed
   read says so with a **Retry** without affecting the rest of the dashboard.
 
@@ -979,10 +1000,13 @@ To see what the run itself would do without spending anything, read `scripts/pri
 ### Manual collector integration test (#929)
 
 The actor choices have already been tested; the next check is the complete collector flow against
-a disposable **test API**. The `Price collector (manual test)` workflow issues a small sample,
+a disposable **test API**. The `Price collector (manual)` workflow issues a small sample,
 runs Claude without the Restockroo bearer token, then submits finished results and completes the
-run even if the model step fails. There is no cron or production API input. See
+run even if the model step fails. There is no cron. Its default `test` target never reaches the
+production API; a separate `production` target runs only from `main`, in its own reviewer-protected
+`price-collector-production` environment. See
 [Manual collector test](docs/price-collector-testing.md) for Entra/OIDC and GitHub environment setup,
+the production checklist,
 the normal and interrupted runs, sample limits, and actual provider cost evidence. Human review,
 release to `main`, environment setup and dispatch are separate from implementing the workflow.
 
@@ -1205,21 +1229,25 @@ POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
 The review above is a **queue**: products awaiting a match, automatic matches to check, listings
 awaiting a decision. This page is the catalogue **itself** — every master product in the shared
 supplier price catalogue, searchable, with the supplier listings that hang from each one (issue #1023,
-the eighth task of #817). It exists because a product nothing was waiting on could not be found,
-searched for or inspected at all.
+the eighth task of #817) — and, since issue #1024, where that catalogue is **managed**: a master
+product can be added before any business asks for it, and a wrong brand, name or size corrected. It
+exists because a product nothing was waiting on could not be found, searched for or inspected at all.
 
-**It is read only.** Creating, editing and deleting a master product are separate tasks that follow
-this one, and the Supplier Price Review stays the only place a master product is created or corrected.
+**Deleting a master product is not here.** That is a separate task, and the API has no such route.
+This page and the Supplier Price Review are the only two places a master product is created or
+corrected; no automatic match and no business ever creates one.
 
 ```text
-GET /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
-GET /api/super-admin/master-products/{id}                      one product and its supplier listings
+GET    /api/super-admin/master-products?search=&page=&pageSize=   one bounded page of the catalogue
+GET    /api/super-admin/master-products/{id}                      one product and its supplier listings
+POST   /api/super-admin/master-products                           add one   (brand, name, sizeValue, sizeUnit)
+PUT    /api/super-admin/master-products/{id}                      correct one (the same, plus lastChangedAtUtc)
 ```
 
 - **Who may use it.** Exactly the same answer as every Super Admin route above: the configured Entra
   `(tid, oid)` pair alone. An Owner, a Manager and an Operator are refused, and a member who presents
   a support-session id is still an ordinary member. The request resolves no business at all.
-- **Nothing about any business is in either response** — no business id, no business name, no
+- **Nothing about any business is in any request or response** — no business id, no business name, no
   business's product id, and **no count of who is tracking a product**. That count is the review's, and
   it is deliberately not here: this page is master-catalogue management only.
 - **Searching and paging happen on the server.** `search` matches the brand or the name, ignoring case
@@ -1235,12 +1263,40 @@ GET /api/super-admin/master-products/{id}                      one product and i
   currency, whether it includes GST, and when it was observed. A listing nobody has priced says
   **Never checked** rather than showing a zero, and an unpublished pack quantity stays **Unknown**.
   Nothing here is a per-unit price: that comparison is the Cheapest supplier column's.
+- **Adding one** takes the brand, the name or variant, and the individual size with its unit from the
+  closed list `ml`, `l`, `g`, `kg`, `each`. It is held to exactly the rules the Supplier Price Review's
+  own create is: the values are trimmed and required, the size must be above zero at no more than three
+  decimal places, and the same description is the same product however it is capitalised or spaced — so
+  a second attempt at one is refused with **"Another master product already describes this brand, name
+  and size. Match this product to that one instead of creating a second."** rather than quietly making
+  a duplicate.
+- **Correcting one keeps the same product.** The brand, the name and the size are corrected on the row
+  every business tracking that product already points at, so every supplier listing, match and
+  suggestion stays linked and nothing a business owns changes at all — not its own product name, size,
+  stock, cost or purchases. A brand or name edit changes the shared catalogue's **label**, not anybody's
+  product record, and correcting a master product never creates, confirms or refuses a supplier listing
+  and never matches or unmatches a business's tracked product.
+- **The size cannot be changed while a supplier listing of the product is confirmed.** Those listings'
+  pack sizes were confirmed against the current size, and every tracking business's per-unit price would
+  change without anybody confirming anything — so the page says so, and the server refuses it with that
+  reason. Decide those listings in Supplier Price Review first. The brand and the name can always be
+  corrected.
+- **Two tabs cannot overwrite each other.** A correction carries the "last changed" instant the page
+  read, and one that has been superseded is refused with **"This master product has been changed since
+  this page was read. Re-read the catalogue and make the correction again."** The catalogue is re-read
+  after every accepted change, so what is on screen is what is stored.
+- **Every change is recorded** — who made it, which master product, and when — on the same audit trail
+  the Supplier Price Review's decisions are written to. A refused change is not recorded, because
+  nothing happened.
 - **The page.** The Angular app offers it at `/super-admin/master-products`, shown as **Master
   Products** in the sidebar's **Super Admin** group beside Supplier Price Review and only while
   `GET /api/admin/diagnostics/access` confirms the signed-in actor; entering the URL directly works
-  identically, because the policy decides access on every request. It has no Add, Edit or Delete
-  control. See
-  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issue-1023).
+  identically, because the policy decides access on every request. It has a **New master product**
+  button and an **Edit** action on each row, shows the server's own refusal wording verbatim, and has
+  no Delete control. Adding or correcting another product while a change is still being saved is
+  allowed: the slower answer never closes the form you have moved on to or discards what you have
+  typed into it, and a change the server accepted is still announced and the list still refreshed. See
+  [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issues-1023-and-1024).
 
 ## Super Admin option visibility
 
@@ -2376,8 +2432,12 @@ it is in, on the Machines pages.
 
 ## What you paid, on the dashboard's Reorder Alerts
 
-Since issue #972 this table is the dashboard's **Reorder priorities** (its first five products, with
-a link to all of them on Needs Ordering), and its two cost columns are unchanged.
+Since issue #972 this table is the dashboard's **Reorder priorities**, and since issue #1017 it pages
+the whole reorder list five products at a time (the link to Needs Ordering is still there). Its two
+cost columns are unchanged, and they are read once for every product on the list, so they are filled
+in on every page without a page turn asking for anything. A long list is read in requests of at most
+100 products each, so the request never grows too long for the server; if any of them fails, both
+columns say "Unavailable" with a Retry rather than showing only some of the costs.
 
 Where the Reorder Alerts table used to carry a selling price, it now carries what you actually paid:
 a **Last purchase** column and a **Cheapest purchase** column, each showing the supplier and the unit

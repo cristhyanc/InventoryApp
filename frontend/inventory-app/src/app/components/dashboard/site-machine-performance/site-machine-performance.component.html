@@ -9,7 +9,27 @@
 <section class="card overflow-hidden rounded-xl border-rr-line" aria-labelledby="site-machine-performance-title">
   <div class="card-header flex-wrap gap-2">
     <div class="min-w-0">
-      <h2 id="site-machine-performance-title" class="card-title text-lg font-semibold text-rr-navy">Site and machine performance</h2>
+      <!--
+        The card's explanations, behind one help button beside the title (issue #1015). The button
+        is a sibling of the `<h2>` rather than a child of it, because the section is named by that
+        heading: anything inside it would become part of the section's accessible name. The heading
+        is laid out inline so the button follows the last word rather than the heading's box, which
+        is what keeps it beside "performance" rather than at the far end of the header.
+
+        `pr-7` and `-ml-6` are one pair, and only there while the button is: the heading reserves
+        the button's 24px plus its gap at the end of its own inline box, so the browser breaks the
+        title's line as though the button were part of the heading - without it, at 360px the words
+        fill the line exactly and the button alone wraps underneath them - and the button then takes
+        that 24px back, leaving the 4px gap.
+
+        It is the shared `HelpToggletipComponent`, whose panel is in the browser's top layer, so
+        this card's `overflow-hidden` cannot clip it and the table below never moves to make room.
+      -->
+      <h2
+        id="site-machine-performance-title"
+        class="card-title inline text-lg font-semibold text-rr-navy"
+        [class.pr-7]="isFiguresHelpShown"
+      >Site and machine performance</h2>@if (isFiguresHelpShown) {<app-help-toggletip class="-ml-6" [label]="figuresHelpLabel">{{ machineStockNote }}</app-help-toggletip>}
       <p class="m-0 text-sm text-rr-muted">Each site with the machines standing at it, their stock levels and their sales</p>
     </div>
     <!--
@@ -70,8 +90,6 @@
       }
 
       @if (hasRows) {
-        <p class="m-0 border-b border-rr-line px-4 py-3 text-sm text-rr-muted" data-testid="machine-stock-note">{{ machineStockNote }}</p>
-
         <div class="hidden overflow-x-auto md:block">
           <table class="table" data-testid="performance-table">
             <thead class="table-head">
@@ -101,7 +119,7 @@
                         [attr.aria-controls]="rowsRegionId(group)"
                         (click)="toggle(group)"
                       >
-                        <span class="text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                        <span class="inline-flex w-4 shrink-0 justify-center text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                         <span class="font-semibold">{{ group.site.siteName }}</span>
                       </button>
                       <span class="block px-1 text-xs text-rr-caption">{{ machineCountLabel(group.machines.length) }}</span>
@@ -147,7 +165,7 @@
                         [attr.aria-controls]="rowsRegionId(group)"
                         (click)="toggle(group)"
                       >
-                        <span class="text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                        <span class="inline-flex w-4 shrink-0 justify-center text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                         {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
                       </button>
                     </td>
@@ -164,23 +182,35 @@
                 @if (isExpanded(group)) {
                   @for (machine of group.machines; track machine.machineID) {
                     <tr class="table-row table-row-link bg-white" (click)="followMachineRowLink($event)" (keydown.enter)="followMachineRowLink($event)">
-                      <td class="table-cell pl-8">
-                        @if (machine.localMachineId != null) {
-                          <a
-                            class="table-row-anchor"
-                            [routerLink]="['/machines', machine.localMachineId]"
-                            [attr.data-testid]="'machine-name-' + machine.machineID"
-                            [attr.aria-label]="'View details for ' + machineName(machine)"
-                          >{{ machineName(machine) }}</a>
-                        } @else {
-                          <span [attr.data-testid]="'machine-name-' + machine.machineID">{{ machineName(machine) }}</span>
-                        }
+                      <td class="table-cell">
+                        <!--
+                          The structural cue (issue #1014): a left rule and a fixed indent mark the
+                          row as this group's child, so the hierarchy is not colour alone. The one
+                          unheaded fallback group - no site was available at all - is not
+                          `isCollapsible`, so its machines keep no indent or rule.
+                        -->
+                        <div
+                          class="flex min-w-0 items-start gap-2"
+                          [attr.data-testid]="'machine-row-indent-' + machine.machineID"
+                          [ngClass]="childRowIndentClass(group)"
+                        >
+                          @if (machine.localMachineId != null) {
+                            <a
+                              class="table-row-anchor break-words"
+                              [routerLink]="['/machines', machine.localMachineId]"
+                              [attr.data-testid]="'machine-name-' + machine.machineID"
+                              [attr.aria-label]="'View details for ' + machineName(machine)"
+                            >{{ machineName(machine) }}</a>
+                          } @else {
+                            <span class="break-words" [attr.data-testid]="'machine-name-' + machine.machineID">{{ machineName(machine) }}</span>
+                          }
+                        </div>
                       </td>
                       <!--
                         The machine's own stock level (issue #1013), from the site read that fetched
                         this machine's selections - never the site's percentage repeated, and never
                         a figure derived here. A machine that read does not cover, or that reports
-                        no capacity, says so instead; see `machineStockNote` above.
+                        no capacity, says so instead; the title's help button says why.
                       -->
                       <td class="table-cell" [attr.data-testid]="'machine-stock-' + machine.machineID">
                         @if (hasMachineStockPercentage(group, machine)) {
@@ -237,7 +267,9 @@
                   }
                   @if (group.machines.length === 0) {
                     <tr>
-                      <td class="table-cell value-muted" [attr.colspan]="columnCount">{{ emptyGroupText }}</td>
+                      <td class="table-cell value-muted" [attr.colspan]="columnCount">
+                        <span class="block" [ngClass]="childRowIndentClass(group)">{{ emptyGroupText }}</span>
+                      </td>
                     </tr>
                   }
                 }
@@ -288,7 +320,7 @@
                     [attr.aria-controls]="cardsRegionId(group)"
                     (click)="toggle(group)"
                   >
-                    <span class="text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                    <span class="inline-flex w-4 shrink-0 justify-center text-xs text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                     <span class="min-w-0 break-words font-semibold">{{ group.site.siteName }}</span>
                   </button>
                   <span class="badge shrink-0" [ngClass]="siteStockClass(group.site)">{{ group.site.totalStockPercentage.toFixed(0) }}% stock</span>
@@ -324,12 +356,17 @@
                   [attr.aria-controls]="cardsRegionId(group)"
                   (click)="toggle(group)"
                 >
-                  <span class="text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
+                  <span class="inline-flex w-4 shrink-0 justify-center text-rr-teal" aria-hidden="true">{{ isExpanded(group) ? '▴' : '▾' }}</span>
                   {{ group.label }} · {{ machineCountLabel(group.machines.length) }}
                 </button>
               }
 
-              <ul [id]="cardsRegionId(group)" class="m-0 mt-2 flex list-none flex-col gap-2 p-0">
+              <!--
+                The structural cue (issue #1014): a left rule and indent on the whole list mark
+                every machine card, and the empty-group line below, as this group's child. The
+                one unheaded fallback group is not `isCollapsible`, so it gets neither.
+              -->
+              <ul [id]="cardsRegionId(group)" class="m-0 mt-2 flex list-none flex-col gap-2 p-0" [ngClass]="childCardIndentClass(group)">
                 @if (isExpanded(group)) {
                   @for (machine of group.machines; track machine.machineID) {
                     <li class="rounded-lg border border-rr-line bg-white p-3" [attr.data-testid]="'performance-machine-card-' + machine.machineID">

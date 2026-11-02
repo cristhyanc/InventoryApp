@@ -385,6 +385,12 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/Products/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}/gst-rule", "PUT", Capability.InventoryOperate)]
     [InlineData("api/products/{productId:long}/inventory-count/apply", "POST", Capability.InventoryOperate)]
+    // Issue #1049's business lookup of the shared master products declares no capability of its own
+    // either: looking a product up in order to create it is the same catalogue work as the create
+    // below, so it is the same class and the same capability rather than a platform-admin policy or
+    // a sixth class. Asserted here because it is a member-facing read of a platform table, and what
+    // decides who may make it is exactly this row.
+    [InlineData("api/Products/master-product-suggestions", "GET", Capability.InventoryOperate)]
     [InlineData("api/Categories", "GET", Capability.InventoryOperate)]
 
     // The manual catalogue write surface (issue #736): maintaining the catalogue is the same
@@ -725,11 +731,16 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/price-catalogue-review/matches", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo", "POST")]
-    // Issue #1023's read-only view of the shared catalogue's master products: the searchable, paged
-    // listing and one product with its supplier listings. Class 2 again - the same marker and the same
-    // policy as the review beside it - and read only, so neither of them writes anything at all.
+    // Issue #1023's view of the shared catalogue's master products: the searchable, paged listing and
+    // one product with its supplier listings. Class 2 again - the same marker and the same policy as
+    // the review beside it.
     [InlineData("api/super-admin/master-products", "GET")]
     [InlineData("api/super-admin/master-products/{id:long}", "GET")]
+    // And issue #1024's management of that catalogue: adding a master product and correcting one.
+    // Class 2 again, on the same controller and therefore under the same marker and policy - the
+    // second and last writer of MasterProducts, beside the review above, and no sixth class.
+    [InlineData("api/super-admin/master-products", "POST")]
+    [InlineData("api/super-admin/master-products/{id:long}", "PUT")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);

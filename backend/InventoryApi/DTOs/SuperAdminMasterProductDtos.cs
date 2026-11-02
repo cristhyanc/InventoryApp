@@ -19,6 +19,52 @@ public sealed record SuperAdminMasterProductsRequest(
     [property: FromQuery(Name = "pageSize")] int? PageSize = null);
 
 /// <summary>
+/// The body of <c>POST api/super-admin/master-products</c> (issue #1024): the four values that say
+/// what the product is.
+///
+/// <para>Nothing more, deliberately. No normalised key - that is computed from these four by
+/// <c>MasterProductPolicy</c> and is never a value a client chooses - no instants, which are the
+/// server's clock's, and nothing about a supplier listing or a business, neither of which a master
+/// product knows about.</para>
+///
+/// <para>Every value is checked rather than trusted: an enum is a compile-time constraint and not a
+/// validation, because a deserialized JSON number binds an arbitrary integer.</para>
+/// </summary>
+public sealed record SuperAdminCreateMasterProductRequest(
+    string? Brand,
+    string? Name,
+    decimal SizeValue,
+    MasterProductSizeUnit SizeUnit)
+{
+    public MasterProductSubmission ToSubmission() =>
+        new(Brand, Name, SizeValue, SizeUnit);
+}
+
+/// <summary>
+/// The body of <c>PUT api/super-admin/master-products/{id}</c> (issue #1024): the corrected
+/// description, and the <c>lastChangedAtUtc</c> the page being corrected had read.
+///
+/// <para><see cref="LastChangedAtUtc"/> is the expected-value half of the write, and it is the row's
+/// own <c>updatedAtUtc</c> as the catalogue published it rather than a new column: an edit that
+/// presents an instant the row no longer carries is refused with <c>409</c>, so two Super Admin tabs
+/// cannot overwrite each other silently. It is nullable because a request may omit it, which is a
+/// <c>400</c> - an incomplete request - and not a stale one.</para>
+///
+/// <para>The master product's own id is the route value and is deliberately not in the body: a
+/// request that carried both could disagree with itself.</para>
+/// </summary>
+public sealed record SuperAdminUpdateMasterProductRequest(
+    string? Brand,
+    string? Name,
+    decimal SizeValue,
+    MasterProductSizeUnit SizeUnit,
+    DateTime? LastChangedAtUtc)
+{
+    public MasterProductEditSubmission ToSubmission() =>
+        new(Brand, Name, SizeValue, SizeUnit, LastChangedAtUtc);
+}
+
+/// <summary>
 /// How many supplier listings one master product has in each match status (issue #1023), as the
 /// Super Admin catalogue publishes them.
 ///

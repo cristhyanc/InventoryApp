@@ -213,8 +213,9 @@ public sealed class DecideProductMatchReview
 
         if (result.MasterProductCreated)
         {
-            // Beside the match below, never instead of it: this surface is the only writer of
-            // MasterProducts, so "a master product came into existence" is its own fact.
+            // Beside the match below, never instead of it: "a master product came into existence"
+            // and "this key is that product" are two facts, and merging them would leave the trail
+            // unable to say which happened.
             _audit.Record(Entry(
                 actor,
                 PriceCatalogueReviewAction.MasterProductCreated,

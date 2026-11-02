@@ -164,7 +164,7 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
-      { provide: ProductPurchaseCostService, useValue: { getSummaries } },
+      { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: getSummaries } },
       { provide: CheapestSupplierService, useValue: { getSummary: () => of({ displayBasis: 'ExGst', products: [] }) } },
       { provide: AccessService, useValue: { allows: () => doubles.financials ?? of(true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
@@ -450,18 +450,21 @@ describe('Reorder Alerts purchase costs across a changed product set (issue #789
 });
 
 /**
- * The Reorder priorities overview (issue #972): the first five products of the authoritative reorder
- * list, in the backend's order, and a link to the full list that names its real length. The
- * purchase costs are asked for only for the products the overview shows.
+ * The Reorder priorities card (issue #972), as issue #1017 left it: the authoritative reorder list
+ * in the backend's order, five rows per page, and a link to the full list that names its real
+ * length. The purchase costs are asked for once, for every product the card lists - the owner's
+ * paging decision superseded #972's "only the five shown", so the assertions below changed with the
+ * requirement rather than being weakened; the paging itself is
+ * `dashboard.component.reorder-paging.spec.ts`'s subject.
  */
-describe('Reorder priorities overview (issue #972)', () => {
+describe('Reorder priorities card (issues #972 and #1017)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   const seven = Array.from({ length: 7 }, (_, index) =>
     product({ id: index + 1, name: `Product ${index + 1}`, needToOrder: 30 - index, onOrderQuantity: index === 0 ? 6 : 0 })
   );
 
-  it('shows the first five products in the order the list published them', async () => {
+  it('shows the first page of five in the order the list published them', async () => {
     const { host } = await render({ alerts: [of(machineAwareAlerts(seven))] });
 
     expect(alertRows(host).map((row) => row[0])).toEqual(['Product 1', 'Product 2', 'Product 3', 'Product 4', 'Product 5']);
@@ -475,10 +478,27 @@ describe('Reorder priorities overview (issue #972)', () => {
     expect(link?.getAttribute('href')).toBe('/products/needs-ordering');
   });
 
-  it('asks for the purchase costs of the five products shown only', async () => {
-    const { getSummaries } = await render({ alerts: [of(machineAwareAlerts(seven))] });
+  /**
+   * Issue #1017's request rule: the costs are read once for every product the card pages, so the
+   * rows of page 2 carry them too and turning a page sends nothing.
+   */
+  // "Once" is one logical load (one `getSummariesBatched` call), not one HTTP request: the service
+  // splits a long id list into bounded GETs, which the reorder-paging transport tests pin.
+  it('asks for the purchase costs of every listed product, once', async () => {
+    const { fixture, host, getSummaries } = await render({
+      alerts: [of(machineAwareAlerts(seven))],
+      costs: [of(seven.map((listed) => costSummary({ productId: listed.id })))]
+    });
 
-    expect(getSummaries).toHaveBeenCalledWith([1, 2, 3, 4, 5]);
+    expect(getSummaries).toHaveBeenCalledTimes(1);
+    expect(getSummaries).toHaveBeenCalledWith([1, 2, 3, 4, 5, 6, 7]);
+
+    host.querySelector<HTMLButtonElement>('[data-testid="reorder-next-page"]')?.click();
+    fixture.detectChanges();
+
+    expect(getSummaries).toHaveBeenCalledTimes(1);
+    expect(alertRows(host).map((row) => row[0])).toEqual(['Product 6', 'Product 7']);
+    expect(alertRows(host)[0].slice(-2)).toEqual(['Acme · $1.25', 'Budget Wholesale · $0.95']);
   });
 
   it('keeps the reorder quantities as published, with what is already on order beside the need', async () => {
@@ -488,7 +508,7 @@ describe('Reorder priorities overview (issue #972)', () => {
     expect(alertRows(host)[0][3]).toContain('6 on order');
   });
 
-  it('renders the same five products as cards for a narrow screen', async () => {
+  it('renders the same page of five as cards for a narrow screen', async () => {
     const { host } = await render({ alerts: [of(machineAwareAlerts(seven))] });
     const cards = Array.from(host.querySelectorAll('[data-testid="reorder-cards"] > li'));
 

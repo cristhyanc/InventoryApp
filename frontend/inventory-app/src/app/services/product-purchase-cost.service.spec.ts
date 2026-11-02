@@ -3,7 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 import { ProductPurchaseCostSummary } from '../models/product-purchase-cost-summary';
 import { ConfigService } from './config.service';
-import { ProductPurchaseCostService } from './product-purchase-cost.service';
+import { PURCHASE_COST_MAX_IDS_PER_REQUEST, ProductPurchaseCostService } from './product-purchase-cost.service';
 
 /**
  * The request this client makes (issue #788, B of #786). What is pinned here is the URL and the
@@ -107,5 +107,56 @@ describe('ProductPurchaseCostService (issue #788)', () => {
 
     expect(received).toHaveLength(1);
     expect(received?.[0].productId).toBe(7);
+  });
+
+  describe('getSummariesBatched (issue #1017 repair)', () => {
+    /** 15-digit ids, the width real catalogue ids have. */
+    const wideIds = (count: number): number[] => Array.from({ length: count }, (_, i) => 100_000_000_000_001 + i);
+
+    it('sends nothing and answers [] for an empty id list, never asking for the whole business', () => {
+      let received: ProductPurchaseCostSummary[] | undefined;
+      service.getSummariesBatched([]).subscribe((summaries) => (received = summaries));
+
+      http.expectNone((candidate) => candidate.url === SUMMARY_URL);
+      expect(received).toEqual([]);
+    });
+
+    it('splits a long id list into GETs of at most the bound, covering each id once, under 8 KB', () => {
+      const ids = wideIds(310);
+      let received: ProductPurchaseCostSummary[] | undefined;
+      service.getSummariesBatched([...ids, ids[0]]).subscribe((summaries) => (received = summaries));
+
+      const requests = http.match((candidate) => candidate.url === SUMMARY_URL);
+      expect(requests).toHaveLength(Math.ceil(310 / PURCHASE_COST_MAX_IDS_PER_REQUEST));
+      const batches = requests.map((request) => request.request.params.getAll('productIds') ?? []);
+      for (const batch of batches) {
+        expect(batch.length).toBeGreaterThan(0);
+        expect(batch.length).toBeLessThanOrEqual(PURCHASE_COST_MAX_IDS_PER_REQUEST);
+      }
+      for (const request of requests) {
+        expect(`GET ${request.request.urlWithParams} HTTP/1.1`.length).toBeLessThan(8192);
+      }
+      expect(batches.flat()).toEqual(ids.map(String));
+
+      requests.forEach((request, index) => request.flush([summary(index + 1)]));
+      expect(received).toEqual(requests.map((_, index) => summary(index + 1)));
+    });
+
+    it('fails the whole load when any batch fails, rather than answering part of it', () => {
+      let failed = false;
+      let received: ProductPurchaseCostSummary[] | undefined;
+      service.getSummariesBatched(wideIds(250)).subscribe({
+        next: (summaries) => (received = summaries),
+        error: () => (failed = true)
+      });
+
+      const requests = http.match((candidate) => candidate.url === SUMMARY_URL);
+      requests[0].flush([summary(1)]);
+      requests[1].flush('boom', { status: 500, statusText: 'Server Error' });
+
+      expect(failed).toBe(true);
+      expect(received).toBeUndefined();
+      expect(requests[2].cancelled).toBe(true);
+    });
   });
 });

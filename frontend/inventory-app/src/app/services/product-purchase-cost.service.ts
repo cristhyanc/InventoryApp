@@ -1,8 +1,19 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import { Observable } from 'rxjs';
+import { Observable, forkJoin, map, of } from 'rxjs';
 import { ProductPurchaseCostSummary } from '../models/product-purchase-cost-summary';
 import { ConfigService } from './config.service';
+
+/**
+ * The most product ids one `GET` from {@link ProductPurchaseCostService.getSummariesBatched} carries
+ * (issue #1017 repair). The ids travel as repeated `productIds` query values, so the request line
+ * grows by `productIds=<id>&` per id, and Kestrel refuses a request line longer than its default
+ * `MaxRequestLineSize` of 8,192 bytes. At 100 ids even the widest `long` (20 characters with its
+ * sign) keeps the query at about 3.2 kB, under half that limit; 310 real 15-digit ids in one
+ * request already exceeded it. This is a frontend safety bound, not an endpoint rule: the endpoint
+ * publishes none.
+ */
+export const PURCHASE_COST_MAX_IDS_PER_REQUEST = 100;
 
 /**
  * The frontend client for the bulk product purchase-cost summary
@@ -47,5 +58,27 @@ export class ProductPurchaseCostService {
       params = params.append('productIds', productId);
     }
     return this.http.get<ProductPurchaseCostSummary[]>(this.baseUrl, { params });
+  }
+
+  /**
+   * The summaries for exactly `productIds`, read as one logical load split into `GET`s of at most
+   * {@link PURCHASE_COST_MAX_IDS_PER_REQUEST} ids each, so a long id list can never build a request
+   * line the server refuses. Duplicate ids are collapsed before the split, so no id is asked twice.
+   *
+   * Unlike {@link getSummaries}, an **empty** list sends nothing and answers `[]`: an empty batch
+   * would mean "every product of the business", which no caller of this method is asking for.
+   * The answers are concatenated untouched - nothing is sorted, filtered or picked here - and if any
+   * batch fails the whole load fails, so a caller shows its unavailable state rather than a mix of
+   * real costs and gaps that would read as "no purchases recorded".
+   */
+  getSummariesBatched(productIds: readonly number[]): Observable<ProductPurchaseCostSummary[]> {
+    const distinct = [...new Set(productIds)];
+    if (distinct.length === 0) return of([]);
+
+    const batches: number[][] = [];
+    for (let index = 0; index < distinct.length; index += PURCHASE_COST_MAX_IDS_PER_REQUEST) {
+      batches.push(distinct.slice(index, index + PURCHASE_COST_MAX_IDS_PER_REQUEST));
+    }
+    return forkJoin(batches.map((batch) => this.getSummaries(batch))).pipe(map((answers) => answers.flat()));
   }
 }

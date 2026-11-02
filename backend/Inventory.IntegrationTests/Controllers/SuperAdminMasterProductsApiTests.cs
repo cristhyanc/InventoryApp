@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
@@ -10,9 +11,9 @@ using Xunit;
 namespace InventoryApi.Tests.Controllers;
 
 /// <summary>
-/// The Super Admin master products API over real HTTP (issue #1023, parent #817): who may reach it,
-/// what it reports, how it pages and searches, what it refuses - and the decisive assertion that
-/// nothing about any business appears in any of it.
+/// The Super Admin master products API over real HTTP (issues #1023 and #1024, parent #817): who may
+/// reach it, what it reports, how it pages and searches, what a create and an edit store and refuse -
+/// and the decisive assertion that nothing about any business appears in any of it.
 ///
 /// <para>Everything here goes through the complete pipeline - authentication, <c>[Authorize]</c>, the
 /// platform-admin policy, <c>[RequiredScope]</c>, <c>RolePreviewMiddleware</c>,
@@ -50,7 +51,7 @@ public class SuperAdminMasterProductsApiTests
     #region Who may reach it
 
     /// <summary>
-    /// The issue's own criterion, asked of both endpoints: members, Owners included, are refused. An
+    /// The issue's own criterion, asked of every endpoint: members, Owners included, are refused. An
     /// Owner holds the strongest business role there is and reaches none of this, because the master
     /// catalogue is shared by every business and a business role is not platform authority.
     /// </summary>
@@ -59,12 +60,12 @@ public class SuperAdminMasterProductsApiTests
     [InlineData(SuperAdminBusinessesApiFactory.TradingManagerObjectId)]
     [InlineData(SuperAdminBusinessesApiFactory.ApplicantObjectId)]
     [InlineData(SuperAdminBusinessesApiFactory.StrangerObjectId)]
-    public async Task Both_endpoints_refuse_a_caller_who_is_not_the_configured_administrator(
+    public async Task Every_endpoint_refuses_a_caller_who_is_not_the_configured_administrator(
         string objectId)
     {
         var client = _factory.Authenticated(objectId);
 
-        foreach (var response in await BothEndpointsAsync(client))
+        foreach (var response in await EveryEndpointAsync(client))
         {
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         }
@@ -80,7 +81,7 @@ public class SuperAdminMasterProductsApiTests
     {
         var client = _factory.CreateClient();
 
-        foreach (var response in await BothEndpointsAsync(client))
+        foreach (var response in await EveryEndpointAsync(client))
         {
             Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         }
@@ -95,7 +96,7 @@ public class SuperAdminMasterProductsApiTests
     {
         var client = _factory.WithoutScope(SuperAdminBusinessesApiFactory.AdministratorObjectId);
 
-        foreach (var response in await BothEndpointsAsync(client))
+        foreach (var response in await EveryEndpointAsync(client))
         {
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         }
@@ -119,17 +120,16 @@ public class SuperAdminMasterProductsApiTests
         var client = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
         client.DefaultRequestHeaders.Add("X-Support-Session", SessionId);
 
-        foreach (var response in await BothEndpointsAsync(client))
+        foreach (var response in await EveryEndpointAsync(client))
         {
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         }
     }
 
     /// <summary>
-    /// A role preview is read-only everywhere (issue #720), and these two endpoints are reads: the
-    /// administrator previewing a business role still reads the catalogue, because a preview refuses
-    /// writes and there is no write on this surface to refuse. What it must not do is turn the
-    /// platform-admin answer into a member refusal.
+    /// A role preview is read-only everywhere (issue #720): the administrator previewing a business
+    /// role still <em>reads</em> the catalogue, because a preview refuses writes and a read is not
+    /// one. What it must not do is turn the platform-admin answer into a member refusal.
     /// </summary>
     [Theory]
     [InlineData("Owner")]
@@ -147,6 +147,33 @@ public class SuperAdminMasterProductsApiTests
     }
 
     /// <summary>
+    /// And the other half of that rule, which issue #1024 is the first thing on this controller to
+    /// have: a role preview's <strong>writes</strong> are refused with the preview's own stable code,
+    /// before the endpoint runs, and the catalogue is unchanged.
+    /// </summary>
+    [Theory]
+    [InlineData("Owner")]
+    [InlineData("Manager")]
+    [InlineData("Operator")]
+    public async Task A_role_preview_write_is_refused_as_read_only_and_stores_nothing(string role)
+    {
+        var arranged = await ArrangeAsync();
+
+        var client = _factory.AsAdministrator();
+        client.DefaultRequestHeaders.Add("X-Role-Preview", role);
+
+        var before = await FingerprintAsync();
+
+        foreach (var response in await WritesAsync(client, arranged))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Equal("read_only_role_preview", await CodeAsync(response));
+        }
+
+        Assert.Equal(before, await FingerprintAsync());
+    }
+
+    /// <summary>
     /// A member previewing a role reaches it no more than that member does: the preview header is not
     /// a grant of anything, least of all of platform authority.
     /// </summary>
@@ -156,10 +183,34 @@ public class SuperAdminMasterProductsApiTests
         var client = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
         client.DefaultRequestHeaders.Add("X-Role-Preview", "Owner");
 
-        foreach (var response in await BothEndpointsAsync(client))
+        foreach (var response in await EveryEndpointAsync(client))
         {
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         }
+    }
+
+    /// <summary>
+    /// A refused caller writes nothing, asserted against the database rather than against the status
+    /// code alone: the catalogue's own rows and the mappings beside them are exactly as they were.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_caller_stores_nothing()
+    {
+        var arranged = await ArrangeAsync();
+        var before = await FingerprintAsync();
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        foreach (var response in await WritesAsync(owner, arranged))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        foreach (var response in await WritesAsync(_factory.CreateClient(), arranged))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        Assert.Equal(before, await FingerprintAsync());
     }
 
     /// <summary>
@@ -176,38 +227,384 @@ public class SuperAdminMasterProductsApiTests
     }
 
     /// <summary>
-    /// The surface is read only, which is the issue's last criterion: there is no create, edit or
-    /// delete action at either address, so every write verb is refused and nothing is stored.
+    /// The two writes this surface has are the create and the edit, and no other: <strong>deleting a
+    /// master product is explicitly out of this issue's scope</strong>, so no action matches
+    /// <c>DELETE</c> and nothing is removed.
     ///
     /// <para>The refusal is <c>403</c> rather than <c>405</c>, and that is the pipeline being exactly
     /// as strict as it should be: no action matches the method, so the request reaches no endpoint
     /// carrying <c>PlatformDiagnosticsEndpointAttribute</c>, and <c>BusinessScopeMiddleware</c>
     /// therefore applies the ordinary membership requirement - which the administrator, a member of no
-    /// business, does not meet. Either answer would mean "there is nothing here to write"; this one
-    /// also means no write could be reached without a new, classified endpoint.</para>
+    /// business, does not meet. Either answer would mean "there is nothing here to delete"; this one
+    /// also means no delete could be reached without a new, classified endpoint.</para>
     /// </summary>
     [Fact]
-    public async Task There_is_no_write_on_this_surface()
+    public async Task There_is_no_delete_on_this_surface()
     {
         var arranged = await ArrangeAsync();
         var client = _factory.AsAdministrator();
         var before = await FingerprintAsync();
 
-        foreach (var response in new[]
-        {
-            await client.PostAsync(MasterProductsUrl, content: null),
-            await client.PutAsync($"{MasterProductsUrl}/{arranged.ColaId}", content: null),
-            await client.DeleteAsync($"{MasterProductsUrl}/{arranged.ColaId}"),
-        })
-        {
-            Assert.True(
-                response.StatusCode is HttpStatusCode.Forbidden
-                    or HttpStatusCode.MethodNotAllowed
-                    or HttpStatusCode.NotFound,
-                $"A write reached something: {response.StatusCode}.");
-        }
+        var response = await client.DeleteAsync($"{MasterProductsUrl}/{arranged.ColaId}");
+
+        Assert.True(
+            response.StatusCode is HttpStatusCode.Forbidden
+                or HttpStatusCode.MethodNotAllowed
+                or HttpStatusCode.NotFound,
+            $"A delete reached something: {response.StatusCode}.");
 
         Assert.Equal(before, await FingerprintAsync());
+    }
+
+    #endregion
+
+    #region Creating one
+
+    /// <summary>
+    /// The first criterion over the wire: a create stores the description under the same
+    /// normalisation and key the review's own create uses, answers <c>201</c> with the product it
+    /// created and the location to read it at, and the catalogue then holds it.
+    /// </summary>
+    [Fact]
+    public async Task A_create_stores_the_product_and_returns_it()
+    {
+        await ArrangeAsync();
+        _factory.ClearLog();
+
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            MasterProductsUrl,
+            new { brand = "  Solo  ", name = " Lemon ", sizeValue = 600m, sizeUnit = (int)MasterProductSizeUnit.Millilitre });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var created = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        var id = created.GetProperty("id").GetInt64();
+
+        Assert.Equal("Solo", created.GetProperty("brand").GetString());
+        Assert.Equal("Lemon", created.GetProperty("name").GetString());
+        Assert.Equal(600m, created.GetProperty("sizeValue").GetDecimal());
+        Assert.Equal((int)MasterProductSizeUnit.Millilitre, created.GetProperty("sizeUnit").GetInt32());
+        Assert.Equal(0, created.GetProperty("listingCounts").GetProperty("total").GetInt32());
+        Assert.Equal(
+            $"{MasterProductsUrl}/{id}",
+            response.Headers.Location?.AbsolutePath);
+
+        await using var db = _factory.Database();
+        var stored = await db.MasterProducts.AsNoTracking().SingleAsync(master => master.Id == id);
+        Assert.Equal(
+            MasterProductPolicy.NormalisedKey("Solo", "Lemon", 600m, MasterProductSizeUnit.Millilitre),
+            stored.NormalisedKey);
+        Assert.Equal(stored.CreatedAtUtc, stored.UpdatedAtUtc);
+
+        // Audited with the actor, on the shared catalogue's own trail, naming no business.
+        var audit = Assert.Single(
+            _factory.LoggedEntries(),
+            entry => entry.Contains("Price catalogue review audit", StringComparison.Ordinal));
+        Assert.Contains("MasterProductCreated", audit, StringComparison.Ordinal);
+        Assert.Contains(
+            SuperAdminBusinessesApiFactory.AdministratorObjectId,
+            audit,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            SuperAdminBusinessesApiFactory.TradingBusinessName,
+            audit,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The 400 half of the first criterion, with the policy's own sentence: every value is checked
+    /// rather than trusted, including the unit - an enum is a compile-time constraint and not a
+    /// validation, because a deserialized JSON number binds an arbitrary integer.
+    /// </summary>
+    [Theory]
+    [InlineData("", "Lemon", 600, 1)]
+    [InlineData("   ", "Lemon", 600, 1)]
+    [InlineData("Solo", "", 600, 1)]
+    [InlineData("Solo", "Lemon", 0, 1)]
+    [InlineData("Solo", "Lemon", -600, 1)]
+    [InlineData("Solo", "Lemon", 600.0001, 1)]
+    [InlineData("Solo", "Lemon", 600, 0)]
+    [InlineData("Solo", "Lemon", 600, 99)]
+    public async Task An_invalid_create_is_a_bad_request_and_stores_nothing(
+        string brand,
+        string name,
+        decimal sizeValue,
+        int sizeUnit)
+    {
+        await ArrangeAsync();
+        var before = await FingerprintAsync();
+
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            MasterProductsUrl,
+            new { brand, name, sizeValue, sizeUnit });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.False(string.IsNullOrWhiteSpace(await MessageAsync(response)));
+        Assert.Equal(before, await FingerprintAsync());
+    }
+
+    /// <summary>
+    /// The 409 half: one description is one master product, so a second create of it carries the
+    /// review's own duplicate sentence - the same rule, so the same answer - and leaves one row.
+    /// </summary>
+    [Fact]
+    public async Task A_duplicate_create_is_a_conflict_and_stores_nothing()
+    {
+        var arranged = await ArrangeAsync();
+        var before = await FingerprintAsync();
+
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            MasterProductsUrl,
+            // The same description the arrangement's "Coca-Cola Classic 375 ml" carries, spelled
+            // differently on purpose: the key is what decides a duplicate, not the spelling.
+            new { brand = "coca-cola", name = "  CLASSIC ", sizeValue = 375m, sizeUnit = (int)MasterProductSizeUnit.Millilitre });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(
+            ProductMatchReviewPolicy.DuplicateMasterProductMessage,
+            await MessageAsync(response));
+        Assert.Equal(before, await FingerprintAsync());
+
+        // And the row that was already there is untouched.
+        await using var db = _factory.Database();
+        Assert.Equal(
+            "Classic",
+            (await db.MasterProducts.AsNoTracking().SingleAsync(master => master.Id == arranged.ColaId)).Name);
+    }
+
+    #endregion
+
+    #region Editing one
+
+    /// <summary>
+    /// The second and third criteria over the wire: an edit corrects the brand and the name, keeps
+    /// the row's <strong>id</strong> - so everything pointing at it still does - recomputes the key
+    /// and the instant, and changes nothing else at all.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_corrects_the_product_keeps_its_id_and_changes_nothing_else()
+    {
+        var arranged = await ArrangeAsync();
+        var client = _factory.AsAdministrator();
+        _factory.ClearLog();
+
+        var read = await ProductAsync(arranged.ColaId);
+
+        var response = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            new
+            {
+                brand = "Coca-Cola",
+                name = "Classic No Sugar",
+                sizeValue = 375m,
+                sizeUnit = (int)MasterProductSizeUnit.Millilitre,
+                lastChangedAtUtc = read.UpdatedAtUtc,
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var updated = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(arranged.ColaId, updated.GetProperty("id").GetInt64());
+        Assert.Equal("Classic No Sugar", updated.GetProperty("name").GetString());
+        Assert.Equal(2, updated.GetProperty("listingCounts").GetProperty("total").GetInt32());
+
+        await using var db = _factory.Database();
+        var stored = await db.MasterProducts.AsNoTracking()
+            .SingleAsync(master => master.Id == arranged.ColaId);
+        Assert.Equal("Classic No Sugar", stored.Name);
+        Assert.Equal(
+            MasterProductPolicy.NormalisedKey(
+                "Coca-Cola",
+                "Classic No Sugar",
+                375m,
+                MasterProductSizeUnit.Millilitre),
+            stored.NormalisedKey);
+        Assert.True(stored.UpdatedAtUtc > read.UpdatedAtUtc);
+        Assert.Equal(read.CreatedAtUtc, stored.CreatedAtUtc);
+
+        // Both of this product's supplier listings still hang from it, with their own statuses, and
+        // every mapping of both businesses is untouched.
+        Assert.Equal(
+            2,
+            await db.SupplierListings.AsNoTracking()
+                .CountAsync(listing => listing.MasterProductId == arranged.ColaId));
+
+        foreach (var mapping in await db.ProductPriceTrackings.AsNoTracking()
+            .IgnoreQueryFilters()
+            .ToListAsync())
+        {
+            Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
+            Assert.Null(mapping.MasterProductId);
+            Assert.Equal(Observed, mapping.UpdatedAtUtc);
+        }
+
+        var audit = Assert.Single(
+            _factory.LoggedEntries(),
+            entry => entry.Contains("Price catalogue review audit", StringComparison.Ordinal));
+        Assert.Contains("MasterProductEdited", audit, StringComparison.Ordinal);
+        Assert.Contains(arranged.ColaId.ToString(System.Globalization.CultureInfo.InvariantCulture), audit, StringComparison.Ordinal);
+    }
+
+    /// <summary>An id no master product has is <c>404</c> and nothing is written.</summary>
+    [Fact]
+    public async Task An_edit_of_an_unknown_product_is_not_found()
+    {
+        await ArrangeAsync();
+        var before = await FingerprintAsync();
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            $"{MasterProductsUrl}/999999",
+            Edit("Solo", "Lemon", 600m, Observed));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(before, await FingerprintAsync());
+    }
+
+    /// <summary>
+    /// An edit onto another master product's description is the same <c>409</c> a duplicate create
+    /// is, and an edit that saves its <em>own</em> unchanged key is allowed - which is the issue's own
+    /// distinction.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_onto_another_products_key_is_a_conflict_and_its_own_key_is_allowed()
+    {
+        var arranged = await ArrangeAsync();
+        var client = _factory.AsAdministrator();
+
+        var zero = await ProductAsync(arranged.ColaZeroId);
+
+        var conflict = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaZeroId}",
+            Edit("Coca-Cola", "Classic", 375m, zero.UpdatedAtUtc));
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        Assert.Equal(
+            ProductMatchReviewPolicy.DuplicateMasterProductMessage,
+            await MessageAsync(conflict));
+        Assert.Equal("Zero Sugar", (await ProductAsync(arranged.ColaZeroId)).Name);
+
+        // Its own key, re-submitted: a row is not a duplicate of itself.
+        var allowed = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaZeroId}",
+            Edit("Coca-Cola", "Zero Sugar", 375m, zero.UpdatedAtUtc));
+
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+    }
+
+    /// <summary>
+    /// The stale-edit refusal over the wire: the second of two tabs is refused rather than applied,
+    /// and the first tab's correction stands.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_presenting_a_superseded_instant_is_a_conflict()
+    {
+        var arranged = await ArrangeAsync();
+        var client = _factory.AsAdministrator();
+
+        var read = await ProductAsync(arranged.PepsiId);
+
+        var first = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.PepsiId}",
+            Edit("Pepsi", "Max Zero", 375m, read.UpdatedAtUtc));
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var second = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.PepsiId}",
+            Edit("Pepsi", "Something Else", 375m, read.UpdatedAtUtc));
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal(MasterProductEditPolicy.StaleEditMessage, await MessageAsync(second));
+        Assert.Equal("Max Zero", (await ProductAsync(arranged.PepsiId)).Name);
+    }
+
+    /// <summary>
+    /// An edit that carries no <c>lastChangedAtUtc</c> at all is a <c>400</c> rather than the
+    /// <c>409</c> a stale one gets: the request is incomplete, and the page must send the field
+    /// rather than re-read.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_with_no_expected_instant_is_a_bad_request()
+    {
+        var arranged = await ArrangeAsync();
+        var before = await FingerprintAsync();
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            new { brand = "Coca-Cola", name = "Classic", sizeValue = 375m, sizeUnit = 1 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            MasterProductEditPolicy.ExpectedUpdatedAtRequiredMessage,
+            await MessageAsync(response));
+        Assert.Equal(before, await FingerprintAsync());
+    }
+
+    /// <summary>
+    /// <strong>The safeguard of this issue over the wire.</strong> The arrangement's cola has a
+    /// confirmed supplier listing with a pack of 30, so a change to its size value or unit is
+    /// <c>409</c> with the policy's own sentence and nothing is written - while a brand or name edit
+    /// of the same product goes through.
+    /// </summary>
+    [Theory]
+    [InlineData(600, 1)]
+    [InlineData(375, 3)]
+    public async Task A_size_change_is_refused_while_a_listing_is_confirmed(decimal sizeValue, int sizeUnit)
+    {
+        var arranged = await ArrangeAsync();
+        var read = await ProductAsync(arranged.ColaId);
+        var before = await FingerprintAsync();
+
+        var refused = await _factory.AsAdministrator().PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            new
+            {
+                brand = "Coca-Cola",
+                name = "Classic",
+                sizeValue,
+                sizeUnit,
+                lastChangedAtUtc = read.UpdatedAtUtc,
+            });
+
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+        Assert.Equal(
+            MasterProductEditPolicy.SizeChangeRefusedMessage,
+            await MessageAsync(refused));
+        Assert.Equal(before, await FingerprintAsync());
+
+        // And the brand and the name are still editable on that very product.
+        var allowed = await _factory.AsAdministrator().PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            Edit("Coca-Cola Amatil", "Classic", 375m, read.UpdatedAtUtc));
+
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+        Assert.Equal("Coca-Cola Amatil", (await ProductAsync(arranged.ColaId)).Brand);
+    }
+
+    /// <summary>
+    /// The same product with nothing confirmed: the arrangement's "Coca-Cola Zero Sugar" has no
+    /// supplier listing at all, so its size is editable and the key is recomputed.
+    /// </summary>
+    [Fact]
+    public async Task A_size_change_is_allowed_with_no_confirmed_listing()
+    {
+        var arranged = await ArrangeAsync();
+        var read = await ProductAsync(arranged.ColaZeroId);
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaZeroId}",
+            Edit("Coca-Cola", "Zero Sugar", 600m, read.UpdatedAtUtc));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = await ProductAsync(arranged.ColaZeroId);
+        Assert.Equal(600m, stored.SizeValue);
+        Assert.Equal(
+            MasterProductPolicy.NormalisedKey(
+                "Coca-Cola",
+                "Zero Sugar",
+                600m,
+                MasterProductSizeUnit.Millilitre),
+            stored.NormalisedKey);
     }
 
     #endregion
@@ -436,7 +833,7 @@ public class SuperAdminMasterProductsApiTests
     /// of it to travel, and nothing tenant-owned is read to build it.</para>
     /// </summary>
     [Fact]
-    public async Task Neither_response_carries_any_business_data()
+    public async Task No_response_carries_any_business_data()
     {
         var arranged = await ArrangeAsync();
         var client = _factory.AsAdministrator();
@@ -445,7 +842,19 @@ public class SuperAdminMasterProductsApiTests
         var detail = await (await client.GetAsync($"{MasterProductsUrl}/{arranged.ColaId}"))
             .Content.ReadAsStringAsync();
 
-        foreach (var body in new[] { listing, detail })
+        // The two writes of issue #1024 answer with the same contract, so there is nowhere in them
+        // for a business id, a business name or a tracking count to travel either.
+        var created = await (await client.PostAsJsonAsync(
+                MasterProductsUrl,
+                Edit("Solo", "Lemon", 600m, Observed)))
+            .Content.ReadAsStringAsync();
+        var read = await ProductAsync(arranged.ColaZeroId);
+        var updated = await (await client.PutAsJsonAsync(
+                $"{MasterProductsUrl}/{arranged.ColaZeroId}",
+                Edit("Coca-Cola", "Zero Sugar Corrected", 375m, read.UpdatedAtUtc)))
+            .Content.ReadAsStringAsync();
+
+        foreach (var body in new[] { listing, detail, created, updated })
         {
             Assert.DoesNotContain(
                 SuperAdminBusinessesApiFactory.TradingBusinessName,
@@ -676,6 +1085,76 @@ public class SuperAdminMasterProductsApiTests
             await client.GetAsync(MasterProductsUrl),
             await client.GetAsync($"{MasterProductsUrl}/{arranged.ColaId}"),
         ];
+    }
+
+    /// <summary>
+    /// All four endpoints of this surface - both reads and both writes - so an authorization
+    /// assertion covers the create and the edit of issue #1024 rather than only what #1023 shipped.
+    /// </summary>
+    private async Task<IReadOnlyList<HttpResponseMessage>> EveryEndpointAsync(HttpClient client)
+    {
+        var arranged = await ArrangeAsync();
+
+        return
+        [
+            await client.GetAsync(MasterProductsUrl),
+            await client.GetAsync($"{MasterProductsUrl}/{arranged.ColaId}"),
+            .. await WritesAsync(client, arranged),
+        ];
+    }
+
+    /// <summary>The two writes, each carrying a body a permitted caller would have been answered for.</summary>
+    private static async Task<IReadOnlyList<HttpResponseMessage>> WritesAsync(
+        HttpClient client,
+        Arranged arranged) =>
+        [
+            await client.PostAsJsonAsync(MasterProductsUrl, Edit("Solo", "Lemon", 600m, Observed)),
+            await client.PutAsJsonAsync(
+                $"{MasterProductsUrl}/{arranged.ColaId}",
+                Edit("Coca-Cola", "Classic Corrected", 375m, Observed)),
+        ];
+
+    /// <summary>
+    /// The body both writes take: the description, and - for the edit - the instant it expects the row
+    /// to carry. The create ignores the extra property, which is what lets one shape serve both in the
+    /// authorization assertions.
+    /// </summary>
+    private static object Edit(string brand, string name, decimal sizeValue, DateTime lastChangedAtUtc) =>
+        new
+        {
+            brand,
+            name,
+            sizeValue,
+            sizeUnit = (int)MasterProductSizeUnit.Millilitre,
+            lastChangedAtUtc,
+        };
+
+    /// <summary>One stored master product, read from outside the boundary for verifying a write.</summary>
+    private async Task<MasterProduct> ProductAsync(long masterProductId)
+    {
+        await using var db = _factory.Database();
+
+        return await db.MasterProducts
+            .AsNoTracking()
+            .SingleAsync(master => master.Id == masterProductId);
+    }
+
+    /// <summary>
+    /// The refusal's own sentence, which is what the page shows: <c>DomainExceptionHandler</c> writes
+    /// the Domain's caller-safe message onto the problem details as <c>message</c>.
+    /// </summary>
+    private static async Task<string?> MessageAsync(HttpResponseMessage response)
+    {
+        var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+
+        return body.TryGetProperty("message", out var message) ? message.GetString() : null;
+    }
+
+    private static async Task<string?> CodeAsync(HttpResponseMessage response)
+    {
+        var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+
+        return body.TryGetProperty("code", out var code) ? code.GetString() : null;
     }
 
     #endregion

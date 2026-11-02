@@ -1,4 +1,5 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { Subject, of, throwError } from 'rxjs';
 import {
   MASTER_PRODUCT_PAGE_SIZE,
@@ -8,6 +9,7 @@ import {
   SuperAdminMasterProductsService
 } from '../../../services/super-admin-master-products.service';
 import { MasterProductSizeUnit, SupplierListingMatchStatus } from '../../../services/super-admin-price-catalogue-review.service';
+import { MasterProductFormComponent } from './master-product-form.component';
 import { SuperAdminMasterProductsComponent } from './super-admin-master-products.component';
 
 function product(overrides: Partial<SuperAdminMasterProduct> = {}): SuperAdminMasterProduct {
@@ -71,7 +73,7 @@ function testId(host: HTMLElement, id: string): HTMLElement {
   return match as HTMLElement;
 }
 
-describe('SuperAdminMasterProductsComponent (issue #1023)', () => {
+describe('SuperAdminMasterProductsComponent (issues #1023 and #1024)', () => {
   it('reads the first page on arrival and lists each product with its listing counts', async () => {
     const list = jest.fn(() =>
       of(
@@ -324,16 +326,16 @@ describe('SuperAdminMasterProductsComponent (issue #1023)', () => {
   });
 
   /**
-   * The issue's last criterion, as the page's own contract: this is a read-only screen. No Add, Edit
-   * or Delete control exists on it, because the API has none and those actions are separate issues.
+   * Deleting a master product is explicitly out of issue #1024's scope and the API has no such
+   * route, so the page offers no control that could ask for one. The create and edit controls
+   * *do* exist now, and are covered in their own describe below.
    */
-  it('offers no create, edit or delete control', async () => {
+  it('offers no delete control', async () => {
     const { host } = await render({ list: jest.fn(() => of(page())) });
 
     const labels = Array.from(host.querySelectorAll('button')).map((button) => button.textContent?.trim() ?? '');
-    expect(labels).not.toContain('Add master product');
-    expect(labels).not.toContain('Edit');
     expect(labels).not.toContain('Delete');
+    expect(labels).not.toContain('Remove');
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 
@@ -345,7 +347,218 @@ describe('SuperAdminMasterProductsComponent (issue #1023)', () => {
     const { host } = await render({ list: jest.fn(() => of(page())) });
 
     const text = host.textContent ?? '';
-    expect(text).not.toMatch(/business/i);
+    expect(text).not.toMatch(/\bbusinesses?\b/i);
     expect(text).not.toMatch(/tracking/i);
+  });
+
+  /**
+   * Issue #1024's own criteria on the page: the two ways in to the form, and the fact that an
+   * accepted write re-reads the catalogue, so what is on screen is what is stored.
+   */
+  describe('managing the catalogue (issue #1024)', () => {
+    it('opens the form with no product for a new master product', async () => {
+      const { component, host, fixture } = await render({ list: jest.fn(() => of(page())) });
+
+      testId(host, 'master-product-new').click();
+      fixture.detectChanges();
+
+      expect(component.formOpen).toBe(true);
+      expect(component.editing).toBeNull();
+      expect(testId(host, 'master-product-form').textContent).toContain('New master product');
+    });
+
+    /**
+     * Edit hands the form the whole product, not its id: the correction has to present the
+     * `updatedAtUtc` this page read, which is how the server refuses a stale edit.
+     */
+    it('opens the form with the row being corrected', async () => {
+      const row = product({ id: 7, brand: 'Coke', name: 'Clasic', updatedAtUtc: '2026-10-31T01:02:03Z' });
+      const { component, host, fixture } = await render({
+        list: jest.fn(() => of(page({ products: [row] })))
+      });
+
+      testId(host, 'master-product-edit-7').click();
+      fixture.detectChanges();
+
+      expect(component.formOpen).toBe(true);
+      expect(component.editing).toBe(row);
+      expect(testId(host, 'master-product-form').textContent).toContain('Edit master product');
+    });
+
+    it('re-reads the catalogue after an accepted write and says what happened', async () => {
+      const list = jest
+        .fn()
+        .mockReturnValueOnce(of(page({ products: [product({ id: 7, brand: 'Coke' })] })))
+        .mockReturnValueOnce(of(page({ products: [product({ id: 7, brand: 'Coca-Cola' })] })));
+      const { component, host, fixture } = await render({ list });
+
+      component.savedChanges('Coca-Cola Classic was corrected.');
+      fixture.detectChanges();
+
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(component.formOpen).toBe(false);
+      expect(component.editing).toBeNull();
+      expect(component.selectedProductId).toBeNull();
+      expect(component.products.map((match) => match.brand)).toEqual(['Coca-Cola']);
+      expect(testId(host, 'master-product-saved').textContent).toContain('was corrected');
+    });
+
+    it('closes the form on cancel without re-reading anything', async () => {
+      const list = jest.fn(() => of(page()));
+      const { component, fixture } = await render({ list });
+
+      component.startCreating();
+      component.closeForm();
+      fixture.detectChanges();
+
+      expect(component.formOpen).toBe(false);
+      expect(list).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A search or a page step replaces the rows the form is about, so a half-typed correction
+     * prepared against a row nobody is looking at any more is not kept.
+     */
+    it('closes the form when the search or the page changes', async () => {
+      // The server reports page 2 of more, so stepping in either direction really happens: the page
+      // displays the slice the server says it served, never the one that was asked for.
+      const { component } = await render({ list: jest.fn(() => of(page({ page: 2, hasMore: true }))) });
+
+      component.startEditing(product({ id: 7 }));
+      component.search();
+      expect(component.formOpen).toBe(false);
+
+      component.startEditing(product({ id: 7 }));
+      component.nextPage();
+      expect(component.formOpen).toBe(false);
+
+      component.startEditing(product({ id: 7 }));
+      component.previousPage();
+      expect(component.formOpen).toBe(false);
+    });
+
+    /**
+     * The page keeps New and every row's Edit available while a write is in flight, and it serves
+     * both rows with **one** form instance. The reported defect is what that allows: correct row A,
+     * open row B before A's answer arrives, type into B, and A's answer would close B's form and
+     * throw away what was typed - or show A's refusal as B's own.
+     *
+     * The write itself is never treated as undone. An accepted one is announced and the catalogue is
+     * re-read; the form on screen is simply left alone.
+     */
+    describe('a write that answers after the form has moved on', () => {
+      function openForm(fixture: ComponentFixture<SuperAdminMasterProductsComponent>) {
+        const form = fixture.debugElement.query(By.directive(MasterProductFormComponent));
+        expect(form).not.toBeNull();
+        return form.componentInstance as MasterProductFormComponent;
+      }
+
+      const rowA = product({ id: 7, brand: 'Coke', name: 'Clasic', updatedAtUtc: '2026-10-31T01:02:03Z' });
+      const rowB = product({ id: 9, brand: 'Pepsi', name: 'Maxx', updatedAtUtc: '2026-10-31T04:05:06Z' });
+
+      it('keeps the row being corrected, and still says what the accepted write did', async () => {
+        const pending = new Subject<SuperAdminMasterProduct>();
+        const list = jest.fn(() => of(page({ products: [rowA, rowB], totalCount: 2 })));
+        const { component, host, fixture } = await render({ list, update: jest.fn(() => pending) });
+
+        testId(host, 'master-product-edit-7').click();
+        fixture.detectChanges();
+        const form = openForm(fixture);
+        form.brand = 'Coca-Cola';
+        form.submit();
+
+        testId(host, 'master-product-edit-9').click();
+        fixture.detectChanges();
+        // The same instance: it is handed the other row rather than being built again, which is why
+        // an answer has to know which form it belongs to.
+        expect(openForm(fixture)).toBe(form);
+        form.name = 'Max';
+
+        pending.next(product({ id: 7, brand: 'Coca-Cola', name: 'Clasic' }));
+        pending.complete();
+        fixture.detectChanges();
+
+        expect(component.formOpen).toBe(true);
+        expect(component.editing).toBe(rowB);
+        expect(form.brand).toBe('Pepsi');
+        expect(form.name).toBe('Max');
+        expect(form.submitting).toBe(false);
+        expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+        expect(testId(host, 'master-product-form').textContent).toContain('Edit master product');
+        // The correction did happen, so it is reported and the catalogue is read again.
+        expect(list).toHaveBeenCalledTimes(2);
+        expect(testId(host, 'master-product-saved').textContent).toContain('Coca-Cola Clasic was corrected.');
+      });
+
+      it('does not show an earlier refusal on the row being corrected, and re-reads nothing', async () => {
+        const pending = new Subject<SuperAdminMasterProduct>();
+        const list = jest.fn(() => of(page({ products: [rowA, rowB], totalCount: 2 })));
+        const { component, host, fixture } = await render({ list, update: jest.fn(() => pending) });
+
+        testId(host, 'master-product-edit-7').click();
+        fixture.detectChanges();
+        const form = openForm(fixture);
+        form.submit();
+
+        testId(host, 'master-product-edit-9').click();
+        fixture.detectChanges();
+        form.name = 'Max';
+
+        pending.error({
+          status: 409,
+          error: { message: 'This master product has been changed since this page was read.' }
+        });
+        fixture.detectChanges();
+
+        expect(component.formOpen).toBe(true);
+        expect(component.editing).toBe(rowB);
+        expect(form.brand).toBe('Pepsi');
+        expect(form.name).toBe('Max');
+        expect(form.submitting).toBe(false);
+        expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+        // A refusal wrote nothing, so there is nothing to announce and nothing to re-read.
+        expect(list).toHaveBeenCalledTimes(1);
+        expect(host.querySelector('[data-testid="master-product-saved"]')).toBeNull();
+      });
+
+      /**
+       * Dismissing the form while a write is in flight and opening another row: the reopened form is
+       * that row's, with none of the dismissed submission's state. The write itself is not announced,
+       * because the form that sent it is gone - the catalogue is read again on the next search, page
+       * step or accepted write.
+       */
+      it('reopens a clean form for another row after a write was dismissed mid-flight', async () => {
+        const pending = new Subject<SuperAdminMasterProduct>();
+        const list = jest.fn(() => of(page({ products: [rowA, rowB], totalCount: 2 })));
+        const { component, host, fixture } = await render({ list, update: jest.fn(() => pending) });
+
+        testId(host, 'master-product-edit-7').click();
+        fixture.detectChanges();
+        const dismissed = openForm(fixture);
+        dismissed.brand = 'Coca-Cola';
+        dismissed.submit();
+
+        testId(host, 'master-product-form-cancel').click();
+        fixture.detectChanges();
+        expect(component.formOpen).toBe(false);
+
+        testId(host, 'master-product-edit-9').click();
+        fixture.detectChanges();
+        const reopened = openForm(fixture);
+        reopened.name = 'Max';
+
+        pending.next(product({ id: 7, brand: 'Coca-Cola', name: 'Clasic' }));
+        pending.complete();
+        fixture.detectChanges();
+
+        expect(component.formOpen).toBe(true);
+        expect(component.editing).toBe(rowB);
+        expect(reopened.brand).toBe('Pepsi');
+        expect(reopened.name).toBe('Max');
+        expect(reopened.submitting).toBe(false);
+        expect(reopened.error).toBeNull();
+        expect(host.querySelector('[data-testid="master-product-form-error"]')).toBeNull();
+      });
+    });
   });
 });

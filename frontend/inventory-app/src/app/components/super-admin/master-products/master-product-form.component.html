@@ -1,0 +1,96 @@
+<section class="card" data-testid="master-product-form">
+  <div class="card-header">
+    <h2 class="card-title">{{ heading }}</h2>
+    <button
+      type="button"
+      class="btn btn-secondary btn-sm"
+      (click)="cancel()"
+      data-testid="master-product-form-cancel"
+    >
+      Cancel
+    </button>
+  </div>
+  <div class="card-body">
+    <form class="flex flex-wrap items-end gap-3" (ngSubmit)="submit()">
+      <label class="text-sm" for="master-product-brand">
+        Brand
+        <input
+          id="master-product-brand"
+          class="ml-2"
+          type="text"
+          name="brand"
+          autocomplete="off"
+          maxlength="100"
+          required
+          [(ngModel)]="brand"
+          data-testid="master-product-form-brand"
+        />
+      </label>
+      <label class="text-sm" for="master-product-name">
+        Name
+        <input
+          id="master-product-name"
+          class="ml-2"
+          type="text"
+          name="name"
+          autocomplete="off"
+          maxlength="200"
+          required
+          [(ngModel)]="name"
+          data-testid="master-product-form-name"
+        />
+      </label>
+      <label class="text-sm" for="master-product-size-value">
+        Size
+        <input
+          id="master-product-size-value"
+          class="ml-2"
+          type="number"
+          name="sizeValue"
+          min="0.001"
+          step="0.001"
+          required
+          [(ngModel)]="sizeValue"
+          data-testid="master-product-form-size-value"
+        />
+      </label>
+      <label class="text-sm" for="master-product-size-unit">
+        Unit
+        <select
+          id="master-product-size-unit"
+          class="ml-2"
+          name="sizeUnit"
+          [(ngModel)]="sizeUnit"
+          data-testid="master-product-form-size-unit"
+        >
+          <!-- [ngValue] rather than [value], so the bound unit stays the number the API expects
+               instead of becoming the string the DOM would hand back. -->
+          @for (unit of sizeUnits; track unit.value) {
+            <option [ngValue]="unit.value">{{ unit.label }}</option>
+          }
+        </select>
+      </label>
+      <button
+        type="submit"
+        class="btn btn-primary btn-sm"
+        [disabled]="submitting"
+        data-testid="master-product-form-submit"
+      >
+        {{ editing ? 'Save changes' : 'Add master product' }}
+      </button>
+    </form>
+
+    <!-- Said rather than enforced: the refusal is the server's, and hiding the size fields would
+         also hide why the correction cannot be made. -->
+    @if (editing && hasConfirmedListing) {
+      <p class="text-sm value-muted mt-2" data-testid="master-product-form-size-locked">
+        The size cannot be changed while a supplier listing of this product is confirmed: those listings' pack sizes
+        were confirmed against the current size. The brand and the name can always be corrected.
+      </p>
+    }
+
+    @if (error) {
+      <p class="text-sm text-red-600 mt-2" role="alert" data-testid="master-product-form-error">{{ error }}</p>
+    }
+  </div>
+</section>
