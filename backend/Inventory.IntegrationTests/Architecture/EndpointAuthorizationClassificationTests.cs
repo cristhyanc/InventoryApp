@@ -385,6 +385,12 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/Products/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}/gst-rule", "PUT", Capability.InventoryOperate)]
     [InlineData("api/products/{productId:long}/inventory-count/apply", "POST", Capability.InventoryOperate)]
+    // Issue #1049's business lookup of the shared master products declares no capability of its own
+    // either: looking a product up in order to create it is the same catalogue work as the create
+    // below, so it is the same class and the same capability rather than a platform-admin policy or
+    // a sixth class. Asserted here because it is a member-facing read of a platform table, and what
+    // decides who may make it is exactly this row.
+    [InlineData("api/Products/master-product-suggestions", "GET", Capability.InventoryOperate)]
     [InlineData("api/Categories", "GET", Capability.InventoryOperate)]
 
     // The manual catalogue write surface (issue #736): maintaining the catalogue is the same

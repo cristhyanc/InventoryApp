@@ -117,6 +117,13 @@ public class SupportSessionRequestApiTests
     // The tracked-products list of issue #938. A supporter may read which of the business's products
     // it has asked supplier prices for; the switch itself is refused below.
     [InlineData("Inventory.Operate", "/api/products/price-tracking")]
+    // The business lookup of the shared master products (issue #1049). It is a GET under a
+    // capability this session's own set grants, so the central rule answers it - exactly as it
+    // answers the "Available to add" list of a platform record below, and exactly as it refuses
+    // the product create of the same capability because that is a POST. What a supporter reads
+    // here is the shared catalogue: a brand, a name and a size are facts about products, so it
+    // says nothing about the business they are looking at or about any other.
+    [InlineData("Inventory.Operate", "/api/products/master-product-suggestions?q=co")]
     [InlineData("Purchasing.Operate", "/api/suppliers")]
     // The "Available to add" list of issue #935. A platform record is about no business, so a
     // supporter reading it learns nothing about the business they are looking at beyond which
