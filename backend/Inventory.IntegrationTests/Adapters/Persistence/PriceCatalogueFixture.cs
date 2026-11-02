@@ -247,6 +247,29 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         new EfMasterProductCatalogueStore(Track(TestAppDbContext.Denied(_options)));
 
     /// <summary>
+    /// The business lookup of the master products as a <strong>member's</strong> request reaches it
+    /// (issue #1049): the real adapter on a context scoped to one business, which is the scope every
+    /// <c>GET api/products/master-product-suggestions</c> request has.
+    ///
+    /// <para>That is the shape that matters here, and it is the opposite of the two stores above: this
+    /// read is made by a member of a business, under their own resolved scope, and it must answer the
+    /// shared catalogue anyway - because a master product carries no business key and so no central
+    /// filter narrows it. It still reaches no mapping, no product and no business, which is what
+    /// <see cref="UnscopedSuggestionStore"/> beside it is for.</para>
+    /// </summary>
+    public IMasterProductSuggestionStore SuggestionStoreFor(int businessId) =>
+        new EfMasterProductSuggestionStore(Track(TestAppDbContext.For(_options, businessId)));
+
+    /// <summary>
+    /// The same store over a context with no filter at all. Setup-shaped, kept so a test can state
+    /// that a member's own scoped read answers exactly what a completely unfiltered one does: what
+    /// bounds this read is its reviewed field set and the endpoint's authorization, not the scope the
+    /// request carries.
+    /// </summary>
+    public IMasterProductSuggestionStore UnscopedSuggestionStore() =>
+        new EfMasterProductSuggestionStore(Track(TestAppDbContext.Unrestricted(_options)));
+
+    /// <summary>
     /// The master-product write store as a platform-admin request reaches it (issue #1024): the real
     /// adapter on a context whose caller has no business at all, which is the scope every
     /// <c>api/super-admin/master-products</c> request has.
