@@ -585,6 +585,16 @@ changed, and every "Unavailable" still means unavailable, never zero.
   connector-free rather than looking like it belongs to a site, an error or an empty message. A
   site the fleet read returned no machine for stays visible saying so, presented as that site's own
   child. Every machine appears exactly once.
+  - **What the figures mean is behind one help button** beside the words "Site and machine
+    performance", on a wide screen and on a phone (issue #1015), instead of a full-width row of
+    explanation above the table. Pressing, tapping or tabbing to it - or just hovering over it -
+    opens a short panel beside it with the card's one explanation: that every machine row carries
+    its own stock level and its own low and empty counts, that machines under **Other machines**
+    show theirs as unavailable, and that a site's counts need not add up from its machines'. The
+    panel sits beside the button rather than pushing the table down, Escape or a press outside
+    closes it, and Escape hands focus back to the button. It appears only when the card has rows:
+    while it is loading, after a failed read with nothing to show, or when the business has no
+    sites or machines, there is no help button, exactly as there was no explanation row before.
   - **One period at a time, shared by both layouts.** The Today / This week / Last week / Month to
     date buttons above the table choose the period for every row, and the sales column names it. The
     comparison column shows the published "vs same time last week" figure while This week is
@@ -611,7 +621,7 @@ changed, and every "Unavailable" still means unavailable, never zero.
     are worked out on the server by the site's own rule over that machine's selections alone: only
     selections linked to an active catalogue product count, several slots of one product on that
     machine are added together first, and nothing is counted in the browser. **A site's counts are
-    not the sum of its machines'**, and the card says so: a site counts each product once over the
+    not the sum of its machines'**, and the card's help button says so: a site counts each product once over the
     combined stock of its machines, so a product that is low on two machines is two machine alerts
     and one site alert, and a product the site reports as stocked can still be low on one machine.
     A machine whose selections hold nothing to alert on shows an honest **0 low · 0 empty**; a

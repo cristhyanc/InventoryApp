@@ -17,7 +17,10 @@ import { join, resolve } from 'node:path';
  * pending restock sync - so no business data, account name or credential can appear in a capture.
  *
  * Each width also asserts the page has no horizontal overflow, which is the issue's layout rule.
- * Issue #1016's evidence is here too - the Cheapest supplier help panel opened from the desktop
+ * Issue #1015's evidence is here - the performance card's explanation opened from the one help
+ * button beside its title at all four widths, measured beside the button, in the top layer, inside
+ * the viewport and leaving the table where it was, plus the keyboard focus ring on that button -
+ * and issue #1016's - the Cheapest supplier help panel opened from the desktop
  * heading at 1440px and from a narrow-screen card at 360px - and issue #1017's: Reorder priorities
  * is paged five rows to a page, so the seven reorder products give two pages, and the second page
  * is captured at 1440 and 390px after turning it with the pager. Issue #987's own interaction evidence
@@ -352,9 +355,89 @@ function siteName(page: Page, key: string): Locator {
 
 /** Where an element's box actually starts on the page, in CSS pixels. */
 async function leftEdge(locator: Locator): Promise<number> {
-  const box = await locator.boundingBox();
-  expect(box, 'an element has to be laid out before it can be measured').not.toBeNull();
-  return box!.x;
+  return (await box(locator)).x;
+}
+
+/** An element's rendered box, which has to exist before anything about it can be measured. */
+async function box(locator: Locator): Promise<{ x: number; y: number; width: number; height: number }> {
+  const measured = await locator.boundingBox();
+  expect(measured, 'an element has to be laid out before it can be measured').not.toBeNull();
+  return measured!;
+}
+
+/** The card title's one help button (issue #1015), in whichever layout is the rendered one. */
+function performanceHelpButton(page: Page): Locator {
+  return page
+    .locator('section[aria-labelledby="site-machine-performance-title"] button[aria-label="About these figures"]:visible')
+    .first();
+}
+
+/**
+ * Where the help button actually sits (issue #1015): immediately after the words "Site and machine
+ * performance", on every width. The heading's *last line* is measured with a `Range` rather than
+ * the heading's box, because at 360px the title wraps - and a button beside the box rather than
+ * beside the words would land at the far end of the header, which is exactly what the criterion
+ * rules out and what no class assertion could tell apart.
+ */
+function measureHelpButtonPlacement(page: Page): Promise<{ onTitleLastLine: boolean; gapAfterLastWord: number }> {
+  return page.evaluate(() => {
+    const heading = document.querySelector('#site-machine-performance-title') as HTMLElement;
+    const button = document.querySelector('button[aria-label="About these figures"]') as HTMLElement;
+    const text = document.createRange();
+    text.selectNodeContents(heading);
+    const lines = Array.from(text.getClientRects());
+    const lastLine = lines.at(-1)!;
+    const box = button.getBoundingClientRect();
+
+    return {
+      onTitleLastLine: box.top + box.height / 2 >= lastLine.top && box.top + box.height / 2 <= lastLine.bottom,
+      gapAfterLastWord: Math.round(box.left - lastLine.right)
+    };
+  });
+}
+
+/**
+ * What issue #1015 asks of the open help panel, measured inside the page so every figure is
+ * viewport-relative and therefore comparable: it stands beside its trigger rather than over it, it
+ * is wholly inside the viewport, and over its whole extent the element the browser hit-tests to is
+ * the panel - which is what "escapes clipping" means for a card with `overflow-hidden`, and what
+ * nothing but a real browser's top layer can answer.
+ *
+ * The probe points are the panel's centre and the middle of each of its four edges rather than its
+ * corners, because the panel is rounded: a point inside the bounding box at a corner is outside
+ * the painted shape, and would say "clipped" about a radius.
+ */
+function measureHelpPanel(page: Page): Promise<{
+  coversTrigger: boolean;
+  insideViewport: boolean;
+  onTopThroughout: boolean;
+}> {
+  return page.evaluate(() => {
+    const panel = document.querySelector('[data-testid="help-toggletip-panel"]') as HTMLElement;
+    const trigger = document.querySelector(
+      'button[aria-label="About these figures"][aria-expanded="true"]'
+    ) as HTMLElement;
+    const box = panel.getBoundingClientRect();
+    const button = trigger.getBoundingClientRect();
+    const inset = 2;
+    const points: [number, number][] = [
+      [box.left + box.width / 2, box.top + box.height / 2],
+      [box.left + box.width / 2, box.top + inset],
+      [box.left + box.width / 2, box.bottom - inset],
+      [box.left + inset, box.top + box.height / 2],
+      [box.right - inset, box.top + box.height / 2]
+    ];
+
+    return {
+      coversTrigger:
+        box.left < button.right && box.right > button.left && box.top < button.bottom && box.bottom > button.top,
+      insideViewport:
+        box.left >= 0 && box.top >= 0 && box.right <= window.innerWidth && box.bottom <= window.innerHeight,
+      onTopThroughout: points.every(
+        ([x, y]) => document.elementFromPoint(x, y)?.closest('[data-testid="help-toggletip-panel"]') != null
+      )
+    };
+  });
 }
 
 /** Opens the More sheet at 390px from the given control and checks focus starts on Close. */
@@ -446,6 +529,83 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       await page.screenshot({ path: join(screenshotDirectory, `reorder-page-2-${width}px.png`) });
     });
   }
+
+  /**
+   * Issue #1015's own evidence, and the part of it only a browser can answer: the card's
+   * explanation is now behind one help button beside its title, and the panel that button opens
+   * has to stand *beside* the button in the top layer - clipped by neither the `overflow-hidden`
+   * card nor anything else, inside the viewport even at 360px, not over its own trigger, and
+   * without moving the table it explains. Each of those is measured here from the rendered boxes
+   * rather than argued from the classes, at every width the issue names.
+   */
+  for (const width of [360, 390, 768, 1440]) {
+    test(`Site and machine performance help panel open at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+      // Centred rather than merely scrolled into view, so the card header is in a settled place on
+      // every width and the capture is of the panel beside its button rather than of a page edge.
+      await page
+        .locator('#site-machine-performance-title')
+        .evaluate((heading) => heading.scrollIntoView({ block: 'center' }));
+      const button = performanceHelpButton(page);
+      const figures = page
+        .locator('[data-testid="performance-table"]:visible, [data-testid="performance-cards"]:visible')
+        .first();
+
+      // Immediately after the words, on this width's own line breaks.
+      const placement = await measureHelpButtonPlacement(page);
+      expect(placement.onTitleLastLine).toBe(true);
+      expect(placement.gapAfterLastWord).toBeGreaterThanOrEqual(0);
+      expect(placement.gapAfterLastWord).toBeLessThanOrEqual(8);
+
+      // Where the figures sit before the panel exists: an anchored panel must not push them.
+      const figuresBefore = await box(figures);
+      await button.click();
+
+      const panel = page.getByTestId('help-toggletip-panel');
+      await expect(panel).toBeVisible();
+      await expect(button).toHaveAttribute('aria-expanded', 'true');
+      await expect(panel).toHaveText(/need not equal the sum of its machines'\.$/);
+
+      expect(await measureHelpPanel(page)).toEqual({
+        coversTrigger: false,
+        insideViewport: true,
+        onTopThroughout: true
+      });
+      // The figures have not moved, which is what an in-flow disclosure could not manage.
+      expect(await box(figures)).toEqual(figuresBefore);
+      await expectNoHorizontalOverflow(page);
+
+      await page.screenshot({ path: join(screenshotDirectory, `performance-help-${width}px.png`) });
+
+      // Escape dismisses it and hands focus back, from a pointer opening as well as a keyboard one.
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('help-toggletip-panel')).toHaveCount(0);
+      await expect(button).toHaveAttribute('aria-expanded', 'false');
+      await expect(button).toBeFocused();
+    });
+  }
+
+  test('the help button takes keyboard focus, shows it, and opens from the keyboard', async ({ page }) => {
+    await openDashboard(page, 1440);
+    const button = performanceHelpButton(page);
+
+    await button.focus();
+    await expect(button).toBeFocused();
+    // Focus alone shows the explanation, and the ring is captured with the card header around it.
+    await expect(page.getByTestId('help-toggletip-panel')).toBeVisible();
+    await page
+      .locator('section[aria-labelledby="site-machine-performance-title"] .card-header')
+      .screenshot({ path: join(screenshotDirectory, 'performance-help-focus-1440px.png') });
+
+    // Space pins it open, Enter closes it again: one key press is one toggle.
+    await page.keyboard.press(' ');
+    await expect(page.getByTestId('help-toggletip-panel')).toBeVisible();
+    await expect(button).toHaveAttribute('aria-expanded', 'true');
+
+    await page.keyboard.press('Enter');
+    await expect(page.getByTestId('help-toggletip-panel')).toHaveCount(0);
+    await expect(button).toBeFocused();
+  });
 
   /**
    * Issue #987's own evidence. Each one is a real browser interaction, not a styled state: the
