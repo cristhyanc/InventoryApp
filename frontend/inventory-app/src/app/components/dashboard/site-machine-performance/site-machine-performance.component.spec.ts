@@ -675,6 +675,71 @@ describe('Site and machine performance actions (issue #987)', () => {
   });
 });
 
+describe('Site and machine performance child presentation (issue #1014)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it("marks a machine row as its site's child with an indent and a left rule, not colour alone", async () => {
+    const { host } = await render();
+    const indentWrapper = machineRow(host, 'site-2', 1).querySelector('td div') as HTMLElement;
+
+    expect(indentWrapper.className).toContain('border-l-2');
+    expect(indentWrapper.className).toContain('border-rr-line');
+    expect(indentWrapper.className).toContain('ml-10');
+  });
+
+  it('gives the Other machines group the same child presentation as a site', async () => {
+    const { host } = await render();
+    const indentWrapper = machineRow(host, 'other', 3).querySelector('td div') as HTMLElement;
+
+    expect(indentWrapper.className).toContain('border-l-2');
+    expect(indentWrapper.className).toContain('ml-10');
+  });
+
+  it('leaves the one unheaded no-sites group with no indent or connector on its machine rows', async () => {
+    const { host } = await render({ sites: [], sitesError: 'Sites could not be loaded.' });
+    const indentWrapper = machineRow(host, 'other', 1).querySelector('td div') as HTMLElement;
+
+    expect(indentWrapper.className).not.toContain('border-l-2');
+    expect(indentWrapper.className).not.toContain('ml-10');
+  });
+
+  it("presents an empty site's own \"No machines at this site.\" line as that site's child", async () => {
+    const { host } = await render({ machines: [machine(2, 'Avenue Hotel VM', 1)] });
+    const emptyLine = machineRegion(host, 'site-2').querySelector('span') as HTMLElement;
+
+    expect(emptyLine.textContent?.trim()).toBe('No machines at this site.');
+    expect(emptyLine.className).toContain('border-l-2');
+  });
+
+  it('gives the narrow-layout machine card list the same child presentation', async () => {
+    const { host } = await render();
+    const cardsRegion = host.querySelector('#site-machine-cards-site-2') as HTMLElement;
+
+    expect(cardsRegion.className).toContain('border-l-2');
+    expect(cardsRegion.className).toContain('ml-4');
+  });
+
+  it('leaves the narrow-layout unheaded no-sites group with no indent or connector', async () => {
+    const { host } = await render({ sites: [], sitesError: 'Sites could not be loaded.' });
+    const cardsRegion = host.querySelector('#site-machine-cards-other') as HTMLElement;
+
+    expect(cardsRegion.className).not.toContain('border-l-2');
+  });
+
+  it('does not change any expander when a machine name link is activated', async () => {
+    const { fixture, host } = await render();
+    jest.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    const machineLink = machineRegion(host, 'site-1').querySelector('a.table-row-anchor') as HTMLAnchorElement;
+
+    machineLink.click();
+    fixture.detectChanges();
+
+    expect(expander(host, 'site-1').getAttribute('aria-expanded')).toBe('true');
+    expect(expander(host, 'site-2').getAttribute('aria-expanded')).toBe('true');
+    expect(expander(host, 'other').getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
 describe('Site and machine performance independent read states (issue #987)', () => {
   afterEach(() => TestBed.resetTestingModule());
 

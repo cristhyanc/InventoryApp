@@ -9320,7 +9320,17 @@ Visual evidence at 360, 390, 768 and 1440px, with a no-horizontal-overflow asser
 `e2e/visual/dashboard-redesign.visual.ts`, written to `docs/screenshots/issue-972/`. Issue #987's
 collapsed-group, period-control and keyboard-focus captures are written beside them by the same run,
 and so are issue #1016's two help-panel captures (`reorder-supplier-help-1440px.png` and
-`reorder-supplier-help-360px.png`).
+`reorder-supplier-help-360px.png`). Issue #1014's nesting is **measured** by that run rather than
+inferred from the Tailwind values, because where a machine name starts compared with its site's name
+is a layout outcome and no class assertion in jsdom can stand in for it: at 1440px it measures every
+machine name's left edge against its site's (at least the 1.5rem the issue asks for), that the
+"Other machines" child box and an empty site's own line start exactly where a site's machine row
+does, that collapsing a group moves no site name because the glyph keeps its own slot, and that the
+long names stay inside the Site / machine column; at 360 and 390px it measures that each machine card
+is inside its site card's box and that its name starts right of the site's. The failed-sites fallback
+has its own two captures, `performance-no-sites-1440px.png` and `performance-no-sites-390px.png`,
+taken with the sites read answered 500 while the machine read succeeds, and the run asserts that the
+one unheaded group draws neither indent nor rule.
 
 #### Shared help toggletip (issues #1015 and #1016)
 
@@ -9385,7 +9395,11 @@ sites. Sites start expanded; `collapsedKeys` remembers what the reader *closed*,
 arrives in a later read starts expanded and a refresh returning the same site ids keeps exactly the
 groups that were closed. Each group's machines are their own `tbody` (and `ul` on a narrow screen)
 whose `id` the expander's `aria-controls` names; collapsing renders no row at all, so a collapsed
-group exposes no focusable descendant.
+group exposes no focusable descendant. Since issue #1014 a machine row is indented well clear of its
+site's name and set off with a left rule (`childRowIndentClass`/`childCardIndentClass`, built from
+the `rr-line` token), rather than the site tint alone marking the relationship; "Other machines" gets
+the same treatment under its own heading, and the one unheaded fallback group - no site was available
+at all - is not `isCollapsible`, so it keeps neither indent nor rule.
 
 **One set of columns, one period.** Site and machine rows share Site / machine, Stock, Low / empty,
 the selected period's sales, the applicable comparison and Actions. One `<fieldset>` of Today / This

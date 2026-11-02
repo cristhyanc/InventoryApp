@@ -575,11 +575,16 @@ changed, and every "Unavailable" still means unavailable, never zero.
   reminder keeps its 14-day window and its link that opens Sync Restock from the oldest pending date.
 - **Site and machine performance** is one card (issue #987): each site is a summary row - its name,
   how many machines it has, its stock level in words as well as in colour, its low and empty
-  selections and its sales - and an expand button under the site's name reveals that site's machines
-  indented directly beneath it. Sites start expanded, collapsing one leaves the others alone, and a
+  selections and its sales - and an expand button under the site's name reveals that site's machines,
+  each indented well clear of the site's own name and set off with a left rule, so the relationship
+  is never carried by the site's tint alone (issue #1014). Sites start expanded, collapsing one leaves the others alone, and a
   refresh keeps whichever groups you closed. Machines with no site, or at a site that was not
-  returned, come last under **Other machines**, and a site the fleet read returned no machine for
-  stays visible saying so. Every machine appears exactly once.
+  returned, come last under **Other machines**, which gets the same indent and rule under its own
+  heading. When no site is available at all - an empty or failed sites read - the whole fleet is one
+  unheaded group with no heading to nest under, so it is deliberately left un-indented and
+  connector-free rather than looking like it belongs to a site, an error or an empty message. A
+  site the fleet read returned no machine for stays visible saying so, presented as that site's own
+  child. Every machine appears exactly once.
   - **One period at a time, shared by both layouts.** The Today / This week / Last week / Month to
     date buttons above the table choose the period for every row, and the sales column names it. The
     comparison column shows the published "vs same time last week" figure while This week is

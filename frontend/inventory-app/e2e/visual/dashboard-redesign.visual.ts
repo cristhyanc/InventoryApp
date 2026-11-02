@@ -304,9 +304,17 @@ async function answerApi(page: Page): Promise<void> {
   });
 }
 
-async function openDashboard(page: Page, width: number): Promise<void> {
+async function openDashboard(page: Page, width: number, options: { failSitesRead?: boolean } = {}): Promise<void> {
   await page.setViewportSize({ width, height: 900 });
   await answerApi(page);
+  if (options.failSitesRead) {
+    // Registered after the catch-all so it is the handler that wins: Playwright offers a request to
+    // the most recently added matching route first. The machine read still succeeds, which is the
+    // state issue #1014 cares about - every machine falls back to the one unheaded group.
+    await page.route('**/api/sites', (route: Route) =>
+      route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ message: 'Sites are unavailable.' }) })
+    );
+  }
   await page.goto('/');
   await page.addStyleTag({
     content: '*, *::before, *::after { animation: none !important; transition: none !important; }'
@@ -335,6 +343,18 @@ function groupMachines(page: Page, key: string): Locator {
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
+}
+
+/** The site's own name inside whichever layout's expander is the rendered one. */
+function siteName(page: Page, key: string): Locator {
+  return siteExpander(page, key).locator('span.font-semibold');
+}
+
+/** Where an element's box actually starts on the page, in CSS pixels. */
+async function leftEdge(locator: Locator): Promise<number> {
+  const box = await locator.boundingBox();
+  expect(box, 'an element has to be laid out before it can be measured').not.toBeNull();
+  return box!.x;
 }
 
 /** Opens the More sheet at 390px from the given control and checks focus starts on Close. */
@@ -496,6 +516,96 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
     await expect(expander).toHaveAttribute('aria-expanded', 'true');
     await expect(groupMachines(page, 'site-1')).toHaveCount(1);
   });
+
+  /**
+   * Issue #1014's own evidence, and the part of it that nothing but a browser can give: the
+   * hierarchy is *measured* in the rendered page rather than reasoned from the Tailwind values,
+   * because the question the issue asks - where does a machine name actually start compared with
+   * its site's name - is a layout outcome, not a class list.
+   */
+  test('every machine name is measurably nested under its site name at 1440px', async ({ page }) => {
+    await openDashboard(page, 1440);
+    /** The issue's rule: at least 1.5rem, which is 24px at the root font size the application ships. */
+    const minimumChildIndent = 24;
+
+    const siteOneName = await leftEdge(siteName(page, 'site-1'));
+    // Every machine of both sites, including the two standing at the deliberately long-named one.
+    for (const child of [
+      { group: 'site-1', machineId: 1 },
+      { group: 'site-2', machineId: 2 },
+      { group: 'site-2', machineId: 3 }
+    ]) {
+      const machineNameX = await leftEdge(page.locator(`tbody#site-machines-${child.group} [data-testid="machine-name-${child.machineId}"]`));
+      expect(machineNameX - (await leftEdge(siteName(page, child.group)))).toBeGreaterThanOrEqual(minimumChildIndent);
+    }
+
+    // The structural cue, not background colour alone: a rule drawn down the left of every child.
+    await expect(page.getByTestId('machine-row-indent-1')).toHaveCSS('border-left-width', '2px');
+
+    // "Other machines" and an empty site's own line are presented as children in the same place:
+    // the indented, ruled box itself, which is what carries the cue, starts exactly where a site's
+    // machine row does.
+    const childBox = await leftEdge(page.getByTestId('machine-row-indent-1'));
+    expect(await leftEdge(page.getByTestId('machine-row-indent-4'))).toBeCloseTo(childBox, 0);
+    expect(await leftEdge(page.getByText('No machines at this site.').filter({ visible: true }).first())).toBeCloseTo(childBox, 0);
+
+    // The glyph keeps its own space: collapsing a group swaps ▾ for ▴ and moves no site name, so a
+    // machine name can never come to line up with one.
+    await siteExpander(page, 'site-1').click();
+    await expect(siteExpander(page, 'site-1')).toHaveAttribute('aria-expanded', 'false');
+    expect(await leftEdge(siteName(page, 'site-1'))).toBeCloseTo(siteOneName, 0);
+
+    // The long names wrap inside the Site / machine column instead of widening it or the page.
+    await expectNoHorizontalOverflow(page);
+    const nameColumn = (await page.locator('[data-testid="performance-table"] thead th').first().boundingBox())!;
+    const longMachineName = (await page.locator('tbody#site-machines-site-2 [data-testid="machine-name-3"]').boundingBox())!;
+    expect(longMachineName.x + longMachineName.width).toBeLessThanOrEqual(nameColumn.x + nameColumn.width);
+  });
+
+  for (const width of [360, 390]) {
+    test(`machine cards stay inside their site card and indented at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+
+      // The two-machine site, whose name is the deliberately long one: the hardest case for a
+      // narrow screen, and the one that would overflow if the indent were taken from the viewport.
+      const siteCard = page.getByTestId('performance-card-group-site-2');
+      const machineCard = siteCard.getByTestId('performance-machine-card-2');
+      await expect(machineCard).toBeVisible();
+
+      const site = (await siteCard.boundingBox())!;
+      const machine = (await machineCard.boundingBox())!;
+      expect(machine.x).toBeGreaterThan(site.x);
+      expect(machine.x + machine.width).toBeLessThanOrEqual(site.x + site.width);
+      expect(machine.y).toBeGreaterThan(site.y);
+      expect(machine.y + machine.height).toBeLessThanOrEqual(site.y + site.height);
+
+      expect(await leftEdge(machineCard.getByTestId('machine-name-2'))).toBeGreaterThan(await leftEdge(siteName(page, 'site-2')));
+      await expect(page.locator('ul#site-machine-cards-site-2')).toHaveCSS('border-left-width', '2px');
+
+      await expectNoHorizontalOverflow(page);
+    });
+  }
+
+  /**
+   * The one group that is deliberately *not* nested: when the sites read fails there is no site to
+   * be a child of, so every machine falls back to one unheaded group that keeps no indent and no
+   * connector - nothing may look nested under a site, an error message or an empty message.
+   */
+  for (const width of [1440, 390]) {
+    test(`machines are not nested under a failed sites read at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width, { failSitesRead: true });
+
+      await expect(page.getByTestId('sites-unavailable')).toBeVisible();
+      await expect(page.locator('[data-testid^="performance-expander-"], [data-testid^="performance-card-expander-"]')).toHaveCount(0);
+      await expect(page.getByTestId('machine-row-indent-1')).toHaveCSS('border-left-width', '0px');
+      await expect(page.locator('ul#site-machine-cards-other')).toHaveCSS('border-left-width', '0px');
+      await expectNoHorizontalOverflow(page);
+
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width, height });
+      await page.screenshot({ path: join(screenshotDirectory, `performance-no-sites-${width}px.png`) });
+    });
+  }
 
   for (const width of [360, 390]) {
     test(`More sheet opened and scrolled at ${width}px`, async ({ page }) => {
