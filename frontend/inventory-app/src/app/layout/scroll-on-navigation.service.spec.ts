@@ -32,6 +32,16 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
   let scrollToAnchor: jest.Mock;
   let router: Router;
   let blockedPath: string | null;
+  /**
+   * Where the window is scrolled to right now. The router reads this through
+   * `ViewportScroller.getScrollPosition()` when a navigation starts, which is what it later hands
+   * back as the `Scroll` event's `position` on Back/Forward - so a test that wants to prove real
+   * restoration has to move it to a nonzero value first, exactly as an operator scrolling the page
+   * does. A fixed `[0, 0]` here would make restoration indistinguishable from scrolling to the top.
+   */
+  let scrollPosition: [number, number];
+  /** The element the test's root component is bootstrapped into; removed again after each test. */
+  let host: HTMLElement | null = null;
 
   const blockingGuard: CanActivateFn = (_route, state) => {
     if (blockedPath !== null && state.url === blockedPath) {
@@ -50,10 +60,26 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
     await flushScrollEvent();
   }
 
+  /** The operator scrolling the page they are on, before they navigate away from it. */
+  function scrollTo(position: [number, number]): void {
+    scrollPosition = position;
+  }
+
+  async function goBack(): Promise<void> {
+    TestBed.inject(Location).back();
+    await flushScrollEvent();
+  }
+
+  async function goForward(): Promise<void> {
+    TestBed.inject(Location).forward();
+    await flushScrollEvent();
+  }
+
   async function harness(): Promise<void> {
     scrollToPosition = jest.fn();
     scrollToAnchor = jest.fn();
     blockedPath = null;
+    scrollPosition = [0, 0];
 
     TestBed.configureTestingModule({
       providers: [
@@ -69,7 +95,7 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
         {
           provide: ViewportScroller,
           useValue: {
-            getScrollPosition: () => [0, 0],
+            getScrollPosition: () => scrollPosition,
             scrollToPosition,
             scrollToAnchor,
             setOffset: jest.fn(),
@@ -79,7 +105,7 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
       ]
     });
 
-    const host = document.createElement('app-scroll-test-root');
+    host = document.createElement('app-scroll-test-root');
     document.body.appendChild(host);
     TestBed.inject(ApplicationRef).bootstrap(RootComponent, host);
     // Starts the handler, exactly as `provideEnvironmentInitializer` does in `app.config.ts`.
@@ -94,11 +120,14 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
 
   afterEach(() => {
     TestBed.resetTestingModule();
+    host?.remove();
+    host = null;
   });
 
   it('scrolls to the top on a successful navigation to a different primary path', async () => {
     await harness();
     await navigate('/a');
+    scrollTo([0, 640]);
     scrollToPosition.mockClear();
 
     await navigate('/b');
@@ -106,16 +135,40 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
     expect(scrollToPosition).toHaveBeenCalledWith([0, 0]);
   });
 
-  it('restores the stored position on Back', async () => {
+  it('restores the nonzero position the history entry had on Back', async () => {
     await harness();
     await navigate('/a');
+    scrollTo([0, 640]);
+    // Leaving page A is what stores [0, 640] against page A's history entry, and page B then opens
+    // at the top - so a restoration to [0, 640] can only come from that stored position.
     await navigate('/b');
+    scrollTo([0, 0]);
     scrollToPosition.mockClear();
 
-    TestBed.inject(Location).back();
-    await flushScrollEvent();
+    await goBack();
 
-    expect(scrollToPosition).toHaveBeenCalledWith([0, 0]);
+    expect(scrollToPosition).toHaveBeenCalledWith([0, 640]);
+    expect(scrollToPosition).not.toHaveBeenCalledWith([0, 0]);
+    expect(scrollToAnchor).not.toHaveBeenCalled();
+  });
+
+  it('restores the position that forward history entry had on Forward', async () => {
+    await harness();
+    await navigate('/a');
+    scrollTo([0, 640]);
+    await navigate('/b');
+    // A different position on page B, so Forward cannot pass by restoring page A's one.
+    scrollTo([0, 215]);
+    await goBack();
+    expect(scrollToPosition).toHaveBeenCalledWith([0, 640]);
+    scrollTo([0, 640]);
+    scrollToPosition.mockClear();
+
+    await goForward();
+
+    expect(scrollToPosition).toHaveBeenCalledWith([0, 215]);
+    expect(scrollToPosition).not.toHaveBeenCalledWith([0, 0]);
+    expect(scrollToPosition).not.toHaveBeenCalledWith([0, 640]);
     expect(scrollToAnchor).not.toHaveBeenCalled();
   });
 
