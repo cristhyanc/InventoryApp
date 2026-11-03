@@ -78,7 +78,8 @@ public class BulkProductGstRulePolicyTests
     [Fact]
     public void The_confirmed_count_matching_the_stored_count_is_what_allows_the_write()
     {
-        BulkProductGstRulePolicy.RequireUnchangedEligibleCount(expectedCount: 4, actualCount: 4);
+        Assert.Null(Record.Exception(
+            () => BulkProductGstRulePolicy.RequireUnchangedEligibleCount(expectedCount: 4, actualCount: 4)));
     }
 
     [Theory]

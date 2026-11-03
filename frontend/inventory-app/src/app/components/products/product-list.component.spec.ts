@@ -2270,7 +2270,7 @@ describe('ProductListComponent Set GST rule in bulk (issue #1076)', () => {
     clickInDialog('Apply');
 
     expect(success).toHaveBeenCalledWith('GST rule set on 2 products that had no rule.');
-    expect(getAll.mock.calls.length).toBe(fetchesBefore + 1);
+    expect(getAll.mock.calls).toHaveLength(fetchesBefore + 1);
     expect(dialog()).toBeNull();
   });
 
