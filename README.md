@@ -1756,6 +1756,7 @@ What a run does, and why it is safe to repeat:
 - That host, and only that host, authenticates the suite's synthetic test actors instead of real Microsoft Entra sign-in, and seeds two synthetic businesses with a small catalogue. See [docs/architecture.md § End-to-end testing authentication](docs/architecture.md#end-to-end-testing-authentication-issue-46) for the scheme and its fail-closed safeguards; the backend suite in `backend/Inventory.IntegrationTests/Auth/` proves it cannot be reached in any other environment, and those tests *are* part of `scripts/validate.sh`.
 - It registers no Nayax HTTP client at all, so no run can reach the live Nayax operator account.
 - Tests run serially against that one host, each on its own seeded product, and the covered workflows are the reorder → supplier order → receive-as-purchase chain, the positive-magnitude stock correction, purchase create/edit/delete inventory effects, the COGS/profit-unavailable report state, and two-business isolation.
+- A few files answer a rendered-layout question instead of a workflow, because jsdom computes no layout: the New Product form's geometry at 1440px and 375px (issue #892), and the New Product **Name** catalogue suggestions at 1440px and 390px — the labelled size rows, arrow-key and tapped selection on a real touchscreen, the Name/Unit Label prefill, the tracking opt-out, free text and no sideways scrolling (issue #1052). The suggestion lookup alone is answered in the browser there, because the E2E fixture seeds no master products; everything else on those pages is the real API.
 
 Failure output (screenshots and traces) is written under `frontend/inventory-app/e2e/.artifacts/test-results/`; open a trace with `npm --prefix frontend/inventory-app/e2e exec -- playwright show-trace <path>`.
 
@@ -2013,6 +2014,11 @@ does not manage.
   **Choose again**, which clears the selection so you can pick the product afresh, and **Create
   without link**, which creates the product exactly as you typed it with no catalogue link.
   **Editing** a product keeps its plain Name box: linking an existing product is not done here.
+  Screenshots at both widths:
+  [the list, 1440px](docs/screenshots/issue-1052/suggestions-open-1440px.png),
+  [the list, 390px](docs/screenshots/issue-1052/suggestions-open-390px.png),
+  [a taken suggestion, 1440px](docs/screenshots/issue-1052/selection-tracking-1440px.png) and
+  [a taken suggestion, 390px](docs/screenshots/issue-1052/selection-tracking-390px.png).
 - **Unit Label is required** (issue #895). It is what a quantity of this product is counted in — a
   bag, a can, a bottle — and every product you create or edit by hand has one. **Products → New
   Product** and **Products → Edit Product** mark the field with `*`, refuse to save while it is
