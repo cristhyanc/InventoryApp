@@ -351,6 +351,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IAvailableSupplierPresetStore, EfAvailableSupplierPresetStore>();
         services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
         services.AddScoped<IProductStore, EfProductStore>();
+        // "Set GST rule in bulk" (issue #1076). Its own adapter rather than two more methods on
+        // EfProductStore: it is the one write in this folder that touches every eligible product of
+        // a business at once, and its BEGIN IMMEDIATE count-compare-write belongs where it can be
+        // read and reviewed as the one thing it is.
+        services.AddScoped<IBulkProductGstRuleStore, EfBulkProductGstRuleStore>();
         services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
         services.AddScoped<IPurchaseStore, EfPurchaseStore>();
         services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
