@@ -497,13 +497,14 @@ public class PriceCollectorResultsTests
 
     #region Identity and pack changes
 
-    /// <summary>Every identity field the issue names sends a confirmed listing to review.</summary>
+    /// <summary>
+    /// Every identity field sends a confirmed listing to review. The barcode and its scope are not
+    /// identity fields (owner decision, 3 November 2026), which the next test holds.
+    /// </summary>
     [Theory]
     [InlineData("variant")]
     [InlineData("size")]
     [InlineData("unit")]
-    [InlineData("barcode")]
-    [InlineData("scope")]
     [InlineData("pack")]
     public async Task An_identity_change_sends_a_confirmed_listing_to_review(string field)
     {
@@ -535,6 +536,40 @@ public class PriceCollectorResultsTests
         Assert.Equal("0012345678905", listing.Barcode);
         Assert.Empty(await fixture.AllObservationsAsync());
         Assert.Single(await fixture.AllPendingObservationsAsync());
+    }
+
+    /// <summary>
+    /// A reading of a confirmed listing that differs only by its barcode or barcode scope is priced,
+    /// and the listing stays confirmed with the barcode a person confirmed: production runs had sent
+    /// confirmed listings to review because one reading carried a barcode and the next did not.
+    /// </summary>
+    [Theory]
+    [InlineData("barcode")]
+    [InlineData("scope")]
+    public async Task A_barcode_difference_alone_keeps_a_confirmed_listing_priced(string field)
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+
+        var listingId = await fixture.SeedIdentifiedListingAsync(
+            cola,
+            waitingKey: null,
+            "SKU-30",
+            SupplierListingMatchStatus.Confirmed);
+
+        var runId = await fixture.SeedRunAsync(RunStarted, Expires);
+        var workItemId = await fixture.SeedWorkItemAsync(runId, cola, waitingKey: null);
+
+        var receipt = await SubmitAsync(fixture, runId, Changed(field, workItemId, fixture.SupplierPresetId));
+
+        Assert.Single(receipt!.Accepted);
+        Assert.Empty(receipt.SentToReview);
+
+        var listing = await fixture.ListingAsync(listingId);
+        Assert.Equal(SupplierListingMatchStatus.Confirmed, listing.MatchStatus);
+        Assert.Equal("0012345678905", listing.Barcode);
+        Assert.Single(await fixture.AllObservationsAsync());
+        Assert.Empty(await fixture.AllPendingObservationsAsync());
     }
 
     /// <summary>And a refused listing whose identity changed is a new proposal rather than a refusal.</summary>

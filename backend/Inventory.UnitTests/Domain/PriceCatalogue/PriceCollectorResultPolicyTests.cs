@@ -132,8 +132,6 @@ public class PriceCollectorResultPolicyTests
             Confirmed with { Variant = "Zero Sugar" },
             Confirmed with { SizeValue = 600m },
             Confirmed with { SizeUnit = MasterProductSizeUnit.Gram },
-            Confirmed with { Barcode = "0012345678906" },
-            Confirmed with { BarcodeScope = BarcodeScope.Carton },
             Confirmed with { UnitsPerPack = 24 },
         };
 
@@ -148,16 +146,40 @@ public class PriceCollectorResultPolicyTests
                 Confirmed,
                 Confirmed with { Variant = "  classic " }));
 
+    public static TheoryData<SupplierListingIdentity> BarcodeOnlyDifferences() =>
+        new()
+        {
+            Confirmed with { Barcode = "0012345678906" },
+            Confirmed with { Barcode = "12345678905" },
+            Confirmed with { BarcodeScope = BarcodeScope.Carton },
+            Confirmed with { Barcode = null, BarcodeScope = null },
+        };
+
     /// <summary>
-    /// A barcode is compared exactly, because <c>0012345678905</c> and <c>12345678905</c> are
-    /// different codes and the leading zeros are the difference.
+    /// The barcode and its scope are not part of the identity check (owner decision, 3 November
+    /// 2026): a barcode that is different, missing or of another scope is not a change on its own,
+    /// because one reading carrying it and the next not kept sending confirmed listings to review.
     /// </summary>
+    [Theory]
+    [MemberData(nameof(BarcodeOnlyDifferences))]
+    public void A_barcode_difference_alone_is_not_a_change(SupplierListingIdentity observed) =>
+        Assert.False(PriceCollectorResultPolicy.HasIdentityChanged(Confirmed, observed));
+
+    /// <summary>So a confirmed listing whose reading differs only by its barcode is priced.</summary>
     [Fact]
-    public void A_barcode_that_differs_only_by_its_leading_zeros_is_a_change() =>
-        Assert.True(
-            PriceCollectorResultPolicy.HasIdentityChanged(
-                Confirmed,
-                Confirmed with { Barcode = "12345678905" }));
+    public void A_confirmed_listing_whose_reading_differs_only_by_barcode_is_accepted()
+    {
+        var decision = Decide(
+            SupplierListingMatchStatus.Confirmed,
+            Confirmed,
+            Confirmed with { Barcode = null, BarcodeScope = null },
+            packPrice: 10m,
+            lastAcceptedPackPrice: 10m);
+
+        Assert.Equal(PriceCollectorRowOutcome.Accepted, decision.Outcome);
+        Assert.True(decision.RecordsAcceptedObservation);
+        Assert.Null(decision.NewMatchStatus);
+    }
 
     /// <summary>A rejected listing whose identity changed is proposed again rather than priced.</summary>
     [Fact]
