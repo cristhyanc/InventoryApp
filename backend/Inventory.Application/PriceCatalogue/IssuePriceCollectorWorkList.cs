@@ -203,7 +203,7 @@ public sealed class IssuePriceCollectorWorkList
 
         return [.. suppliers
             .Where(supplier => PriceCollectorWorkListPolicy.IsSupplierDue(
-                supplier.IsEnabled,
+                supplier.SearchPrices,
                 supplier.PriceConnector is not null))
             .OrderBy(supplier => supplier.SupplierPresetId)];
     }

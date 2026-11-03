@@ -34,6 +34,12 @@ namespace Inventory.Infrastructure.Models;
 /// - and the seeded rows in particular are edited and disabled like any other, never reset. See
 /// <c>AddSupplierPresets</c> for why the four shipped rows are inserted by that one migration and by
 /// nothing else.</para>
+///
+/// <para><strong>Being suggested and being searched are two columns</strong> (issue #1077):
+/// <see cref="IsEnabled"/> decides whether businesses are offered the supplier, and
+/// <see cref="SearchPrices"/> decides whether the price collector searches it. They were one flag
+/// until 3 November 2026, which meant the only way to stop paying for one supplier's searches was to
+/// stop offering it to businesses too.</para>
 /// </summary>
 public class SupplierPreset
 {
@@ -69,11 +75,40 @@ public class SupplierPreset
     public string? Url { get; set; }
 
     /// <summary>
-    /// Whether this preset is still suggested. Disabling is how a preset stops being offered, and it
-    /// is reversible; there is no delete. A disabled preset stays visible to the Super Admin, because
-    /// a list that hid them would make re-enabling one impossible.
+    /// Whether this preset is still suggested <em>to businesses</em>. Disabling is how a preset stops
+    /// being offered - it is what the provisioning copy of issue #849 and the "Available to add" list
+    /// of issue #935 read - and it is reversible; there is no delete. A disabled preset stays visible
+    /// to the Super Admin, because a list that hid them would make re-enabling one impossible.
+    ///
+    /// <para>Since issue #1077 it says <strong>only</strong> that. Whether this supplier's prices are
+    /// searched for is <see cref="SearchPrices"/>, and the collector reads that column and not this
+    /// one.</para>
     /// </summary>
     public bool IsEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Whether the price collector searches this supplier (issue #1077, the owner's decision of
+    /// 3 November 2026).
+    ///
+    /// <para><strong>It is a separate column from <see cref="IsEnabled"/> because the two decisions
+    /// are separate.</strong> The Kmart and BIG W routes are charged per searched result, so pausing
+    /// their searches is an ordinary thing to want - and until this column existed the only way to do
+    /// it was to press Disable, which also stopped the supplier being offered to businesses. Nothing
+    /// here changes what a business sees.</para>
+    ///
+    /// <para>It is one half of the decision, never the whole of it:
+    /// <c>PriceCollectorWorkListPolicy.IsSupplierDue</c> searches a supplier only when this is
+    /// <see langword="true"/> <strong>and</strong> <see cref="PriceConnector"/> names a route, so
+    /// switching it on for a supplier nothing collects issues no work.</para>
+    ///
+    /// <para>Switching it off stops <em>new</em> readings and nothing else: the listings,
+    /// observations and held readings this supplier already has are untouched, and a stored price
+    /// still ages out by <see cref="PriceCheckFreshnessHours"/> exactly as before. New presets are
+    /// created searchable, and <c>AddSupplierPresetSearchPrices</c> gave every row that already
+    /// existed its <see cref="IsEnabled"/> value, so the collector's behaviour did not change on
+    /// deploy.</para>
+    /// </summary>
+    public bool SearchPrices { get; set; } = true;
 
     /// <summary>
     /// Whether this supplier serves the whole country. Mutually exclusive with

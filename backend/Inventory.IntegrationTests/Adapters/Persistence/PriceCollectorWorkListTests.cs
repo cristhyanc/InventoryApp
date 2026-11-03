@@ -165,6 +165,90 @@ public class PriceCollectorWorkListTests
     }
 
     /// <summary>
+    /// A supplier whose <em>Search prices</em> switch is off gets no work, however suggested it still
+    /// is (issue #1077): the criterion is "given a preset with <c>IsEnabled = true</c> and
+    /// <c>SearchPrices = false</c>, the work list issues no work items for it".
+    ///
+    /// <para>No supplier is due, so no product is published either - every published product has to
+    /// be answerable through a work item.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_supplier_whose_searching_is_switched_off_is_not_due_and_no_work_is_issued()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(
+            fixture.SupplierPresetId,
+            SupplierPriceConnector.Kmart,
+            isEnabled: true,
+            searchPrices: false);
+
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(matched.Id, cola);
+
+        var workList = await IssueAsync(fixture);
+
+        Assert.Empty(workList.Suppliers);
+        Assert.Empty(workList.MatchedProducts);
+        Assert.Empty(workList.WaitingProducts);
+        Assert.Empty(await fixture.AllWorkItemsAsync());
+    }
+
+    /// <summary>
+    /// And the other half of the same criterion: a preset the platform no longer suggests is still
+    /// searched while its <em>Search prices</em> switch is on (issue #1077), which is what separates
+    /// "stop offering this supplier to businesses" from "stop paying to search it".
+    ///
+    /// <para>This is the regression for the behaviour this issue changed: before it, pressing Disable
+    /// was the only way to stop a supplier's searches, so a disabled preset got no work at all.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_supplier_the_platform_no_longer_suggests_is_still_searched_while_searching_is_on()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(
+            fixture.SupplierPresetId,
+            SupplierPriceConnector.Kmart,
+            isEnabled: false,
+            searchPrices: true);
+
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(matched.Id, cola);
+
+        var workList = await IssueAsync(fixture);
+
+        Assert.Equal(fixture.SupplierPresetId, Assert.Single(workList.Suppliers).SupplierPresetId);
+        var product = Assert.Single(workList.MatchedProducts);
+        Assert.Equal(fixture.SupplierPresetId, Assert.Single(product.WorkItems).SupplierPresetId);
+        Assert.Single(await fixture.AllWorkItemsAsync());
+    }
+
+    /// <summary>
+    /// Switching searching on at a supplier nothing collects issues nothing either: the rule is both
+    /// halves, so the combination that means nothing is simply not work rather than a refusal
+    /// (issue #1077).
+    /// </summary>
+    [Fact]
+    public async Task Searching_a_supplier_with_no_connector_is_still_no_work()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(
+            fixture.SupplierPresetId,
+            connector: null,
+            searchPrices: true);
+
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var matched = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(matched.Id, cola);
+
+        var workList = await IssueAsync(fixture);
+
+        Assert.Empty(workList.Suppliers);
+        Assert.Empty(await fixture.AllWorkItemsAsync());
+    }
+
+    /// <summary>
     /// A supplier checked an hour ago is still searched (owner decision, 1 November 2026): a run
     /// searches every collectable supplier, so a partial run can no longer mark a supplier as checked
     /// for the products it never reached.

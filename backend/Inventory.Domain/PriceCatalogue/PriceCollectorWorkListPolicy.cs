@@ -13,7 +13,9 @@ namespace Inventory.Domain.PriceCatalogue;
 ///
 /// <para><strong>A supplier nothing collects is not due</strong>, however fresh or stale its prices
 /// are. A preset with no connector - Costco's state, and a real one - has no route to take, and a
-/// disabled preset is one the platform has stopped suggesting; neither is work.</para>
+/// preset whose <em>Search prices</em> switch is off is one the platform has stopped paying to
+/// search (issue #1077); neither is work. Whether the preset is still <em>suggested</em> to
+/// businesses is a separate stored fact and is no part of this decision.</para>
 ///
 /// <para><strong>The response is bounded in every dimension that grows.</strong> A work item is one
 /// product and one supplier, so the work grows with the product of the two: a thousand tracked
@@ -100,8 +102,16 @@ public static class PriceCollectorWorkListPolicy
         "A price collector run must be allowed at least one work item.";
 
     /// <summary>
-    /// Whether a supplier is searched on a run: every supplier the platform still suggests and that
-    /// something collects, on every run.
+    /// Whether a supplier is searched on a run: every supplier whose <em>Search prices</em> switch is
+    /// on and that something collects, on every run.
+    ///
+    /// <para><strong>Whether the platform still suggests the supplier is not part of this
+    /// decision</strong> (owner decision, 3 November 2026, #1077). One flag used to answer two
+    /// questions, so the only way to stop paying for a supplier's searches - the paid Kmart and BIG W
+    /// routes, for example - was to stop offering that supplier to businesses as well. They are now
+    /// two stored facts: <c>SupplierPreset.SearchPrices</c> is read here, and
+    /// <c>SupplierPreset.IsEnabled</c> decides only whether the preset is suggested, which is the
+    /// provisioning copy's and the "Available to add" list's question and never this one's.</para>
     ///
     /// <para><strong>There is no cadence here</strong> (owner decision, 1 November 2026, #929): a run
     /// searches every product at every collectable supplier, whenever it was last checked. A
@@ -110,9 +120,10 @@ public static class PriceCollectorWorkListPolicy
     /// the schedule's decision, and a price's freshness is still
     /// <see cref="SupplierPriceFreshnessPolicy"/>'s.</para>
     /// </summary>
-    /// <param name="isEnabled">Whether the platform still suggests this supplier.</param>
+    /// <param name="searchPrices">Whether this supplier's prices are searched for at all.</param>
     /// <param name="hasConnector">Whether anything collects this supplier's prices at all.</param>
-    public static bool IsSupplierDue(bool isEnabled, bool hasConnector) => isEnabled && hasConnector;
+    public static bool IsSupplierDue(bool searchPrices, bool hasConnector) =>
+        searchPrices && hasConnector;
 
     /// <summary>
     /// The work-item budget a run is issued with: the configured one, bounded by

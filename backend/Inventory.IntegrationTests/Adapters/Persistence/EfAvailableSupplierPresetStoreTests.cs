@@ -118,6 +118,44 @@ public class EfAvailableSupplierPresetStoreTests
             (await fixture.ListAsync(fixture.CanberraId)).Select(preset => preset.Name));
     }
 
+    /// <summary>
+    /// What a business is offered is decided by whether the platform still <em>suggests</em> a
+    /// record, and by nothing about price searching (issue #1077): a record whose searches a Super
+    /// Admin has paused is still offered, and one that is no longer suggested is still withheld
+    /// however searched it is.
+    ///
+    /// <para>This is the criterion that "Available to add" is unaffected by the new switch, and it
+    /// matters in both directions: the one combination that could have been got wrong is the record
+    /// a Super Admin stopped paying to search, which must stay on offer because businesses still buy
+    /// from it.</para>
+    /// </summary>
+    [Fact]
+    public async Task What_a_business_is_offered_ignores_whether_the_record_is_searched()
+    {
+        await using var fixture = await AvailablePresetFixture.CreateAsync();
+        var unsearched = await fixture.AddPresetAsync(
+            "Unsearched Grocer", null, nationwide: true, searchPrices: false);
+        await fixture.AddPresetAsync(
+            "Retired But Searched", null, nationwide: true, isEnabled: false, searchPrices: true);
+
+        Assert.Equal(
+            ["Unsearched Grocer"],
+            (await fixture.ListAsync(fixture.CanberraId)).Select(preset => preset.Name));
+
+        // And the add beside the list agrees with it: the unsearched record is addable, and the copy
+        // it writes is the ordinary linked supplier row, carrying nothing about searching at all.
+        var added = await fixture.AddAsync(fixture.CanberraId, unsearched);
+
+        Assert.Equal(SupplierPresetAdditionOutcome.Added, added.Outcome);
+        Assert.Equal(
+            unsearched,
+            Assert.Single(await fixture.SuppliersOfAsync(fixture.CanberraId)).SupplierPresetId);
+
+        // Nothing was written back to the platform list either: the record is still unsearched.
+        Assert.False(
+            (await fixture.PresetsAsync()).Single(preset => preset.Id == unsearched).SearchPrices);
+    }
+
     #endregion
 
     #region Adding one
@@ -627,7 +665,8 @@ public class EfAvailableSupplierPresetStoreTests
             string? url = null,
             bool nationwide = false,
             string servedStates = "",
-            bool isEnabled = true)
+            bool isEnabled = true,
+            bool searchPrices = true)
         {
             await using var db = TestAppDbContext.Unrestricted(_options);
             var preset = new SupplierPreset
@@ -636,6 +675,7 @@ public class EfAvailableSupplierPresetStoreTests
                 NormalisedName = SupplierPresetPolicy.NormalisedName(name),
                 Url = url,
                 IsEnabled = isEnabled,
+                SearchPrices = searchPrices,
                 ServesNationwide = nationwide,
                 ServedStates = servedStates,
                 CreatedAtUtc = CreatedAt,

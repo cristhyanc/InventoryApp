@@ -444,6 +444,9 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
                 Name = name,
                 NormalisedName = SupplierPresetPolicy.NormalisedName(name),
                 IsEnabled = true,
+                // Searched, which is what the migration's backfill leaves an enabled record as
+                // (issue #1077). A test about that switch seeds its own preset or edits one of these.
+                SearchPrices = true,
                 // A valid supplier-master claim, and the least interesting one there is: nationwide,
                 // GST-inclusive, collected by nobody (issue #931). A test that is about one of these
                 // fields seeds its own preset or edits one of these.
@@ -567,7 +570,8 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         string servedStates = "",
         bool pricesIncludeGst = true,
         SupplierPriceConnector? priceConnector = null,
-        string? priceConnectorKey = null)
+        string? priceConnectorKey = null,
+        bool searchPrices = true)
     {
         await using var db = Database();
         var preset = new SupplierPreset
@@ -576,6 +580,7 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
             NormalisedName = SupplierPresetPolicy.NormalisedName(name),
             Url = url,
             IsEnabled = isEnabled,
+            SearchPrices = searchPrices,
             ServesNationwide = servesNationwide,
             ServedStates = servedStates,
             PricesIncludeGst = pricesIncludeGst,
