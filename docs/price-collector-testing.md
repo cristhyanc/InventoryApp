@@ -185,6 +185,19 @@ search that returns nothing is tried once more with fewer words; that second cal
 the run's Apify call cap (600) and, at Kmart and BIG W, is charged like any other search. JB Metro
 search words are written without apostrophes or `&`, because the command guard refuses them.
 
+A JB Metro price includes JB's container deposit levy (issue #1082, owner decision, 3 November
+2026). JB Metro charges a per-unit `NSW Levy` at checkout as a Magento fixed product tax that
+`price_range.minimum_price.final_price` does not include, so drinks were recorded about 11-14c per
+container cheaper than JB actually charges. The owner checked the decision against a JB Metro
+invoice: the levy is ex GST, the same basis as `finalPrice`/`regularPrice` (GST is charged on the
+item price *and* the levy together, for example $22.00 + $1.10 levy = $23.10 at 10% GST, exactly
+$2.31). `jbmetro-lookup.mjs` now requests `fixed_product_taxes` and reports it as `levy` (the summed
+amount, or `null`, never `0`, when the site published none) and `levyLabels`; `prompt.md` has Claude
+write a JB Metro row's `packPrice` as `finalPrice` plus that `levy` and `regularPackPrice` as
+`regularPrice` plus the same `levy`, with no conversion, and say so in the row's `sourceReference`.
+A product with no levy is priced exactly as before. Shipping stays out of scope: it is charged
+separately on the invoice and is not part of any product's price.
+
 ## Production run
 
 A **production** run (owner decision, 1 November 2026) collects real supplier prices into the

@@ -8,8 +8,9 @@
 // Metro's robots.txt disallows; the SKU form is `products(filter: { sku: { in: [...] } })` in bounded
 // batches and is the fallback for a known listing that is missing from a day's search. Both answer
 // one JSON object on stdout: the products with their sku, name, url, stock status, final and regular
-// pack price, currency, pack quantity (`pickamntsoldas`), GST rate (`gst`), inner and outer barcodes
-// and the special dates, plus what could not be read.
+// pack price, currency, the container deposit levy and its labels (`fixed_product_taxes`), pack
+// quantity (`pickamntsoldas`), GST rate (`gst`), inner and outer barcodes and the special dates, plus
+// what could not be read.
 //
 // Four things this script deliberately does not do:
 //   * It does not decide whether a special is running. `special_from_date`/`special_to_date` are
@@ -18,9 +19,13 @@
 //     promotion (issue #927) or as a reason to distrust the price beside it.
 //   * It does not convert a barcode to a number. They are reported as strings so a leading zero
 //     survives, and an empty one is `null` rather than `0`.
-//   * It does not convert, discount or GST-adjust a price. JB Metro publishes **ex-GST** prices and
-//     the supplier master record is what says so (`SupplierPreset.PricesIncludeGst`, issue #931);
-//     what an observed price means is decided where it is stored (#937), not here.
+//   * It does not convert, discount or GST-adjust a price, and it does not add the published
+//     container deposit levy into `finalPrice`/`regularPrice`: `levy` (the summed amount, or `null`
+//     when the site published none) and `levyLabels` are reported alongside them, and adding the
+//     levy into a pack price is `prompt.md`'s decision (owner decision, 3 November 2026), not this
+//     script's. JB Metro publishes **ex-GST** prices and the supplier master record is what says so
+//     (`SupplierPreset.PricesIncludeGst`, issue #931); what an observed price means is decided where
+//     it is stored (#937), not here.
 //   * It does not call a host the work list did not name. The site must be one of the JB Metro
 //     supplier master URLs (`JBMETRO_SITE_URLS`, defaulting to the three records issue #931 shipped);
 //     any other host is refused before a request is made.
@@ -78,6 +83,7 @@ const PRODUCT_FIELDS = `
         minimum_price {
           final_price { value currency }
           regular_price { value currency }
+          fixed_product_taxes { label amount { value currency } }
         }
       }
       custom_attributesV2 {
@@ -141,6 +147,31 @@ function wholeNumber(value) {
 function count(value) {
   const parsed = amount(value);
   return parsed !== null && Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function fixedProductTaxes(minimum) {
+  return Array.isArray(minimum?.fixed_product_taxes) ? minimum.fixed_product_taxes : [];
+}
+
+/** The labels of the published taxes, in order, for example `["NSW Levy"]`. */
+function levyLabels(taxes) {
+  return taxes.map((tax) => text(tax?.label)).filter((label) => label !== null);
+}
+
+/**
+ * The sum of the published taxes' amounts, or `null` when the site published none at all, or when
+ * any one amount could not be read: a partial sum would be a guess at what the full levy is, not
+ * what was published.
+ */
+function levyAmount(taxes) {
+  if (taxes.length === 0) return null;
+  let total = 0;
+  for (const tax of taxes) {
+    const value = amount(tax?.amount?.value);
+    if (value === null) return null;
+    total += value;
+  }
+  return Math.round(total * 100) / 100;
 }
 
 function originOf(value, refusal) {
@@ -261,6 +292,7 @@ export function mapProduct(item, siteUrl) {
   const product = item ?? {};
   const attributes = readCustomAttributes(product.custom_attributesV2);
   const minimum = product.price_range?.minimum_price ?? {};
+  const taxes = fixedProductTaxes(minimum);
   const urlKey = text(product.url_key);
   return {
     sku: text(product.sku),
@@ -270,6 +302,8 @@ export function mapProduct(item, siteUrl) {
     finalPrice: amount(minimum.final_price?.value),
     regularPrice: amount(minimum.regular_price?.value),
     currency: text(minimum.final_price?.currency) ?? text(minimum.regular_price?.currency),
+    levy: levyAmount(taxes),
+    levyLabels: levyLabels(taxes),
     packQuantity: wholeNumber(attributes.pickamntsoldas),
     gstRate: amount(attributes.gst),
     // Strings, always: a barcode's leading zero is part of it.

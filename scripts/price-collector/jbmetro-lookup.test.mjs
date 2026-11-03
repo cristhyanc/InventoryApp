@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_OPTIONS,
   JB_METRO_SITE_URLS,
+  SEARCH_QUERY,
+  SKU_QUERY,
   allowedSiteUrls,
   lookupSkus,
   mapProduct,
@@ -123,6 +125,8 @@ describe('product mapping', () => {
       finalPrice: 31.2,
       regularPrice: 33.6,
       currency: 'AUD',
+      levy: null,
+      levyLabels: [],
       packQuantity: 24,
       gstRate: 10,
       innerBarcode: '9311493000012',
@@ -164,6 +168,8 @@ describe('product mapping', () => {
       finalPrice: null,
       regularPrice: null,
       currency: null,
+      levy: null,
+      levyLabels: [],
       packQuantity: null,
       gstRate: null,
       innerBarcode: null,
@@ -171,6 +177,81 @@ describe('product mapping', () => {
       specialFromDate: null,
       specialToDate: null,
     });
+  });
+});
+
+describe('container deposit levy', () => {
+  it('requests fixed_product_taxes under minimum_price in both the search and SKU queries', () => {
+    const shape = /fixed_product_taxes\s*\{\s*label\s*amount\s*\{\s*value\s*currency\s*\}\s*\}/;
+    assert.match(SEARCH_QUERY, shape);
+    assert.match(SKU_QUERY, shape);
+  });
+
+  it('reports one fixed product tax as the levy and its label', () => {
+    const mapped = mapProduct({
+      sku: 'YOOSH',
+      price_range: {
+        minimum_price: {
+          final_price: { value: 22, currency: 'AUD' },
+          fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 1.1, currency: 'AUD' } }],
+        },
+      },
+    }, SITE);
+    assert.equal(mapped.levy, 1.1);
+    assert.deepEqual(mapped.levyLabels, ['NSW Levy']);
+  });
+
+  it('sums two fixed product tax entries into the levy', () => {
+    const mapped = mapProduct({
+      sku: 'COKE600',
+      price_range: {
+        minimum_price: {
+          final_price: { value: 68.8, currency: 'AUD' },
+          fixed_product_taxes: [
+            { label: 'NSW Levy', amount: { value: 1.65, currency: 'AUD' } },
+            { label: 'NSW Levy', amount: { value: 1.64, currency: 'AUD' } },
+          ],
+        },
+      },
+    }, SITE);
+    assert.equal(mapped.levy, 3.29);
+    assert.deepEqual(mapped.levyLabels, ['NSW Levy', 'NSW Levy']);
+  });
+
+  it('reports null, never zero, when the site publishes an empty list', () => {
+    const mapped = mapProduct({
+      sku: 'WATER',
+      price_range: {
+        minimum_price: { final_price: { value: 2, currency: 'AUD' }, fixed_product_taxes: [] },
+      },
+    }, SITE);
+    assert.equal(mapped.levy, null);
+    assert.deepEqual(mapped.levyLabels, []);
+  });
+
+  it('never guesses a levy from a malformed or missing amount', () => {
+    const malformed = mapProduct({
+      sku: 'BAD',
+      price_range: {
+        minimum_price: {
+          final_price: { value: 2, currency: 'AUD' },
+          fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 'not-a-number', currency: 'AUD' } }],
+        },
+      },
+    }, SITE);
+    assert.equal(malformed.levy, null);
+    assert.deepEqual(malformed.levyLabels, ['NSW Levy']);
+
+    const missing = mapProduct({
+      sku: 'BAD2',
+      price_range: {
+        minimum_price: {
+          final_price: { value: 2, currency: 'AUD' },
+          fixed_product_taxes: [{ label: 'NSW Levy' }],
+        },
+      },
+    }, SITE);
+    assert.equal(missing.levy, null);
   });
 });
 

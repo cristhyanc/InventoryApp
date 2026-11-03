@@ -248,6 +248,16 @@ One entry of `searches` is one product at one supplier, identified by its `workI
 - `priceBasis` is the supplier's own basis, which is the work list's `pricesIncludeGst` for that
   supplier (`inclusive_of_gst` when true, `exclusive_of_gst` when false). Never convert a price, and
   never GST-adjust one.
+- **A JB Metro row's price includes JB Metro's container deposit levy** (owner decision, 3 November
+  2026: JB's checkout charges GST on the levy the same way it does on the ex-GST item price, so the
+  levy is ex GST like `finalPrice`/`regularPrice`, and is added with no conversion). When
+  `jbmetro-lookup.mjs` reports a product's `levy` as a number, write `packPrice` as `finalPrice` plus
+  that `levy`, and `regularPackPrice` as `regularPrice` plus the same `levy`. When it reports `levy`
+  as `null` — the site published none for that product — price the row exactly as today, with
+  nothing added. `output.schema.json` has no field of its own for this, so say the levy was included
+  in that row's `sourceReference`, for example `"JB Metro: includes $1.10 NSW Levy (ex GST)"` using
+  `levyLabels` and the levy amount; never silently fold the levy into the price without saying so
+  somewhere in the row.
 - **`packQuantity` is how many items one pack price buys.** Take it from the supplier's own pack
   field when it has one (JB Metro's `pickamntsoldas`), otherwise from the count the title states
   (`24 Pack`, `x 30`, `18x375ml`, `2 Pack`, `10PK`). A title that names one item size and **no
