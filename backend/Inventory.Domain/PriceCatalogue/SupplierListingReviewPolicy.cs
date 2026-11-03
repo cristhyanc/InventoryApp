@@ -203,7 +203,8 @@ public static class SupplierListingReviewPolicy
     /// would make the correction useless - the listing would be confirmed with no price and the next
     /// run would flag it for the same disagreement. So the confirmed quantity wins and is what the
     /// per-unit price is derived from; every other field still has to agree, because a reading of a
-    /// different variant, size or barcode is a price for something else.</para>
+    /// different variant or size is a price for something else. The barcode is not compared, by the
+    /// owner's decision of 3 November 2026 (see that rule).</para>
     /// </summary>
     public static bool ReadingDescribesConfirmedPack(
         SupplierListingIdentity confirmed,
@@ -230,7 +231,7 @@ public static class SupplierListingReviewPolicy
     /// rule is about a price that was accepted <em>earlier</em>, against a quantity somebody already
     /// settled: a $40 24-pack confirmed as a 36-pack is still $40, and a per-unit comparison would
     /// divide it by 36 and report a price no supplier ever published. So a changed pack quantity
-    /// withdraws the current price exactly as a changed variant, individual size or barcode does.
+    /// withdraws the current price exactly as a changed variant or individual size does.
     /// </para>
     ///
     /// <para><strong>A compatible identity keeps its price, deliberately.</strong> When the confirmed
