@@ -1986,7 +1986,11 @@ does not manage.
   "CC's Tasty Cheese Corn Chips · 175 g", so two sizes of one product are never confused. Arrow keys
   move through the list, **Enter** takes the highlighted one, **Escape** closes it, and on a phone
   you tap the row. While a search is in flight the list says so, and it says when nothing in the
-  catalogue matches what you typed or when there is more to find than it is showing.
+  catalogue matches what you typed or when there is more to find than it is showing. **The list
+  always belongs to the text in the box now**: change the Name and the matches for what you had
+  typed before are gone at once, so you can never pick a product that matched something you have
+  already changed, and clearing the field closes the list for good rather than letting a slow search
+  reopen it.
   **The Name is still your own text.** Nothing is filled in by typing or by leaving the field: a
   product the catalogue does not have is typed exactly as it always was, and if the catalogue cannot
   be searched at all the field says so and nothing is blocked — you still type the name and create

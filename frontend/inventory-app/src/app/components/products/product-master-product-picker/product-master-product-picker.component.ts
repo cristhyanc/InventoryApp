@@ -9,8 +9,8 @@ import {
   OnInit,
   Output
 } from '@angular/core';
-import { EMPTY, Observable, Subject, Subscription } from 'rxjs';
-import { catchError, debounceTime, switchMap, tap } from 'rxjs/operators';
+import { EMPTY, Observable, Subject, Subscription, timer } from 'rxjs';
+import { catchError, switchMap, tap } from 'rxjs/operators';
 import { MasterProductSuggestion } from '../../../models/models';
 import { ProductService } from '../../../services/product.service';
 import { SEARCH_DEBOUNCE_MS } from '../../shared/filter-request-trigger';
@@ -42,11 +42,15 @@ export type MasterProductSuggestionState = 'idle' | 'loading' | 'loaded' | 'fail
  * only when it is activated, by Enter on the keyboard or by pressing the row, and the parent decides
  * what that fills in.</p>
  *
- * <p><strong>Only the latest term is ever shown.</strong> The settled term goes through `switchMap`,
- * so a slower earlier request is unsubscribed the moment a newer one starts: its answer reaches
- * neither the list, the field nor the parent. A failed lookup is a message beside the field and
- * nothing more - it disables no control, blocks no typing and refuses no save, because the shared
- * catalogue being unreachable is not a reason a business cannot name its own product.</p>
+ * <p><strong>Only the text in the box now has suggestions.</strong> The `switchMap` is over the raw
+ * keystroke and the debounce is its inner `timer`, so changing the box - or taking a suggestion -
+ * drops both the wait that has not fired yet and the request already in flight, immediately rather
+ * than 300 ms later. The rows of the previous term go with it, so a stale row is never on screen
+ * and so never selectable: an older answer can reach neither the list, the field nor the parent,
+ * and nothing left over can reopen the list over a Name the operator has just filled in. A failed
+ * lookup is a message beside the field and nothing more - it disables no control, blocks no typing
+ * and refuses no save, because the shared catalogue being unreachable is not a reason a business
+ * cannot name its own product.</p>
  */
 @Component({
   selector: 'app-product-master-product-picker',
@@ -93,7 +97,8 @@ export class ProductMasterProductPickerComponent implements OnInit, OnDestroy {
   readonly listboxId = `product-master-product-listbox-${this.instanceId}`;
   readonly hintId = `product-master-product-hint-${this.instanceId}`;
 
-  private readonly terms$ = new Subject<string>();
+  /** A term to ask about once it settles, or `null` to drop the pending question and ask nothing. */
+  private readonly terms$ = new Subject<string | null>();
   private searchSubscription?: Subscription;
 
   constructor(
@@ -102,12 +107,18 @@ export class ProductMasterProductPickerComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    // `switchMap` over the raw keystroke, with the debounce as its inner `timer`, rather than
+    // `debounceTime` in front of it. Both shapes ask once per settled term, but this one unsubscribes
+    // the previous wait *and* the request it already started the moment anything is typed, so an
+    // answer to a term that has already been replaced cannot arrive inside the next debounce window
+    // and reopen or repopulate the list. `null` drops the pending question without asking another.
     // No `distinctUntilChanged` on the term: taking a suggestion refills the box without typing, so
     // a term asked once and then typed again is a new question and must be asked again.
     this.searchSubscription = this.terms$
       .pipe(
-        debounceTime(SEARCH_DEBOUNCE_MS),
-        switchMap((term) => this.search(term))
+        switchMap((term) =>
+          term === null ? EMPTY : timer(SEARCH_DEBOUNCE_MS).pipe(switchMap(() => this.search(term)))
+        )
       )
       .subscribe();
   }
@@ -152,13 +163,21 @@ export class ProductMasterProductPickerComponent implements OnInit, OnDestroy {
     const term = value.trim();
     if (term.length < MASTER_PRODUCT_SUGGESTION_MIN_LENGTH) {
       this.closeAndForget();
-    } else {
-      this.open = true;
-      this.activeIndex = -1;
-      this.state = 'loading';
-      this.searchedTerm = term;
+      // Nothing is asked below the minimum, and the question already in flight is dropped here: an
+      // answer on its way must not reopen the list for text the box no longer holds.
+      this.terms$.next(null);
+      return;
     }
 
+    // The previous term's rows go now, not when the next answer arrives. A row that matched text the
+    // operator has already changed is not an offer any more, so it is neither shown nor selectable
+    // while the new term is being searched.
+    this.suggestions = [];
+    this.hasMore = false;
+    this.open = true;
+    this.activeIndex = -1;
+    this.state = 'loading';
+    this.searchedTerm = term;
     this.terms$.next(term);
   }
 
@@ -210,8 +229,16 @@ export class ProductMasterProductPickerComponent implements OnInit, OnDestroy {
 
   /** Takes a suggestion: the one thing that reports one, by Enter or by pressing the row. */
   select(suggestion: MasterProductSuggestion): void {
-    this.open = false;
-    this.activeIndex = -1;
+    if (!this.suggestions.includes(suggestion)) {
+      // A row the list no longer holds is not an offer: it would fill the Name and the unit label in
+      // from a product that matched text the operator has already changed.
+      return;
+    }
+
+    this.closeAndForget();
+    // Whatever the box was still waiting on goes with the list. The Name and the unit label this
+    // selection is about to fill in must not be overwritten, and no obsolete list may reopen.
+    this.terms$.next(null);
     this.suggestionSelected.emit(suggestion);
   }
 
@@ -225,14 +252,11 @@ export class ProductMasterProductPickerComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The read for one settled term. A term below the minimum reads nothing, and a failure is caught
+   * The read for one settled term, which is always long enough to ask about: {@link onInput} drops
+   * the question below the minimum rather than spending a refused request on it. A failure is caught
    * here rather than killing the stream, so the next settled term asks again.
    */
   private search(term: string): Observable<unknown> {
-    if (term.length < MASTER_PRODUCT_SUGGESTION_MIN_LENGTH) {
-      return EMPTY;
-    }
-
     return this.productService.getMasterProductSuggestions(term).pipe(
       tap((answer) => {
         this.suggestions = answer.products;

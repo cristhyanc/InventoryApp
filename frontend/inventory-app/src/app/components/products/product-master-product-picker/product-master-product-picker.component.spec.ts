@@ -250,6 +250,114 @@ describe('ProductMasterProductPickerComponent (issue #1052)', () => {
     expect(component.selected).toEqual([]);
   });
 
+  it('drops the question as the box changes, so its answer cannot land during the next debounce', async () => {
+    const first = new Subject<MasterProductSuggestionPage>();
+    const getMasterProductSuggestions = jest.fn((term: string) =>
+      term === 'cheese'
+        ? (first as Observable<MasterProductSuggestionPage>)
+        : new Subject<MasterProductSuggestionPage>()
+    );
+    const { search, type, options, press, state, component, fixture } = await render(
+      getMasterProductSuggestions as jest.Mock
+    );
+
+    search('cheese');
+    // Typed inside the next term's debounce, so the request for 'cheese' is still the only one made.
+    type('cheese corn');
+    expect(getMasterProductSuggestions).toHaveBeenCalledTimes(1);
+
+    // The answer to the question the operator has already moved on from.
+    first.next(page([suggestion({ id: 99, productName: 'Stale Answer', unitLabel: '1each' })]));
+    fixture.detectChanges();
+
+    expect(options()).toEqual([]);
+    expect(state('loading')).not.toBeNull();
+
+    // There is nothing of the old term to move onto or take, either.
+    press('ArrowDown');
+    press('Enter');
+    expect(component.selected).toEqual([]);
+    expect(component.productName).toBe('cheese corn');
+  });
+
+  it('stays closed when the field is cleared below two characters before the answer arrives', async () => {
+    const answers = new Subject<MasterProductSuggestionPage>();
+    const { search, type, listbox, options, combobox, state, fixture } = await render(
+      jest.fn(() => answers)
+    );
+
+    search('cheese');
+    // Cleared below the minimum while the request for 'cheese' is still in flight.
+    type('c');
+
+    answers.next(page([suggestion()]));
+    fixture.detectChanges();
+
+    expect(listbox()).toBeNull();
+    expect(options()).toEqual([]);
+    expect(state('loading')).toBeNull();
+    expect(combobox().getAttribute('aria-expanded')).toBe('false');
+
+    // And the dropped wait asks nothing of its own when the debounce would have elapsed.
+    jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS * 2);
+    fixture.detectChanges();
+    expect(listbox()).toBeNull();
+  });
+
+  it('drops the previous term’s rows at once, so a stale row cannot be taken while the next search runs', async () => {
+    const answers = new Subject<MasterProductSuggestionPage>();
+    const { search, type, options, optionLabels, listbox, press, component, fixture } = await render(
+      jest.fn(() => answers)
+    );
+
+    search('cheese');
+    answers.next(page([suggestion(), partySize]));
+    fixture.detectChanges();
+    expect(optionLabels()).toHaveLength(2);
+    const staleRow = options()[0];
+
+    // The list is now about text that is no longer in the box, so it is gone before the next answer.
+    type('cheese corn');
+
+    expect(options()).toEqual([]);
+    expect(listbox()).toBeNull();
+
+    press('ArrowDown');
+    press('Enter');
+    staleRow.click();
+    fixture.detectChanges();
+
+    expect(component.selected).toEqual([]);
+    expect(component.productName).toBe('cheese corn');
+  });
+
+  it('cannot be reopened by the lookup it dropped once a suggestion is taken', async () => {
+    const answers = new Subject<MasterProductSuggestionPage>();
+    const { search, options, listbox, combobox, component, fixture } = await render(
+      jest.fn(() => answers)
+    );
+
+    search('cheese');
+    answers.next(page([suggestion()]));
+    fixture.detectChanges();
+
+    options()[0].click();
+    fixture.detectChanges();
+    expect(component.selected).toEqual([suggestion()]);
+    expect(listbox()).toBeNull();
+
+    // Anything the dropped lookup still had to say arrives after the selection: the Name and unit
+    // label it filled in are not overwritten, and no obsolete list opens over them.
+    answers.next(page([suggestion({ id: 99, productName: 'Stale Answer', unitLabel: '1each' })]));
+    jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS * 2);
+    fixture.detectChanges();
+
+    expect(listbox()).toBeNull();
+    expect(options()).toEqual([]);
+    expect(combobox().getAttribute('aria-expanded')).toBe('false');
+    expect(component.selected).toEqual([suggestion()]);
+  });
+
   it('moves through the list with the arrow keys and reports the one Enter takes', async () => {
     const { search, press, combobox, options, component, listbox } = await render(
       jest.fn(() => of(page([suggestion(), partySize])))
