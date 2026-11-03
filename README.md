@@ -1978,7 +1978,37 @@ does not manage.
   see that match and undo it** — it is listed on their review page as a match the business made
   itself, and undoing it returns the product to awaiting a match and changes nothing else about it
   (see [Super Admin supplier price review](#super-admin-supplier-price-review)). The **New Product**
-  form that offers the picker is issue #1052; this is the API behind it.
+  form that offers the picker is the next bullet; this is the API behind it.
+- **Pick the product from the shared catalogue as you type its Name** (issue #1052). On
+  **Products → New Product** the **Name** field suggests products from the shared supplier
+  catalogue. Type at least two characters and the matches appear a moment later, each shown as its
+  brand, name and size — "CC's Tasty Cheese Corn Chips · 45 g" beside
+  "CC's Tasty Cheese Corn Chips · 175 g", so two sizes of one product are never confused. Arrow keys
+  move through the list, **Enter** takes the highlighted one, **Escape** closes it, and on a phone
+  you tap the row. While a search is in flight the list says so, and it says when nothing in the
+  catalogue matches what you typed or when there is more to find than it is showing.
+  **The Name is still your own text.** Nothing is filled in by typing or by leaving the field: a
+  product the catalogue does not have is typed exactly as it always was, and if the catalogue cannot
+  be searched at all the field says so and nothing is blocked — you still type the name and create
+  the product.
+  Taking a suggestion fills in **Name** and **Unit Label** from the catalogue and shows a note that
+  this product's supplier prices will be tracked from the moment it is created, with a ticked
+  **Track supplier prices for this product** box beside it. Untick that box and the product is
+  created as an ordinary unlinked, untracked product — see
+  [Track supplier prices on a product](#track-supplier-prices-on-a-product) for switching it on
+  later.
+  **Edit either value away from what the suggestion filled in and the link is dropped** — spacing
+  and capitals aside, so `45G` is still `45g` but `45 g` is a different size. The product is then
+  created with the name you typed and no link at all, because the link rests on the product being the
+  one the catalogue described; typing the catalogue's wording back by hand does not bring the link
+  back. Pick a suggestion again to start over, which refills both values. Every other field — SKU,
+  category, opening stock, the reorder settings and the GST rule — leaves the selection alone.
+  If the server refuses the link when you press **Create Product** — the catalogue product was
+  corrected or removed since you looked it up, or a Super Admin has ruled that pairing out —
+  **nothing at all is created**. The refusal is shown in the server's own words with two buttons:
+  **Choose again**, which clears the selection so you can pick the product afresh, and **Create
+  without link**, which creates the product exactly as you typed it with no catalogue link.
+  **Editing** a product keeps its plain Name box: linking an existing product is not done here.
 - **Unit Label is required** (issue #895). It is what a quantity of this product is counted in — a
   bag, a can, a bottle — and every product you create or edit by hand has one. **Products → New
   Product** and **Products → Edit Product** mark the field with `*`, refuse to save while it is
@@ -2242,8 +2272,11 @@ product you have not switched on.
   catalogue product the new product is, so it arrives **Matched** instead of awaiting a match, and
   its prices are tracked from the start. That happens only while the Name and unit label are still
   the ones the suggestion filled in, only on the create, and never for a product that already exists
-  — see **Create a product from a catalogue suggestion** under
-  [Products and categories](#products-and-categories). Turning the product's switch off afterwards
+  — see **Create a product from a catalogue suggestion** and **Pick the product from the shared
+  catalogue as you type its Name** under [Products and categories](#products-and-categories). The
+  New Product form says that beside the suggestion you took, with a ticked box you can untick to
+  create the product unlinked and untracked instead (issue #1052); it is not this switch, and the
+  switch is still only on an existing product's **Edit** page. Turning the product's switch off afterwards
   withdraws the request like any other, and a Super Admin sees that match in their own review list
   and can undo it — which returns the product to awaiting a match, with its stock, cost and
   everything else about it untouched; see
