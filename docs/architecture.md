@@ -9253,14 +9253,22 @@ renders it as five parts:
    [Per-machine low and empty counts on the site read](#per-machine-low-and-empty-counts-on-the-site-read-issue-1019)),
    and `GET api/machines` for the machine rows and the fleet totals.
 4. **Reorder priorities**: since issue #1017 the card pages the whole authoritative low-stock list in
-   its own order, `REORDER_PAGE_SIZE` (5) rows to a page, and `reorderViewAllLabel` still names the
-   list's real length. `reorderPriorities` is the current page - `lowStock.slice()` at
-   `reorderPageIndex`, so nothing re-ranks or re-filters the list and the pages hold every product
-   exactly once - and `reorderPageCount`, `reorderRangeLabel` and `isReorderPagerShown` are what the
-   one pager renders for both the desktop table and the narrow-screen cards, which therefore cannot
-   disagree about which page is shown. The page size is fixed (no selector), the page is not
-   persisted anywhere, and `keepReorderPageInRange` is the rule for a re-read: the same page when it
-   still exists, the new last page when the list has shrunk past it, never an empty page. The two
+   its own order, and `reorderViewAllLabel` still names the list's real length. Since issue #1080 the
+   page size is a local, unpersisted `reorderPageSize` selected from `REORDER_PAGE_SIZE_OPTIONS` (5,
+   10, 20, 50, 100), defaulting to the first entry on every visit; `onReorderPageSizeChange` validates
+   the selected `<select>` value against that list and resets `reorderPageIndex` to 0, since a new
+   size is a fresh view of the same loaded list. `reorderPriorities` is the current page -
+   `lowStock.slice()` at `reorderPageIndex * reorderPageSize`, so nothing re-ranks or re-filters the
+   list and the pages hold every product exactly once - and `reorderPageCount`, `reorderRangeLabel`
+   and `isReorderPagerShown` are derived from `reorderPageSize` and are what the one pager renders for
+   both the desktop table and the narrow-screen cards, which therefore cannot disagree about which
+   page is shown. The "Items per page" selector is independent of `isReorderPagerShown`: it stays
+   visible for every successfully loaded non-empty list, even a single page, so a size that currently
+   fits the whole list on one page can be made smaller again; Previous and Next stay hidden on a
+   single page since there is nowhere to go. Neither the page nor the selected size is persisted
+   anywhere, and `keepReorderPageInRange` is the rule for a re-read: the selected size is kept for the
+   rest of the visit, and the same page is kept when it still exists at that size, the new last page
+   when the list has shrunk past it, never an empty page. The two
    **enrichment reads are per reorder read, not per page**: `reorderPriorityIds` carries every listed
    id, so the purchase-cost read (#788/#789) asks for all of them as one logical load -
    `ProductPurchaseCostService.getSummariesBatched` splits it into `GET`s of at most
@@ -9268,7 +9276,8 @@ renders it as five parts:
    310 real 15-digit ids in one `GET` already exceed Kestrel's default 8,192-byte request line; any
    failed batch fails the whole load ("Unavailable" with Retry, never partial costs) - still only
    with `Dashboard.ViewFinancials`, and still never with an empty id list or an empty batch, which
-   that endpoint reads as "every product" - and turning a page issues no request at all. Last and Cheapest purchase are named by their own column headings;
+   that endpoint reads as "every product" - and turning a page or changing the page size issues no
+   request at all. Last and Cheapest purchase are named by their own column headings;
    the note row that used to repeat that they are historical costs was removed by issue #1016 and
    the sentence was not moved anywhere else. The **Cheapest supplier** column (issue #981, the same column #939
    asks for) reuses #930's `CheapestSuppliersComponent` and `CheapestSupplierCellComponent`
