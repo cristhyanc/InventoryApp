@@ -384,6 +384,12 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/Products", "GET", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}/gst-rule", "PUT", Capability.InventoryOperate)]
+    // Issue #1076's bulk GST rule change declares no capability of its own either: it is the same
+    // configuration as the single-product rule above, on the same controller, so it is the same
+    // class and the same capability. Both rows are asserted because the confirmation step is as
+    // restricted as the write it authorises.
+    [InlineData("api/Products/gst-rule/bulk-preview", "POST", Capability.InventoryOperate)]
+    [InlineData("api/Products/gst-rule/bulk", "POST", Capability.InventoryOperate)]
     [InlineData("api/products/{productId:long}/inventory-count/apply", "POST", Capability.InventoryOperate)]
     // Issue #1049's business lookup of the shared master products declares no capability of its own
     // either: looking a product up in order to create it is the same catalogue work as the create
