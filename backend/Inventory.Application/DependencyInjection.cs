@@ -417,6 +417,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<DeleteProduct>();
         services.AddScoped<GetProductGstRule>();
         services.AddScoped<SetProductGstRule>();
+        // "Set GST rule in bulk" (issue #1076): the preview that counts the products carrying no
+        // rule, and the apply that configures exactly those. Scoped like every other tenant-scoped
+        // use case: both answers belong to one caller's resolved business.
+        services.AddScoped<PreviewBulkProductGstRule>();
+        services.AddScoped<SetBulkProductGstRule>();
         // The "Track supplier prices" switch (issue #938, fourth task of #817). Scoped like every
         // other tenant-scoped use case: each answer belongs to one caller's resolved business.
         services.AddScoped<GetProductPriceTracking>();
