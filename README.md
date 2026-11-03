@@ -1235,8 +1235,13 @@ POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
   the run ends the page shows one summary (how many were confirmed and how many were not), the queue
   is re-read exactly once rather than after each listing, and any listing that could not be confirmed
   stays on screen, stays selected, and shows the server's own refusal reason exactly as a single
-  confirmation would. While a run is in progress every card's own buttons, every checkbox and
-  Select all are disabled, and the button reports its own progress. There is no bulk **Refuse**, no
+  confirmation would. While a run is in progress every card's own buttons, every checkbox,
+  Select all and **Refresh** are disabled, and the button reports its own progress: a run confirms
+  each listing with what its own card shows, so nothing re-reads the queue underneath it — a
+  refresh or a decision made elsewhere on the page while the run is in flight is answered by the
+  run's own single re-read when it ends, and no card or correction is replaced in the meantime. A
+  selected listing that is no longer on screen when the run reaches it is reported as not confirmed,
+  with that reason, rather than confirmed with values nobody reviewed. There is no bulk **Refuse**, no
   bulk action on the other two sections, and no new endpoint: this is a frontend loop over the
   existing per-listing decision endpoint above.
 

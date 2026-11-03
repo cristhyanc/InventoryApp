@@ -8,7 +8,9 @@
         here belongs to one business — a decision applies to every business tracking the product.
       </p>
     </div>
-    <button type="button" class="btn btn-secondary" [disabled]="loading" (click)="load()">Refresh</button>
+    <button type="button" class="btn btn-secondary" [disabled]="refreshDisabled" (click)="load()">
+      Refresh
+    </button>
   </header>
 
   @if (loading) {

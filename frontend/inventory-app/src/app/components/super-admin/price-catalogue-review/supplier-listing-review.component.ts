@@ -1,5 +1,5 @@
 import { CommonModule, DatePipe } from '@angular/common';
-import { Component, EventEmitter, Input, OnChanges, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import {
   BARCODE_SCOPE_LABELS,
@@ -92,8 +92,17 @@ export class SupplierListingReviewComponent implements OnChanges {
    * The form starts from what is <strong>stored</strong>, never from what was last typed: the page
    * re-reads the queue after every decision, and a correction carried onto another listing would be
    * a pack quantity nobody reviewed.
+   *
+   * It is reset only when the <em>listing</em> itself changes. The page's other two inputs change
+   * during a bulk "Confirm selected" run (issue #1055) - `bulkDisabled` the moment the run starts,
+   * `externalError` when it ends - and resetting on those would throw away the very corrections the
+   * run was asked to confirm, for every card whose request has not been sent yet.
    */
-  ngOnChanges(): void {
+  ngOnChanges(changes: SimpleChanges): void {
+    if (!changes['listing']) {
+      return;
+    }
+
     this.error = null;
     this.submitting = false;
     this.approvePriceException = false;

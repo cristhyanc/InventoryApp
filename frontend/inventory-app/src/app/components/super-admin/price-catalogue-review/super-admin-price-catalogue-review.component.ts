@@ -103,7 +103,20 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
     this.destroying$.complete();
   }
 
+  /**
+   * Re-reads the queue, unless a "Confirm selected" run is sequencing its requests (issue #1055).
+   * A read would take every listing card away from under the run: the loading branch removes them,
+   * and the read that comes back feeds the cards the stored values again through `ngOnChanges`. The
+   * run confirms each selected listing with what its <em>own</em> card shows, so a read in the
+   * middle of one would either leave it with no card to ask or silently replace the corrections the
+   * reviewer meant to confirm. Nothing is lost by declining: the run itself re-reads the queue once,
+   * the moment it has finished, so a refresh asked for while it was running is answered then.
+   */
   load(): void {
+    if (this.bulkConfirmInProgress) {
+      return;
+    }
+
     this.loading = true;
     this.loadError = false;
 
@@ -121,6 +134,15 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
           this.loadError = true;
         }
       });
+  }
+
+  /**
+   * Refresh is offered while a read is in flight no more than while a "Confirm selected" run is
+   * (issue #1055): the run owns the cards it is confirming until it ends, and declines the read
+   * anyway, so the button says so rather than looking as though it did nothing.
+   */
+  get refreshDisabled(): boolean {
+    return this.loading || this.bulkConfirmInProgress;
   }
 
   /** Whether there is nothing at all to review, which is a real and expected state. */
@@ -271,7 +293,19 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
 
     const target = targets[index];
     const card = this.listingCards?.find((listingCard) => listingCard.listing.id === target.id);
-    const request = card!.buildConfirmationRequest();
+
+    // A listing with no card on screen is reported as not confirmed rather than sent with invented
+    // values: what a confirmation submits is the pack quantity, barcode and identity that card
+    // shows, and defaults nobody reviewed are exactly the wrong thing to write (issue #1055).
+    if (card === undefined) {
+      failedListingIds.add(target.id);
+      this.bulkConfirmErrorsByListingId[target.id] =
+        'This listing was no longer on screen when the run reached it, so nothing was sent for it.';
+      this.confirmNextSelected(targets, index + 1, failedListingIds);
+      return;
+    }
+
+    const request = card.buildConfirmationRequest();
 
     this.reviewService
       .decideListing(target.id, request)

@@ -361,6 +361,30 @@ describe('SupplierListingReviewComponent (issue #928)', () => {
   });
 
   /**
+   * A bulk run disables every card the moment it starts, and that must not be read as a new listing:
+   * the run confirms each selected listing with exactly what its own card shows, so resetting the
+   * form here would send the stored pack quantity for every card whose request has not gone yet.
+   */
+  it('keeps this card edits when the page disables it for a bulk run, or reports a reason on it', async () => {
+    const { fixture, component } = await render(listing());
+
+    component.unitsPerPack = 36;
+    component.variant = 'Zero Sugar';
+
+    fixture.componentRef.setInput('bulkDisabled', true);
+    fixture.detectChanges();
+
+    expect(component.unitsPerPack).toBe(36);
+    expect(component.variant).toBe('Zero Sugar');
+
+    fixture.componentRef.setInput('externalError', 'This supplier listing is not waiting for a decision.');
+    fixture.detectChanges();
+
+    expect(component.unitsPerPack).toBe(36);
+    expect(component.buildConfirmationRequest().unitsPerPack).toBe(36);
+  });
+
+  /**
    * The page's bulk run keeps a failed listing's refusal reason outside this card (issue #1055),
    * because the one queue re-read after the run replaces `listing` and resets this card's own
    * `error` - so the card shows the externally supplied reason the same way it shows its own.
