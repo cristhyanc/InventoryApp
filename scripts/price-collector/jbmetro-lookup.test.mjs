@@ -6,6 +6,9 @@
 // contract was recorded on issue #927 (owner-verified on 27 October 2026): `price_range.minimum_price`
 // holds the ex-GST pack prices, and `custom_attributesV2` holds `pickamntsoldas`, `gst`, `innerbarcode`,
 // `outerbarcode`, `special_from_date` and `special_to_date`. The SKUs are the three the issue names.
+// They were recorded before the query asked for `fixed_product_taxes` (issue #1082) and are left as
+// recorded, so a product read from one reports its levy as `unreadable`: that is the right answer
+// for an answer that did not carry the list, and the levy cases below use their own bodies.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -14,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_OPTIONS,
   JB_METRO_SITE_URLS,
+  LEVY_STATUS,
   SEARCH_QUERY,
   SKU_QUERY,
   allowedSiteUrls,
@@ -26,7 +30,8 @@ import {
   searchProducts,
 } from './jbmetro-lookup.mjs';
 
-const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const here = dirname(fileURLToPath(import.meta.url));
+const fixturesDir = join(here, 'fixtures');
 const fixture = (name) => JSON.parse(readFileSync(join(fixturesDir, `${name}.json`), 'utf8'));
 
 const SITE = 'https://www.jbmetro.com.au';
@@ -125,8 +130,11 @@ describe('product mapping', () => {
       finalPrice: 31.2,
       regularPrice: 33.6,
       currency: 'AUD',
+      // This fixture was recorded before the query asked for `fixed_product_taxes`, so it carries
+      // none: an answer without the list is unreadable, never a published absence of levy.
       levy: null,
       levyLabels: [],
+      levyStatus: LEVY_STATUS.unreadable,
       packQuantity: 24,
       gstRate: 10,
       innerBarcode: '9311493000012',
@@ -170,6 +178,7 @@ describe('product mapping', () => {
       currency: null,
       levy: null,
       levyLabels: [],
+      levyStatus: LEVY_STATUS.unreadable,
       packQuantity: null,
       gstRate: null,
       innerBarcode: null,
@@ -181,6 +190,12 @@ describe('product mapping', () => {
 });
 
 describe('container deposit levy', () => {
+  // One drink priced in AUD, with whatever `fixed_product_taxes` the case is about.
+  const priced = (fixedProductTaxes, final = { value: 22, currency: 'AUD' }) => mapProduct({
+    sku: 'YOOSH',
+    price_range: { minimum_price: { final_price: final, ...fixedProductTaxes } },
+  }, SITE);
+
   it('requests fixed_product_taxes under minimum_price in both the search and SKU queries', () => {
     const shape = /fixed_product_taxes\s*\{\s*label\s*amount\s*\{\s*value\s*currency\s*\}\s*\}/;
     assert.match(SEARCH_QUERY, shape);
@@ -188,70 +203,141 @@ describe('container deposit levy', () => {
   });
 
   it('reports one fixed product tax as the levy and its label', () => {
-    const mapped = mapProduct({
-      sku: 'YOOSH',
-      price_range: {
-        minimum_price: {
-          final_price: { value: 22, currency: 'AUD' },
-          fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 1.1, currency: 'AUD' } }],
-        },
-      },
-    }, SITE);
+    const mapped = priced({ fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 1.1, currency: 'AUD' } }] });
     assert.equal(mapped.levy, 1.1);
     assert.deepEqual(mapped.levyLabels, ['NSW Levy']);
+    assert.equal(mapped.levyStatus, LEVY_STATUS.published);
   });
 
   it('sums two fixed product tax entries into the levy', () => {
-    const mapped = mapProduct({
-      sku: 'COKE600',
-      price_range: {
-        minimum_price: {
-          final_price: { value: 68.8, currency: 'AUD' },
-          fixed_product_taxes: [
-            { label: 'NSW Levy', amount: { value: 1.65, currency: 'AUD' } },
-            { label: 'NSW Levy', amount: { value: 1.64, currency: 'AUD' } },
-          ],
-        },
-      },
-    }, SITE);
+    const mapped = priced({
+      fixed_product_taxes: [
+        { label: 'NSW Levy', amount: { value: 1.65, currency: 'AUD' } },
+        { label: 'NSW Levy', amount: { value: 1.64, currency: 'AUD' } },
+      ],
+    }, { value: 68.8, currency: 'AUD' });
     assert.equal(mapped.levy, 3.29);
     assert.deepEqual(mapped.levyLabels, ['NSW Levy', 'NSW Levy']);
+    assert.equal(mapped.levyStatus, LEVY_STATUS.published);
   });
 
-  it('reports null, never zero, when the site publishes an empty list', () => {
-    const mapped = mapProduct({
-      sku: 'WATER',
-      price_range: {
-        minimum_price: { final_price: { value: 2, currency: 'AUD' }, fixed_product_taxes: [] },
-      },
-    }, SITE);
-    assert.equal(mapped.levy, null);
-    assert.deepEqual(mapped.levyLabels, []);
+  it('keeps a published empty list apart from a levy it could not read', () => {
+    // The whole point of the status: both carry `levy: null`, and prompt.md prices them oppositely.
+    const empty = priced({ fixed_product_taxes: [] });
+    assert.equal(empty.levy, null);
+    assert.deepEqual(empty.levyLabels, []);
+    assert.equal(empty.levyStatus, LEVY_STATUS.none, 'an empty published list is the site saying there is no levy');
+
+    const unreadable = priced({ fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 'not-a-number', currency: 'AUD' } }] });
+    assert.equal(unreadable.levy, null);
+    assert.equal(unreadable.levyStatus, LEVY_STATUS.unreadable);
+    assert.notEqual(empty.levyStatus, unreadable.levyStatus);
   });
 
-  it('never guesses a levy from a malformed or missing amount', () => {
-    const malformed = mapProduct({
-      sku: 'BAD',
-      price_range: {
-        minimum_price: {
-          final_price: { value: 2, currency: 'AUD' },
-          fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 'not-a-number', currency: 'AUD' } }],
-        },
-      },
-    }, SITE);
+  it('never guesses a levy from a malformed, missing, negative or part-readable list', () => {
+    const malformed = priced({ fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 'not-a-number', currency: 'AUD' } }] });
     assert.equal(malformed.levy, null);
-    assert.deepEqual(malformed.levyLabels, ['NSW Levy']);
+    assert.equal(malformed.levyStatus, LEVY_STATUS.unreadable);
+    assert.deepEqual(malformed.levyLabels, ['NSW Levy'], 'the label it did read is still reported');
 
-    const missing = mapProduct({
-      sku: 'BAD2',
-      price_range: {
-        minimum_price: {
-          final_price: { value: 2, currency: 'AUD' },
-          fixed_product_taxes: [{ label: 'NSW Levy' }],
-        },
-      },
-    }, SITE);
-    assert.equal(missing.levy, null);
+    const missingAmount = priced({ fixed_product_taxes: [{ label: 'NSW Levy' }] });
+    assert.equal(missingAmount.levy, null);
+    assert.equal(missingAmount.levyStatus, LEVY_STATUS.unreadable);
+    assert.deepEqual(missingAmount.levyLabels, ['NSW Levy']);
+
+    const negative = priced({ fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: -1.1, currency: 'AUD' } }] });
+    assert.equal(negative.levy, null);
+    assert.equal(negative.levyStatus, LEVY_STATUS.unreadable);
+
+    // A mixed list must not publish the part that read: 1.10 is not the levy, it is half of it.
+    const mixed = priced({
+      fixed_product_taxes: [
+        { label: 'NSW Levy', amount: { value: 1.1, currency: 'AUD' } },
+        { label: 'NSW Levy', amount: { value: null, currency: 'AUD' } },
+      ],
+    });
+    assert.equal(mixed.levy, null);
+    assert.equal(mixed.levyStatus, LEVY_STATUS.unreadable);
+    assert.deepEqual(mixed.levyLabels, ['NSW Levy', 'NSW Levy']);
+  });
+
+  it('treats a tax list the answer did not carry as unreadable, never as no levy', () => {
+    for (const missing of [{}, { fixed_product_taxes: null }, { fixed_product_taxes: 'NSW Levy' }]) {
+      const mapped = priced(missing);
+      assert.equal(mapped.levy, null);
+      assert.deepEqual(mapped.levyLabels, []);
+      assert.equal(mapped.levyStatus, LEVY_STATUS.unreadable, JSON.stringify(missing));
+    }
+
+    // The recorded fixtures were captured before the query asked for the field, so they are the
+    // same silence: a product read from one is unpriceable, not levy-free.
+    const recorded = mapProduct(fixture('search-bundaberg-page-1').data.products.items[0], SITE);
+    assert.equal(recorded.levy, null);
+    assert.equal(recorded.levyStatus, LEVY_STATUS.unreadable);
+  });
+
+  it('refuses a levy that is not in the price\'s own currency', () => {
+    const otherCurrency = priced({ fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 1.1, currency: 'USD' } }] });
+    assert.equal(otherCurrency.levy, null);
+    assert.equal(otherCurrency.levyStatus, LEVY_STATUS.unreadable);
+
+    const noTaxCurrency = priced({ fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 1.1 } }] });
+    assert.equal(noTaxCurrency.levy, null);
+    assert.equal(noTaxCurrency.levyStatus, LEVY_STATUS.unreadable);
+
+    const noPriceCurrency = priced({ fixed_product_taxes: [{ label: 'NSW Levy', amount: { value: 1.1, currency: 'AUD' } }] }, { value: 22 });
+    assert.equal(noPriceCurrency.currency, null);
+    assert.equal(noPriceCurrency.levy, null);
+    assert.equal(noPriceCurrency.levyStatus, LEVY_STATUS.unreadable);
+  });
+
+  // The script only reports the levy; prompt.md is what prices a row with it, so the rule that
+  // keeps a base-only price out of a file lives there and is checked here against the same words.
+  describe('the pricing rule prompt.md states', () => {
+    const prompt = readFileSync(join(here, 'prompt.md'), 'utf8');
+    const anchor = "A JB Metro row's price includes JB Metro's container deposit levy";
+    const section = (() => {
+      const start = prompt.indexOf(anchor);
+      assert.ok(start > 0, 'prompt.md no longer has a JB Metro container deposit levy rule');
+      const rest = prompt.slice(start);
+      const end = rest.indexOf('\n- ');
+      return end === -1 ? rest : rest.slice(0, end);
+    })();
+
+    /** The sub-bullet that tells the collector what to do with one `levyStatus`. */
+    const ruleFor = (status) => {
+      const marker = `\`"${status}"\``;
+      const at = section.indexOf(marker);
+      assert.ok(at >= 0, `prompt.md states no rule for a ${status} levy`);
+      const rest = section.slice(at + marker.length);
+      const end = rest.search(/\n {2}- /);
+      return end === -1 ? rest : rest.slice(0, end);
+    };
+
+    it('states a rule for every levy status the script can report', () => {
+      for (const status of Object.values(LEVY_STATUS)) assert.ok(ruleFor(status).length > 0, status);
+    });
+
+    it('adds the levy into both prices, and says so in the row, only when it was published', () => {
+      const published = ruleFor(LEVY_STATUS.published).replace(/\s+/g, ' ');
+      assert.match(published, /`packPrice` as `finalPrice` plus that `levy`/);
+      assert.match(published, /`regularPackPrice` as `regularPrice` plus the same `levy`/);
+      assert.match(published, /sourceReference/);
+    });
+
+    it('keeps today\'s price for a product the site publishes no levy for', () => {
+      assert.match(ruleFor(LEVY_STATUS.none).replace(/\s+/g, ' '), /row exactly as today, with nothing added/);
+    });
+
+    it('keeps a base-only price out of the file when the levy could not be read', () => {
+      // One line of prose per rule, reflowed freely, so every assertion tolerates a line break.
+      const unreadable = ruleFor(LEVY_STATUS.unreadable).replace(/\s+/g, ' ');
+      assert.match(unreadable, /do not write a row for it/);
+      assert.match(unreadable, /`truncated` rather than `complete`/);
+      assert.match(unreadable, /[Nn]ever fall back to `finalPrice`/);
+      assert.match(unreadable, /never treat the levy as `0`/);
+      assert.match(unreadable, /never `no_matches`/);
+    });
   });
 });
 

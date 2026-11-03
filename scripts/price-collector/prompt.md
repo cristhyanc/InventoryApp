@@ -250,14 +250,24 @@ One entry of `searches` is one product at one supplier, identified by its `workI
   never GST-adjust one.
 - **A JB Metro row's price includes JB Metro's container deposit levy** (owner decision, 3 November
   2026: JB's checkout charges GST on the levy the same way it does on the ex-GST item price, so the
-  levy is ex GST like `finalPrice`/`regularPrice`, and is added with no conversion). When
-  `jbmetro-lookup.mjs` reports a product's `levy` as a number, write `packPrice` as `finalPrice` plus
-  that `levy`, and `regularPackPrice` as `regularPrice` plus the same `levy`. When it reports `levy`
-  as `null` — the site published none for that product — price the row exactly as today, with
-  nothing added. `output.schema.json` has no field of its own for this, so say the levy was included
-  in that row's `sourceReference`, for example `"JB Metro: includes $1.10 NSW Levy (ex GST)"` using
-  `levyLabels` and the levy amount; never silently fold the levy into the price without saying so
-  somewhere in the row.
+  levy is ex GST like `finalPrice`/`regularPrice`, and is added with no conversion). For every
+  product `jbmetro-lookup.mjs` reports a `levyStatus` beside `levy` and `levyLabels`, and that word,
+  never the `levy` number on its own, decides the row:
+  - `"published"` — the site published a readable levy. Write `packPrice` as `finalPrice` plus that
+    `levy`, and `regularPackPrice` as `regularPrice` plus the same `levy`. `output.schema.json` has
+    no field of its own for this, so say the levy was included in that row's `sourceReference`, for
+    example `"JB Metro: includes $1.10 NSW Levy (ex GST)"` using `levyLabels` and the levy amount;
+    never silently fold the levy into the price without saying so somewhere in the row.
+  - `"none"` — the site published an empty levy list, which is its answer for a product that carries
+    no levy. Price the row exactly as today, with nothing added and nothing to say about a levy.
+  - `"unreadable"` — the answer carried no levy list, or an amount that could not be read, or one in
+    another currency. **This product's real price is unknown: do not write a row for it**, and
+    report that search as `truncated` rather than `complete`, exactly as for a listing you could not
+    price. Never fall back to `finalPrice`/`regularPrice` on its own, never treat the levy as `0`,
+    and never add up only the amounts that did read: a JB Metro drink priced without its levy looks
+    cheaper than JB charges and would win the cheapest-supplier comparison on a price that is not
+    real. If that leaves the search with no rows at all, it is still `truncated` and never
+    `no_matches`: the supplier does publish the product, and `no_matches` would say it does not.
 - **`packQuantity` is how many items one pack price buys.** Take it from the supplier's own pack
   field when it has one (JB Metro's `pickamntsoldas`), otherwise from the count the title states
   (`24 Pack`, `x 30`, `18x375ml`, `2 Pack`, `10PK`). A title that names one item size and **no

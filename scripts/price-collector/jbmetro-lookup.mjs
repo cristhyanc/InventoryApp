@@ -8,11 +8,11 @@
 // Metro's robots.txt disallows; the SKU form is `products(filter: { sku: { in: [...] } })` in bounded
 // batches and is the fallback for a known listing that is missing from a day's search. Both answer
 // one JSON object on stdout: the products with their sku, name, url, stock status, final and regular
-// pack price, currency, the container deposit levy and its labels (`fixed_product_taxes`), pack
-// quantity (`pickamntsoldas`), GST rate (`gst`), inner and outer barcodes and the special dates, plus
-// what could not be read.
+// pack price, currency, the container deposit levy with its labels and the status of that reading
+// (`fixed_product_taxes`), pack quantity (`pickamntsoldas`), GST rate (`gst`), inner and outer
+// barcodes and the special dates, plus what could not be read.
 //
-// Four things this script deliberately does not do:
+// Five things this script deliberately does not do:
 //   * It does not decide whether a special is running. `special_from_date`/`special_to_date` are
 //     reported exactly as published and nothing is derived from them: the final price *is* the
 //     current price, and an old date attribute left on a product must never be read as a live
@@ -20,12 +20,16 @@
 //   * It does not convert a barcode to a number. They are reported as strings so a leading zero
 //     survives, and an empty one is `null` rather than `0`.
 //   * It does not convert, discount or GST-adjust a price, and it does not add the published
-//     container deposit levy into `finalPrice`/`regularPrice`: `levy` (the summed amount, or `null`
-//     when the site published none) and `levyLabels` are reported alongside them, and adding the
-//     levy into a pack price is `prompt.md`'s decision (owner decision, 3 November 2026), not this
-//     script's. JB Metro publishes **ex-GST** prices and the supplier master record is what says so
+//     container deposit levy into `finalPrice`/`regularPrice`: `levy`, `levyLabels` and
+//     `levyStatus` are reported alongside them, and adding the levy into a pack price is
+//     `prompt.md`'s decision (owner decision, 3 November 2026), not this script's. JB Metro
+//     publishes **ex-GST** prices and the supplier master record is what says so
 //     (`SupplierPreset.PricesIncludeGst`, issue #931); what an observed price means is decided where
 //     it is stored (#937), not here.
+//   * It does not report a levy it could not read as no levy. `levyStatus` says which of the two a
+//     `null` levy is — `none`, the empty list JB Metro publishes for a non-drink, or `unreadable`,
+//     anything the answer did not carry completely — because pricing a drink without a levy it does
+//     in fact charge makes that drink look cheaper than it is (issue #1082).
 //   * It does not call a host the work list did not name. The site must be one of the JB Metro
 //     supplier master URLs (`JBMETRO_SITE_URLS`, defaulting to the three records issue #931 shipped);
 //     any other host is refused before a request is made.
@@ -45,6 +49,18 @@ export const JB_METRO_SITE_URLS = Object.freeze([
   'https://www.jbmetro-sc-act.com.au',
   'https://www.jbmetro-sa-nt.com.au',
 ]);
+
+/**
+ * What the site said about a product's container deposit levy, which is a different question from
+ * how much it is: `published` is a complete, readable levy, `none` is the empty `fixed_product_taxes`
+ * list JB Metro publishes for a product that carries no levy, and `unreadable` is every other
+ * answer. `prompt.md` prices a row by this word, so each of the three has a rule there (issue #1082).
+ */
+export const LEVY_STATUS = Object.freeze({
+  published: 'published',
+  none: 'none',
+  unreadable: 'unreadable',
+});
 
 export const DEFAULT_OPTIONS = Object.freeze({
   pageSize: 20,
@@ -149,29 +165,43 @@ function count(value) {
   return parsed !== null && Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function fixedProductTaxes(minimum) {
-  return Array.isArray(minimum?.fixed_product_taxes) ? minimum.fixed_product_taxes : [];
-}
-
 /** The labels of the published taxes, in order, for example `["NSW Levy"]`. */
 function levyLabels(taxes) {
   return taxes.map((tax) => text(tax?.label)).filter((label) => label !== null);
 }
 
+const unreadableLevy = (labels) => ({ levy: null, levyLabels: labels, levyStatus: LEVY_STATUS.unreadable });
+
 /**
- * The sum of the published taxes' amounts, or `null` when the site published none at all, or when
- * any one amount could not be read: a partial sum would be a guess at what the full levy is, not
- * what was published.
+ * Reads `minimum_price.fixed_product_taxes` into the levy, its labels and the status that says what
+ * the site actually answered, in the currency the price itself is in.
+ *
+ * The status exists because `levy: null` alone cannot tell the two silences apart, and they are
+ * priced oppositely: an empty published list is JB Metro's answer for a non-drink and the row keeps
+ * today's price, while an answer that did not carry a readable levy leaves the real price unknown,
+ * and pricing that row on `finalPrice` alone would quietly make a drink look cheaper than JB
+ * charges (issue #1082). So a list the answer did not carry at all is `unreadable` and never
+ * `none` — the query asks for the field, so its absence is a gap in the answer and not a statement
+ * that JB charges nothing — and one entry that cannot be read makes the whole levy `unreadable`,
+ * because a partial sum would be a guess at the published total and `0` would be a price too low.
  */
-function levyAmount(taxes) {
-  if (taxes.length === 0) return null;
+function readLevy(minimum, currency) {
+  const taxes = minimum?.fixed_product_taxes;
+  if (!Array.isArray(taxes)) return unreadableLevy([]);
+
+  const labels = levyLabels(taxes);
+  if (taxes.length === 0) return { levy: null, levyLabels: labels, levyStatus: LEVY_STATUS.none };
+
   let total = 0;
   for (const tax of taxes) {
     const value = amount(tax?.amount?.value);
-    if (value === null) return null;
+    // A negative amount is not a deposit levy, and one in another currency (or beside a price whose
+    // own currency could not be read) cannot be added to this price: neither is a sum to publish.
+    if (value === null || value < 0) return unreadableLevy(labels);
+    if (currency === null || text(tax?.amount?.currency) !== currency) return unreadableLevy(labels);
     total += value;
   }
-  return Math.round(total * 100) / 100;
+  return { levy: Math.round(total * 100) / 100, levyLabels: labels, levyStatus: LEVY_STATUS.published };
 }
 
 function originOf(value, refusal) {
@@ -292,7 +322,8 @@ export function mapProduct(item, siteUrl) {
   const product = item ?? {};
   const attributes = readCustomAttributes(product.custom_attributesV2);
   const minimum = product.price_range?.minimum_price ?? {};
-  const taxes = fixedProductTaxes(minimum);
+  const currency = text(minimum.final_price?.currency) ?? text(minimum.regular_price?.currency);
+  const levyReading = readLevy(minimum, currency);
   const urlKey = text(product.url_key);
   return {
     sku: text(product.sku),
@@ -301,9 +332,10 @@ export function mapProduct(item, siteUrl) {
     stockStatus: stockStatus(product.stock_status),
     finalPrice: amount(minimum.final_price?.value),
     regularPrice: amount(minimum.regular_price?.value),
-    currency: text(minimum.final_price?.currency) ?? text(minimum.regular_price?.currency),
-    levy: levyAmount(taxes),
-    levyLabels: levyLabels(taxes),
+    currency,
+    levy: levyReading.levy,
+    levyLabels: levyReading.levyLabels,
+    levyStatus: levyReading.levyStatus,
     packQuantity: wholeNumber(attributes.pickamntsoldas),
     gstRate: amount(attributes.gst),
     // Strings, always: a barcode's leading zero is part of it.
