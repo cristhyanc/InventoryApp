@@ -124,7 +124,7 @@
                 [checked]="allListingsSelected"
                 [indeterminate]="someListingsSelected"
                 [disabled]="bulkConfirmInProgress"
-                (change)="toggleSelectAllListings($any($event.target).checked)"
+                (change)="$any($event.target).checked ? selectAllListings() : deselectAllListings()"
               />
               Select all
             </label>
@@ -147,7 +147,7 @@
                 [attr.aria-label]="'Select ' + listing.supplierName + ' ' + listing.supplierProductId"
                 [checked]="isListingSelected(listing.id)"
                 [disabled]="bulkConfirmInProgress"
-                (change)="toggleListingSelected(listing.id, $any($event.target).checked)"
+                (change)="$any($event.target).checked ? selectListing(listing.id) : deselectListing(listing.id)"
               />
               <app-supplier-listing-review
                 class="flex-1"

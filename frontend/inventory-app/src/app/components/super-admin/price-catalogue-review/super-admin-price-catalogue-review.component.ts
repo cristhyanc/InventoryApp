@@ -170,12 +170,12 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
     return this.selectedListingIds.has(listingId);
   }
 
-  toggleListingSelected(listingId: number, selected: boolean): void {
-    if (selected) {
-      this.selectedListingIds.add(listingId);
-    } else {
-      this.selectedListingIds.delete(listingId);
-    }
+  selectListing(listingId: number): void {
+    this.selectedListingIds.add(listingId);
+  }
+
+  deselectListing(listingId: number): void {
+    this.selectedListingIds.delete(listingId);
   }
 
   /** Every listing currently shown is selected, none is, or - the indeterminate state - some are. */
@@ -189,16 +189,12 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
     return this.selectedListingIds.size > 0 && !this.allListingsSelected;
   }
 
-  toggleSelectAllListings(selected: boolean): void {
-    if (!this.queue) {
-      return;
-    }
+  selectAllListings(): void {
+    this.queue?.listings.forEach((listing) => this.selectedListingIds.add(listing.id));
+  }
 
-    if (selected) {
-      this.queue.listings.forEach((listing) => this.selectedListingIds.add(listing.id));
-    } else {
-      this.selectedListingIds.clear();
-    }
+  deselectAllListings(): void {
+    this.selectedListingIds.clear();
   }
 
   bulkConfirmErrorFor(listingId: number): string | null {
