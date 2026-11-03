@@ -9343,7 +9343,19 @@ long names stay inside the Site / machine column; at 360 and 390px it measures t
 is inside its site card's box and that its name starts right of the site's. The failed-sites fallback
 has its own two captures, `performance-no-sites-1440px.png` and `performance-no-sites-390px.png`,
 taken with the sites read answered 500 while the machine read succeeds, and the run asserts that the
-one unheaded group draws neither indent nor rule.
+one unheaded group draws neither indent nor rule. Issue #1020's **Storage after refill** column is
+measured by the same run rather than inferred from the markup, because where a column lands and what
+colour a shortfall is painted are layout outcomes: at 1440px it checks the heading between Machine
+need and Need to Order, every cell of the first page sharing that heading's own column box and
+spilling out of neither it nor the card (the table needs no horizontal scrolling at that width), the
+three shapes of the figure the synthetic rows carry (`-3`, `-8`, `-6`, then `0` for the KitKat whose
+machine need equals its storage stock, then `2`), and that a shortfall is painted one colour and
+everything else another; at 360 and 390px it checks the card entry standing on its own grid row
+under Storage stock, aligned with it, inside the card and inside its own box. Storage-only mode has
+its own two captures, `reorder-storage-only-1440px.png` and `reorder-storage-only-390px.png`, taken
+with the reorder read answered with the `X-Reorder-Mode: StorageOnly` header the API publishes: the
+run asserts neither layout renders Machine need or Storage after refill at all, while the
+storage-only sentence, the storage figures and the pager are unchanged.
 
 #### Shared help toggletip (issues #1015 and #1016)
 
