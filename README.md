@@ -2032,7 +2032,10 @@ does not manage.
   it is not in the shared Products header, so Needs Ordering, which orders products that already
   exist, no longer offers it.) **Needs Ordering → Mark as ordered** sits the same way, in that
   page's own search/filter toolbar to the right of search, Category and Reset (issue #832) — it used
-  to sit in its own row below the toolbar. **Import products** sits beside New Product on that same
+  to sit in its own row below the toolbar. **Set GST rule in bulk** sits in that same All Products
+  toolbar beside New Product (issue #1076), and is left out while a support session is active, the
+  way New Product is; see
+  [Product and supplier GST rules](#product-and-supplier-gst-rules). **Import products** sits beside New Product on that same
   toolbar (issue #875) for a member who holds `Imports.Run` while Nayax is usable and no support
   session is active — it opens the catalogue import's own page, **Products → Import products**
   (`/products/import`, issue #888), rather than being a second entry point with its own behaviour.
@@ -2515,11 +2518,24 @@ classified:
   as described under
   [Products and categories](#products-and-categories). A **Save GST rule** button appears there only
   if the product was created and its rule was not, to retry that one write.
+- **Products → Set GST rule in bulk.** The button beside **New Product** on the Products list sets
+  one rule — **Taxable** or **GST-free** — on **every product in this business that is currently
+  "No rule"**, including inactive products, on every page of the list and whatever the search or
+  category filter is showing. You choose the rule (nothing is preselected), then confirm it against
+  the number of products it will change; **Cancel** writes nothing, and when every product already
+  has a rule the dialog says so and offers nothing to apply. A product with an explicit Taxable or
+  GST-free rule is **never** changed, and neither is anything else: no purchase that is already
+  recorded, no GST already classified on one, and no cost, stock quantity or inventory value. When
+  it succeeds you are told how many products actually changed and the list refreshes. If somebody
+  else changes, adds or removes a product while you are confirming, the change is refused rather
+  than applied to a different set of products — the dialog says so, shows the new number and asks
+  you to confirm again.
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
   defaults**. The three are independent: a charge never inherits the product-line default.
 
-Both panels read the stored setting first, and the save button stays disabled until it is on screen,
+The two single-record panels — a product's own GST rule and a supplier's GST defaults — read the
+stored setting first, and the save button stays disabled until it is on screen,
 so you are always editing what is actually configured. If that read fails the panel says so and
 saving stays disabled: the pickers open on "No rule"/"No default", which are real values that would
 replace whatever is stored, so reload the page instead of saving. Opening one product or supplier
@@ -2542,7 +2558,8 @@ configuration: the rule a product carries is the one the Historical GST classifi
 apply, it reads the rules as they are configured at the moment you press **Apply**, and it only ever
 classifies components nobody has classified yet. Recording a purchase does not read a rule at all —
 you classify each line and charge on the purchase itself — so a rule chosen while creating a product,
-or changed afterwards, classifies nothing by itself and restates nothing that is already recorded.
+changed afterwards, or set in bulk, classifies nothing by itself and restates nothing that is
+already recorded.
 
 ## Historical GST classification (Admin page)
 
