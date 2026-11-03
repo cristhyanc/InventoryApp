@@ -8,7 +8,8 @@
 //
 //   1. **Every file is validated on its own** against ./output.schema.json. A file that is missing,
 //      unreadable, misnamed, invalid or about another run is skipped and reported, and loses only
-//      its own search.
+//      its own search. Before that, a row with no price is dropped and a barcode with no unit or
+//      carton scope is removed, so one bad row loses only itself (`tidyResultRows`, 3 Nov 2026).
 //   2. **Match files first** (`POST /api/price-collector/matches`, #941), in batches of at most 200
 //      proposals, because a waiting key matched earlier in the run is what lets that key's own
 //      result rows attach to the master product (#937, same-run key resolution).
@@ -133,6 +134,54 @@ export function stampObservedAt(file, writtenAt) {
   }
 }
 
+const hasPrice = (row) => typeof row.packPrice === 'number' && Number.isFinite(row.packPrice) && row.packPrice > 0;
+
+/**
+ * One bad row never costs a search its other rows (owner decision, 3 November 2026). Production run
+ * 41558756584 lost ten whole Woolworths searches this way: eight rows carried a barcode without
+ * saying whether it was the unit's or the carton's, and two rows (one an out-of-stock listing) had
+ * no price. So, before the file is validated:
+ *
+ * - a barcode without a `unit` or `carton` scope is removed and the rest of the row is kept, because
+ *   a code that may name the wrong pack is worse than no code;
+ * - a row with no usable price is removed, because a price is the one thing a row exists to carry;
+ * - a `complete` search that lost a row is submitted as `truncated`, so the API never records that
+ *   listing as not found when it was found and only its price was unreadable.
+ *
+ * Returns one note per change, which the summary prints; a change never fails the submission.
+ */
+export function tidyResultRows(file) {
+  if (!Array.isArray(file?.rows)) return [];
+  let barcodesRemoved = 0;
+  const kept = [];
+  for (const row of file.rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      kept.push(row);
+      continue;
+    }
+    if (!hasPrice(row)) continue;
+    if (Object.hasOwn(row, 'barcode') && !(typeof row.barcodeScope === 'string' && Object.hasOwn(BARCODE_SCOPES, row.barcodeScope))) {
+      delete row.barcode;
+      delete row.barcodeScope;
+      barcodesRemoved += 1;
+    }
+    kept.push(row);
+  }
+
+  const notes = [];
+  const rowsRemoved = file.rows.length - kept.length;
+  if (barcodesRemoved > 0) notes.push(`removed ${barcodesRemoved} barcode(s) without a unit or carton scope, kept the row(s)`);
+  if (rowsRemoved > 0) {
+    file.rows = kept;
+    notes.push(`removed ${rowsRemoved} row(s) without a price`);
+    if (file.outcome === 'complete') {
+      file.outcome = 'truncated';
+      notes.push('submitted the search as truncated, not complete');
+    }
+  }
+  return notes;
+}
+
 /** One file, read and validated on its own: a result, a match, or a reason it is skipped. */
 async function classifyOutputFile(dir, name) {
   if (!RESULT_FILE_NAME.test(name) && !MATCH_FILE_NAME.test(name)) {
@@ -147,9 +196,11 @@ async function classifyOutputFile(dir, name) {
   }
 
   const isResult = RESULT_FILE_NAME.test(name);
+  let tidied = [];
   if (isResult) {
     normaliseStockStatus(parsed);
     stampObservedAt(parsed, (await stat(join(dir, name))).mtime);
+    tidied = tidyResultRows(parsed);
   }
   const checked = isResult ? validateResultFile(parsed) : validateMatchFile(parsed);
   if (!checked.ok) return { skip: checked.problems[0] };
@@ -158,7 +209,7 @@ async function classifyOutputFile(dir, name) {
     return { skip: `it answers work item ${parsed.workItemId}, which is not the work item its name states` };
   }
 
-  return { isResult, file: parsed };
+  return { isResult, file: parsed, tidied };
 }
 
 /**
@@ -178,6 +229,7 @@ export async function readOutputFiles(dir) {
   const results = [];
   const matches = [];
   const skipped = [];
+  const tidied = [];
 
   for (const name of names) {
     const classified = await classifyOutputFile(dir, name);
@@ -186,9 +238,10 @@ export async function readOutputFiles(dir) {
       continue;
     }
     (classified.isResult ? results : matches).push({ name, file: classified.file });
+    for (const note of classified.tidied ?? []) tidied.push({ name, note });
   }
 
-  return { results, matches, skipped };
+  return { results, matches, skipped, tidied };
 }
 
 /** The one run being submitted: the argument, else the one run every valid file agrees on. */
@@ -281,10 +334,11 @@ function reasonLines(label, tallied) {
   return [...tallied.reasons.entries()].map(([reason, count]) => `  ${label}: ${reason} × ${count}`);
 }
 
-function report({ runId, counted, searchCounts, answered, withoutOutcome, skipped, completion, errorCount, fileCounts }) {
+function report({ runId, counted, searchCounts, answered, withoutOutcome, skipped, tidied, completion, errorCount, fileCounts }) {
   const lines = [
     `files: results ${fileCounts.results}, matches ${fileCounts.matches}, skipped ${skipped.length}`,
     ...skipped.map((entry) => `  skipped ${entry.name}: ${entry.reason}`),
+    ...tidied.map((entry) => `  tidied ${entry.name}: ${entry.note}`),
     `matches: auto-matched ${counted.autoMatched.count}, tentative ${counted.tentative.count}, rejected ${counted.matchesRejected.count}`,
     ...reasonLines('tentative', counted.tentative),
     ...reasonLines('match rejected', counted.matchesRejected),
@@ -453,6 +507,7 @@ export async function runSubmission({ argv = [], env = {}, fetchImpl = fetch } =
     answered,
     withoutOutcome,
     skipped: found.skipped,
+    tidied: found.tidied,
     completion,
     errorCount: errors.length,
     fileCounts: { results: resolved.results.length, matches: resolved.matches.length },
