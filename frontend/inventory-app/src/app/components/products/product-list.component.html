@@ -35,6 +35,19 @@
       `Imports.Run` and a provider the catalogue review can actually read.
     -->
     <div class="flex flex-wrap items-center gap-2 self-center sm:ml-auto">
+      <!--
+        Set GST rule in bulk (issue #1076). It is offered on the same permission as the
+        single-product GST rule - this page already requires Inventory.Operate - and is hidden
+        rather than disabled while a support session is active, for the reason New Product is: a
+        session grants that capability, so this write would otherwise still render.
+      -->
+      @if (!sessionActive) {
+        <button
+          type="button"
+          data-testid="bulk-gst-rule-button"
+          class="btn btn-secondary"
+          (click)="openBulkGstRule()">Set GST rule in bulk</button>
+      }
       @if (showImportProducts) {
         <a
           data-testid="import-products-link"
@@ -230,6 +243,17 @@
   [message]="`Delete product '${confirmingProduct.name}'?`"
   (confirmed)="deleteConfirmed()"
   (canceled)="cancelDelete()"></app-confirmation-dialog>
+
+<!--
+  Set GST rule in bulk (issue #1076): a dedicated feature component, composed in through one input
+  and two outputs. The dialog markup, the eligible count, the choice, the confirmation, the write and
+  every refusal live inside it (issue #191's page composition boundary); this page only says whether
+  the question is open, and reacts to what it reports.
+-->
+<app-product-gst-rule-bulk
+  [open]="settingGstRuleInBulk"
+  (applied)="bulkGstRuleApplied($event)"
+  (closed)="closeBulkGstRule()"></app-product-gst-rule-bulk>
 
 <app-confirmation-dialog
   confirmLabel="Deactivate"

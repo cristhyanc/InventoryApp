@@ -19,6 +19,29 @@ export interface ProductGstRule {
 }
 
 /**
+ * How many of this business's products currently carry no GST rule, from
+ * `POST /api/products/gst-rule/bulk-preview` (issue #1076). It covers the whole catalogue - active
+ * and inactive products alike - and no list filter narrows it.
+ *
+ * `eligibleCount` is also the concurrency token the apply requires back: the server re-counts inside
+ * its own write transaction and refuses a count that has moved. Zero is an answer ("every product
+ * already has a rule"), never an absence.
+ */
+export interface BulkProductGstRulePreview {
+  eligibleCount: number;
+}
+
+/**
+ * What a bulk GST rule change actually configured, from `POST /api/products/gst-rule/bulk`
+ * (issue #1076): the rule that was set and how many products took it, as the committed write
+ * reported it rather than the count that was confirmed.
+ */
+export interface BulkProductGstRuleApplied {
+  gstRule: GstClassification;
+  changedCount: number;
+}
+
+/**
  * Where one of the business's products has got to in the shared supplier price catalogue (backend
  * `Inventory.Domain.PriceCatalogue.ProductPriceTrackingStatus`, issue #938 of parent #817). The five
  * states are answers, never labels on each other: `NotFound` is "looked for and not found", which is

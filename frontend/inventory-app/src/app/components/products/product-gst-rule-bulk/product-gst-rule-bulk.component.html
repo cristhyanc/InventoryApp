@@ -1,0 +1,115 @@
+@if (open) {
+  <!--
+    A native modal `<dialog>`, for the reason the supplier-order completion question is one (issue
+    #974): `showModal()` moves this into the top layer, makes the Products list behind it inert and
+    paints the backdrop as this element's own `::backdrop`, so the list cannot be clicked, tabbed
+    into or reached by assistive technology while the question is open. Neither `role` nor
+    `aria-modal` is written here because the platform maps a modal `<dialog>` to exactly those.
+    Escape arrives as the dialog's own `cancel` event, which this component answers as Cancel.
+  -->
+  <dialog
+    #dialogPanel
+    tabindex="-1"
+    [attr.aria-labelledby]="titleId"
+    class="m-auto flex max-h-[calc(100vh-2rem)] w-[calc(100%-2rem)] max-w-xl flex-col overflow-hidden rounded-md-dialog border-0 bg-white p-0 text-left text-md-gray-800 shadow-md-lg outline-none backdrop:bg-md-gray-800/50"
+    data-testid="bulk-gst-rule-dialog"
+  >
+    <div class="border-b border-md-gray-200 px-6 py-4">
+      <h2 [id]="titleId" class="card-title">Set GST rule in bulk</h2>
+      <!--
+        The scope, in so many words. It is deliberately wider than what the list behind the dialog
+        is showing, so it has to be stated rather than inferred from the page: every product of this
+        business with no rule, inactive ones included, on every page and whatever the list is
+        filtered to.
+      -->
+      <p class="text-md-body value-muted">
+        This sets the GST rule for <strong>all products in this business that are currently
+        "No rule"</strong> — including inactive products, on every page of the list, and whatever
+        the search or category filter is showing. A product with an explicit Taxable or GST-free
+        rule is never changed.
+      </p>
+    </div>
+
+    <div class="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      @if (loading) {
+        <p class="text-md-body value-muted" data-testid="bulk-gst-rule-loading">
+          Reading how many products have no GST rule...
+        </p>
+      }
+      @if (error) {
+        <p class="mb-3 text-md-body value-negative" data-testid="bulk-gst-rule-error">{{ error }}</p>
+      }
+
+      @if (hasNothingEligible) {
+        <!-- An answer, not a failure: there is simply nothing for this action to configure. -->
+        <p class="text-md-body" data-testid="bulk-gst-rule-empty">
+          Every product in this business already has a GST rule, so there is nothing to set. Change
+          one product's rule on its own Edit page.
+        </p>
+      } @else if (hasEligibleProducts) {
+        @if (step === 'choose') {
+          <fieldset class="space-y-3">
+            <legend class="mb-1 text-md-body font-semibold">
+              Which rule should those {{ eligibleCount }} products get?
+            </legend>
+            <!--
+              No option is preselected, and there is no "No rule" option at all: the owner chooses
+              the tax treatment at use time (issue #1076), and "No rule" is what these products
+              already carry.
+            -->
+            @for (option of options; track option.value; let first = $first) {
+              <label class="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="bulkGstRule"
+                  [attr.id]="'bulk-gst-rule-' + option.value"
+                  [value]="option.value"
+                  [checked]="rule === option.value"
+                  (change)="chooseRule(option.value)"
+                  #firstOption
+                />
+                <span>{{ option.label }}</span>
+              </label>
+            }
+            <p class="text-md-caption value-muted">
+              GST-free is an explicit rule, and it is not the same as "No rule". Setting a rule
+              changes no purchase that is already recorded, and no cost, stock or valuation.
+            </p>
+          </fieldset>
+        } @else {
+          <div class="space-y-3" data-testid="bulk-gst-rule-confirmation">
+            <p class="text-md-body">
+              Set <strong>{{ chosenLabel }}</strong> on
+              <strong>{{ eligibleCount }}</strong> products that currently have no GST rule?
+            </p>
+            <p class="text-md-body value-muted">
+              This is a configuration change. It records no GST on any existing purchase, and
+              changes no purchase amount, unit cost, stock quantity or inventory value. You can
+              still change any single product's rule afterwards.
+            </p>
+          </div>
+        }
+      }
+    </div>
+
+    <div class="flex flex-wrap justify-end gap-2 border-t border-md-gray-200 px-6 py-4">
+      <button type="button" class="btn btn-link" [disabled]="saving" (click)="cancel()">Cancel</button>
+      @if (!loading && !hasNothingEligible && eligibleCount === null) {
+        <!-- The one way out of a failed read: nothing can be confirmed against a count nobody has. -->
+        <button type="button" class="btn btn-secondary" (click)="retry()">Retry</button>
+      }
+      @if (hasEligibleProducts) {
+        @if (step === 'choose') {
+          <button type="button" class="btn btn-primary" [disabled]="!canContinue" (click)="continueToConfirmation()">
+            Continue
+          </button>
+        } @else {
+          <button type="button" class="btn btn-secondary" [disabled]="saving" (click)="backToChoice()">Back</button>
+          <button type="button" class="btn btn-primary" [disabled]="!canApply" (click)="apply()">
+            {{ saving ? 'Applying...' : 'Apply' }}
+          </button>
+        }
+      }
+    </div>
+  </dialog>
+}
