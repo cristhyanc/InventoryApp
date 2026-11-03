@@ -42,10 +42,18 @@ public sealed class ListSupplierPresets
 /// <para>Every value here is <em>submitted</em> and nothing here is trusted: the names mirror the
 /// request body, the types are as permissive as the wire is, and the policies in
 /// <c>Inventory.Domain.Suppliers</c> decide what is storable. <c>IsEnabled</c> is deliberately not
-/// part of it - a create never carries one, because a new preset is created suggested.</para>
+/// part of it - a create never carries one, because a new preset is created suggested.
+/// <c>SearchPrices</c> <em>is</em> part of it, because both writes carry it (issue #1077): a route
+/// that charges per search is one somebody may want to add switched off.</para>
 /// </summary>
 /// <param name="Name">The submitted name.</param>
 /// <param name="Url">The submitted website, or <see langword="null"/>/blank for none.</param>
+/// <param name="SearchPrices">
+/// Whether the collector is to search this supplier (issue #1077). A plain flag with no rule of its
+/// own: it is two stored states, and the one combination that means nothing - searching on at a
+/// supplier with no connector - issues no work rather than being refused, because a route may be
+/// recorded later.
+/// </param>
 /// <param name="ServesNationwide">Whether the caller claims the whole country.</param>
 /// <param name="ServedStates">The submitted state codes, in any order, case or padding.</param>
 /// <param name="PricesIncludeGst">Whether the caller says the published prices include GST.</param>
@@ -54,6 +62,7 @@ public sealed class ListSupplierPresets
 public sealed record SupplierPresetSubmission(
     string? Name,
     string? Url,
+    bool SearchPrices,
     bool ServesNationwide,
     IReadOnlyList<string?>? ServedStates,
     bool PricesIncludeGst,
@@ -147,6 +156,7 @@ public sealed class CreateSupplierPreset
                         validatedName,
                         normalisedName,
                         validatedUrl,
+                        submitted.SearchPrices,
                         submitted.ServesNationwide,
                         servedStates,
                         submitted.PricesIncludeGst,
@@ -177,12 +187,15 @@ public sealed class CreateSupplierPreset
 
 /// <summary>
 /// Edits one platform supplier preset (issue #848, with the supplier-master fields of #931): its
-/// name, its website, what it serves, how its prices are collected and whether it is still
-/// suggested, in one <c>PUT</c> of the whole resource.
+/// name, its website, what it serves, how its prices are collected, whether it is still suggested
+/// and whether its prices are searched for, in one <c>PUT</c> of the whole resource.
 ///
 /// <para>Enabling and disabling are this operation, deliberately rather than two extra endpoints:
 /// these fields are what a preset is, they are all editable by the same authority, and a
-/// separate toggle would be a second write path over one row with its own race to reason about.</para>
+/// separate toggle would be a second write path over one row with its own race to reason about.
+/// Switching searching on and off (issue #1077) is the same operation for the same reason, and it is
+/// a <em>different</em> field: an edit that disables a preset no longer stops its searches, and one
+/// that stops its searches no longer hides it from businesses.</para>
 ///
 /// <para><strong>Every field is submitted together, which is what makes the supplier-master rules
 /// decidable.</strong> Whether nationwide and a state list conflict, and whether the connector key
@@ -273,6 +286,7 @@ public sealed class UpdateSupplierPreset
                         normalisedName,
                         validatedUrl,
                         isEnabled,
+                        submitted.SearchPrices,
                         submitted.ServesNationwide,
                         servedStates,
                         submitted.PricesIncludeGst,

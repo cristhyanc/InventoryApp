@@ -5,36 +5,61 @@ using Xunit;
 namespace Inventory.UnitTests.Domain.PriceCatalogue;
 
 /// <summary>
-/// What one collector run is asked to do (issue #924): which suppliers are due (every enabled,
-/// collectable one, on every run, since 1 November 2026), and how much work a run may be handed.
+/// What one collector run is asked to do (issue #924): which suppliers are due (every supplier whose
+/// <em>Search prices</em> switch is on and that something collects, on every run, since 1 November
+/// 2026), and how much work a run may be handed.
 /// </summary>
 public class PriceCollectorWorkListPolicyTests
 {
     #region Which suppliers are due
 
     /// <summary>
-    /// An enabled supplier that something collects is due on every run, whenever it was last checked
-    /// (owner decision, 1 November 2026): a run searches everywhere.
+    /// All four combinations of the two facts the rule reads (issue #1077): a supplier is searched
+    /// when its <em>Search prices</em> switch is on <strong>and</strong> something collects its
+    /// prices, and in no other case.
+    ///
+    /// <para>Whether the platform still <em>suggests</em> the supplier is deliberately not one of
+    /// them, and that is the whole of this issue: paying for one supplier's searches and offering it
+    /// to businesses are different decisions, so a supplier can be suggested and unsearched (the paid
+    /// Kmart and BIG W routes, paused) or searched and unsuggested.</para>
     /// </summary>
-    [Fact]
-    public void An_enabled_collectable_supplier_is_always_due() =>
-        Assert.True(PriceCollectorWorkListPolicy.IsSupplierDue(isEnabled: true, hasConnector: true));
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, false)]
+    public void A_supplier_is_due_only_when_searching_is_on_and_something_collects_it(
+        bool searchPrices,
+        bool hasConnector,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            PriceCollectorWorkListPolicy.IsSupplierDue(searchPrices, hasConnector));
 
     /// <summary>
-    /// A supplier nothing collects is never due. Costco is in that state and it is a real one: a route
-    /// that cannot be taken is not work, and issuing it would be a work item no result could answer.
+    /// The first of those four spelled out: searching on and a route to take is due on every run,
+    /// whenever it was last checked (owner decision, 1 November 2026) - a run searches everywhere.
+    /// </summary>
+    [Fact]
+    public void A_searchable_collectable_supplier_is_always_due() =>
+        Assert.True(PriceCollectorWorkListPolicy.IsSupplierDue(searchPrices: true, hasConnector: true));
+
+    /// <summary>
+    /// A supplier nothing collects is never due, however the switch is set. Costco is in that state
+    /// and it is a real one: a route that cannot be taken is not work, and issuing it would be a work
+    /// item no result could answer.
     /// </summary>
     [Fact]
     public void A_supplier_with_no_connector_is_never_due() =>
-        Assert.False(PriceCollectorWorkListPolicy.IsSupplierDue(isEnabled: true, hasConnector: false));
+        Assert.False(PriceCollectorWorkListPolicy.IsSupplierDue(searchPrices: true, hasConnector: false));
 
     /// <summary>
-    /// A disabled supplier is never due either. Disabling is how the platform stops suggesting a
-    /// supplier, and a supplier it has stopped suggesting is not one to keep searching.
+    /// And a supplier whose searching has been switched off is never due either, which is how a
+    /// Super Admin stops paying for one supplier's searches without hiding it from businesses.
     /// </summary>
     [Fact]
-    public void A_disabled_supplier_is_never_due() =>
-        Assert.False(PriceCollectorWorkListPolicy.IsSupplierDue(isEnabled: false, hasConnector: true));
+    public void A_supplier_whose_searching_is_off_is_never_due() =>
+        Assert.False(PriceCollectorWorkListPolicy.IsSupplierDue(searchPrices: false, hasConnector: true));
 
     #endregion
 

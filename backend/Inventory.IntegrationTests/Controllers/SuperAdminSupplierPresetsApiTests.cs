@@ -258,7 +258,7 @@ public class SuperAdminSupplierPresetsApiTests
     #region The list
 
     /// <summary>
-    /// The baseline four, by name, with the eleven declared fields and nothing else. In particular
+    /// The baseline four, by name, with the twelve declared fields and nothing else. In particular
     /// the stored normalised name is not published: it is the unique index's key, not a field of the
     /// resource.
     /// </summary>
@@ -275,6 +275,10 @@ public class SuperAdminSupplierPresetsApiTests
         Assert.All(presets, preset =>
         {
             Assert.True(preset.GetProperty("isEnabled").GetBoolean());
+
+            // And its searching state beside it (issue #1077), reported for every preset the list
+            // carries rather than only for the ones something collects.
+            Assert.True(preset.GetProperty("searchPrices").GetBoolean());
             Assert.Equal(JsonValueKind.Null, preset.GetProperty("url").ValueKind);
             Assert.True(preset.GetProperty("id").GetInt32() > 0);
             Assert.Equal(
@@ -286,6 +290,7 @@ public class SuperAdminSupplierPresetsApiTests
                     "priceConnector",
                     "priceConnectorKey",
                     "pricesIncludeGst",
+                    "searchPrices",
                     "servedStates",
                     "servesNationwide",
                     "updatedAtUtc",
@@ -796,6 +801,158 @@ public class SuperAdminSupplierPresetsApiTests
 
     #endregion
 
+    #region The Search prices switch (issue #1077)
+
+    /// <summary>
+    /// The criterion: a create that says nothing about searching creates a searched preset, because
+    /// a supplier added to this list is normally one somebody wants priced.
+    /// </summary>
+    [Fact]
+    public async Task A_create_that_omits_searchPrices_creates_a_searched_preset()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(PresetsUrl, CreateBody("Aldi"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.True((await ReadJsonAsync(response)).RootElement.GetProperty("searchPrices").GetBoolean());
+        Assert.True((await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi").SearchPrices);
+    }
+
+    /// <summary>
+    /// And a create may state it, in either direction: "add this supplier but do not search it yet"
+    /// is a real thing to want of a route that charges per search. The preset is created suggested
+    /// either way - the two flags are independent, and a create never chooses the first.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_create_may_state_whether_the_supplier_is_searched(bool searchPrices)
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", searchPrices: searchPrices));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var created = (await ReadJsonAsync(response)).RootElement;
+        Assert.Equal(searchPrices, created.GetProperty("searchPrices").GetBoolean());
+        Assert.True(created.GetProperty("isEnabled").GetBoolean());
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi");
+        Assert.Equal(searchPrices, stored.SearchPrices);
+        Assert.True(stored.IsEnabled);
+    }
+
+    /// <summary>
+    /// An edit stores the two flags independently, which is the whole of this issue: a supplier can
+    /// be withdrawn from the suggestions while it is still searched, and its searches stopped while
+    /// it is still suggested.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task An_edit_stores_the_suggestion_and_the_searching_flags_independently(
+        bool isEnabled,
+        bool searchPrices)
+    {
+        var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles").Id;
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(id),
+            EditBody("Coles", isEnabled: isEnabled, searchPrices: searchPrices));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var updated = (await ReadJsonAsync(response)).RootElement;
+        Assert.Equal(isEnabled, updated.GetProperty("isEnabled").GetBoolean());
+        Assert.Equal(searchPrices, updated.GetProperty("searchPrices").GetBoolean());
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(preset => preset.Id == id);
+        Assert.Equal(isEnabled, stored.IsEnabled);
+        Assert.Equal(searchPrices, stored.SearchPrices);
+    }
+
+    /// <summary>
+    /// <c>searchPrices</c> is a <c>bool</c> on the edit, so a body that omits it would otherwise bind
+    /// to <c>false</c> indistinguishably from an explicit <c>false</c> and silently stop a supplier's
+    /// searches. <c>JsonRequiredAttribute</c> refuses the under-posted body instead, and nothing is
+    /// written - not the searching flag, and not the name the body did carry.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_without_searchPrices_is_refused_and_changes_nothing()
+    {
+        var preset = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(preset.Id),
+            new
+            {
+                name = "Coles Renamed",
+                isEnabled = true,
+                servesNationwide = true,
+                pricesIncludeGst = true,
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == preset.Id);
+        Assert.Equal(preset.Name, stored.Name);
+        Assert.Equal(preset.SearchPrices, stored.SearchPrices);
+        Assert.Equal(preset.UpdatedAtUtc, stored.UpdatedAtUtc);
+    }
+
+    /// <summary>
+    /// A disabled preset is reported with its own searching state, which is how the page can show
+    /// "not suggested, still searched" at all.
+    /// </summary>
+    [Fact]
+    public async Task The_list_reports_a_disabled_preset_that_is_still_searched()
+    {
+        await _factory.SeedSupplierPresetAsync(
+            "Retired But Priced",
+            isEnabled: false,
+            searchPrices: true,
+            priceConnector: SupplierPriceConnector.Kmart);
+
+        var retired = (await ReadJsonAsync(await _factory.AsAdministrator().GetAsync(PresetsUrl)))
+            .RootElement
+            .EnumerateArray()
+            .Single(preset => preset.GetProperty("name").GetString() == "Retired But Priced");
+
+        Assert.False(retired.GetProperty("isEnabled").GetBoolean());
+        Assert.True(retired.GetProperty("searchPrices").GetBoolean());
+    }
+
+    /// <summary>
+    /// And the edit records the state it ended in on the existing audit trail, which is the
+    /// criterion: on the paid routes this flag is money, so "who switched this supplier's searches
+    /// off" has to be answerable.
+    /// </summary>
+    [Fact]
+    public async Task Switching_searching_off_is_recorded_on_the_audit_trail()
+    {
+        var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles").Id;
+        _factory.ClearLog();
+
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await _factory.AsAdministrator().PutAsJsonAsync(
+                PresetUrl(id),
+                EditBody("Coles", isEnabled: true, searchPrices: false))).StatusCode);
+
+        var entry = Assert.Single(_factory.LoggedEntries()
+            .Where(logged => logged.Contains("Platform supplier preset audit", StringComparison.Ordinal)));
+
+        // The state it ended in, and the suggestion flag beside it so the two are distinguishable in
+        // the trail rather than one being read as the other.
+        Assert.Contains("search prices False", entry, StringComparison.Ordinal);
+        Assert.Contains("enabled True", entry, StringComparison.Ordinal);
+        Assert.Contains(id.ToString(CultureInfo.InvariantCulture), entry, StringComparison.Ordinal);
+        Assert.DoesNotContain("Coles", entry, StringComparison.OrdinalIgnoreCase);
+    }
+
+    #endregion
+
     #region Editing
 
     [Fact]
@@ -996,6 +1153,9 @@ public class SuperAdminSupplierPresetsApiTests
         Assert.Contains("change Updated", audit[1], StringComparison.Ordinal);
         Assert.Contains("enabled False", audit[1], StringComparison.Ordinal);
 
+        // And the searching state each write ended in, beside the suggestion flag (issue #1077).
+        Assert.All(audit, entry => Assert.Contains("search prices True", entry, StringComparison.Ordinal));
+
         // The create's own supplier-master state: nationwide, GST-inclusive, collected by nobody.
         Assert.Contains("nationwide True", audit[0], StringComparison.Ordinal);
         Assert.Contains("prices include GST True", audit[0], StringComparison.Ordinal);
@@ -1093,7 +1253,8 @@ public class SuperAdminSupplierPresetsApiTests
         string?[]? servedStates = null,
         bool pricesIncludeGst = true,
         int? priceConnector = null,
-        string? priceConnectorKey = null) =>
+        string? priceConnectorKey = null,
+        bool? searchPrices = null) =>
         new
         {
             name,
@@ -1103,6 +1264,9 @@ public class SuperAdminSupplierPresetsApiTests
             pricesIncludeGst,
             priceConnector,
             priceConnectorKey,
+            // Omitted by default, because "the caller said nothing" is the create's normal case and
+            // the server's answer to it - searched - is a criterion of issue #1077 in its own right.
+            searchPrices,
         };
 
     /// <summary>
@@ -1116,7 +1280,8 @@ public class SuperAdminSupplierPresetsApiTests
         string?[]? servedStates = null,
         bool pricesIncludeGst = true,
         int? priceConnector = null,
-        string? priceConnectorKey = null) =>
+        string? priceConnectorKey = null,
+        bool searchPrices = true) =>
         new
         {
             name,
@@ -1127,6 +1292,10 @@ public class SuperAdminSupplierPresetsApiTests
             pricesIncludeGst,
             priceConnector,
             priceConnectorKey,
+            // Always stated on an edit, unlike on a create: the PUT is the whole resource, and the
+            // field is required on the wire so an omitted value cannot silently start or stop a
+            // supplier's searches (issue #1077).
+            searchPrices,
         };
 
     /// <summary>
@@ -1177,6 +1346,7 @@ public class SuperAdminSupplierPresetsApiTests
         Assert.All(presets, preset =>
         {
             Assert.True(preset.IsEnabled);
+            Assert.True(preset.SearchPrices);
             Assert.Null(preset.Url);
             // The baseline's supplier-master values too, so "nothing was written" covers the fields
             // of issue #931 and not only the three #848 had.

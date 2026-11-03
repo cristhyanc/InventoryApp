@@ -435,7 +435,7 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
             {
                 preset.Id,
                 preset.Name,
-                preset.IsEnabled,
+                preset.SearchPrices,
                 preset.PriceConnector,
                 preset.PriceConnectorKey,
                 preset.Url,
@@ -467,7 +467,7 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
         return presets.ConvertAll(preset => new CollectableSupplier(
             preset.Id,
             preset.Name,
-            preset.IsEnabled,
+            preset.SearchPrices,
             preset.PriceConnector,
             preset.PriceConnectorKey,
             preset.Url,

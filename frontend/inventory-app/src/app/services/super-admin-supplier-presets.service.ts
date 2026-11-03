@@ -37,8 +37,8 @@ export enum SupplierPriceConnector {
 }
 
 /**
- * One platform supplier preset as `GET /api/super-admin/supplier-presets` reports it (issues #848
- * and #931). These eleven fields are the whole contract: the stored normalised name the server
+ * One platform supplier preset as `GET /api/super-admin/supplier-presets` reports it (issues #848,
+ * #931 and #1077). These twelve fields are the whole contract: the stored normalised name the server
  * compares by is deliberately not published, because whether two names collide is the database's
  * answer and not a decision any client makes.
  */
@@ -46,7 +46,18 @@ export interface SuperAdminSupplierPreset {
   readonly id: number;
   readonly name: string;
   readonly url: string | null;
+  /**
+   * Whether the preset is still suggested to businesses. Since issue #1077 it says only that:
+   * whether the collector searches this supplier is {@link searchPrices}.
+   */
   readonly isEnabled: boolean;
+  /**
+   * Whether the price collector searches this supplier (issue #1077). Independent of
+   * {@link isEnabled} - a supplier may be suggested and unsearched, or searched and no longer
+   * suggested - and it decides nothing at all for a preset whose {@link priceConnector} is `null`,
+   * because there is no route to take.
+   */
+  readonly searchPrices: boolean;
   /** Whether it serves the whole country. Mutually exclusive with {@link servedStates}. */
   readonly servesNationwide: boolean;
   /**
@@ -64,10 +75,16 @@ export interface SuperAdminSupplierPreset {
   readonly updatedAtUtc: string;
 }
 
-/** What a create submits. A new preset is created enabled, so there is no `isEnabled`. */
+/**
+ * What a create submits. A new preset is created enabled, so there is no `isEnabled` - but it does
+ * state `searchPrices` (issue #1077), because adding a supplier whose searches cost money without
+ * switching them on is a real thing to want. The server defaults an omitted value to `true`; this
+ * client always sends it, so the dialog's own switch is what decides.
+ */
 export interface CreateSupplierPresetRequest {
   readonly name: string;
   readonly url: string | null;
+  readonly searchPrices: boolean;
   readonly servesNationwide: boolean;
   readonly servedStates: readonly string[];
   readonly pricesIncludeGst: boolean;
@@ -75,11 +92,16 @@ export interface CreateSupplierPresetRequest {
   readonly priceConnectorKey: string | null;
 }
 
-/** What an edit submits: the whole resource, so enabling and disabling is this call. */
+/**
+ * What an edit submits: the whole resource, so enabling and disabling is this call - and so is
+ * switching price searching on and off (issue #1077). Both flags are required by the server, so
+ * every caller has to state the one it is not changing rather than letting it default.
+ */
 export interface UpdateSupplierPresetRequest {
   readonly name: string;
   readonly url: string | null;
   readonly isEnabled: boolean;
+  readonly searchPrices: boolean;
   readonly servesNationwide: boolean;
   readonly servedStates: readonly string[];
   readonly pricesIncludeGst: boolean;

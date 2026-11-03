@@ -20,6 +20,7 @@ const preset: SuperAdminSupplierPreset = {
   name: 'Coles',
   url: 'https://www.coles.com.au',
   isEnabled: true,
+  searchPrices: true,
   servesNationwide: true,
   servedStates: [],
   pricesIncludeGst: true,
@@ -31,6 +32,7 @@ const preset: SuperAdminSupplierPreset = {
 
 /** The supplier-master half of a request, as the one a nationwide GST-inclusive preset sends. */
 const nationwideGstInclusive = {
+  searchPrices: true,
   servesNationwide: true,
   servedStates: [],
   pricesIncludeGst: true,
@@ -94,6 +96,7 @@ describe('SuperAdminSupplierPresetsService (issue #848)', () => {
       .create({
         name: 'JB Metro SA & NT',
         url: 'https://www.jbmetro-sa-nt.com.au',
+        searchPrices: true,
         servesNationwide: false,
         servedStates: ['SA', 'NT'],
         pricesIncludeGst: false,
@@ -107,6 +110,7 @@ describe('SuperAdminSupplierPresetsService (issue #848)', () => {
     expect(http.post).toHaveBeenCalledWith('/api/super-admin/supplier-presets', {
       name: 'JB Metro SA & NT',
       url: 'https://www.jbmetro-sa-nt.com.au',
+      searchPrices: true,
       servesNationwide: false,
       servedStates: ['SA', 'NT'],
       pricesIncludeGst: false,
@@ -127,6 +131,46 @@ describe('SuperAdminSupplierPresetsService (issue #848)', () => {
       url: null,
       isEnabled: false,
       ...nationwideGstInclusive
+    });
+  });
+
+  /**
+   * The two switches travel on one `PUT` and are sent exactly as given (issue #1077): this client
+   * decides nothing about either, which is what lets the page send "no longer suggested, still
+   * searched" without a rule here to contradict it.
+   */
+  it('puts the suggestion and the searching flags independently (issue #1077)', () => {
+    const { service, http } = createService();
+
+    service
+      .update(4, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: true,
+        ...nationwideGstInclusive,
+        searchPrices: false
+      })
+      .subscribe();
+
+    expect(http.put).toHaveBeenCalledWith('/api/super-admin/supplier-presets/4', {
+      name: 'Kmart',
+      url: null,
+      isEnabled: true,
+      ...nationwideGstInclusive,
+      searchPrices: false
+    });
+  });
+
+  it('posts a create with the searching flag it was given (issue #1077)', () => {
+    const { service, http } = createService();
+
+    service.create({ name: 'Aldi', url: null, ...nationwideGstInclusive, searchPrices: false }).subscribe();
+
+    expect(http.post).toHaveBeenCalledWith('/api/super-admin/supplier-presets', {
+      name: 'Aldi',
+      url: null,
+      ...nationwideGstInclusive,
+      searchPrices: false
     });
   });
 

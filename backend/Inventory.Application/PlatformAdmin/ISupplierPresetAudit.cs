@@ -12,14 +12,16 @@ public enum SupplierPresetChange
     /// A preset was edited. Enabling and disabling are edits too, which is why there is no separate
     /// value for them: the endpoint is one <c>PUT</c> of the whole resource, so "the name changed"
     /// and "it was disabled" arrive as the same request and
-    /// <see cref="SupplierPresetAuditEntry.IsEnabled"/> records which state it ended in.
+    /// <see cref="SupplierPresetAuditEntry.IsEnabled"/> records which state it ended in. Switching
+    /// searching on and off is the same (issue #1077), recorded by
+    /// <see cref="SupplierPresetAuditEntry.SearchPrices"/>.
     /// </summary>
     Updated = 2,
 }
 
 /// <summary>
 /// One audit event about one committed write to the platform supplier presets (issue #848): who did
-/// it, which preset, which change, and whether the preset is enabled afterwards.
+/// it, which preset, which change, and whether the preset is suggested and searched afterwards.
 ///
 /// <para>It is emitted only after the write is committed, exactly as
 /// <see cref="PlatformBusinessDecisionAuditEntry"/> and
@@ -45,7 +47,13 @@ public enum SupplierPresetChange
 /// <param name="ActorObjectId">Their Entra <c>oid</c>.</param>
 /// <param name="PresetId">The preset the change was about.</param>
 /// <param name="Change">Which change it was.</param>
-/// <param name="IsEnabled">Whether the preset is suggested after the change.</param>
+/// <param name="IsEnabled">Whether the preset is suggested to businesses after the change.</param>
+/// <param name="SearchPrices">
+/// Whether its prices are searched for after the change (issue #1077). Recorded for the reason the
+/// supplier-master fields are: on the paid routes this flag is money, so "who switched BIG W's
+/// searches off, and when" is exactly a question this trail exists to answer. It is a state rather
+/// than content, and it is nobody's name, address or business data.
+/// </param>
 /// <param name="ServesNationwide">Whether it serves the whole country after the change.</param>
 /// <param name="ServedStates">
 /// The states and territories it serves after the change, as the stored canonical list, or the empty
@@ -65,6 +73,7 @@ public sealed record SupplierPresetAuditEntry(
     int PresetId,
     SupplierPresetChange Change,
     bool IsEnabled,
+    bool SearchPrices,
     bool ServesNationwide,
     string ServedStates,
     bool PricesIncludeGst,
@@ -96,6 +105,7 @@ public sealed record SupplierPresetAuditEntry(
             stored.Id,
             change,
             stored.IsEnabled,
+            stored.SearchPrices,
             stored.ServesNationwide,
             string.Join(',', stored.ServedStates),
             stored.PricesIncludeGst,
