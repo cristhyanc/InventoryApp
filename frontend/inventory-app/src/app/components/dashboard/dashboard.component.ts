@@ -1009,6 +1009,32 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return product.quantityInStock <= 0 ? 'badge-danger' : 'badge-warning';
   }
 
+  /**
+   * "Storage after refill" (issue #1020): what storage stock minus machine need leaves behind,
+   * purely so an operator is not left doing that subtraction themselves. It is the same two figures
+   * the row already carries - never a second reorder formula, and never shown where
+   * {@link isMachineNeedShownInReorderAlerts} is false, because the machine need there is an unread
+   * `0` and the subtraction would be misleading. `null` only for a figure genuinely not a number, so
+   * it is shown as unavailable rather than coerced to zero.
+   */
+  storageAfterRefill(product: Product): number | null {
+    const { quantityInStock, machineReplenishmentNeed } = product;
+    if (!Number.isFinite(quantityInStock) || !Number.isFinite(machineReplenishmentNeed)) return null;
+    return quantityInStock - machineReplenishmentNeed;
+  }
+
+  /** The cell's text: the signed figure, or an em dash for the unavailable case above. */
+  storageAfterRefillDisplay(product: Product): string {
+    const value = this.storageAfterRefill(product);
+    return value === null ? '—' : String(value);
+  }
+
+  /** A shortfall (machines need more than storage holds) is styled exactly like any other negative. */
+  storageAfterRefillClass(product: Product): string {
+    const value = this.storageAfterRefill(product);
+    return value !== null && value < 0 ? 'value-negative' : '';
+  }
+
 }
 
 /** What a purchase-cost cell says while its one request is outstanding or has not been issued. */

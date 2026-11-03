@@ -351,6 +351,7 @@ public class EndpointPlanRequirementTests
         new("SuperAdminPriceCatalogueReviewController.DecideMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/matches
         new("SuperAdminPriceCatalogueReviewController.Queue", PlanRequirementKind.None), // GET api/super-admin/price-catalogue-review
         new("SuperAdminPriceCatalogueReviewController.UndoAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo
+        new("SuperAdminPriceCatalogueReviewController.UndoBusinessSelection", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/business-selections/undo
         new("SuperAdminPlanGrantsController.End", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/plan-grant/end
         new("SuperAdminPlanGrantsController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/plan-grant
         new("SuperAdminPlanGrantsController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/plan-grant

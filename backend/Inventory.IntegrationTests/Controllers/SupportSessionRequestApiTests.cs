@@ -161,6 +161,10 @@ public class SupportSessionRequestApiTests
     // its answer is the confirmation the write is checked against.
     [InlineData("Inventory.Operate", "POST", "/api/products/gst-rule/bulk-preview")]
     [InlineData("Inventory.Operate", "POST", "/api/products/gst-rule/bulk")]
+    // The product create, which issue #1051 let link a new product to a master product and so turn
+    // that tracking on: the method rule refuses it for the same reason the switch beside it is
+    // refused, so somebody from outside the business cannot create one of its products at all.
+    [InlineData("Inventory.Operate", "POST", "/api/products")]
     // The pick list's two refill writes (issues #743 and #897). Neither carries a rule of its own:
     // the method rule is what refuses them, which is why a multi-machine batch needed no support
     // session handling when it was added.

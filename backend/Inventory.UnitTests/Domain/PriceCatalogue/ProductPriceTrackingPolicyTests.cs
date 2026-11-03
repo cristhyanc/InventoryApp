@@ -39,6 +39,7 @@ public class ProductPriceTrackingPolicyTests
     [InlineData(ProductPriceTrackingStatus.AutoMatched, 7L, ProductPriceTrackingMatchSource.CollectorAutomaticMatch)]
     [InlineData(ProductPriceTrackingStatus.Matched, 7L, ProductPriceTrackingMatchSource.SuperAdmin)]
     [InlineData(ProductPriceTrackingStatus.Matched, 7L, ProductPriceTrackingMatchSource.CollectorAutomaticMatch)]
+    [InlineData(ProductPriceTrackingStatus.Matched, 7L, ProductPriceTrackingMatchSource.BusinessSelection)]
     public void A_consistent_mapping_is_accepted(
         ProductPriceTrackingStatus status,
         long? masterProductId,
@@ -138,6 +139,36 @@ public class ProductPriceTrackingPolicyTests
                 (ProductPriceTrackingStatus)9,
                 masterProductId: null,
                 matchSource: null));
+
+    /// <summary>
+    /// The third source is a declared one (issue #1051): a business that created a product from an
+    /// unchanged master product suggestion. It is accepted on exactly the terms the other two are -
+    /// only beside a master product, and only in a matched state - so the one consistency rule still
+    /// governs every writer of this table.
+    /// </summary>
+    [Fact]
+    public void A_business_selection_is_a_declared_match_source()
+    {
+        Assert.True(
+            ProductPriceTrackingPolicy.IsDeclaredMatchSource(
+                ProductPriceTrackingMatchSource.BusinessSelection));
+
+        Assert.Equal(
+            ProductPriceTrackingPolicy.MasterProductStatusMismatchMessage,
+            Assert.Throws<DomainValidationException>(
+                () => ProductPriceTrackingPolicy.RequireConsistentMatch(
+                    ProductPriceTrackingStatus.Requested,
+                    masterProductId: 7L,
+                    ProductPriceTrackingMatchSource.BusinessSelection)).Message);
+
+        Assert.Equal(
+            ProductPriceTrackingPolicy.MatchSourceMismatchMessage,
+            Assert.Throws<DomainValidationException>(
+                () => ProductPriceTrackingPolicy.RequireConsistentMatch(
+                    ProductPriceTrackingStatus.NotFound,
+                    masterProductId: null,
+                    ProductPriceTrackingMatchSource.BusinessSelection)).Message);
+    }
 
     [Fact]
     public void An_undeclared_match_source_is_refused() =>

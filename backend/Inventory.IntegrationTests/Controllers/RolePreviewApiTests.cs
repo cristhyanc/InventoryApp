@@ -194,6 +194,9 @@ public class RolePreviewApiTests : IClassFixture<RolePreviewApiTests.ApiFactory>
     // authorise it, because both are POSTs and the method rule refuses them before the endpoint.
     [InlineData("POST", "/api/products/gst-rule/bulk-preview")]
     [InlineData("POST", "/api/products/gst-rule/bulk")]
+    // The product create, which issue #1051 let link a new product to a master product: a previewed
+    // role cannot create a product, and so cannot decide what one of the business's products is.
+    [InlineData("POST", "/api/products")]
     // Issue #974's supplier-order completion preview, on the same terms: a previewed role cannot
     // ask the server to project an order, which is what a client needs before it can submit a
     // completion decision at all.

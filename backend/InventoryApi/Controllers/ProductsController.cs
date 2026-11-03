@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 using Inventory.Application.Access;
 using Inventory.Application.Gst;
 using Inventory.Application.PriceCatalogue;
@@ -56,6 +58,15 @@ namespace InventoryApi.Controllers;
 /// through this lookup, which is why it is a separately reviewed read rather than a widening of
 /// #938's name-and-size limit, and that limit is unchanged. See docs/architecture.md § Tenant
 /// ownership.</para>
+///
+/// <para><b>Issue #1051 let <see cref="Create"/> link the product it creates to one of those master
+/// products</b>, on the same capability and with no new field on any other action: a create may carry
+/// the selection the lookup answered with, and the server writes one <c>Matched</c> price-tracking
+/// mapping for it when - and only when - the submitted Name and unit label are still the ones it
+/// recomputes from that master product. It is the only place in the application where a business
+/// decides which master product one of its products is, it is bounded to a product being created, and
+/// a Super Admin may still undo it. See docs/architecture.md § Tracking supplier prices on a
+/// product.</para>
 ///
 /// <para><b>Issue #1076 added "Set GST rule in bulk" on the same capability</b>:
 /// <c>POST gst-rule/bulk-preview</c> and <c>POST gst-rule/bulk</c>. Configuring the GST rule of
@@ -317,15 +328,31 @@ public class ProductsController : ControllerBase
     /// through the ordinary catalogue read so a client gets the same shape
     /// <see cref="Get"/> answers - including which fields a provider manages, which for a product
     /// created here is none.
+    ///
+    /// <para><strong>Since issue #1051 it may also link the new product to the master product
+    /// suggestion the operator created it from</strong> (parent #817): <c>selectedMasterProductId</c>
+    /// with <c>trackSupplierPrices</c>, which defaults to <see langword="true"/> beside a selection
+    /// because the link <em>is</em> the price-tracking row. Whether the link is made is the server's
+    /// answer and not the client's - the Name and unit label are recomputed from the stored master
+    /// product inside the create's own transaction and must still be the submitted ones - and a
+    /// selection that no longer stands refuses the whole create with <c>409</c> and a stable code,
+    /// storing nothing at all. Deciding which master product an <em>existing</em> product is remains
+    /// the matcher's (#941) and the Super Admin review's (#928).</para>
     /// </summary>
     /// <response code="201">The created product, with its database-assigned id.</response>
     /// <response code="400">
     /// A validation refusal with its message: no name, no unit label (issue #895), negative restock
     /// settings, or a category this business does not own.
     /// </response>
+    /// <response code="409">
+    /// The selected master product does not stand (issue #1051): <c>master_product_unavailable</c>,
+    /// <c>master_product_changed</c> or <c>master_product_refused</c> in the problem's <c>code</c>,
+    /// with the sentence to show beside it. Nothing was created.
+    /// </response>
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<ProductResponse>> Create(ProductCreateDto dto, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(dto);
@@ -341,8 +368,19 @@ public class ProductsController : ControllerBase
                 dto.Unit,
                 dto.CategoryId,
                 dto.IsActive,
-                dto.InitialUnitCost),
+                dto.InitialUnitCost,
+                dto.SelectedMasterProductId,
+                // Absent means "yes" beside a selection, which is the form's own default: an operator
+                // who picked a product from the catalogue asked for its prices. The opt-out is an
+                // explicit false, and what it then does is the Domain's rule rather than this
+                // boundary's.
+                dto.TrackSupplierPrices ?? true),
             ct);
+
+        if (result.ConflictCode is { } conflictCode)
+        {
+            return MasterProductSelectionConflict(conflictCode, result.ValidationError!);
+        }
 
         if (!result.IsValid) return BadRequest(result.ValidationError);
 
@@ -357,6 +395,38 @@ public class ProductsController : ControllerBase
                 nameof(Get),
                 new { id = created.Id },
                 ProductRecordResponseMapper.ToResponse(created, visibility));
+    }
+
+    /// <summary>
+    /// The one shape a refused master product selection is published in (issue #1051): <c>409</c>
+    /// with the stable <c>code</c> beside the sentence, in the <c>ProblemDetails</c> shape every other
+    /// handled refusal in this application uses - the <c>plan_required</c> refusal's own shape, with
+    /// <c>message</c> kept beside the standard <c>detail</c> because the existing frontend error
+    /// handling reads it.
+    ///
+    /// <para>The code and the sentence are both the Domain rule's; this method only writes them into
+    /// a response. It is a conflict rather than a <c>400</c> because the submitted values are valid
+    /// and what changed is the shared catalogue they were chosen against - the client's two ways on
+    /// are to choose again or to resubmit with no selection, and the code is how it tells which
+    /// happened.</para>
+    /// </summary>
+    private ObjectResult MasterProductSelectionConflict(string code, string message)
+    {
+        var problemDetails = new ProblemDetails
+        {
+            Title = "The selected master product is no longer available",
+            Detail = message,
+            Status = StatusCodes.Status409Conflict,
+        };
+        problemDetails.Extensions["traceId"] = Activity.Current?.Id ?? HttpContext.TraceIdentifier;
+        problemDetails.Extensions["message"] = message;
+        problemDetails.Extensions["code"] = code;
+
+        return new ObjectResult(problemDetails)
+        {
+            StatusCode = StatusCodes.Status409Conflict,
+            ContentTypes = { "application/problem+json" },
+        };
     }
 
     /// <summary>

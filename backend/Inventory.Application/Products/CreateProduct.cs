@@ -16,6 +16,14 @@ namespace Inventory.Application.Products;
 /// other half of issue #895 and is deliberately not here - it compares the stored label, so it is
 /// decided inside the write's own transaction (<see cref="IProductStore.UpdateAsync"/>), the same
 /// place the provider-managed and category refusals are.</para>
+///
+/// <para><strong>The master product a create may be linked to is decided there too</strong>
+/// (issue #1051): whether that master product still exists, whether the submitted Name and unit
+/// label are still its own, and whether a Super Admin has ruled the pair out are three statements
+/// about <em>stored</em> rows, so the read, the comparison and both writes are one operation inside
+/// the store's transaction. This use case only reports the conflict it answers with, and the
+/// deterministic refusals above still come first: a product that would not be created at all is
+/// never asked which master product it is.</para>
 /// </summary>
 public sealed class CreateProduct
 {
@@ -41,10 +49,19 @@ public sealed class CreateProduct
         if (catalogueError is not null) return CreateProductResult.Invalid(catalogueError);
 
         var attempt = await _store.CreateAsync(fields, cancellationToken);
-        return attempt.Outcome == ProductWriteOutcome.Succeeded
-            ? CreateProductResult.Success(attempt.ProductId!.Value)
+        return attempt.Outcome switch
+        {
+            ProductWriteOutcome.Succeeded => CreateProductResult.Success(attempt.ProductId!.Value),
+            // The selected master product does not stand, and nothing at all was created (issue
+            // #1051). The code travels with the sentence because a client has to tell the three
+            // conflicts apart to offer "choose again" or "create without the link".
+            ProductWriteOutcome.MasterProductConflict => CreateProductResult.Conflict(
+                attempt.ConflictCode!,
+                attempt.Refusal!),
             // The store's own refusal: a category this business does not own. It is a statement
             // about stored data, so only the store can make it.
-            : CreateProductResult.Invalid(attempt.Refusal ?? ProductCataloguePolicy.UnknownCategoryMessage);
+            _ => CreateProductResult.Invalid(
+                attempt.Refusal ?? ProductCataloguePolicy.UnknownCategoryMessage),
+        };
     }
 }

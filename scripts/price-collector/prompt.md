@@ -60,7 +60,8 @@ per-run call cap — reserving each call before it is allowed, so two calls at o
 same allowance — and refuses a write outside `price-collector-out/` or to a file that already exists. It
 also refuses every paid call while its own accounting cannot be read, locked or written, because a
 cap it cannot count is a cap it cannot keep. **A refusal is the answer, not an obstacle**: do not
-retry it with different wording, do not look for another tool, and do not raise a limit. If the
+retry it with different wording (the one exception is a JB Metro command refused for a symbol in
+its search words, which you fix and run again; see "Each search", step 1), do not look for another tool, and do not raise a limit. If the
 per-run call cap stops you, stop — the searches you did not reach are recorded as "not searched",
 which is a true answer.
 
@@ -141,11 +142,29 @@ Rules:
 
 One entry of `searches` is one product at one supplier, identified by its `workItemId`.
 
-1. **Search by name.** Use the supplier's route with the product's description: a matched product's
-   `brand`, `name` and size; a waiting product's `searchName` and `unitLabel`. Search by name
-   **every** run, even for a product whose listings you already know: a new pack of the same product
-   (a 30-pack beside a 24-pack) has its own supplier product id, and an id-only lookup would never
-   find it.
+1. **Search by name, with short search words.** Search by name **every** run, even for a product
+   whose listings you already know: a new pack of the same product (a 30-pack beside a 24-pack) has
+   its own supplier product id, and an id-only lookup would never find it.
+   - **Supplier searches only return items that contain every word you type**, and suppliers word
+     their titles differently (JB Metro lists `45G CHEEZELS` and `25G NOBBY'S BEEF JERKY HOT`; Coles
+     lists `M&M's Peanut Milk Chocolate Snack Bag 46g`). One extra word returns nothing. In
+     production run 41558756584, `Cheezels Original`, `Nobbys Beef Jerky Hot Spicy 25g` and
+     `M&M's Peanut 46g` all found nothing, while `Cheezels`, `Nobbys Jerky` and `m&m peanut` found
+     the product (owner decision, 3 November 2026).
+   - So search with **the brand and the one or two words that name the product**: from a matched
+     product's `brand` and `name`, or a waiting product's `searchName`. Leave out the size, the
+     pack count, and describing words such as `Original`, `Crinkle Cut`, `Hot & Spicy`, `Cup
+     Noodles`. Examples: `Cheezels`, `Nobbys Jerky`, `Smiths Salt Vinegar`, `m&m peanut`, `Indomie`.
+   - The size and the variant are checked in step 3 when you choose the matches, not in the
+     search words. A short search returns more noise, and that is expected.
+   - **If a search returns no product at all, search once more with fewer words** (the brand
+     alone, or the brand and one word), at the same supplier, and use that second answer. Never
+     more than two different search wordings for one work item. Both searches count towards the run's call cap.
+   - For JB Metro, write the search words with **letters, digits and spaces only** (`Nobbys
+     Peanuts`, not `Nobby's Peanuts`; `M M Peanut`, not `M&M's Peanut`), and always use the
+     `--search "<words>" <siteUrl>` form. The guard refuses apostrophes, `&` and other symbols in
+     a command. If it refuses one, fix the words and run that search again; do not leave the work
+     item unsearched.
 2. **Read every page the rule allows.** How depends on the actor:
    - **Kmart (`abotapi/kmart-au-scraper`) and BIG W by name (`axlymxp/bigw-product-scraper`)
      page internally.** Make **one** call per search, with at most the actor's configured item
@@ -169,9 +188,10 @@ One entry of `searches` is one product at one supplier, identified by its `workI
      size. If the actor filled that page, or reports more results than it returned, ask for the
      next page — up to the actor's page cap. If the cap stops you while there is more, that
      search's outcome is `truncated`.
-3. **Keep only the real matches.** The results are noisy: a keyword search for one product returns
-   other brands, other products and accessories. Keep a result only when it is **the same product**
-   — same brand, same variant, same individual unit size — in **any** pack size. A different flavour,
+3. **Keep only the real matches.** The results are noisy: a short keyword search for one product
+   returns other sizes, other flavours, other brands and accessories. Keep a result only when it is
+   **the same product** — same brand, same variant, same individual unit size — in **any** pack
+   size. Check the size against the result's own size field or the size in its title (`45G`, `46g`). A different flavour,
    a different sugar variant, a different unit size or a different brand is not this product.
    Recognise a listing you already know by its `supplierProductId` in `knownListings`, and report any
    other pack of the same product as a row of its own: the backend proposes it as a new listing and
@@ -234,11 +254,17 @@ One entry of `searches` is one product at one supplier, identified by its `workI
   count and no pack word** (`Kinder Bueno Bar 43g`, `Aero Peppermint Milk Chocolate Bar 40g`) is a
   single item: write `1` (owner decision, 1 November 2026). When the title says it is a pack or
   multipack but not how many (`Multipack`, `Value Pack`, `Box`), leave `packQuantity` out.
-- **Never invent any other value.** A price, a barcode, a size or a GST rate you did not read is
-  **left out of the row** — never guessed from a title, derived from another pack, carried over
-  from last night or sent as `0`. A barcode is text, so its leading zeros survive, and it needs
-  its `barcodeScope` (`unit` or `carton`): without one, leave both out. Never infer a scope from
-  another supplier's barcode or from the digits.
+- **Never invent any other value.** A barcode, a size or a GST rate you did not read is **left
+  out of the row** — never guessed from a title, derived from another pack, carried over from last
+  night or sent as `0`.
+- **A row needs a price.** When a listing shows no price you can read (including an out-of-stock
+  listing that hides its price), **do not write a row for it**, and report the search as
+  `truncated` rather than `complete`, because you saw that listing but could not price it. Never
+  write a row without `packPrice`.
+- **A barcode needs its `barcodeScope`** (`unit` or `carton`). A barcode is text, so its leading
+  zeros survive. When the source does not say whether a code is the single item's or the carton's,
+  **leave both `barcode` and `barcodeScope` out and keep the rest of the row**. Never infer a scope
+  from another supplier's barcode or from the digits.
 - **Never write `observedAtUtc`.** You have no clock. The submitter records when each file was
   written, so write a search's file as soon as you have read its prices.
 - `stockStatus` is `in_stock`, `out_of_stock` or `unknown`. Write `unknown` when the source gives
@@ -247,7 +273,8 @@ One entry of `searches` is one product at one supplier, identified by its `workI
 - `sourceUrl` is the supplier's own page. Leave it out rather than constructing one.
 - The schema is `scripts/price-collector/output.schema.json`. The submitter validates each file
   against it independently and skips a file that does not fit, so a file that does not fit is a
-  search lost.
+  search lost. Before it validates, it drops a row with no price and removes a barcode with
+  no scope, and says so in its summary; that is a safety net, not a licence to write either.
 
 ## Hard rules
 

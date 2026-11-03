@@ -23,7 +23,11 @@ import { join, resolve } from 'node:path';
  * and issue #1016's - the Cheapest supplier help panel opened from the desktop
  * heading at 1440px and from a narrow-screen card at 360px - and issue #1017's: Reorder priorities
  * is paged five rows to a page, so the seven reorder products give two pages, and the second page
- * is captured at 1440 and 390px after turning it with the pager. Issue #987's own interaction evidence
+ * is captured at 1440 and 390px after turning it with the pager. Issue #1020's **Storage after
+ * refill** column is measured here too - its position beside Machine need, its positive, zero and
+ * negative values, its column alignment on the desktop table, the matching narrow-screen card entry
+ * and its withholding in storage-only mode, which the synthetic reorder read declares with the same
+ * `X-Reorder-Mode` header the API publishes. Issue #987's own interaction evidence
  * is here as well: a collapsed group at 1440 and 390px, the
  * shared period control switched to Last week, and the keyboard focus ring on a site expander with
  * the group toggled from the keyboard alone. The More sheet's modality is exercised in the browser
@@ -207,11 +211,18 @@ function product(id: number, name: string, stock: number, need: number, toOrder:
   };
 }
 
+/**
+ * Seven reorder products, so issue #1017's pager has two pages. Their storage stock and machine need
+ * also give the first page all three shapes of issue #1020's **Storage after refill**: a shortfall
+ * (4 - 7 = -3, 0 - 8 = -8, 1 - 7 = -6), exactly nothing left (8 - 8 = 0, the KitKat, whose machine
+ * need is deliberately equal to its storage stock) and a remainder (10 - 8 = 2). Page 2 keeps two
+ * more remainders (12 - 4 = 8 and 14 - 3 = 11).
+ */
 const reorder = [
   product(1, 'Cadbury Dairy Milk 45g', 4, 7, 26),
   product(2, 'Red Bull Energy Drink 250mL', 0, 8, 21, 6),
   product(3, 'Kinder Bueno 43g', 1, 7, 19),
-  product(4, 'Nestle KitKat 42g', 8, 6, 17),
+  product(4, 'Nestle KitKat 42g', 8, 8, 17),
   product(5, 'Smiths Original Chips 45g Multipack Value Share Bag', 10, 8, 17),
   product(6, 'Mount Franklin Water 600mL', 12, 4, 9),
   product(7, 'Coca-Cola 375mL', 14, 3, 6)
@@ -281,11 +292,21 @@ const restockReminder = {
   ]
 };
 
-function json(route: Route, body: unknown): Promise<void> {
-  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+function json(route: Route, body: unknown, headers: Record<string, string> = {}): Promise<void> {
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body), headers });
 }
 
-async function answerApi(page: Page): Promise<void> {
+/**
+ * The additive response headers a storage-only reorder read carries (issues #726 and #727): the mode
+ * and why the machines were not read. They are the only thing that puts the Dashboard in that mode,
+ * so the fixture declares it exactly as the API does rather than by changing the body.
+ */
+const STORAGE_ONLY_REORDER_HEADERS = {
+  'X-Reorder-Mode': 'StorageOnly',
+  'X-Reorder-Machine-Need-Unavailable-Reason': 'NayaxNotConnected'
+};
+
+async function answerApi(page: Page, options: { storageOnlyReorder?: boolean } = {}): Promise<void> {
   await page.route('**/api/**', (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -297,7 +318,9 @@ async function answerApi(page: Page): Promise<void> {
     if (path.endsWith('/nayax-connection/status')) return json(route, { status: 'Ready', machineChecksPending: false });
     if (path.endsWith('/dashboard/summary')) return json(route, summary);
     if (path.endsWith('/machine-restock-sync/reminder')) return json(route, restockReminder);
-    if (path.endsWith('/products/alerts/low-stock')) return json(route, reorder);
+    if (path.endsWith('/products/alerts/low-stock')) {
+      return json(route, reorder, options.storageOnlyReorder ? STORAGE_ONLY_REORDER_HEADERS : {});
+    }
     if (path.endsWith('/products/purchase-cost-summary')) return json(route, purchaseCosts);
     if (path.endsWith('/sites')) return json(route, sites);
     if (path.endsWith('/machines')) return json(route, machines);
@@ -307,9 +330,13 @@ async function answerApi(page: Page): Promise<void> {
   });
 }
 
-async function openDashboard(page: Page, width: number, options: { failSitesRead?: boolean } = {}): Promise<void> {
+async function openDashboard(
+  page: Page,
+  width: number,
+  options: { failSitesRead?: boolean; storageOnlyReorder?: boolean } = {}
+): Promise<void> {
   await page.setViewportSize({ width, height: 900 });
-  await answerApi(page);
+  await answerApi(page, options);
   if (options.failSitesRead) {
     // Registered after the catch-all so it is the handler that wins: Playwright offers a request to
     // the most recently added matching route first. The machine read still succeeds, which is the
@@ -363,6 +390,43 @@ async function box(locator: Locator): Promise<{ x: number; y: number; width: num
   const measured = await locator.boundingBox();
   expect(measured, 'an element has to be laid out before it can be measured').not.toBeNull();
   return measured!;
+}
+
+/** The Reorder priorities card, which holds both the desktop table and the narrow-screen cards. */
+function reorderSection(page: Page): Locator {
+  return page.locator('section[aria-labelledby="reorder-priorities-title"]');
+}
+
+/**
+ * The desktop table's column headings, in rendered order, lower-cased. `innerText` is deliberately
+ * the source: it is what the browser lays out, so a heading read here is one a reader can actually
+ * see - which also means it comes back as `.table-head` paints it, in capitals, hence the folding.
+ * It is only meaningful at a width where the table layout is the rendered one.
+ */
+async function reorderHeadings(page: Page): Promise<string[]> {
+  return (await reorderSection(page).locator('thead th').allInnerTexts()).map((heading) =>
+    heading.trim().toLowerCase()
+  );
+}
+
+/** The narrow-screen reorder cards, which render the same page of rows as the table. */
+function reorderCards(page: Page): Locator {
+  return reorderSection(page).getByTestId('reorder-cards').locator('> li');
+}
+
+/** A card's value for one labelled entry, taken from the `dd` beside that `dt`. */
+function cardValue(card: Locator, label: string): Locator {
+  return card.locator(`dt:text-is("${label}") + dd`);
+}
+
+/** Whether an element carries one class, asked of the rendered element rather than of the template. */
+function hasClass(element: Locator, className: string): Promise<boolean> {
+  return element.evaluate((node, name) => node.classList.contains(name), className);
+}
+
+/** The colour the browser actually paints an element's text in. */
+function paintedColour(element: Locator): Promise<string> {
+  return element.evaluate((node) => getComputedStyle(node).color);
 }
 
 /** The card title's one help button (issue #1015), in whichever layout is the rendered one. */
@@ -527,6 +591,147 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       const height = await page.evaluate(() => document.documentElement.scrollHeight);
       await page.setViewportSize({ width, height });
       await page.screenshot({ path: join(screenshotDirectory, `reorder-page-2-${width}px.png`) });
+    });
+  }
+
+  /**
+   * Issue #1020's own evidence on the desktop table, and the part of it jsdom cannot answer: where
+   * the **Storage after refill** column actually lands, that each of its cells is laid out in that
+   * column rather than merely written after the Machine need cell in the markup, and that a
+   * shortfall is painted in a different colour from a remainder. The first page carries all three
+   * shapes of the figure - three shortfalls, exactly nothing left, and a remainder - and the pager
+   * still reports the same seven products over two pages.
+   */
+  test('Storage after refill is laid out beside Machine need and shows its three shapes at 1440px', async ({ page }) => {
+    await openDashboard(page, 1440);
+    await reorderSection(page).scrollIntoViewIfNeeded();
+
+    const headings = await reorderHeadings(page);
+    const column = headings.indexOf('storage after refill');
+    expect(column).toBeGreaterThan(0);
+    expect(column).toBe(headings.indexOf('machine need') + 1);
+    expect(column).toBe(headings.indexOf('need to order') - 1);
+    // The same locator the storage-only run asserts nothing for, so that run cannot pass vacuously.
+    await expect(reorderSection(page).getByText('Storage after refill', { exact: true })).not.toHaveCount(0);
+    await expect(reorderSection(page).getByText('Machine need', { exact: true })).not.toHaveCount(0);
+
+    const heading = reorderSection(page).locator('thead th').nth(column);
+    const headingBox = await box(heading);
+    const machineNeed = await box(reorderSection(page).locator('thead th').nth(column - 1));
+    const needToOrder = await box(reorderSection(page).locator('thead th').nth(column + 1));
+    // Laid out between the two columns the issue names, not only listed between them.
+    expect(headingBox.x).toBeGreaterThanOrEqual(machineNeed.x + machineNeed.width - 1);
+    expect(headingBox.x + headingBox.width).toBeLessThanOrEqual(needToOrder.x + 1);
+
+    const rows = reorderSection(page).locator('tbody tr');
+    const expected = ['-3', '-8', '-6', '0', '2'];
+    await expect(rows).toHaveCount(expected.length);
+    const colours: Record<string, string[]> = { shortfall: [], remainder: [] };
+    for (const [index, value] of expected.entries()) {
+      const cell = rows.nth(index).locator('td').nth(column);
+      await expect(cell).toHaveText(value);
+      // A shortfall is signed and styled; zero and a remainder are plain numbers.
+      const isShortfall = value.startsWith('-');
+      expect(await hasClass(cell, 'value-negative')).toBe(isShortfall);
+      colours[isShortfall ? 'shortfall' : 'remainder'].push(await paintedColour(cell));
+
+      // Every cell sits in the heading's own column, which is what "aligned" means once the table
+      // has laid itself out, and its number is inside the column rather than spilling out of it.
+      const cellBox = await box(cell);
+      expect(cellBox.x).toBeCloseTo(headingBox.x, 0);
+      expect(cellBox.width).toBeCloseTo(headingBox.width, 0);
+      expect(await cell.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+    }
+    // One styling for a shortfall, one for everything else, and they are not the same colour.
+    expect(new Set(colours.shortfall).size).toBe(1);
+    expect(new Set(colours.remainder).size).toBe(1);
+    expect(colours.shortfall[0]).not.toBe(colours.remainder[0]);
+
+    // The widened table still fits inside its card at 1440px: its horizontal scroll container has
+    // nothing to scroll, so the added column reaches nobody only by dragging the table sideways.
+    const tableOverflow = await reorderSection(page)
+      .locator('div.overflow-x-auto:has(table)')
+      .evaluate((node) => node.scrollWidth - node.clientWidth);
+    expect(tableOverflow).toBeLessThanOrEqual(0);
+
+    // The extra column changed neither the paging nor the figures beside it.
+    await expect(page.getByTestId('reorder-range')).toHaveText(/Showing 1.5 of 7 products/);
+    await expect(rows.first().locator('td').nth(column - 1)).toHaveText('7');
+    await expect(rows.first().locator('td').nth(column + 1)).toContainText('26');
+    await expectNoHorizontalOverflow(page);
+  });
+
+  /**
+   * The same figure on the narrow-screen cards (issue #1020), where the question a browser answers
+   * is whether the added entry fits: the card's two-column grid puts it on its own row under
+   * Storage stock, aligned with it, with its value inside the card and inside its own box, and the
+   * page still does not scroll sideways at either phone width.
+   */
+  for (const width of [360, 390]) {
+    test(`Storage after refill on the reorder cards at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+      await reorderSection(page).scrollIntoViewIfNeeded();
+      await expect(reorderCards(page)).toHaveCount(5);
+
+      const first = reorderCards(page).first();
+      const labels = (await first.locator('dt').allInnerTexts()).map((label) => label.trim());
+      expect(labels.indexOf('Storage after refill')).toBe(labels.indexOf('Machine need') + 1);
+
+      // The shortfall, exactly nothing left, and a remainder, on the cards that carry each.
+      await expect(cardValue(first, 'Storage after refill')).toHaveText('-3 units');
+      expect(await hasClass(cardValue(first, 'Storage after refill'), 'value-negative')).toBe(true);
+      await expect(cardValue(reorderCards(page).nth(3), 'Storage after refill')).toHaveText('0 units');
+      expect(await hasClass(cardValue(reorderCards(page).nth(3), 'Storage after refill'), 'value-negative')).toBe(false);
+      await expect(cardValue(reorderCards(page).nth(4), 'Storage after refill')).toHaveText('2 units');
+
+      // Its own row of the grid, under and aligned with Storage stock rather than squeezed beside
+      // Machine need, and the quantities around it are the ones they always were.
+      const storageStock = await box(first.locator('dt:text-is("Storage stock")'));
+      const machineNeed = await box(first.locator('dt:text-is("Machine need")'));
+      const afterRefill = await box(first.locator('dt:text-is("Storage after refill")'));
+      expect(afterRefill.y).toBeGreaterThan(machineNeed.y);
+      expect(afterRefill.x).toBeCloseTo(storageStock.x, 0);
+      await expect(cardValue(first, 'Storage stock')).toHaveText('4 units');
+      await expect(cardValue(first, 'Machine need')).toHaveText('7 units');
+
+      // Nothing spills out of the card or out of its own box, and the page does not scroll sideways.
+      const value = cardValue(first, 'Storage after refill');
+      const valueBox = await box(value);
+      const cardBox = await box(first);
+      expect(valueBox.x).toBeGreaterThanOrEqual(cardBox.x);
+      expect(valueBox.x + valueBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+      expect(await value.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+      await expectNoHorizontalOverflow(page);
+    });
+  }
+
+  /**
+   * Storage-only mode (issue #727) withholds the machine need, and issue #1020's column is withheld
+   * with it: the subtraction there would be made from an unread `0`. The synthetic reorder read
+   * declares that mode with the response headers the API publishes, so this is the real rendering
+   * rather than a styled one, and the capture is the evidence that neither layout carries the figure
+   * while every storage figure and the pager stay exactly as they were.
+   */
+  for (const width of [1440, 390]) {
+    test(`Reorder priorities withholds Storage after refill in storage-only mode at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width, { storageOnlyReorder: true });
+      const section = reorderSection(page);
+      await section.scrollIntoViewIfNeeded();
+
+      await expect(section.getByText(/^Storage stock only: these figures do not include/)).toBeVisible();
+      // Not hidden by a class in one layout or the other: neither figure is rendered at all.
+      await expect(section.getByText('Machine need', { exact: true })).toHaveCount(0);
+      await expect(section.getByText('Storage after refill', { exact: true })).toHaveCount(0);
+      await expect(section.getByText('Storage stock', { exact: true }).first()).toBeAttached();
+      await expect(page.getByTestId('reorder-range')).toHaveText(/Showing 1.5 of 7 products/);
+      await expectNoHorizontalOverflow(page);
+
+      // An element taller than the viewport is captured by stitching, which would paint the fixed
+      // bottom bar across the middle of the card; growing the viewport to the document first is the
+      // same answer the full-page captures use.
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width, height });
+      await section.screenshot({ path: join(screenshotDirectory, `reorder-storage-only-${width}px.png`) });
     });
   }
 

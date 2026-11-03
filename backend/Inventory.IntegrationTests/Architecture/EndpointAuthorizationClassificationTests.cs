@@ -737,6 +737,10 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/price-catalogue-review/matches", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo", "POST")]
+    // And issue #1051's undo of a match a business made itself, which is the same authority deciding
+    // the same four columns of the same mappings: class 2 on the same controller, same marker, same
+    // policy - a business's own selection is reviewed here or nowhere.
+    [InlineData("api/super-admin/price-catalogue-review/business-selections/undo", "POST")]
     // Issue #1023's view of the shared catalogue's master products: the searchable, paged listing and
     // one product with its supplier listings. Class 2 again - the same marker and the same policy as
     // the review beside it.

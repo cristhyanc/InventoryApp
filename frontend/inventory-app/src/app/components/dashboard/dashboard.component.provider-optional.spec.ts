@@ -333,6 +333,9 @@ describe('Dashboard without a usable provider (issue #727)', () => {
 
     const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
     expect(headers).not.toContain('Machine need');
+    // The "Storage after refill" subtraction (issue #1020) follows the same storage-only hiding
+    // rule as the machine need it is derived from.
+    expect(headers).not.toContain('Storage after refill');
     expect(headers).toContain('Need to Order');
   });
 });
@@ -557,6 +560,8 @@ describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
     expect(headers).toContain('Machine need');
     // "Stock after machine need" was removed by issue #789; the machine need itself is unchanged.
     expect(headers).not.toContain('Stock after machine need');
+    // Issue #1020 reintroduced the same subtraction as "Storage after refill", beside Machine need.
+    expect(headers).toContain('Storage after refill');
     expect(host.textContent).not.toContain('Storage stock only');
 
     // Reorder Alerts carries no Supplier column since issue #787 (A1 of #786): a product has no
