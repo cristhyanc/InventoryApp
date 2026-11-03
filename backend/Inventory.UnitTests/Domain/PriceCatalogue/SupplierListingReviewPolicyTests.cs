@@ -150,15 +150,14 @@ public class SupplierListingReviewPolicyTests
     }
 
     /// <summary>
-    /// Every identity field but the pack quantity has to agree, because a reading of another variant,
-    /// size or barcode is a price for something else.
+    /// Every identity field but the pack quantity has to agree, because a reading of another variant
+    /// or size is a price for something else. The barcode is not compared (owner decision, 3 November
+    /// 2026), which the next test holds.
     /// </summary>
     [Theory]
     [InlineData("Zero Sugar", 375, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Unit)]
     [InlineData("Classic", 355, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Unit)]
     [InlineData("Classic", 375, MasterProductSizeUnit.Gram, "0012345678905", BarcodeScope.Unit)]
-    [InlineData("Classic", 375, MasterProductSizeUnit.Millilitre, "12345678905", BarcodeScope.Unit)]
-    [InlineData("Classic", 375, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Carton)]
     public void A_reading_of_another_pack_is_not_accepted(
         string variant,
         decimal size,
@@ -259,16 +258,41 @@ public class SupplierListingReviewPolicyTests
     }
 
     /// <summary>
+    /// A reading that differs from the confirmed pack only by its barcode or barcode scope - another
+    /// code, the carton's, or none at all - is a reading of that pack, so its price is accepted and a
+    /// confirmation that only moves the barcode keeps the current price.
+    /// </summary>
+    [Theory]
+    [InlineData("12345678905", BarcodeScope.Unit)]
+    [InlineData("0012345678905", BarcodeScope.Carton)]
+    [InlineData(null, null)]
+    public void A_barcode_difference_alone_neither_refuses_nor_withdraws_a_price(string? barcode, BarcodeScope? scope)
+    {
+        var read = Confirmed with { Barcode = barcode, BarcodeScope = scope };
+
+        Assert.True(SupplierListingReviewPolicy.ReadingDescribesConfirmedPack(Confirmed, read));
+        Assert.False(SupplierListingReviewPolicy.ConfirmationWithdrawsCurrentPrice(Confirmed, read));
+
+        var decision = SupplierListingReviewPolicy.DecidePendingPrice(
+            Confirmed,
+            new ReviewedPendingReading(read, 42.50m, Observed),
+            lastAcceptedPackPrice: null,
+            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            Observed.AddHours(1),
+            priceExceptionApproved: false);
+
+        Assert.True(decision.AcceptsPrice);
+    }
+
+    /// <summary>
     /// Every other identity field withdraws it for the same reason: an accepted price of the Classic
-    /// 375 mL unit pack is not a price of the Zero Sugar, of a 355 mL item, of another barcode or of
-    /// the carton that barcode might be.
+    /// 375 mL pack is not a price of the Zero Sugar or of a 355 mL item. A barcode change alone does
+    /// not (owner decision, 3 November 2026).
     /// </summary>
     [Theory]
     [InlineData("Zero Sugar", 375, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Unit)]
     [InlineData("Classic", 355, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Unit)]
     [InlineData("Classic", 375, MasterProductSizeUnit.Gram, "0012345678905", BarcodeScope.Unit)]
-    [InlineData("Classic", 375, MasterProductSizeUnit.Millilitre, "12345678905", BarcodeScope.Unit)]
-    [InlineData("Classic", 375, MasterProductSizeUnit.Millilitre, "0012345678905", BarcodeScope.Carton)]
     public void A_changed_identity_field_withdraws_the_price_the_listing_was_publishing(
         string variant,
         decimal size,

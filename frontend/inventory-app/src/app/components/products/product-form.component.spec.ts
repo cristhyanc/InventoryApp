@@ -5,9 +5,15 @@ import { Observable, of, throwError } from 'rxjs';
 import { ProductFormComponent } from './product-form.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { Category, GstClassification, Product } from '../../models/models';
+import { Category, GstClassification, MasterProductSuggestion, Product } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { RolePreviewService } from '../../role-preview/role-preview.service';
+import { SEARCH_DEBOUNCE_MS } from '../shared/filter-request-trigger';
+import {
+  MASTER_PRODUCT_CHANGED_CODE,
+  MASTER_PRODUCT_REFUSED_CODE,
+  MASTER_PRODUCT_UNAVAILABLE_CODE
+} from './master-product-selection';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -50,6 +56,38 @@ const categories: Category[] = [
   { id: 2, name: 'Snacks' }
 ];
 
+/**
+ * One master product as the lookup of issue #1049 publishes it, with the server's own prefill: the
+ * two values a selection fills in and the two the create compares the submission against.
+ */
+function masterProductSuggestion(overrides: Partial<MasterProductSuggestion> = {}): MasterProductSuggestion {
+  return {
+    id: 12,
+    brand: "CC's",
+    name: 'Tasty Cheese Corn Chips',
+    sizeValue: 45,
+    sizeUnit: 'g',
+    productName: "CC's Tasty Cheese Corn Chips",
+    unitLabel: '45g',
+    ...overrides
+  };
+}
+
+/** The 175 g variant of that product: the case two near-identical sizes have to be told apart. */
+const partySizeSuggestion = masterProductSuggestion({ id: 13, sizeValue: 175, unitLabel: '175g' });
+
+/** The label the suggestion list renders, which is how a row is pressed in these tests. */
+const SUGGESTION_LABEL = "CC's Tasty Cheese Corn Chips · 45 g";
+const PARTY_SUGGESTION_LABEL = "CC's Tasty Cheese Corn Chips · 175 g";
+
+/** A `409` of the shape issue #1051's create refuses a selection with. */
+function selectionConflict(code: string, message: string): HttpErrorResponse {
+  return new HttpErrorResponse({
+    status: 409,
+    error: { title: 'The selected master product is no longer available', detail: message, status: 409, message, code }
+  });
+}
+
 /** The routed edit page, rendered the way entering `/products/7/edit` renders it. */
 async function render(
   overrides: {
@@ -63,6 +101,7 @@ async function render(
     getCategories?: jest.Mock;
     createCategory?: jest.Mock;
     getPriceTracking?: jest.Mock;
+    getMasterProductSuggestions?: jest.Mock;
   } = {}
 ) {
   const update = overrides.update ?? jest.fn(() => of(undefined));
@@ -86,6 +125,12 @@ async function render(
         trackRefusal: null
       })
     );
+  // The Name suggestions on New Product (issue #1052). Their own behaviour - the debounce, the
+  // superseded response, the list states and the keyboard - is
+  // `product-master-product-picker.component.spec.ts`; here the lookup only has to answer.
+  const getMasterProductSuggestions =
+    overrides.getMasterProductSuggestions ??
+    jest.fn(() => of({ products: [masterProductSuggestion()], page: 1, pageSize: 10, hasMore: false }));
   const navigate = jest.fn();
 
   await TestBed.configureTestingModule({
@@ -103,7 +148,8 @@ async function render(
           // The "Track supplier prices" panel (issue #938) reads this; its own behaviour is
           // ProductPriceTrackingComponent's spec, and here it only has to render.
           getPriceTracking: getPriceTracking,
-          setPriceTracking: jest.fn(() => of(undefined))
+          setPriceTracking: jest.fn(() => of(undefined)),
+          getMasterProductSuggestions
         }
       },
       { provide: CategoryService, useValue: { getAll: getCategories, create: createCategory } },
@@ -165,6 +211,80 @@ async function render(
     fixture.detectChanges();
   };
 
+  /** Types into the composed Name combobox the way a person does (issue #1052). */
+  const typeName = (text: string) => {
+    const element = host.querySelector<HTMLInputElement>(
+      'app-product-master-product-picker input[role="combobox"]'
+    )!;
+    element.value = text;
+    element.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  };
+
+  /** Types into the Unit Label field the way a person does, through its own binding. */
+  const typeUnit = (text: string) => {
+    const element = host.querySelector<HTMLInputElement>('[name="unit"]')!;
+    element.value = text;
+    element.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  };
+
+  /**
+   * Settles the suggestion lookup's debounce and presses the row for one master product, which is
+   * the only way a suggestion is taken. Requires `jest.useFakeTimers()` in the calling describe.
+   */
+  const chooseSuggestion = (label: string) => {
+    jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    fixture.detectChanges();
+    const option = Array.from(
+      host.querySelectorAll<HTMLButtonElement>('app-product-master-product-picker [role="option"]')
+    ).find((candidate) => candidate.textContent?.replace(/\s+/g, ' ').trim() === label);
+    expect(option).not.toBeUndefined();
+    option!.click();
+    fixture.detectChanges();
+  };
+
+  /** The note and opt-out the page shows while a master product is selected (issue #1052). */
+  const selectionNote = () => host.querySelector<HTMLElement>('[data-testid="product-master-product-selection"]');
+
+  const trackSupplierPricesCheckbox = () =>
+    host.querySelector<HTMLInputElement>('[name="trackSupplierPrices"]');
+
+  /**
+   * Lets the template-driven form settle: Angular registers a newly rendered `ngModel` control with
+   * its form, and writes a programmatic value to the DOM, one microtask after the render. A test
+   * that asserts what is on screen, or that interacts with a control that has just appeared, needs
+   * that tick; a person cannot press or read faster than it.
+   */
+  const settleFormBindings = async () => {
+    await Promise.resolve();
+    fixture.detectChanges();
+  };
+
+  /** Ticks or unticks the opt-out the way a person does: the DOM moves, then the form hears about it. */
+  const toggleTrackSupplierPrices = async () => {
+    await settleFormBindings();
+    const checkbox = trackSupplierPricesCheckbox()!;
+    checkbox.checked = !checkbox.checked;
+    checkbox.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+  };
+
+  /** The refused-selection panel a `409` create answers with (issue #1051's codes). */
+  const conflictPanel = () => host.querySelector<HTMLElement>('[data-testid="product-master-product-conflict"]');
+
+  const conflictButton = (label: string) =>
+    Array.from(conflictPanel()?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
+      (button) => button.textContent?.trim() === label
+    );
+
+  const pressConflictButton = (label: string) => {
+    const button = conflictButton(label);
+    expect(button).not.toBeUndefined();
+    button!.click();
+    fixture.detectChanges();
+  };
+
   return {
     fixture,
     component: fixture.componentInstance,
@@ -183,6 +303,17 @@ async function render(
     categoryOption,
     createCategoryOption,
     clickCategoryOption,
+    getMasterProductSuggestions,
+    typeName,
+    typeUnit,
+    chooseSuggestion,
+    selectionNote,
+    trackSupplierPricesCheckbox,
+    toggleTrackSupplierPrices,
+    settleFormBindings,
+    conflictPanel,
+    conflictButton,
+    pressConflictButton,
     navigate
   };
 }
@@ -365,8 +496,11 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { host } = await render({ routeParams: {} });
 
     expect(host.querySelector('h1')?.textContent).toContain('New Product');
-    expect((host.querySelector('[name="name"]') as HTMLInputElement).value).toBe('');
-    expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
+    // Name is the suggesting combobox here since issue #1052, not a plain textbox; it is still free
+    // text and still empty, and its own describe below covers what the suggestions do.
+    const name = host.querySelector('app-product-master-product-picker input[role="combobox"]') as HTMLInputElement;
+    expect(name.value).toBe('');
+    expect(name.readOnly).toBe(false);
     // The category is chosen through the searchable picker here since issue #830, not the dropdown
     // the edit page still uses; its own describe below covers what that control does.
     expect(
@@ -893,13 +1027,14 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
 
   /**
    * The grid's own cells, in the order they are reached by reading and by Tab. Each cell is a
-   * direct child of the grid - a field label, or the composed category picker, whose own inner
-   * combobox belongs to that component rather than to this layout.
+   * direct child of the grid - a field label, or one of the two composed pickers (the category's
+   * since issue #830 and the Name's since issue #1052), whose own inner combobox belongs to that
+   * component rather than to this layout.
    */
   const controlNames = (container: HTMLElement) =>
     Array.from(container.children).map((cell) => {
-      if (cell.tagName === 'APP-PRODUCT-CATEGORY-PICKER') {
-        return 'app-product-category-picker';
+      if (cell.tagName === 'APP-PRODUCT-CATEGORY-PICKER' || cell.tagName === 'APP-PRODUCT-MASTER-PRODUCT-PICKER') {
+        return cell.tagName.toLowerCase();
       }
       const control = cell.querySelector('input, select, textarea');
       return control?.getAttribute('name') ?? cell.tagName.toLowerCase();
@@ -928,7 +1063,13 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
     const { host } = await render({ routeParams: {} });
 
     const details = grid(host, 'product-details');
-    expect(controlNames(details)).toEqual(['name', 'sku', 'app-product-category-picker', 'unit', 'description']);
+    expect(controlNames(details)).toEqual([
+      'app-product-master-product-picker',
+      'sku',
+      'app-product-category-picker',
+      'unit',
+      'description'
+    ]);
 
     const classes = Array.from(details.classList);
     expect(classes).toContain('md:grid-cols-2');
@@ -1322,5 +1463,365 @@ describe('ProductFormComponent supplier price tracking (issue #938)', () => {
     component.save();
 
     expect(update).toHaveBeenCalledWith(7, expect.not.objectContaining({ tracked: expect.anything() }));
+  });
+});
+
+/**
+ * Creating a product from a master product suggestion (issue #1052), seen from the page.
+ *
+ * The suggestion list itself - the debounced lookup, the superseded response, the loading, empty and
+ * failure states and the combobox keyboard - belongs to `app-product-master-product-picker` (the
+ * page composition boundary) and is covered by its own spec. What these tests pin is the page's
+ * side: what a selection fills in, when the selection is dropped, what is actually submitted, and
+ * the two ways on from the create's `409`.
+ */
+describe('ProductFormComponent master product suggestions on New Product (issue #1052)', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('offers the suggesting Name field on New Product and leaves the edit page a plain textbox', async () => {
+    const createMode = await render({ routeParams: {} });
+
+    expect(createMode.host.querySelector('app-product-master-product-picker')).not.toBeNull();
+    expect(
+      (createMode.host.querySelector('app-product-master-product-picker input[role="combobox"]') as HTMLInputElement)
+        .value
+    ).toBe('');
+    // Nothing is read until something is typed: the lookup is the field's, not the page's load.
+    expect(createMode.getMasterProductSuggestions).not.toHaveBeenCalled();
+
+    TestBed.resetTestingModule();
+    const editMode = await render();
+
+    expect(editMode.host.querySelector('app-product-master-product-picker')).toBeNull();
+    expect((editMode.host.querySelector('[name="name"]') as HTMLInputElement).value).toBe('E2E Chips');
+  });
+
+  it('fills Name and Unit label from the suggestion, says prices will be tracked, and sends the selection', async () => {
+    const {
+      component,
+      host,
+      typeName,
+      chooseSuggestion,
+      selectionNote,
+      trackSupplierPricesCheckbox,
+      settleFormBindings,
+      submit,
+      create,
+      navigate
+    } = await render({ routeParams: {} });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    await settleFormBindings();
+
+    expect(component.form.name).toBe("CC's Tasty Cheese Corn Chips");
+    expect(component.form.unit).toBe('45g');
+    expect((host.querySelector('app-product-master-product-picker input[role="combobox"]') as HTMLInputElement).value).toBe(
+      "CC's Tasty Cheese Corn Chips"
+    );
+    expect((host.querySelector('[name="unit"]') as HTMLInputElement).value).toBe('45g');
+
+    // The note is the operator's warning that this does something beyond naming the product, and
+    // its checkbox is the opt-out, on by default.
+    expect(selectionNote()?.textContent).toContain('supplier prices');
+    expect(trackSupplierPricesCheckbox()?.checked).toBe(true);
+
+    submit();
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "CC's Tasty Cheese Corn Chips",
+        unit: '45g',
+        selectedMasterProductId: 12,
+        trackSupplierPrices: true
+      })
+    );
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('tells two sizes of one product apart and sends the one that was taken', async () => {
+    const { component, typeName, chooseSuggestion, submit, create } = await render({
+      routeParams: {},
+      getMasterProductSuggestions: jest.fn(() =>
+        of({ products: [masterProductSuggestion(), partySizeSuggestion], page: 1, pageSize: 10, hasMore: false })
+      )
+    });
+
+    typeName('cheese corn');
+    chooseSuggestion(PARTY_SUGGESTION_LABEL);
+
+    expect(component.form.unit).toBe('175g');
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ selectedMasterProductId: 13, trackSupplierPrices: true }));
+  });
+
+  /**
+   * A Name nobody picked is still a Name: the payload is then exactly the one every create sent
+   * before this issue, with neither master-product field on it at all.
+   */
+  it('creates a typed Name with no selection and no master-product field in the payload', async () => {
+    const { component, typeName, selectionNote, submit, create } = await render({ routeParams: {} });
+
+    typeName('Hand typed snack');
+    jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    component.form.unit = 'bag';
+    submit();
+
+    expect(selectionNote()).toBeNull();
+    expect(create).toHaveBeenCalledWith({
+      name: 'Hand typed snack',
+      sku: null,
+      description: null,
+      lowStockThreshold: 5,
+      restockTo: 5,
+      unit: 'bag',
+      categoryId: null,
+      isActive: true,
+      quantityInStock: 0,
+      initialUnitCost: null
+    });
+  });
+
+  it('drops the selection when the Name is edited away from it, and typing it back does not revive it', async () => {
+    const { component, typeName, chooseSuggestion, selectionNote, submit, create } = await render({ routeParams: {} });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    typeName("CC's Tasty Cheese Corn Chips (party)");
+
+    expect(selectionNote()).toBeNull();
+
+    // Typing the prefill back by hand is not choosing the product again: the link rests on a
+    // selection, and that selection is gone.
+    typeName("CC's Tasty Cheese Corn Chips");
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.not.objectContaining({ selectedMasterProductId: expect.anything() }));
+    expect(create).toHaveBeenCalledWith(expect.not.objectContaining({ trackSupplierPrices: expect.anything() }));
+    expect(component.form.name).toBe("CC's Tasty Cheese Corn Chips");
+  });
+
+  it('keeps the selection through the differences the server does not call an edit', async () => {
+    const { typeName, chooseSuggestion, typeUnit, selectionNote, submit, create } = await render({ routeParams: {} });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    typeName("  cc's  Tasty Cheese Corn Chips ");
+    typeUnit(' 45G ');
+
+    expect(selectionNote()).not.toBeNull();
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ selectedMasterProductId: 12 }));
+  });
+
+  it('drops the selection when the Unit label is edited away from it', async () => {
+    const { typeName, chooseSuggestion, typeUnit, selectionNote, submit, create } = await render({ routeParams: {} });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    // The spacing the prefill never produces is a different size, which the server calls a change.
+    typeUnit('45 g');
+
+    expect(selectionNote()).toBeNull();
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.not.objectContaining({ selectedMasterProductId: expect.anything() }));
+  });
+
+  it('starts a fresh selection when another suggestion is taken, with the opt-out back on', async () => {
+    const {
+      component,
+      typeName,
+      chooseSuggestion,
+      trackSupplierPricesCheckbox,
+      toggleTrackSupplierPrices,
+      settleFormBindings,
+      host,
+      submit,
+      create
+    } = await render({
+      routeParams: {},
+      getMasterProductSuggestions: jest.fn(() =>
+        of({ products: [masterProductSuggestion(), partySizeSuggestion], page: 1, pageSize: 10, hasMore: false })
+      )
+    });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+
+    await toggleTrackSupplierPrices();
+    expect(trackSupplierPricesCheckbox()?.checked).toBe(false);
+
+    // Choosing again refills both values and is a new selection, so the opt-out starts over.
+    typeName('cheese corn');
+    chooseSuggestion(PARTY_SUGGESTION_LABEL);
+    await settleFormBindings();
+
+    expect(component.form.unit).toBe('175g');
+    expect(trackSupplierPricesCheckbox()?.checked).toBe(true);
+    expect((host.querySelector('[name="unit"]') as HTMLInputElement).value).toBe('175g');
+
+    submit();
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ selectedMasterProductId: 13, trackSupplierPrices: true }));
+  });
+
+  it('sends trackSupplierPrices false when the opt-out is unticked, and nothing else changes', async () => {
+    const { typeName, chooseSuggestion, toggleTrackSupplierPrices, submit, create } = await render({
+      routeParams: {}
+    });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    await toggleTrackSupplierPrices();
+
+    submit();
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "CC's Tasty Cheese Corn Chips",
+        unit: '45g',
+        selectedMasterProductId: 12,
+        trackSupplierPrices: false
+      })
+    );
+  });
+
+  it('leaves the selection alone when another field, or the GST rule, is changed', async () => {
+    const { component, typeName, chooseSuggestion, typeCategory, categoryOption, clickCategoryOption, chooseGstRule, selectionNote, submit, create } =
+      await render({ routeParams: {} });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+
+    component.form.sku = 'SNK-009';
+    component.form.quantityInStock = 4;
+    component.form.initialUnitCost = 1.5;
+    component.form.isActive = false;
+    typeCategory('Snacks');
+    clickCategoryOption(categoryOption('Snacks')!);
+    chooseGstRule('Taxable');
+
+    expect(selectionNote()).not.toBeNull();
+    submit();
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ sku: 'SNK-009', categoryId: 2, selectedMasterProductId: 12, trackSupplierPrices: true })
+    );
+  });
+
+  it.each([
+    [MASTER_PRODUCT_UNAVAILABLE_CODE, 'The product you chose is no longer in the shared catalogue.'],
+    [MASTER_PRODUCT_CHANGED_CODE, 'The Name and unit label no longer match the product you chose.'],
+    [MASTER_PRODUCT_REFUSED_CODE, 'The product you chose has been ruled out for this Name and unit label.']
+  ])('shows the server\'s %s refusal with both ways on, and creates nothing', async (code, message) => {
+    const create = jest.fn(() => throwError(() => selectionConflict(code, message)));
+    const { component, typeName, chooseSuggestion, conflictPanel, conflictButton, submit, navigate } = await render({
+      routeParams: {},
+      create
+    });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    submit();
+
+    expect(conflictPanel()?.textContent).toContain(message);
+    expect(conflictButton('Choose again')).not.toBeUndefined();
+    expect(conflictButton('Create without link')).not.toBeUndefined();
+    // The page says the refusal once, in the server's words, and offers the two actions beside it.
+    expect(component.error).toBe('');
+    expect(component.saving).toBe(false);
+    expect(component.createdProductId).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('clears the refusal and the selection for "Choose again", without creating anything', async () => {
+    const create = jest.fn(() => throwError(() => selectionConflict(MASTER_PRODUCT_CHANGED_CODE, 'Choose it again.')));
+    const { component, typeName, chooseSuggestion, selectionNote, conflictPanel, pressConflictButton, submit } =
+      await render({ routeParams: {}, create });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    submit();
+    pressConflictButton('Choose again');
+
+    expect(conflictPanel()).toBeNull();
+    expect(selectionNote()).toBeNull();
+    expect(create).toHaveBeenCalledTimes(1);
+    // The typed values stay: choosing again is the operator picking the product, not the form
+    // throwing their work away.
+    expect(component.form.name).toBe("CC's Tasty Cheese Corn Chips");
+    expect(component.form.unit).toBe('45g');
+  });
+
+  it('resubmits the same product with no selection for "Create without link"', async () => {
+    const create = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => selectionConflict(MASTER_PRODUCT_REFUSED_CODE, 'Ruled out.')))
+      .mockReturnValueOnce(of(product({ id: 55 })));
+    const { component, typeName, chooseSuggestion, conflictPanel, pressConflictButton, submit, navigate } =
+      await render({ routeParams: {}, create });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    submit();
+    pressConflictButton('Create without link');
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1][0]).toEqual({
+      name: "CC's Tasty Cheese Corn Chips",
+      sku: null,
+      description: null,
+      lowStockThreshold: 5,
+      restockTo: 5,
+      unit: '45g',
+      categoryId: null,
+      isActive: true,
+      quantityInStock: 0,
+      initialUnitCost: null
+    });
+    expect(conflictPanel()).toBeNull();
+    expect(component.createdProductId).toBe(55);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  /** A refusal that is not one of the three codes is still the ordinary create failure. */
+  it('shows an ordinary refusal as the page always did, with no choose-again panel', async () => {
+    const create = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 400, error: 'Unit label is required.' }))
+    );
+    const { component, typeName, chooseSuggestion, conflictPanel, submit } = await render({ routeParams: {}, create });
+
+    typeName('cheese corn');
+    chooseSuggestion(SUGGESTION_LABEL);
+    submit();
+
+    expect(component.error).toBe('Unit label is required.');
+    expect(conflictPanel()).toBeNull();
+  });
+
+  /**
+   * A failed lookup is the shared catalogue being unreachable, which says nothing about the product
+   * this business is creating: the Name is typed, nothing is disabled and the create still happens.
+   */
+  it('still creates the product when the suggestion lookup fails', async () => {
+    const { host, typeName, typeUnit, submit, create, navigate } = await render({
+      routeParams: {},
+      getMasterProductSuggestions: jest.fn(() => throwError(() => new Error('lookup unavailable')))
+    });
+
+    typeName('Hand typed snack');
+    jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    typeUnit('bag');
+
+    expect(host.querySelector('[data-testid="master-product-suggestions-error"]')).not.toBeNull();
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Hand typed snack', unit: 'bag' }));
+    expect(navigate).toHaveBeenCalledWith(['/products']);
   });
 });

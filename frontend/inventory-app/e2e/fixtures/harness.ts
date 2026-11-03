@@ -1,4 +1,11 @@
-import { APIRequestContext, BrowserContext, Page, expect, test as base } from '@playwright/test';
+import {
+  APIRequestContext,
+  BrowserContext,
+  BrowserContextOptions,
+  Page,
+  expect,
+  test as base
+} from '@playwright/test';
 
 /**
  * The harness every end-to-end test speaks through (issue #46).
@@ -64,8 +71,15 @@ export interface SeededProduct {
 }
 
 interface HarnessFixtures {
-  /** A browser page whose every request speaks as one synthetic actor. */
-  pageAs: (actor: string) => Promise<Page>;
+  /**
+   * A browser page whose every request speaks as one synthetic actor.
+   *
+   * `context` adds Playwright context options to that page, for the few checks whose subject is the
+   * device rather than the application - a real touchscreen (`hasTouch`) is the one issue #1052
+   * needs, because "works by touch on mobile" cannot be answered by a mouse click. It never changes
+   * who is calling: the actor header is applied after it, so no option can replace or remove it.
+   */
+  pageAs: (actor: string, context?: BrowserContextOptions) => Promise<Page>;
 
   /**
    * A direct API client for the same actor. Used to arrange nothing and to verify the
@@ -79,8 +93,11 @@ export const test = base.extend<HarnessFixtures>({
   pageAs: async ({ browser }, use) => {
     const contexts: BrowserContext[] = [];
 
-    await use(async (actor: string) => {
-      const context = await browser.newContext({ extraHTTPHeaders: { [ACTOR_HEADER]: actor } });
+    await use(async (actor: string, options?: BrowserContextOptions) => {
+      const context = await browser.newContext({
+        ...options,
+        extraHTTPHeaders: { ...options?.extraHTTPHeaders, [ACTOR_HEADER]: actor }
+      });
       contexts.push(context);
       return context.newPage();
     });

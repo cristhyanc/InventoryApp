@@ -198,7 +198,7 @@ public static class PriceCollectorResultPolicy
 
     /// <summary>Why a confirmed listing was flagged, or a rejected one proposed again.</summary>
     public const string IdentityChangedReason =
-        "variant, individual size, barcode or pack quantity changed";
+        "variant, individual size or pack quantity changed";
 
     /// <summary>Why a price was held instead of accepted.</summary>
     public const string PriceOutsideBandReason =
@@ -285,12 +285,19 @@ public static class PriceCollectorResultPolicy
 
     /// <summary>
     /// Whether <paramref name="observed"/> describes a different thing from <paramref name="stored"/>
-    /// in any of the fields that change what a per-unit price means.
+    /// in any of the fields that change what a per-unit price means: the variant, the individual
+    /// size and its unit, and the pack quantity.
     ///
     /// <para>The variant is the supplier's own wording, so it is compared with its ends trimmed and
-    /// without regard to case: a restyled page is not a new product. <strong>The barcode is compared
-    /// exactly</strong>, because <c>0012345678905</c> and <c>12345678905</c> are different codes and
-    /// the leading zeros are the whole difference.</para>
+    /// without regard to case: a restyled page is not a new product.</para>
+    ///
+    /// <para><strong>The barcode and its scope are deliberately not compared</strong> (owner
+    /// decision, 3 November 2026). The supplier product id already identifies the listing, and the
+    /// barcode was too rigid a check in practice: production runs sent confirmed Woolworths listings
+    /// back to review, with their new price held, because one reading carried the barcode and the
+    /// next did not. The size, unit and pack quantity are what a per-unit price is derived from and
+    /// still decide. The barcode a listing holds is still what a strong cross-supplier barcode match
+    /// in the review is built on (<see cref="SupplierListingReviewPolicy.IsStrongBarcodeMatch"/>).</para>
     /// </summary>
     public static bool HasIdentityChanged(SupplierListingIdentity stored, SupplierListingIdentity observed)
     {
@@ -300,8 +307,6 @@ public static class PriceCollectorResultPolicy
         return !string.Equals(Fold(stored.Variant), Fold(observed.Variant), StringComparison.OrdinalIgnoreCase)
             || stored.SizeValue != observed.SizeValue
             || stored.SizeUnit != observed.SizeUnit
-            || !string.Equals(stored.Barcode, observed.Barcode, StringComparison.Ordinal)
-            || stored.BarcodeScope != observed.BarcodeScope
             || stored.UnitsPerPack != observed.UnitsPerPack;
     }
 

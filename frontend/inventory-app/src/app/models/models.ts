@@ -72,6 +72,43 @@ export interface MatchedMasterProduct {
 }
 
 /**
+ * One master product of the shared catalogue, as the business lookup
+ * `GET /api/products/master-product-suggestions` publishes it (issue #1049, parent #817): the safe
+ * identity, and the two values a product form is filled in with.
+ *
+ * `productName` and `unitLabel` are the server's own prefill - `Brand Name` single-spaced, and the
+ * size with its unit code and no space (`45g`, `375ml`, `1.25l`, `1each`) - so one master product is
+ * never named one way by the suggestion list and another by the create that links to it. They are
+ * what the create of issue #1051 compares the submitted values against, which is why the form sends
+ * them back exactly as they arrived rather than assembling either string itself.
+ *
+ * `sizeValue`/`sizeUnit` are the same size, apart, for a list that has to tell two near-identical
+ * sizes of one product from each other; `sizeUnit` is the published code (`ml`, `l`, `g`, `kg`,
+ * `each`), not an enum member name.
+ */
+export interface MasterProductSuggestion {
+  id: number;
+  brand: string;
+  name: string;
+  sizeValue: number;
+  sizeUnit: string;
+  productName: string;
+  unitLabel: string;
+}
+
+/**
+ * One bounded page of the master product lookup (issue #1049). `page` and `pageSize` are what the
+ * server actually served rather than what was asked for, and `hasMore` says whether to narrow the
+ * search - the catalogue's total is deliberately not published.
+ */
+export interface MasterProductSuggestionPage {
+  products: MasterProductSuggestion[];
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+/**
  * The product's price-tracking state, from `/api/products/{id}/price-tracking` (issue #938).
  *
  * `canTrack` and `trackRefusal` are the server's own eligibility answer about the stored product -
@@ -268,6 +305,12 @@ export interface Product {
 /**
  * The product a client posts to `POST /api/products` (issue #737). It carries no `unitPrice` since
  * issue #792 (A2 of #786): a product has no selling price. `initialUnitCost` is a cost and stays.
+ *
+ * The two master-product fields are optional and are sent **only** when the operator created the
+ * product from a suggestion (issues #1051 and #1052): a payload carrying neither gets exactly the
+ * create it always did. Whether the link is actually made is the server's answer and never the
+ * client's - it recomputes the Name and the unit label from the stored master product inside the
+ * create's own transaction - so these two say what the operator chose, not what is true.
  */
 export interface ProductCreateDto {
   name: string;
@@ -280,6 +323,14 @@ export interface ProductCreateDto {
   categoryId?: number | null;
   isActive: boolean;
   initialUnitCost?: number | null;
+  /** The master product the Name and unit label were filled in from (issue #1049's `id`). */
+  selectedMasterProductId?: number;
+  /**
+   * Whether the operator still wants this product's supplier prices tracked. `false` is the opt-out
+   * beside a selection: the server then ignores the selection and creates the ordinary unlinked,
+   * untracked product, because the link *is* the tracking row.
+   */
+  trackSupplierPrices?: boolean;
 }
 
 /**

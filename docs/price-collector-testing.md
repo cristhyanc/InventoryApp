@@ -185,6 +185,35 @@ search that returns nothing is tried once more with fewer words; that second cal
 the run's Apify call cap (600) and, at Kmart and BIG W, is charged like any other search. JB Metro
 search words are written without apostrophes or `&`, because the command guard refuses them.
 
+A JB Metro price includes JB's container deposit levy (issue #1082, owner decision, 3 November
+2026). JB Metro charges a per-unit `NSW Levy` at checkout as a Magento fixed product tax that
+`price_range.minimum_price.final_price` does not include, so drinks were recorded about 11-14c per
+container cheaper than JB actually charges. The owner checked the decision against a JB Metro
+invoice: the levy is ex GST, the same basis as `finalPrice`/`regularPrice` (GST is charged on the
+item price *and* the levy together, for example $22.00 + $1.10 levy = $23.10 at 10% GST, exactly
+$2.31). `jbmetro-lookup.mjs` now requests `fixed_product_taxes` and reports it as `levy` (the summed
+amount), `levyLabels`, and `levyStatus` — the word that says what the site answered.
+
+**`levyStatus` decides the row, because a levy nobody could read is not a product without a levy.**
+`levy` is `null` for both, and `prompt.md` prices them oppositely:
+
+- `published` — a readable levy. `packPrice` is `finalPrice` plus that `levy` and `regularPackPrice`
+  is `regularPrice` plus the same `levy`, with no conversion, and the row's `sourceReference` says
+  so.
+- `none` — the site published an empty levy list, its answer for a product that carries no levy.
+  The row is priced exactly as before this change.
+- `unreadable` — the answer carried no levy list at all, or an amount that was missing, unparseable,
+  negative or in another currency. **The collector writes no row for that product** and reports that
+  search as `truncated` rather than `complete` (never `no_matches`), the same rule it already
+  follows for a listing it could not price. It never falls back to the base price, never treats the
+  levy as `0` and never adds up only the entries that read: a JB Metro drink priced without a levy
+  JB does charge would win the Cheapest supplier comparison on a price that is not real. So a run
+  whose JB Metro answers lose the levy field loses those readings and says so, instead of quietly
+  recording prices that are 11-14c per container too low.
+
+Shipping stays out of scope: it is charged separately on the invoice and is not part of any
+product's price.
+
 ## Production run
 
 A **production** run (owner decision, 1 November 2026) collects real supplier prices into the

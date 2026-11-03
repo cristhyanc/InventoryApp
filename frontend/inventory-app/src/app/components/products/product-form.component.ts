@@ -5,12 +5,14 @@ import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { Category } from '../../models/models';
+import { Category, MasterProductSuggestion } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
 import { ProductCreateGstRuleComponent } from './product-create-gst-rule/product-create-gst-rule.component';
 import { ProductCategoryPickerComponent } from './product-category-picker/product-category-picker.component';
 import { ProductPriceTrackingComponent } from './product-price-tracking/product-price-tracking.component';
+import { ProductMasterProductPickerComponent } from './product-master-product-picker/product-master-product-picker.component';
+import { MasterProductSelection, isSamePrefillValue, masterProductConflictOf } from './master-product-selection';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 
@@ -25,7 +27,8 @@ import { apiErrorMessage } from '../shared/api-error-message';
     ProductGstRuleComponent,
     ProductCreateGstRuleComponent,
     ProductCategoryPickerComponent,
-    ProductPriceTrackingComponent
+    ProductPriceTrackingComponent,
+    ProductMasterProductPickerComponent
   ],
   templateUrl: './product-form.component.html'
 })
@@ -75,6 +78,33 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    * control at all, which is what makes a duplicate product impossible.
    */
   createdProductId: number | null = null;
+
+  /**
+   * The master product the Name was filled in from on New Product (issue #1052), or `null` while the
+   * operator is naming the product themselves - which includes a selection they have since edited
+   * away from.
+   *
+   * It carries the two values that selection filled in, because those are the whole evidence of the
+   * link: `POST api/products` believes the id only while the submitted Name and unit label are still
+   * the ones the shared catalogue produced (issue #1051). The page therefore sends a selection only
+   * while it still stands, rather than sending one into a refusal.
+   */
+  masterProductSelection: MasterProductSelection | null = null;
+
+  /**
+   * Whether this product's supplier prices are to be tracked - the opt-out beside the selection
+   * note, on by default because an operator who picked a product from the shared catalogue asked for
+   * its prices. It is sent only beside a selection: `false` is what tells the server to ignore the
+   * selection and create the ordinary unlinked, untracked product.
+   */
+  trackSupplierPrices = true;
+
+  /**
+   * The server's own sentence for a create it refused because the selection no longer stands
+   * (issue #1051's `409`), or `null`. Nothing was created, so the page stays on the form and offers
+   * the two ways on the refusal names: choose the product again, or create it with no link.
+   */
+  masterProductConflict: string | null = null;
 
   private readonly sessionActiveSubscription: Subscription;
 
@@ -162,6 +192,85 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    */
   onCategorySelected(categoryId: number | null): void {
     this.form.categoryId = categoryId ?? '';
+  }
+
+  /**
+   * The Name as the suggesting field reports it (issue #1052): free text, exactly as typed. Typing
+   * away from the selected Name drops the selection, because the product being created is then no
+   * longer the one that was chosen from the shared catalogue.
+   */
+  onProductNameInput(name: string): void {
+    this.form.name = name;
+    this.dropEditedMasterProductSelection();
+  }
+
+  /** The Unit Label as its field reports it, under the same rule: editing it away drops the link. */
+  onUnitLabelInput(unit: string): void {
+    this.form.unit = unit;
+    this.dropEditedMasterProductSelection();
+  }
+
+  /**
+   * A master product was taken from the suggestions (issue #1052). It fills in the Name and the Unit
+   * Label from the server's own prefill - never a string assembled here - and remembers the
+   * selection with both values, so an edit to either is visible as the edit it is.
+   *
+   * It is always a *fresh* selection: the opt-out starts on again, and a refusal shown for the
+   * previous attempt no longer applies to the product now being created. Nothing else on the form is
+   * touched - not the SKU, the category, the opening inventory, the reorder settings or the GST rule
+   * chosen beside it (issue #829).
+   */
+  onMasterProductSelected(suggestion: MasterProductSuggestion): void {
+    this.form.name = suggestion.productName;
+    this.form.unit = suggestion.unitLabel;
+    this.masterProductSelection = {
+      masterProductId: suggestion.id,
+      productName: suggestion.productName,
+      unitLabel: suggestion.unitLabel
+    };
+    this.trackSupplierPrices = true;
+    this.masterProductConflict = null;
+  }
+
+  /**
+   * "Choose again" on a refused selection: the selection is dropped and the refusal cleared, so the
+   * Name field is back to suggesting and taking one refills both values afresh. The typed Name and
+   * unit label stay on screen - nothing was created, and the operator's work is theirs.
+   */
+  chooseMasterProductAgain(): void {
+    this.masterProductSelection = null;
+    this.masterProductConflict = null;
+  }
+
+  /**
+   * "Create without link" on a refused selection: the same product, submitted with no selection at
+   * all, which is the create every client made before issue #1051. The link is what was refused, not
+   * the product.
+   */
+  createWithoutMasterProduct(): void {
+    this.masterProductSelection = null;
+    this.masterProductConflict = null;
+    this.save();
+  }
+
+  /**
+   * Drops a selection whose Name or unit label has been edited away from it. The comparison is the
+   * server's own normalisation (`isSamePrefillValue`), so the three differences it does not call an
+   * edit - the ends, runs of whitespace, case - keep the selection, and a selection that is dropped
+   * is gone: typing the prefill back by hand is not choosing the product again.
+   */
+  private dropEditedMasterProductSelection(): void {
+    const selection = this.masterProductSelection;
+    if (!selection) {
+      return;
+    }
+
+    if (
+      !isSamePrefillValue(this.form.name, selection.productName) ||
+      !isSamePrefillValue(this.form.unit, selection.unitLabel)
+    ) {
+      this.masterProductSelection = null;
+    }
   }
 
   /** Whether the provider names this product, so its name may not be edited here (issue #737). */
@@ -254,6 +363,8 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       return;
     }
     this.error = '';
+    // A refusal belongs to the submission that was refused: this one is being made now.
+    this.masterProductConflict = null;
     this.saving = true;
 
     const base = {
@@ -276,10 +387,20 @@ export class ProductFormComponent implements OnInit, OnDestroy {
         }
       });
     } else {
+      // The selection is sent only while it stands (issue #1052): a create carrying neither field
+      // is byte for byte the create this page has always made, which is what keeps a product nobody
+      // picked from the catalogue completely unaffected by this feature.
+      const selection = this.masterProductSelection;
       this.productService.create({
         ...base,
         quantityInStock: this.form.quantityInStock,
-        initialUnitCost: this.form.initialUnitCost
+        initialUnitCost: this.form.initialUnitCost,
+        ...(selection
+          ? {
+              selectedMasterProductId: selection.masterProductId,
+              trackSupplierPrices: this.trackSupplierPrices
+            }
+          : {})
       }).subscribe({
         next: (created) => {
           // The product exists from here on. Its GST rule is `app-product-create-gst-rule`'s to
@@ -288,7 +409,15 @@ export class ProductFormComponent implements OnInit, OnDestroy {
           this.createdProductId = created.id;
         },
         error: (error: unknown) => {
-          this.error = apiErrorMessage(error, 'Failed to create product.');
+          // A refused selection (issue #1051) created nothing at all, and it is the one failure with
+          // two actions beside it rather than a message to read - so it is shown as itself, in the
+          // server's own words, instead of as the page's generic create failure.
+          const conflict = masterProductConflictOf(error);
+          if (conflict) {
+            this.masterProductConflict = conflict.message;
+          } else {
+            this.error = apiErrorMessage(error, 'Failed to create product.');
+          }
           this.saving = false;
         }
       });

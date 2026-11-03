@@ -81,10 +81,22 @@ async function openNewProduct(page: Page, viewport: { width: number; height: num
 
 /** The two controls of one row, in the order the issue requires them to be read in. */
 const pairedRows = [
-  { label: 'Name / SKU', section: 'product-details', first: 'input[name="name"]', second: 'input[name="sku"]' },
+  // Name is the suggesting combobox of issue #1052 rather than a plain textbox, and both pickers on
+  // this row carry one, so each is addressed through its own component's element.
+  {
+    label: 'Name / SKU',
+    section: 'product-details',
+    first: 'app-product-master-product-picker input[role="combobox"]',
+    second: 'input[name="sku"]'
+  },
   // The row the issue was raised about: the Category picker carries a help line under its box, and
   // Unit Label's input must still start at the same height rather than at that line's bottom.
-  { label: 'Category / Unit Label', section: 'product-details', first: '[role="combobox"]', second: 'input[name="unit"]' },
+  {
+    label: 'Category / Unit Label',
+    section: 'product-details',
+    first: 'app-product-category-picker input[role="combobox"]',
+    second: 'input[name="unit"]'
+  },
   {
     label: 'Opening Stock / Initial Unit Cost',
     section: 'opening-inventory',
