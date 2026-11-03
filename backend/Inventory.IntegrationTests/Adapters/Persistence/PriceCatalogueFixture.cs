@@ -1228,10 +1228,15 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     }
 
     /// <summary>
-    /// Records how one supplier master record's prices are collected (issue #931's fields), which is
-    /// what makes it due on a collector run at all. No port writes these - the Super Admin's preset
-    /// edit does, and it is out of #924's scope - so the state is arranged directly and only the reads
-    /// are under test.
+    /// Records how one supplier master record's prices are collected (issue #931's fields) and
+    /// whether they are searched for at all (issue #1077's <c>searchPrices</c>), which together are
+    /// what makes it due on a collector run. No port writes these - the Super Admin's preset edit
+    /// does, and it is out of #924's scope - so the state is arranged directly and only the reads are
+    /// under test.
+    ///
+    /// <para><c>isEnabled</c> is deliberately <em>not</em> part of that decision since #1077: it says
+    /// only whether the platform still suggests the record, so a test about the work list sets
+    /// <c>searchPrices</c> and may leave the suggestion flag either way.</para>
     /// </summary>
     public async Task SetSupplierCollectionAsync(
         int supplierPresetId,
@@ -1239,7 +1244,8 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         string? connectorKey = null,
         string? url = null,
         int freshnessHours = SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
-        bool isEnabled = true)
+        bool isEnabled = true,
+        bool searchPrices = true)
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
 
@@ -1249,6 +1255,7 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         preset.Url = url;
         preset.PriceCheckFreshnessHours = freshnessHours;
         preset.IsEnabled = isEnabled;
+        preset.SearchPrices = searchPrices;
         preset.UpdatedAtUtc = CreatedAt;
 
         await db.SaveChangesAsync();

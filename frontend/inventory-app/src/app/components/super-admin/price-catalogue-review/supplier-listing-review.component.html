@@ -131,7 +131,7 @@
         class="rounded-md-control border border-md-gray-300 p-2 text-sm"
         placeholder="Variant"
         aria-label="Variant as reviewed"
-        [disabled]="submitting"
+        [disabled]="controlsDisabled"
         [(ngModel)]="variant"
       />
       <input
@@ -140,14 +140,14 @@
         placeholder="Size"
         aria-label="Individual size as reviewed"
         step="0.001"
-        [disabled]="submitting"
+        [disabled]="controlsDisabled"
         [(ngModel)]="sizeValue"
       />
       <label class="sr-only" [attr.for]="'sizeUnitAsReviewed' + listing.id">Size unit as reviewed</label>
       <select
         [id]="'sizeUnitAsReviewed' + listing.id"
         class="rounded-md-control border border-md-gray-300 p-2 text-sm"
-        [disabled]="submitting"
+        [disabled]="controlsDisabled"
         [(ngModel)]="sizeUnit"
       >
         <option [ngValue]="null">No size</option>
@@ -161,7 +161,7 @@
         placeholder="Pack qty"
         aria-label="Pack quantity as reviewed"
         step="1"
-        [disabled]="submitting"
+        [disabled]="controlsDisabled"
         [(ngModel)]="unitsPerPack"
       />
       <input
@@ -169,14 +169,14 @@
         class="rounded-md-control border border-md-gray-300 p-2 text-sm"
         placeholder="Barcode"
         aria-label="Barcode as reviewed"
-        [disabled]="submitting"
+        [disabled]="controlsDisabled"
         [(ngModel)]="barcode"
       />
       <label class="sr-only" [attr.for]="'barcodeScopeAsReviewed' + listing.id">Barcode scope as reviewed</label>
       <select
         [id]="'barcodeScopeAsReviewed' + listing.id"
         class="rounded-md-control border border-md-gray-300 p-2 text-sm"
-        [disabled]="submitting"
+        [disabled]="controlsDisabled"
         [(ngModel)]="barcodeScope"
       >
         <option [ngValue]="null">No barcode</option>
@@ -188,22 +188,22 @@
 
     @if (needsPriceException) {
       <label class="mt-2 flex items-center gap-2 text-sm">
-        <input type="checkbox" [disabled]="submitting" [(ngModel)]="approvePriceException" />
+        <input type="checkbox" [disabled]="controlsDisabled" [(ngModel)]="approvePriceException" />
         Approve this price exception and accept the price despite the band
       </label>
     }
   </fieldset>
 
   <div class="flex flex-wrap gap-2">
-    <button type="button" class="btn btn-primary btn-sm" [disabled]="submitting" (click)="confirm()">
+    <button type="button" class="btn btn-primary btn-sm" [disabled]="controlsDisabled" (click)="confirm()">
       Confirm listing
     </button>
-    <button type="button" class="btn btn-danger btn-sm" [disabled]="submitting" (click)="reject()">
+    <button type="button" class="btn btn-danger btn-sm" [disabled]="controlsDisabled" (click)="reject()">
       Reject listing
     </button>
   </div>
 
-  @if (error) {
-    <p class="mt-2 text-sm text-red-600" role="alert">{{ error }}</p>
+  @if (displayedError) {
+    <p class="mt-2 text-sm text-red-600" role="alert">{{ displayedError }}</p>
   }
 </article>

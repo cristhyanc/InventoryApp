@@ -27,20 +27,26 @@ import {
 import { ProductService } from '../../services/product.service';
 import { SiteService } from '../../services/site.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
-import { DashboardComponent, REORDER_PAGE_SIZE } from './dashboard.component';
+import { DashboardComponent, REORDER_PAGE_SIZE_OPTIONS } from './dashboard.component';
+
+/** The default "Items per page" size on every Dashboard visit (issue #1080). */
+const DEFAULT_REORDER_PAGE_SIZE = REORDER_PAGE_SIZE_OPTIONS[0];
 
 /**
- * Paging the Dashboard's Reorder priorities card (issue #1017). The card used to show the first
- * five products of the reorder list and link to Needs Ordering for the rest; the owner asked for
- * every product to be reachable here, five rows per page, which supersedes #972's top-five-only
- * requirement for this card.
+ * Paging the Dashboard's Reorder priorities card (issue #1017, extended by issue #1080). The card
+ * used to show the first five products of the reorder list and link to Needs Ordering for the
+ * rest; the owner asked for every product to be reachable here, five rows per page, which
+ * supersedes #972's top-five-only requirement for this card. Issue #1080 then asked for an "Items
+ * per page" selector offering 5, 10, 20, 50 and 100, defaulting to 5 on every visit, which
+ * supersedes #1017's fixed-five-with-no-selector decision only.
  *
  * What these tests hold is the whole of that behaviour: the list's own order with no product
- * missing or repeated across the pages, the fixed page size, the pager's states and wording, the
- * one page state the desktop table and the phone cards share, the page a re-read lands on, and -
- * the request rule the issue is most specific about - that the Cheapest supplier and purchase-cost
- * reads happen once per reorder read for **all** the listed ids and that turning a page sends
- * nothing. Nothing here re-ranks, re-filters or re-reads the list.
+ * missing or repeated across the pages, every offered page size, the selector's and pager's states
+ * and wording, the one page state the desktop table and the phone cards share, the page and size a
+ * re-read lands on, and - the request rule the issue is most specific about - that the Cheapest
+ * supplier and purchase-cost reads happen once per reorder read for **all** the listed ids and that
+ * turning a page or changing the page size sends nothing. Nothing here re-ranks, re-filters or
+ * re-reads the list.
  */
 
 const SUMMARY: DashboardSummary = {
@@ -263,6 +269,10 @@ function nextButton(host: HTMLElement): HTMLButtonElement | null {
   return reorderSection(host).querySelector<HTMLButtonElement>('[data-testid="reorder-next-page"]');
 }
 
+function pageSizeSelect(host: HTMLElement): HTMLSelectElement | null {
+  return reorderSection(host).querySelector<HTMLSelectElement>('[data-testid="reorder-page-size"]');
+}
+
 function goNext(rendered: { fixture: ComponentFixture<DashboardComponent>; host: HTMLElement }): void {
   nextButton(rendered.host)?.click();
   rendered.fixture.detectChanges();
@@ -273,13 +283,25 @@ function goPrevious(rendered: { fixture: ComponentFixture<DashboardComponent>; h
   rendered.fixture.detectChanges();
 }
 
+/** Chooses a page size from the "Items per page" selector, the way an operator would. */
+function selectPageSize(
+  rendered: { fixture: ComponentFixture<DashboardComponent>; host: HTMLElement },
+  size: number
+): void {
+  const select = pageSizeSelect(rendered.host) as HTMLSelectElement;
+  select.value = String(size);
+  select.dispatchEvent(new Event('change'));
+  rendered.fixture.detectChanges();
+}
+
 describe('Dashboard Reorder priorities paging (issue #1017)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   it('starts on page 1 with the first five products of the list, in the published order', async () => {
     const { host } = await render();
 
-    expect(REORDER_PAGE_SIZE).toBe(5);
+    expect(DEFAULT_REORDER_PAGE_SIZE).toBe(5);
+    expect(pageSizeSelect(host)?.value).toBe('5');
     expect(rowNames(host)).toEqual(['Product 1', 'Product 2', 'Product 3', 'Product 4', 'Product 5']);
     expect(range(host)).toBe('Showing 1–5 of 30 products');
     expect(indicator(host)).toBe('Page 1 of 6');
@@ -377,25 +399,28 @@ describe('Dashboard Reorder priorities paging (issue #1017)', () => {
     expect(range(rendered.host)).toBe('Showing 6–6 of 6 products');
   });
 
-  it('keeps the existing empty state and shows no pager for an empty list', async () => {
+  it('keeps the existing empty state and shows no pager or selector for an empty list', async () => {
     const { host } = await render({ alerts: [of(listing([]))] });
 
     expect(reorderSection(host).textContent).toContain('No reorder alerts');
     expect(reorderSection(host).querySelector('[data-testid="reorder-pagination"]')).toBeNull();
+    expect(pageSizeSelect(host)).toBeNull();
     expect(range(host)).toBeNull();
   });
 
-  it('shows no pager while the list is still loading', async () => {
+  it('shows no pager or selector while the list is still loading', async () => {
     const { host } = await render({ alerts: [new Subject<ReorderAlertListing>()] });
 
     expect(reorderSection(host).querySelector('[data-testid="reorder-pagination"]')).toBeNull();
+    expect(pageSizeSelect(host)).toBeNull();
     expect(reorderSection(host).textContent).not.toContain('No reorder alerts');
   });
 
-  it('shows no pager for a failed read, and never presents it as an empty list', async () => {
+  it('shows no pager or selector for a failed read, and never presents it as an empty list', async () => {
     const { host } = await render({ alerts: [throwError(() => new Error('down'))] });
 
     expect(reorderSection(host).querySelector('[data-testid="reorder-pagination"]')).toBeNull();
+    expect(pageSizeSelect(host)).toBeNull();
     expect(reorderSection(host).textContent).toContain('The reorder-alert list could not be loaded');
     expect(reorderSection(host).textContent).not.toContain('No reorder alerts');
   });
@@ -446,22 +471,122 @@ describe('Dashboard Reorder priorities paging (issue #1017)', () => {
     expect(nextButton(rendered.host)).toBeNull();
   });
 
-  it('says the card pages the whole list, and keeps the View all link and its count', async () => {
+  it('says the card pages the whole list with a size the operator chooses, and keeps the View all link and its count', async () => {
     const { host } = await render();
     const link = host.querySelector<HTMLAnchorElement>('[data-testid="reorder-view-all"]');
 
-    expect(text(reorderSection(host).querySelector('.card-header p'))).toBe(
-      'Every product on the reorder list, five per page'
-    );
+    // Wording that stays true for every offered size (issue #1080), not just the default five.
+    const subtitle = text(reorderSection(host).querySelector('.card-header p'));
+    expect(subtitle).not.toContain('five per page');
+    expect(subtitle).toBe('Every product on the reorder list, paged by the size you choose below');
     expect(link?.textContent).toContain('View all 30 products needing ordering');
     expect(link?.getAttribute('href')).toBe('/products/needs-ordering');
   });
 
-  it('offers no rows-per-page selector: the page size is fixed', async () => {
+  it('offers an "Items per page" selector with exactly 5, 10, 20, 50 and 100, defaulting to 5', async () => {
     const { host } = await render();
+    const select = pageSizeSelect(host) as HTMLSelectElement;
 
-    expect(reorderSection(host).querySelector('select')).toBeNull();
-    expect(reorderSection(host).textContent).not.toContain('Rows per page');
+    expect(select).not.toBeNull();
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['5', '10', '20', '50', '100']);
+    expect(select.value).toBe('5');
+    expect(text(reorderSection(host).querySelector('label[for="reorder-page-size"]'))).toBe('Items per page');
+    expect(select.getAttribute('id')).toBe('reorder-page-size');
+  });
+
+  it('selects every offered size, each immediately paging the list by that size', async () => {
+    const rendered = await render({ alerts: [of(listing(reorderList(230)))] });
+
+    for (const size of REORDER_PAGE_SIZE_OPTIONS) {
+      selectPageSize(rendered, size);
+
+      expect(rowNames(rendered.host)).toHaveLength(Math.min(size, 230));
+      expect(range(rendered.host)).toBe(`Showing 1–${Math.min(size, 230)} of 230 products`);
+      expect(indicator(rendered.host)).toBe(`Page 1 of ${Math.ceil(230 / size)}`);
+    }
+  });
+
+  it('resets to page 1 and updates the pager immediately when the size changes from a later page', async () => {
+    const rendered = await render({ alerts: [of(listing(reorderList(30)))] });
+
+    goNext(rendered);
+    goNext(rendered);
+    expect(indicator(rendered.host)).toBe('Page 3 of 6');
+
+    selectPageSize(rendered, 10);
+
+    expect(indicator(rendered.host)).toBe('Page 1 of 3');
+    expect(rowNames(rendered.host)).toEqual(reorderList(10).map((p) => p.name));
+    expect(range(rendered.host)).toBe('Showing 1–10 of 30 products');
+    expect(previousButton(rendered.host)?.disabled).toBe(true);
+    expect(nextButton(rendered.host)?.disabled).toBe(false);
+  });
+
+  it('keeps the selector visible on a single page, so a smaller size can be chosen again', async () => {
+    const rendered = await render({ alerts: [of(listing(reorderList(7)))] });
+
+    selectPageSize(rendered, 20);
+
+    expect(rowNames(rendered.host)).toHaveLength(7);
+    expect(indicator(rendered.host)).toBeNull();
+    expect(previousButton(rendered.host)).toBeNull();
+    expect(nextButton(rendered.host)).toBeNull();
+    expect(pageSizeSelect(rendered.host)).not.toBeNull();
+
+    selectPageSize(rendered, 5);
+
+    expect(rowNames(rendered.host)).toEqual(['Product 1', 'Product 2', 'Product 3', 'Product 4', 'Product 5']);
+    expect(indicator(rendered.host)).toBe('Page 1 of 2');
+  });
+
+  it('keeps the selected size across a re-read, and keeps the current page while it still exists', async () => {
+    const rendered = await render({ alerts: [of(listing(reorderList(30))), of(listing(reorderList(30)))] });
+
+    selectPageSize(rendered, 10);
+    goNext(rendered);
+    expect(indicator(rendered.host)).toBe('Page 2 of 3');
+
+    rendered.fixture.componentInstance.refreshLowStock();
+    rendered.fixture.detectChanges();
+
+    expect(pageSizeSelect(rendered.host)?.value).toBe('10');
+    expect(indicator(rendered.host)).toBe('Page 2 of 3');
+    expect(rowNames(rendered.host)).toEqual(reorderList(30).slice(10, 20).map((p) => p.name));
+  });
+
+  it('keeps the selected size but clamps to the new last page when a re-read shrinks the list past it', async () => {
+    const rendered = await render({ alerts: [of(listing(reorderList(30))), of(listing(reorderList(12)))] });
+
+    selectPageSize(rendered, 10);
+    goNext(rendered);
+    expect(indicator(rendered.host)).toBe('Page 2 of 3');
+
+    rendered.fixture.componentInstance.refreshLowStock();
+    rendered.fixture.detectChanges();
+
+    expect(pageSizeSelect(rendered.host)?.value).toBe('10');
+    expect(indicator(rendered.host)).toBe('Page 2 of 2');
+    expect(rowNames(rendered.host)).toEqual(reorderList(12).slice(10, 12).map((p) => p.name));
+    expect(range(rendered.host)).toBe('Showing 11–12 of 12 products');
+  });
+
+  it('shows the desktop table and the phone cards on the same page and size from one page-size state', async () => {
+    const rendered = await render({ alerts: [of(listing(reorderList(30)))] });
+
+    selectPageSize(rendered, 20);
+
+    expect(cardNames(rendered.host)).toEqual(rowNames(rendered.host));
+    expect(rowNames(rendered.host)).toHaveLength(20);
+  });
+
+  it('makes the page-size selector keyboard reachable with a visible, associated label', async () => {
+    const { host } = await render();
+    const select = pageSizeSelect(host) as HTMLSelectElement;
+
+    select.focus();
+    expect(document.activeElement).toBe(select);
+    const label = reorderSection(host).querySelector('label[for="reorder-page-size"]') as HTMLLabelElement;
+    expect(label.getAttribute('for')).toBe(select.id);
   });
 
   it('makes the pager controls real buttons with accessible names, reachable from the keyboard', async () => {
@@ -621,7 +746,7 @@ describe('Dashboard Reorder priorities enrichment reads (issue #1017)', () => {
     }
     fixture.detectChanges();
 
-    expect(rowNames(host)).toEqual(products.slice(0, REORDER_PAGE_SIZE).map((p) => p.name));
+    expect(rowNames(host)).toEqual(products.slice(0, DEFAULT_REORDER_PAGE_SIZE).map((p) => p.name));
     expect(range(host)).toBe('Showing 1–5 of 310 products');
     const section = reorderSection(host);
     expect(section.textContent).not.toContain('Acme · $1.25');
@@ -665,6 +790,33 @@ describe('Dashboard Reorder priorities enrichment reads (issue #1017)', () => {
     expect(cells).toHaveLength(5);
     for (const cell of cells) expect(cell.textContent).toContain('JB Metro');
     expect(reorderSection(rendered.host).textContent).toContain('Acme · $1.25');
+
+    rendered.http.verify();
+  });
+
+  it('sends no request when the page size changes (issue #1080), and enriches every size from the one read', async () => {
+    const ids = CHEAPEST_SUPPLIER_MAX_IDS + 30;
+    const rendered = await renderOverHttp(reorderList(ids));
+    for (const request of supplierRequests(rendered.http)) {
+      request.flush(cheapestSummary((request.request.body as { productIds: number[] }).productIds));
+    }
+    for (const request of costRequests(rendered.http)) {
+      request.flush((request.request.params.getAll('productIds') ?? []).map((id) => costSummary(Number(id))));
+    }
+    rendered.fixture.detectChanges();
+
+    const select = pageSizeSelect(rendered.host) as HTMLSelectElement;
+    select.value = '100';
+    select.dispatchEvent(new Event('change'));
+    rendered.fixture.detectChanges();
+
+    expect(indicator(rendered.host)).toBe('Page 1 of 3');
+    expect(rowNames(rendered.host)).toHaveLength(100);
+    const cells = Array.from(
+      reorderSection(rendered.host).querySelectorAll('table [data-testid="cheapest-supplier-cell"]')
+    );
+    expect(cells).toHaveLength(100);
+    for (const cell of cells) expect(cell.textContent).toContain('JB Metro');
 
     rendered.http.verify();
   });

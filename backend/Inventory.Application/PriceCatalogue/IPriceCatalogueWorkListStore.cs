@@ -29,13 +29,20 @@ public sealed record ProductAwaitingMatch(string WaitingKey, string SearchName, 
 /// fields of #931): what it is called, how its prices are collected, and when it was last checked.
 ///
 /// <para><strong>Whether it is searched is not this record's answer.</strong> The record carries the
-/// stored facts - enabled, connector, cadence, last successful check - and
+/// stored facts - searching, connector, cadence, last successful check - and
 /// <see cref="PriceCollectorWorkListPolicy.IsSupplierDue"/> is the one place they become a decision
-/// (enabled and collectable; since 1 November 2026 the last check no longer delays a search).</para>
+/// (searchable and collectable; since 1 November 2026 the last check no longer delays a search).</para>
+///
+/// <para>It deliberately does <strong>not</strong> carry whether the platform still suggests the
+/// supplier (issue #1077): that decides what a business is offered, it is no part of what the
+/// collector searches, and a record that carried it would invite the two to be confused again.</para>
 /// </summary>
 /// <param name="SupplierPresetId">The supplier master record's own key.</param>
 /// <param name="Name">Its name, which is what a collector's log and a reviewer read.</param>
-/// <param name="IsEnabled">Whether the platform still suggests it.</param>
+/// <param name="SearchPrices">
+/// Whether this supplier's prices are searched for at all (issue #1077) - the Super Admin's
+/// <em>Search prices</em> switch, and not whether the preset is suggested to businesses.
+/// </param>
 /// <param name="PriceConnector">
 /// How its prices are collected, or <see langword="null"/> when nothing collects them.
 /// </param>
@@ -56,7 +63,7 @@ public sealed record ProductAwaitingMatch(string WaitingKey, string SearchName, 
 public sealed record CollectableSupplier(
     int SupplierPresetId,
     string Name,
-    bool IsEnabled,
+    bool SearchPrices,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
     string? SiteUrl,

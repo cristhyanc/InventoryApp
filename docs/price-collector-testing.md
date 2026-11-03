@@ -62,8 +62,9 @@ In GitHub → Actions → **Price collector (manual)** → Run workflow:
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
-   or overrides the backend's supplier list. Every enabled supplier with a collection route is in
-   every run's work, however recently it was checked.
+   or overrides the backend's supplier list. Every supplier whose **Search prices** switch is on and
+   that has a collection route is in every run's work, however recently it was checked — see
+   [Pausing one supplier's searches](#pausing-one-suppliers-searches) below.
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.
@@ -184,6 +185,35 @@ search that returns nothing is tried once more with fewer words; that second cal
 the run's Apify call cap (600) and, at Kmart and BIG W, is charged like any other search. JB Metro
 search words are written without apostrophes or `&`, because the command guard refuses them.
 
+A JB Metro price includes JB's container deposit levy (issue #1082, owner decision, 3 November
+2026). JB Metro charges a per-unit `NSW Levy` at checkout as a Magento fixed product tax that
+`price_range.minimum_price.final_price` does not include, so drinks were recorded about 11-14c per
+container cheaper than JB actually charges. The owner checked the decision against a JB Metro
+invoice: the levy is ex GST, the same basis as `finalPrice`/`regularPrice` (GST is charged on the
+item price *and* the levy together, for example $22.00 + $1.10 levy = $23.10 at 10% GST, exactly
+$2.31). `jbmetro-lookup.mjs` now requests `fixed_product_taxes` and reports it as `levy` (the summed
+amount), `levyLabels`, and `levyStatus` — the word that says what the site answered.
+
+**`levyStatus` decides the row, because a levy nobody could read is not a product without a levy.**
+`levy` is `null` for both, and `prompt.md` prices them oppositely:
+
+- `published` — a readable levy. `packPrice` is `finalPrice` plus that `levy` and `regularPackPrice`
+  is `regularPrice` plus the same `levy`, with no conversion, and the row's `sourceReference` says
+  so.
+- `none` — the site published an empty levy list, its answer for a product that carries no levy.
+  The row is priced exactly as before this change.
+- `unreadable` — the answer carried no levy list at all, or an amount that was missing, unparseable,
+  negative or in another currency. **The collector writes no row for that product** and reports that
+  search as `truncated` rather than `complete` (never `no_matches`), the same rule it already
+  follows for a listing it could not price. It never falls back to the base price, never treats the
+  levy as `0` and never adds up only the entries that read: a JB Metro drink priced without a levy
+  JB does charge would win the Cheapest supplier comparison on a price that is not real. So a run
+  whose JB Metro answers lose the levy field loses those readings and says so, instead of quietly
+  recording prices that are 11-14c per container too low.
+
+Shipping stays out of scope: it is charged separately on the invoice and is not part of any
+product's price.
+
 ## Production run
 
 A **production** run (owner decision, 1 November 2026) collects real supplier prices into the
@@ -270,6 +300,36 @@ prices (see [Run log](#run-log)), never credentials.
 The workflow uploads the masked run log described above, then deletes temporary state, CLI files and
 output in an `always()` cleanup step. A hard runner loss can skip cleanup; verified ephemeral/reset
 runners are still required in self-hosted mode.
+
+## Pausing one supplier's searches
+
+A Super Admin can stop paying for one supplier's searches without hiding that supplier from
+businesses (issue #1077, the owner's decision of 3 November 2026). In the app, **Super Admin →
+Supplier presets** has a **Search prices** column beside the existing **Suggested** column:
+
+1. Find the supplier's row. The column shows **On** or **Off**, or **No price route** for a record
+   nothing collects — Costco, for example — which has no search to start or stop and so offers no
+   button.
+2. Press **Stop searching** and confirm. From the next run the collector is issued no work for that
+   supplier, on any product. Nothing in the workflow, `apify-limits.json` or the collector scripts
+   needs changing: the API simply stops putting that supplier in the work list.
+3. Press **Start searching** to resume. The next run includes it again.
+
+What that switch does **not** do, which is the point of having two:
+
+- It does not change what businesses see. **Suggested** is still what decides whether the record is
+  copied into a newly approved business and offered under "Available to add", so pausing the paid
+  Kmart and BIG W searches leaves both suppliers on offer.
+- It removes nothing already collected. That supplier's listings, observed prices and pending
+  readings stay exactly as they are, and the Cheapest supplier column keeps reading them until they
+  age out by the record's own freshness limit (174 hours for BIG W and Kmart) — after which the
+  supplier simply has no comparable price rather than a wrong one.
+- It does not cancel work a run already holds. A run issued before the switch moved can still submit
+  its results and complete, because a submitted row is resolved through the work item it names.
+
+Pressing **Disable** on the same page is still the separate decision it always was: it stops the
+supplier being suggested to businesses and, since #1077, no longer stops its searches. Choosing
+which of the searched suppliers run on which day is still the later scheduled-run part of #929.
 
 ## Implementation and checks
 

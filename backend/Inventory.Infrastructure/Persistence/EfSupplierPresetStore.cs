@@ -54,6 +54,7 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             preset.Name,
             preset.Url,
             preset.IsEnabled,
+            preset.SearchPrices,
             preset.ServesNationwide,
             preset.ServedStates,
             preset.PricesIncludeGst,
@@ -127,6 +128,11 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             // A new preset is suggested: a preset created already disabled would be a row nobody
             // asked for, and disabling is an edit away.
             IsEnabled = true,
+            // Searching, by contrast, is the caller's choice on a create too (issue #1077): a route
+            // that charges per search is one somebody may want recorded before it is switched on.
+            // The boundary defaults an omitted value to true, so a caller that says nothing still
+            // gets a searched supplier.
+            SearchPrices = preset.SearchPrices,
             ServesNationwide = preset.ServesNationwide,
             ServedStates = preset.ServedStates,
             PricesIncludeGst = preset.PricesIncludeGst,
@@ -163,6 +169,7 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
         row.NormalisedName = edit.NormalisedName;
         row.Url = edit.Url;
         row.IsEnabled = edit.IsEnabled;
+        row.SearchPrices = edit.SearchPrices;
         row.ServesNationwide = edit.ServesNationwide;
         row.ServedStates = edit.ServedStates;
         row.PricesIncludeGst = edit.PricesIncludeGst;
@@ -206,6 +213,7 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             row.Name,
             row.Url,
             row.IsEnabled,
+            row.SearchPrices,
             row.ServesNationwide,
             SupplierPresetMasterPolicy.ReadServedStates(row.ServedStates),
             row.PricesIncludeGst,
@@ -224,6 +232,7 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             row.Name,
             row.Url,
             row.IsEnabled,
+            row.SearchPrices,
             row.ServesNationwide,
             row.ServedStates,
             row.PricesIncludeGst,
@@ -242,6 +251,7 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
         string Name,
         string? Url,
         bool IsEnabled,
+        bool SearchPrices,
         bool ServesNationwide,
         string ServedStates,
         bool PricesIncludeGst,

@@ -9,7 +9,8 @@ namespace InventoryApi.Controllers;
 
 /// <summary>
 /// The Super Admin's platform supplier presets (issue #848, child B of #835): the one platform-wide
-/// list of suggested suppliers, which a Super Admin may list, add to, edit, and enable or disable.
+/// list of suggested suppliers, which a Super Admin may list, add to, edit, enable or disable, and -
+/// since issue #1077, independently of all of that - switch price searching on or off for.
 ///
 /// <para><strong>Authorisation is the other two Super Admin surfaces', unchanged.</strong>
 /// <c>[Authorize(Policy = PlatformAdminPolicy.Name)]</c> is evaluated by the authorization
@@ -84,7 +85,10 @@ public sealed class SuperAdminSupplierPresetsController : ControllerBase
         return Ok(presets.Select(SuperAdminSupplierPresetResponse.From).ToList());
     }
 
-    /// <summary>Adds one preset, enabled.</summary>
+    /// <summary>
+    /// Adds one preset, enabled - and searched unless the body says <c>"searchPrices": false</c>
+    /// (issue #1077).
+    /// </summary>
     /// <response code="201">The preset as it was stored.</response>
     /// <response code="400">
     /// The name is blank or longer than 200 characters, the website is not an absolute http(s)
@@ -114,8 +118,9 @@ public sealed class SuperAdminSupplierPresetsController : ControllerBase
 
     /// <summary>
     /// Edits one preset: its name, its website, what it serves, whether its prices include GST, how
-    /// they are collected and whether it is still suggested, all together. Enabling and disabling is
-    /// this call.
+    /// they are collected, whether it is still suggested and whether its prices are searched for,
+    /// all together. Enabling and disabling is this call, and so is switching searching on and off
+    /// (issue #1077) - two separate fields, so neither button moves the other.
     /// </summary>
     /// <response code="200">The preset as the edit left it.</response>
     /// <response code="400">

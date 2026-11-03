@@ -41,6 +41,7 @@ import {
 } from '../shared/cheapest-supplier/cheapest-suppliers.component';
 import { CheapestSupplierCellComponent } from '../shared/cheapest-supplier/cheapest-supplier-cell.component';
 import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
+import { ProductGstRuleBulkComponent } from './product-gst-rule-bulk/product-gst-rule-bulk.component';
 
 // No 'supplier' column since issue #787 (A1 of #786): a product carries no supplier to sort by.
 // No `price` column since issue #792 (A2 of #786): a product carries no selling price, so there is
@@ -68,7 +69,8 @@ type ProductStatusFilter = 'active' | 'all';
     ConfirmationDialogComponent,
     ProductPurchaseCostsComponent,
     CheapestSuppliersComponent,
-    CheapestSupplierCellComponent
+    CheapestSupplierCellComponent,
+    ProductGstRuleBulkComponent
   ],
   templateUrl: './product-list.component.html'
 })
@@ -152,6 +154,13 @@ export class ProductListComponent implements OnInit, OnDestroy {
    * boundary).
    */
   cheapestSuppliers: CheapestSuppliers = CHEAPEST_SUPPLIERS_NOT_READ_YET;
+
+  /**
+   * Whether the "Set GST rule in bulk" dialog is open (issue #1076). The page owns only that: the
+   * eligible count, the choice, the confirmation, the write, its conflict and its failures all
+   * belong to `<app-product-gst-rule-bulk>` (issue #191's page composition boundary).
+   */
+  settingGstRuleInBulk = false;
 
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
@@ -241,6 +250,39 @@ export class ProductListComponent implements OnInit, OnDestroy {
    */
   cheapestSupplier(product: Product): CheapestSupplierProduct | undefined {
     return cheapestSupplierFor(this.cheapestSuppliers, product.id);
+  }
+
+  /**
+   * Opens "Set GST rule in bulk" (issue #1076). Checked here as well as hidden in the template, so
+   * the write is actually unavailable rather than merely invisible during a support session - the
+   * endpoints refuse it either way, by the same central read-only method rule that refuses New
+   * Product and Delete on this page.
+   */
+  openBulkGstRule(): void {
+    if (this.sessionActive) {
+      return;
+    }
+
+    this.settingGstRuleInBulk = true;
+  }
+
+  closeBulkGstRule(): void {
+    this.settingGstRuleInBulk = false;
+  }
+
+  /**
+   * What the dialog reported it configured. The count is the server's own answer from the committed
+   * write, so the summary states what happened rather than what was asked for, and the list is
+   * refetched because a product's rule is not on the catalogue payload - the refresh is what keeps
+   * every other column on screen consistent with a catalogue that has just been written to.
+   */
+  bulkGstRuleApplied(changedCount: number): void {
+    this.toastService.success(
+      changedCount === 1
+        ? 'GST rule set on 1 product that had no rule.'
+        : `GST rule set on ${changedCount} products that had no rule.`
+    );
+    this.applyFilters();
   }
 
   onSearchChange(value: string): void {

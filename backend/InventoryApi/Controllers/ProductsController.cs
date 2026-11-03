@@ -67,6 +67,16 @@ namespace InventoryApi.Controllers;
 /// decides which master product one of its products is, it is bounded to a product being created, and
 /// a Super Admin may still undo it. See docs/architecture.md § Tracking supplier prices on a
 /// product.</para>
+///
+/// <para><b>Issue #1076 added "Set GST rule in bulk" on the same capability</b>:
+/// <c>POST gst-rule/bulk-preview</c> and <c>POST gst-rule/bulk</c>. Configuring the GST rule of
+/// every product that has none is the same configuration as configuring one product's rule, which
+/// is the "same permission as the existing single-product GST rule operation" that issue requires,
+/// so no new capability is declared and no endpoint-specific bypass exists - a read-only support
+/// session and a role preview are refused by those features' own central method rules, because both
+/// actions are <c>POST</c>. Both are configuration only: they reach no purchase, classification,
+/// cost, quantity, valuation, sale or supplier rule. See docs/architecture.md § Product and
+/// supplier GST rules.</para>
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -92,6 +102,14 @@ public class ProductsController : ControllerBase
     private readonly GetProductPriceComparison _getProductPriceComparison;
     private readonly GetProductGstRule _getProductGstRule;
     private readonly SetProductGstRule _setProductGstRule;
+
+    /// <summary>
+    /// "Set GST rule in bulk" (issue #1076): the preview that counts the products carrying no rule,
+    /// and the apply that configures exactly those as one transaction. The single-product use cases
+    /// above are untouched by it.
+    /// </summary>
+    private readonly PreviewBulkProductGstRule _previewBulkProductGstRule;
+    private readonly SetBulkProductGstRule _setBulkProductGstRule;
     private readonly GetProductPriceTracking _getProductPriceTracking;
     private readonly SetProductPriceTracking _setProductPriceTracking;
     private readonly ListTrackedProducts _listTrackedProducts;
@@ -115,6 +133,8 @@ public class ProductsController : ControllerBase
         GetProductPriceComparison getProductPriceComparison,
         GetProductGstRule getProductGstRule,
         SetProductGstRule setProductGstRule,
+        PreviewBulkProductGstRule previewBulkProductGstRule,
+        SetBulkProductGstRule setBulkProductGstRule,
         GetProductPriceTracking getProductPriceTracking,
         SetProductPriceTracking setProductPriceTracking,
         ListTrackedProducts listTrackedProducts,
@@ -125,6 +145,8 @@ public class ProductsController : ControllerBase
         _suggestMasterProducts = suggestMasterProducts;
         _getProductGstRule = getProductGstRule;
         _setProductGstRule = setProductGstRule;
+        _previewBulkProductGstRule = previewBulkProductGstRule;
+        _setBulkProductGstRule = setBulkProductGstRule;
         _getProductPriceTracking = getProductPriceTracking;
         _setProductPriceTracking = setProductPriceTracking;
         _listTrackedProducts = listTrackedProducts;
@@ -470,6 +492,60 @@ public class ProductsController : ControllerBase
             _ => BadRequest(result.ValidationError),
         };
     }
+
+    /// <summary>
+    /// How many of this business's products currently carry no GST rule (issue #1076) - the scope
+    /// the Products list's "Set GST rule in bulk" action asks the operator to confirm. It persists
+    /// nothing at all.
+    ///
+    /// <para>It takes no parameter: no product, no filter, no page, no sort and no business, which
+    /// is the caller's own resolved from their membership. The count covers the whole catalogue,
+    /// active and inactive products alike, so the page's search, category and status filters change
+    /// it in no way.</para>
+    ///
+    /// <para><b>It is a <c>POST</c> although it writes nothing</b>, for the reason the historical
+    /// GST classification preview is one: its answer is the count the apply below is authorised
+    /// against, and a cached <c>GET</c> response would hand a caller a confirmation for a catalogue
+    /// it never read. A read-only support session and a role preview are refused by their own
+    /// central method rules in consequence, which is the intended answer for a confirmation step of
+    /// a write.</para>
+    /// </summary>
+    /// <response code="200">The eligible product count.</response>
+    [HttpPost("gst-rule/bulk-preview")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<BulkProductGstRulePreview>> PreviewBulkGstRule(CancellationToken ct) =>
+        Ok(await _previewBulkProductGstRule.Handle(ct));
+
+    /// <summary>
+    /// Sets one GST rule on every product of this business that carries none (issue #1076), as one
+    /// transaction, and reports how many products were configured.
+    ///
+    /// <para>Configuration only, exactly as the single-product resource above is: it reclassifies no
+    /// purchase line or charge, changes no cost, costing quantity, inventory value, stock movement
+    /// or supplier rule, and creates, retires and deletes no product. A product with an explicit
+    /// Taxable or GST-free rule is never touched - including by a change to the rule it already
+    /// carries - because only "no rule" is eligible.</para>
+    ///
+    /// <para>The body carries the target rule and the eligible count the operator confirmed, and
+    /// nothing else: it cannot name a business, a product or a filter. The count is re-read and
+    /// compared inside the write's own transaction, so a catalogue that moved in between is refused
+    /// rather than silently applied to a set nobody approved.</para>
+    /// </summary>
+    /// <response code="200">The rule that was set and how many products took it.</response>
+    /// <response code="400">
+    /// The target is not Taxable or GST-free, or the request carried no confirmed count. Nothing is
+    /// written.
+    /// </response>
+    /// <response code="409">
+    /// The eligible count changed after the confirmation. Nothing is written; preview again.
+    /// </response>
+    [HttpPost("gst-rule/bulk")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<BulkProductGstRuleApplied>> SetBulkGstRule(
+        [FromBody] SetBulkProductGstRuleRequest request, CancellationToken ct) =>
+        Ok(await _setBulkProductGstRule.Handle(request, ct));
 
     /// <summary>
     /// Which of the business's products have supplier prices tracked, and where each one has got to

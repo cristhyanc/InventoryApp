@@ -1,5 +1,5 @@
 import { CommonModule, DatePipe } from '@angular/common';
-import { Component, EventEmitter, Input, OnChanges, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import {
   BARCODE_SCOPE_LABELS,
@@ -8,6 +8,7 @@ import {
   MASTER_PRODUCT_SIZE_UNIT_LABELS,
   MasterProductSizeUnit,
   ReviewSupplierListing,
+  SupplierListingDecisionRequest,
   SupplierListingReviewOutcome,
   SuperAdminPriceCatalogueReviewService
 } from '../../../services/super-admin-price-catalogue-review.service';
@@ -43,6 +44,21 @@ import { extractReviewErrorMessage, isStaleReviewState } from './review-error';
 export class SupplierListingReviewComponent implements OnChanges {
   @Input({ required: true }) listing!: ReviewSupplierListing;
 
+  /**
+   * Set by the page while its bulk "Confirm selected" run is in progress (issue #1055), so every
+   * card's own fields and buttons are disabled for the run exactly as `submitting` disables them for
+   * this card's own single decision.
+   */
+  @Input() bulkDisabled = false;
+
+  /**
+   * The refusal reason for a bulk "Confirm selected" attempt at this listing, held by the page
+   * rather than this card (issue #1055): the page re-reads the queue once after the whole run, which
+   * replaces `listing` and would otherwise clear this card's own `error` through `ngOnChanges` right
+   * when a failed listing needs to keep showing why.
+   */
+  @Input() externalError: string | null = null;
+
   /** Raised after a decision the server accepted, so the page can re-read the queue. */
   @Output() readonly decided = new EventEmitter<string>();
 
@@ -76,8 +92,17 @@ export class SupplierListingReviewComponent implements OnChanges {
    * The form starts from what is <strong>stored</strong>, never from what was last typed: the page
    * re-reads the queue after every decision, and a correction carried onto another listing would be
    * a pack quantity nobody reviewed.
+   *
+   * It is reset only when the <em>listing</em> itself changes. The page's other two inputs change
+   * during a bulk "Confirm selected" run (issue #1055) - `bulkDisabled` the moment the run starts,
+   * `externalError` when it ends - and resetting on those would throw away the very corrections the
+   * run was asked to confirm, for every card whose request has not been sent yet.
    */
-  ngOnChanges(): void {
+  ngOnChanges(changes: SimpleChanges): void {
+    if (!changes['listing']) {
+      return;
+    }
+
     this.error = null;
     this.submitting = false;
     this.approvePriceException = false;
@@ -91,6 +116,16 @@ export class SupplierListingReviewComponent implements OnChanges {
 
   get statusLabel(): string {
     return LISTING_MATCH_STATUS_LABELS[this.listing.matchStatus];
+  }
+
+  /** Whether this card's own fields and buttons should be disabled, for either reason. */
+  get controlsDisabled(): boolean {
+    return this.submitting || this.bulkDisabled;
+  }
+
+  /** This card's own error takes precedence; a bulk run's reason for this listing otherwise shows. */
+  get displayedError(): string | null {
+    return this.error ?? this.externalError;
   }
 
   /** The master product this listing hangs from, in words, or `null` while it hangs from a search. */
@@ -140,6 +175,25 @@ export class SupplierListingReviewComponent implements OnChanges {
 
   reject(): void {
     this.submit(SupplierListingReviewOutcome.Rejected);
+  }
+
+  /**
+   * Exactly what {@link confirm} would send - this card's current form values, including any
+   * edits - except `approvePriceException` is always `false`: the page's bulk "Confirm selected"
+   * run (issue #1055) never approves a price exception, which is only ever ticked on this card's
+   * own button.
+   */
+  buildConfirmationRequest(): SupplierListingDecisionRequest {
+    return {
+      outcome: SupplierListingReviewOutcome.Confirmed,
+      unitsPerPack: this.unitsPerPack,
+      barcode: this.barcode,
+      barcodeScope: this.barcodeScope,
+      variant: this.variant,
+      sizeValue: this.sizeValue,
+      sizeUnit: this.sizeUnit,
+      approvePriceException: false
+    };
   }
 
   private submit(outcome: SupplierListingReviewOutcome): void {

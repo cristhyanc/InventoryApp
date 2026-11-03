@@ -3,6 +3,8 @@ import { HttpClient, HttpParams, HttpResponse } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 import {
+  BulkProductGstRuleApplied,
+  BulkProductGstRulePreview,
   GstClassification,
   InventoryValuationSummary,
   MasterProductSuggestionPage,
@@ -138,6 +140,37 @@ export class ProductService {
 
   setGstRule(id: number, gstRule: GstClassification): Observable<void> {
     return this.http.put<void>(`${this.baseUrl}/${id}/gst-rule`, { gstRule });
+  }
+
+  /**
+   * How many of the business's products carry no GST rule (issue #1076) - the scope "Set GST rule
+   * in bulk" asks the operator to confirm. It writes nothing.
+   *
+   * A `POST` with no body because that is the API's own shape: the count it answers is the
+   * confirmation {@link setBulkGstRule} is checked against, and a cacheable `GET` would hand the
+   * dialog a confirmation for a catalogue it never read. No filter, category, page or product id is
+   * sent, because the scope is the whole catalogue of the caller's own business.
+   */
+  previewBulkGstRule(): Observable<BulkProductGstRulePreview> {
+    return this.http.post<BulkProductGstRulePreview>(`${this.baseUrl}/gst-rule/bulk-preview`, {});
+  }
+
+  /**
+   * Sets one GST rule on every product of the business that carries none (issue #1076), and reports
+   * how many products took it.
+   *
+   * The body carries the target rule and the count that was confirmed, and nothing else: the server
+   * re-counts inside its own transaction and answers `409` when the count has moved, so a stale
+   * confirmation never configures a set the operator did not see.
+   */
+  setBulkGstRule(
+    gstRule: GstClassification,
+    expectedEligibleCount: number
+  ): Observable<BulkProductGstRuleApplied> {
+    return this.http.post<BulkProductGstRuleApplied>(`${this.baseUrl}/gst-rule/bulk`, {
+      gstRule,
+      expectedEligibleCount
+    });
   }
 
   /**

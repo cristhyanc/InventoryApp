@@ -14,6 +14,7 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
     name: 'Coles',
     url: 'https://www.coles.com.au',
     isEnabled: true,
+    searchPrices: true,
     servesNationwide: true,
     servedStates: [],
     pricesIncludeGst: true,
@@ -27,6 +28,7 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
 
 /** The supplier-master half of the row a toggle re-sends unchanged. */
 const nationwideGstInclusive = {
+  searchPrices: true,
   servesNationwide: true,
   servedStates: [],
   pricesIncludeGst: true,
@@ -250,6 +252,7 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       name: 'JB Metro SA & NT',
       url: 'https://www.jbmetro-sa-nt.com.au',
       isEnabled: false,
+      searchPrices: true,
       servesNationwide: false,
       servedStates: ['SA', 'NT'],
       pricesIncludeGst: false,
@@ -338,6 +341,159 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       const row = rowFor(host, 'Coles Group');
       expect(row.textContent).toContain('Not set');
       expect(row.textContent).not.toContain('Nationwide');
+    });
+  });
+
+  describe('the Search prices column (issue #1077)', () => {
+    const kmart = (overrides: Partial<SuperAdminSupplierPreset> = {}) =>
+      preset({
+        id: 10,
+        name: 'Kmart',
+        url: null,
+        priceConnector: SupplierPriceConnector.Kmart,
+        ...overrides
+      });
+
+    it('shows On or Off per preset, beside the Suggested column', async () => {
+      const list = jest.fn(() =>
+        of([kmart(), kmart({ id: 11, name: 'Big W', searchPrices: false, isEnabled: false })])
+      );
+      const { host } = await render({ list });
+
+      const headers = Array.from(host.querySelectorAll('thead th')).map((cell) => cell.textContent?.trim());
+      expect(headers).toContain('Search prices');
+
+      expect(rowFor(host, 'Kmart').textContent).toContain('On');
+      expect(rowFor(host, 'Big W').textContent).toContain('Off');
+    });
+
+    /**
+     * The two switches are independent, which is the whole point of this issue: a preset that is no
+     * longer suggested can still be searched, and a suggested one can have its searches paused.
+     */
+    it('offers both toggles independently of each other', async () => {
+      const list = jest.fn(() =>
+        of([
+          kmart({ id: 10, name: 'Paused Kmart', isEnabled: true, searchPrices: false }),
+          kmart({ id: 11, name: 'Retired Big W', isEnabled: false, searchPrices: true })
+        ])
+      );
+      const { host } = await render({ list });
+
+      const paused = rowFor(host, 'Paused Kmart');
+      expect(buttonInRow(paused, 'Disable')).toBeDefined();
+      expect(buttonInRow(paused, 'Start searching')).toBeDefined();
+
+      const retired = rowFor(host, 'Retired Big W');
+      expect(buttonInRow(retired, 'Enable')).toBeDefined();
+      expect(buttonInRow(retired, 'Stop searching')).toBeDefined();
+    });
+
+    /**
+     * A preset nothing collects has no route to search, so the switch would decide nothing: the
+     * column says so in words and offers no button, rather than showing an Off badge that reads as
+     * "somebody paused this".
+     */
+    it('shows no price route and no toggle for a preset with no connector', async () => {
+      const list = jest.fn(() => of([preset({ id: 12, name: 'Costco', url: null, priceConnector: null })]));
+      const { host } = await render({ list });
+
+      const row = rowFor(host, 'Costco');
+      expect(row.textContent).toContain('No price route');
+
+      const labels = Array.from(row.querySelectorAll('button')).map((button) => button.textContent?.trim());
+      expect(labels).not.toContain('Stop searching');
+      expect(labels).not.toContain('Start searching');
+      // The Suggested column's own button is still there: the two are separate.
+      expect(labels).toContain('Disable');
+    });
+
+    it('confirms before stopping a supplier’s searches, then puts searchPrices false', async () => {
+      const list = jest.fn(() => of([kmart()]));
+      const update = jest.fn(() => of(kmart({ searchPrices: false })));
+      const success = jest.fn();
+      const { fixture, host } = await render({ list, update }, { success });
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Stop searching').click();
+      fixture.detectChanges();
+
+      expect(host.querySelector('app-confirmation-dialog')).not.toBeNull();
+      expect(host.textContent).toContain('Stop searching prices at Kmart?');
+      expect(update).not.toHaveBeenCalled();
+
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      // The whole resource, with the suggestion flag re-sent exactly as the row holds it: pausing
+      // searches must not withdraw the supplier from businesses as a side effect.
+      expect(update).toHaveBeenCalledWith(10, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: true,
+        searchPrices: false,
+        servesNationwide: true,
+        servedStates: [],
+        pricesIncludeGst: true,
+        priceConnector: SupplierPriceConnector.Kmart,
+        priceConnectorKey: null
+      });
+      expect(success).toHaveBeenCalledWith('Kmart prices are no longer searched.');
+      expect(list).toHaveBeenCalledTimes(2);
+    });
+
+    it('starts a paused supplier’s searches again through the same call', async () => {
+      const paused = kmart({ searchPrices: false, isEnabled: false });
+      const list = jest.fn(() => of([paused]));
+      const update = jest.fn(() => of({ ...paused, searchPrices: true }));
+      const { fixture, host } = await render({ list, update });
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Start searching').click();
+      fixture.detectChanges();
+      expect(host.textContent).toContain('Search prices at Kmart again');
+
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      // isEnabled stays false: starting a search does not start suggesting the supplier either.
+      expect(update).toHaveBeenCalledWith(10, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: false,
+        searchPrices: true,
+        servesNationwide: true,
+        servedStates: [],
+        pricesIncludeGst: true,
+        priceConnector: SupplierPriceConnector.Kmart,
+        priceConnectorKey: null
+      });
+    });
+
+    it('sends nothing when the searching confirmation is canceled', async () => {
+      const update = jest.fn();
+      const { fixture, host } = await render({ list: jest.fn(() => of([kmart()])), update });
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Stop searching').click();
+      fixture.detectChanges();
+      buttonWithText(host, 'Cancel').click();
+      fixture.detectChanges();
+
+      expect(update).not.toHaveBeenCalled();
+      expect(host.querySelector('app-confirmation-dialog')).toBeNull();
+    });
+
+    it('shows the API refusal and re-reads a stale list when a searching toggle conflicts', async () => {
+      const list = jest.fn(() => of([kmart()]));
+      const update = jest.fn(() => throwError(() => ({ status: 404 })));
+      const error = jest.fn();
+      const { fixture, host } = await render({ list, update }, { error });
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Stop searching').click();
+      fixture.detectChanges();
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      expect(error).toHaveBeenCalledWith('Unable to change this supplier preset.');
+      expect(list).toHaveBeenCalledTimes(2);
     });
   });
 

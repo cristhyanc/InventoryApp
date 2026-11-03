@@ -636,12 +636,15 @@ changed, and every "Unavailable" still means unavailable, never zero.
   - The sites and the machines are still read separately: if one read fails the card keeps the
     other's results and says which one is unavailable, and a failed read is never shown as an empty
     business. On a phone the same hierarchy is expandable site cards holding machine cards.
-- **Reorder priorities** shows every product on the reorder list, in the list's own order, **five per
-  page** (issue #1017): below the rows it says which of them you are looking at ("Showing 6-7 of 7
-  products") and offers **Previous** and **Next**, with **Previous** unavailable on the first page and
-  **Next** on the last. The page size is fixed, there is no rows-per-page choice, and every visit
-  starts on page 1. Turning a page only changes which of the products already read are shown; it
-  sends no request, and the phone card list turns with the table. The link naming how many there
+- **Reorder priorities** shows every product on the reorder list, in the list's own order, paged
+  by an **Items per page** choice of 5, 10, 20, 50 or 100 (issue #1017, extended by issue #1080),
+  defaulting to 5 on every visit: below the rows it says which of them you are looking at ("Showing
+  6-7 of 7 products") and offers **Previous** and **Next**, with **Previous** unavailable on the
+  first page and **Next** on the last. The selector stays visible even when the whole list fits on
+  one page, so a smaller size can be chosen again; **Previous** and **Next** are hidden on a single
+  page since there is nowhere to go. Changing the size returns to page 1. Turning a page or
+  changing the size only changes which of the products already read are shown; neither sends a
+  request, and the phone card list turns with the table. The link naming how many there
   really are ("View all 7 products needing ordering") still goes to Products →
   Needs Ordering. Its columns are product, storage stock, machine need, **storage after refill**
   (issue #1020) - storage stock minus machine need, which can be negative - need to order, the last
@@ -952,6 +955,8 @@ Human-controlled portal setup this depends on (no agent may perform any of it, a
 
 **Why both identifiers are pinned, and not just the role.** The workforce scheme is multi-tenant (`TenantId: common`), so another Entra tenant can consent to this API and assign `PriceCollector.Run` to an application of its own — and Microsoft signs that tenant's tokens with the same key set, so the signature is genuine. Pinning `tid` is what makes that somebody else's token, and pinning `azp`/`appid` is what stops the owner's *other* workloads. The token must also carry **no delegated scope at all**, because Entra puts an assigned application role in a signed-in person's token too: that rule is what stops a person impersonating the collector.
 
+**Which suppliers a run searches.** Every supplier master record whose **Search prices** switch is on and that has a collection route, on every run (issue #1077, and the owner's decision of 1 November 2026 that there is no per-supplier cadence). Whether the platform still *suggests* that supplier to businesses is a separate switch and is no part of this: see [Super Admin supplier presets](#super-admin-supplier-presets) and [Pausing one supplier's searches](docs/price-collector-testing.md#pausing-one-suppliers-searches).
+
 **How much one run is handed.** A run is issued at most 2,000 work items — one product and one supplier each — and each published product carries at most 50 listings and 100 refused master products with it, so a large catalogue cannot produce an unbounded payload. When a run hits the work-item bound it says so (`workItemLimitReached`) and the **next** run is issued the products this one omitted: the products form one rotation and each run starts after the product the last one stopped at, so every tracked product is searched over successive runs rather than only the first stretch of the catalogue. A product whose listings or refusals were omitted says so too, and a waiting product whose refusals were omitted is marked `matchingSuppressed`, which means no master product may be matched to it on that run — a key in that state, or a product with more than 50 listings, is a catalogue entry worth a Super Admin's look. See [docs/architecture.md § Collector work list](docs/architecture.md#collector-work-list-issue-924).
 
 ### Verified Apify retailer configuration
@@ -1097,19 +1102,22 @@ The Super Admin also keeps **one platform-wide list of suggested suppliers**, wh
 GET  /api/super-admin/supplier-presets          every preset, enabled and disabled, ordered by name
 POST /api/super-admin/supplier-presets          { "name", "url", "servesNationwide", "servedStates",
                                                   "pricesIncludeGst", "priceConnector",
-                                                  "priceConnectorKey" } -> 201
-PUT  /api/super-admin/supplier-presets/{id}     the same, plus "isEnabled": true|false
+                                                  "priceConnectorKey",
+                                                  "searchPrices"?: true|false } -> 201
+PUT  /api/super-admin/supplier-presets/{id}     the same, plus "isEnabled": true|false and
+                                                "searchPrices": true|false (both required)
 ```
 
 - **It never writes to a business.** This list is a source to copy *from*. Nothing on this surface reads or writes any business's own suppliers: a preset is never a supplier in a business's own list, editing or disabling one changes nothing a business already has, and a business's supplier of the same name is an entirely separate row that business owns outright. A preset added or re-enabled today is **not pushed** into any existing business (issue #935): it is *offered* to the ones it serves, under **Available to add** on their own Suppliers page, and becomes a supplier only when somebody there adds it — see [Suppliers from the platform list](#suppliers-from-the-platform-list).
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the three surfaces above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair unset — the shipped state — nobody can reach it at all.** A business Owner, Admin or member is refused with `403` like anybody else, and an anonymous request is `401`. A [role preview](#previewing-the-app-as-a-role-issues-720-and-721) is refused on both writes as read-only, exactly as on the Businesses surface, while a previewed **read** is unaffected: this controller declares no capability for a preview to narrow. The `X-Support-Session` header is **not acted on here at all** — as on every endpoint of this class — so an ordinary member who sets it is still an ordinary member refused `403`, and an administrator who happens to hold a live [support session](#super-admin-support-sessions) reaches this surface as themselves, writes included, exactly as they still reach the Businesses surface.
-- **What a preset is.** A name (required, trimmed, at most 200 characters), an optional website, whether it is still suggested, the three supplier-master facts below, and the instants it was created and last changed. The website must be a complete `http://` or `https://` address of at most 2048 characters; a blank one is stored as "no website" rather than as an empty string, and nothing fetches, resolves or checks the address. That is not a rule of this feature's own: it is [the one a business supplier's own website uses](#a-suppliers-website) (issue #847), reused here so a preset and a supplier cannot disagree about what a valid address is — which matters because the copy below turns the one into the other.
+- **What a preset is.** A name (required, trimmed, at most 200 characters), an optional website, whether it is still suggested, whether its prices are searched for, the three supplier-master facts below, and the instants it was created and last changed. The website must be a complete `http://` or `https://` address of at most 2048 characters; a blank one is stored as "no website" rather than as an empty string, and nothing fetches, resolves or checks the address. That is not a rule of this feature's own: it is [the one a business supplier's own website uses](#a-suppliers-website) (issue #847), reused here so a preset and a supplier cannot disagree about what a valid address is — which matters because the copy below turns the one into the other.
 - **What it serves, what its prices mean, and who collects them (issue #931).** Each record says **which states it serves** — Australia nationwide, *or* one or more of NSW, VIC, QLD, SA, WA, TAS, ACT and NT, never both and never neither — whether **its published prices include GST** (yes for the supermarkets, Kmart and BIG W; no for JB Metro, whose prices are ex-GST), and **how those prices are collected**: nothing at all, Varnmill with a key naming the retailer (`coles`, `woolworths`, `aldi`), Kmart, BIG W, or JB Metro. The key is required for Varnmill and refused for every other route and for no route, and an invalid combination is `400` with a sentence saying which rule it broke. Whether prices include GST is a **recorded fact and never inferred** from a name, a connector or an amount, and it is required on every write so an omitted value cannot silently record a price list as ex-GST. A JB Metro record's **website is the site its connector reads**, which is why a new JB Metro site is a new record and not new code. No price is collected, stored or compared by this feature: it records what a later price check needs to know. Each record also carries **how old one of its prices may be and still be compared** (issue #925): 30 hours for a supplier checked daily, and 102 for Big W, which is checked on Thursday and Sunday — each one the longest expected gap between two checks plus a six-hour margin, so a collection run that starts a little later than yesterday's does not make every price look out of date. It is stored on the record rather than decided in code, so a supplier whose schedule changes is an edit to data; it is **not on this page or in this API yet**, and the shipped records were given their two values by the migration that added the column.
 - **Names are unique, ignoring case.** "Coles" and "COLES" are the same suggestion, so the second one is refused with `409` and "A supplier preset with this name already exists." The rule is a unique database index over a stored normalised name, not a check made before the insert, so two requests arriving at once leave one preset and one refusal — never two rows and never a server error.
+- **Suggesting a supplier and searching its prices are two switches (issue #1077, the owner's decision of 3 November 2026).** **Suggested** decides whether a record is copied into a newly approved business and offered under "Available to add". **Search prices** decides whether the scheduled price collector searches that supplier at all, and it is the only thing the collector reads: a supplier is searched when that switch is on **and** it has a collection route, so a record you have stopped suggesting is still priced while the switch is on, and pausing the paid Kmart and BIG W searches no longer hides either supplier from businesses. The page shows both as their own column with their own button, and a record nothing collects reads **No price route** rather than Off, because the switch would decide nothing for it. Switching searching off stops *new* readings only: that supplier's collected prices stay and age out by the ordinary freshness rule, work a run already holds can still be submitted, and nothing a business sees changes. Every existing record was given its enabled state as its searching state when the column was added, so the collector's behaviour did not change on deployment. See [Pausing one supplier's searches](docs/price-collector-testing.md#pausing-one-suppliers-searches).
 - **There is no delete.** A preset that should stop being suggested is **disabled**, which is reversible and leaves whatever a business already copied from it untouched. Disabled presets stay in the list, because one nobody can see is one nobody can re-enable.
 - **The shipped records are inserted once, by migrations.** The original four came with the migration that created the table; ALDI, Kmart and the three JB Metro records came with the one that added the supplier-master columns, which also set those columns on the four that already existed, matching them **by name**. Neither is seeded at startup and neither is declared as EF `HasData`, both of which re-apply themselves: production applies migrations on startup, so either would quietly undo an edit, or switch a deliberately disabled preset back on, at the next deployment. Rename one, give it a website, change what it serves, disable it or delete it directly in the database, and it stays that way — and a record that was **renamed before** the supplier-master migration ran is left entirely alone by it, which shows on the page as a market that is **not set** until somebody fills it in. A record you had **already created yourself** under one of those five names is left alone in the same way: the migration inserts a record only when that name is free, so your record keeps its name, website, enabled state and instants, its new fields start **not set**, and the upgrade cannot fail on the duplicate name. Reversing that migration removes only the records it created itself, never one that was already there.
 - **Audit.** Every committed create and edit emits one structured `ILogger` event with the actor `(tid, oid)`, the preset's key, which change it was, whether the preset is suggested afterwards, what it serves, whether its prices include GST, its connector and that connector's key, the instant and the correlation id. It deliberately carries **neither the name nor the website** — the same restraint the two audits above show about a business's name and contact address — and there is no audit table. A refused create or edit is audited as nothing. **The log destination and retention period are platform configuration, exactly as for the audit trails above, and a human must verify them before relying on this trail.**
-- **The page.** The Angular app offers Supplier presets at `/super-admin/supplier-presets`, shown as **Supplier Presets** in the sidebar's **Super Admin** group only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like the two links beside it; entering the URL directly works identically, because the policy above decides access on every request. The table lists every preset — name, website as a link that opens in a new tab, what it serves, whether its prices include GST, which connector collects them, whether it is suggested, and when it last changed — with **Add preset**, **Edit** on each row, and **Disable**/**Enable** behind a confirmation that says plainly that businesses which already have the supplier keep it. The form offers one switch for nationwide and the eight state checkboxes while it is off, the "prices include GST" switch, and the connector with its key shown only for the route that needs one; it checks every rule with the API's own sentences before sending anything, and shows any refusal the API returns — the duplicate-name `409` included — verbatim.
+- **The page.** The Angular app offers Supplier presets at `/super-admin/supplier-presets`, shown as **Supplier Presets** in the sidebar's **Super Admin** group only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like the two links beside it; entering the URL directly works identically, because the policy above decides access on every request. The table lists every preset — name, website as a link that opens in a new tab, what it serves, whether its prices include GST, which connector collects them, whether it is suggested, whether its prices are searched for, and when it last changed — with **Add preset**, **Edit** on each row, **Disable**/**Enable** behind a confirmation that says plainly that businesses which already have the supplier keep it, and **Stop searching**/**Start searching** behind its own confirmation that says plainly that nothing already collected is removed and that businesses are still offered the supplier. A record nothing collects shows **No price route** there and offers no searching button. The form offers one switch for nationwide and the eight state checkboxes while it is off, the "prices include GST" switch, the "search prices for this supplier" switch (on both Add and Edit, unlike the suggested one), and the connector with its key shown only for the route that needs one; it checks every rule with the API's own sentences before sending anything, and shows any refusal the API returns — the duplicate-name `409` included — verbatim.
 
 ### New businesses start with the enabled presets
 
@@ -1152,8 +1160,9 @@ it is still waiting for a decision — never one without the other.
 
 ## Super Admin supplier price review
 
-The shared supplier price catalogue is collected automatically — a daily run searches each supplier's
-site for the products businesses asked to have priced — and **nothing it finds takes part in a price
+The shared supplier price catalogue is collected automatically — a daily run searches, at each
+supplier whose **Search prices** switch is on, for the products businesses asked to have priced — and
+**nothing it finds takes part in a price
 comparison until a person has confirmed it**. That person is the Super Admin, and this is the page
 they do it on (issue #928, the seventh task of #817). The data is shared by every business, so one
 wrong pack quantity would be one wrong "cheapest supplier" for everybody tracking the product: Claude
@@ -1236,6 +1245,27 @@ POST /api/super-admin/price-catalogue-review/business-selections/undo
   what is stored, and shows the API's own refusal sentence verbatim — including the `409` that says
   somebody else decided the same row first. See
   [docs/architecture.md § Super Admin review of the supplier price catalogue](docs/architecture.md#super-admin-review-of-the-supplier-price-catalogue-issue-928).
+- **Confirming several listings at once (issue #1055).** Each listing in "Supplier listings awaiting
+  a decision" has its own checkbox, and the section header has a **Select all** checkbox - showing
+  the indeterminate state while only some listings are ticked - and a **Confirm selected (N)**
+  button. Confirming is still the Super Admin confirming each listing exactly as its own card shows
+  it: the button opens the same confirmation dialog a destructive action uses, and once confirmed
+  the page submits one `POST .../decision` per selected listing, one at a time, with that card's
+  current form values - any correction made on it included - and `approvePriceException: false`
+  for every one of them. Approving a price exception is only ever done on a single listing's own
+  button; it is never part of a bulk confirmation. One listing's refusal does not stop the rest: when
+  the run ends the page shows one summary (how many were confirmed and how many were not), the queue
+  is re-read exactly once rather than after each listing, and any listing that could not be confirmed
+  stays on screen, stays selected, and shows the server's own refusal reason exactly as a single
+  confirmation would. While a run is in progress every card's own buttons, every checkbox,
+  Select all and **Refresh** are disabled, and the button reports its own progress: a run confirms
+  each listing with what its own card shows, so nothing re-reads the queue underneath it — a
+  refresh or a decision made elsewhere on the page while the run is in flight is answered by the
+  run's own single re-read when it ends, and no card or correction is replaced in the meantime. A
+  selected listing that is no longer on screen when the run reaches it is reported as not confirmed,
+  with that reason, rather than confirmed with values nobody reviewed. There is no bulk **Refuse**, no
+  bulk action on the other two sections, and no new endpoint: this is a frontend loop over the
+  existing per-listing decision endpoint above.
 
 ## Super Admin master products
 
@@ -2106,7 +2136,10 @@ does not manage.
   it is not in the shared Products header, so Needs Ordering, which orders products that already
   exist, no longer offers it.) **Needs Ordering → Mark as ordered** sits the same way, in that
   page's own search/filter toolbar to the right of search, Category and Reset (issue #832) — it used
-  to sit in its own row below the toolbar. **Import products** sits beside New Product on that same
+  to sit in its own row below the toolbar. **Set GST rule in bulk** sits in that same All Products
+  toolbar beside New Product (issue #1076), and is left out while a support session is active, the
+  way New Product is; see
+  [Product and supplier GST rules](#product-and-supplier-gst-rules). **Import products** sits beside New Product on that same
   toolbar (issue #875) for a member who holds `Imports.Run` while Nayax is usable and no support
   session is active — it opens the catalogue import's own page, **Products → Import products**
   (`/products/import`, issue #888), rather than being a second entry point with its own behaviour.
@@ -2520,7 +2553,8 @@ it is in, on the Machines pages.
 ## What you paid, on the dashboard's Reorder Alerts
 
 Since issue #972 this table is the dashboard's **Reorder priorities**, and since issue #1017 it pages
-the whole reorder list five products at a time (the link to Needs Ordering is still there). Its two
+the whole reorder list, by a size you choose from issue #1080's **Items per page** selector (the link
+to Needs Ordering is still there). Its two
 cost columns are unchanged, and they are read once for every product on the list, so they are filled
 in on every page without a page turn asking for anything. A long list is read in requests of at most
 100 products each, so the request never grows too long for the server; if any of them fails, both
@@ -2602,11 +2636,24 @@ classified:
   as described under
   [Products and categories](#products-and-categories). A **Save GST rule** button appears there only
   if the product was created and its rule was not, to retry that one write.
+- **Products → Set GST rule in bulk.** The button beside **New Product** on the Products list sets
+  one rule — **Taxable** or **GST-free** — on **every product in this business that is currently
+  "No rule"**, including inactive products, on every page of the list and whatever the search or
+  category filter is showing. You choose the rule (nothing is preselected), then confirm it against
+  the number of products it will change; **Cancel** writes nothing, and when every product already
+  has a rule the dialog says so and offers nothing to apply. A product with an explicit Taxable or
+  GST-free rule is **never** changed, and neither is anything else: no purchase that is already
+  recorded, no GST already classified on one, and no cost, stock quantity or inventory value. When
+  it succeeds you are told how many products actually changed and the list refreshes. If somebody
+  else changes, adds or removes a product while you are confirming, the change is refused rather
+  than applied to a different set of products — the dialog says so, shows the new number and asks
+  you to confirm again.
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
   defaults**. The three are independent: a charge never inherits the product-line default.
 
-Both panels read the stored setting first, and the save button stays disabled until it is on screen,
+The two single-record panels — a product's own GST rule and a supplier's GST defaults — read the
+stored setting first, and the save button stays disabled until it is on screen,
 so you are always editing what is actually configured. If that read fails the panel says so and
 saving stays disabled: the pickers open on "No rule"/"No default", which are real values that would
 replace whatever is stored, so reload the page instead of saving. Opening one product or supplier
@@ -2629,7 +2676,8 @@ configuration: the rule a product carries is the one the Historical GST classifi
 apply, it reads the rules as they are configured at the moment you press **Apply**, and it only ever
 classifies components nobody has classified yet. Recording a purchase does not read a rule at all —
 you classify each line and charge on the purchase itself — so a rule chosen while creating a product,
-or changed afterwards, classifies nothing by itself and restates nothing that is already recorded.
+changed afterwards, or set in bulk, classifies nothing by itself and restates nothing that is
+already recorded.
 
 ## Historical GST classification (Admin page)
 

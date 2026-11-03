@@ -31,6 +31,7 @@
               <th scope="col" class="table-cell">Prices</th>
               <th scope="col" class="table-cell">Price source</th>
               <th scope="col" class="table-cell">Suggested</th>
+              <th scope="col" class="table-cell">Search prices</th>
               <th scope="col" class="table-cell">Last changed</th>
               <th scope="col" class="table-cell">Actions</th>
             </tr>
@@ -81,6 +82,23 @@
                     {{ preset.isEnabled ? 'Yes' : 'No' }}
                   </span>
                 </td>
+                <!-- Whether the collector searches this supplier (issue #1077), which is a
+                     different decision from the Suggested column beside it. A preset nothing
+                     collects has no route to search, so it says so and offers no switch rather than
+                     showing an Off badge that would read as "somebody paused this". -->
+                <td class="table-cell">
+                  @if (canSearchPrices(preset)) {
+                    <span
+                      class="badge"
+                      [class.badge-success]="preset.searchPrices"
+                      [class.badge-neutral]="!preset.searchPrices"
+                    >
+                      {{ preset.searchPrices ? 'On' : 'Off' }}
+                    </span>
+                  } @else {
+                    <span class="value-muted">No price route</span>
+                  }
+                </td>
                 <td class="table-cell">{{ preset.updatedAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}</td>
                 <td class="table-cell">
                   <div class="flex flex-wrap gap-2">
@@ -94,6 +112,17 @@
                     >
                       {{ preset.isEnabled ? 'Disable' : 'Enable' }}
                     </button>
+                    @if (canSearchPrices(preset)) {
+                      <button
+                        type="button"
+                        class="btn btn-sm"
+                        [class.btn-danger]="preset.searchPrices"
+                        [class.btn-primary]="!preset.searchPrices"
+                        (click)="requestSearchToggle(preset)"
+                      >
+                        {{ preset.searchPrices ? 'Stop searching' : 'Start searching' }}
+                      </button>
+                    }
                   </div>
                 </td>
               </tr>
@@ -121,5 +150,16 @@
     cancelLabel="Cancel"
     (confirmed)="confirmToggle()"
     (canceled)="cancelToggle()"
+  ></app-confirmation-dialog>
+}
+
+@if (searchToggleTarget) {
+  <app-confirmation-dialog
+    [title]="searchToggleTitle"
+    [message]="searchToggleMessage"
+    confirmLabel="Confirm"
+    cancelLabel="Cancel"
+    (confirmed)="confirmSearchToggle()"
+    (canceled)="cancelSearchToggle()"
   ></app-confirmation-dialog>
 }

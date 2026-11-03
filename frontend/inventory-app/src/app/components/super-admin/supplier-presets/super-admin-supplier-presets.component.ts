@@ -5,7 +5,8 @@ import { ToastService } from '../../../services/toast.service';
 import {
   SUPPLIER_PRICE_CONNECTOR_LABELS,
   SuperAdminSupplierPreset,
-  SuperAdminSupplierPresetsService
+  SuperAdminSupplierPresetsService,
+  UpdateSupplierPresetRequest
 } from '../../../services/super-admin-supplier-presets.service';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { SupplierPresetDialogComponent } from './supplier-preset-dialog.component';
@@ -19,8 +20,9 @@ import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
  * rules, the website rule and the duplicate-name conflict only it can settle - and this page shows
  * that refusal's own sentence rather than a second copy of the rule.
  *
- * Per docs/architecture.md § Page composition boundary, the page owns the table and the
- * enable/disable confirmation behind the shared `ConfirmationDialogComponent`, while Add and Edit -
+ * Per docs/architecture.md § Page composition boundary, the page owns the table and the two
+ * confirmations behind the shared `ConfirmationDialogComponent` - enable/disable, and the
+ * *Search prices* switch of issue #1077 - while Add and Edit -
  * their own form values, validation and submission state - are a dedicated feature component
  * composed through `[preset]` and its `(saved)`/`(canceled)` outputs.
  *
@@ -44,6 +46,13 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
 
   /** The preset whose enabled state a confirmation is pending for. */
   toggleTarget: SuperAdminSupplierPreset | null = null;
+
+  /**
+   * The preset whose *searching* state a confirmation is pending for (issue #1077). Its own field
+   * rather than a mode on {@link toggleTarget}, so a pending confirmation cannot be answered about
+   * the wrong switch - the two buttons change different columns.
+   */
+  searchToggleTarget: SuperAdminSupplierPreset | null = null;
 
   private readonly destroying$ = new Subject<void>();
 
@@ -138,12 +147,30 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
     this.editTarget = null;
   }
 
+  /**
+   * Whether this preset's searching switch decides anything at all (issue #1077). It does not for a
+   * preset nothing collects: the collector searches a supplier only when the switch is on *and* a
+   * price connector names a route, so a Costco-shaped row has no search to start or stop and the
+   * table says "No price route" instead of offering a button that would change nothing visible.
+   */
+  canSearchPrices(preset: SuperAdminSupplierPreset): boolean {
+    return preset.priceConnector !== null;
+  }
+
   requestToggle(preset: SuperAdminSupplierPreset): void {
     this.toggleTarget = preset;
   }
 
   cancelToggle(): void {
     this.toggleTarget = null;
+  }
+
+  requestSearchToggle(preset: SuperAdminSupplierPreset): void {
+    this.searchToggleTarget = preset;
+  }
+
+  cancelSearchToggle(): void {
+    this.searchToggleTarget = null;
   }
 
   get toggleTitle(): string {
@@ -165,6 +192,25 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
       : `Suggest ${target.name} again to businesses approved from now on?`;
   }
 
+  get searchToggleTitle(): string {
+    if (!this.searchToggleTarget) {
+      return '';
+    }
+    return this.searchToggleTarget.searchPrices ? 'Stop searching prices' : 'Search prices';
+  }
+
+  get searchToggleMessage(): string {
+    const target = this.searchToggleTarget;
+    if (!target) {
+      return '';
+    }
+
+    return target.searchPrices
+      ? `Stop searching prices at ${target.name}? Nothing already collected is removed - its ` +
+          'prices stay and age out as usual - and businesses are still offered this supplier.'
+      : `Search prices at ${target.name} again from the next collection run?`;
+  }
+
   confirmToggle(): void {
     const target = this.toggleTarget;
     if (!target) {
@@ -174,24 +220,58 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
 
     const isEnabled = !target.isEnabled;
 
-    // The whole resource, because this endpoint is a PUT of it. The supplier-master fields are sent
-    // back exactly as the row holds them (issue #931): sending the form's defaults instead would
-    // move a JB Metro record's market to nationwide and its prices to GST-inclusive as a side effect
-    // of pressing Disable, which is a financial field changed by a button that does not say so.
-    const request = {
-      name: target.name,
-      url: target.url,
-      isEnabled,
-      servesNationwide: target.servesNationwide,
-      servedStates: target.servedStates,
-      pricesIncludeGst: target.pricesIncludeGst,
-      priceConnector: target.priceConnector,
-      priceConnectorKey: target.priceConnectorKey
-    };
+    this.put(target, { ...this.wholeResource(target), isEnabled }, (preset) =>
+      isEnabled ? `${preset.name} is suggested again.` : `${preset.name} is no longer suggested.`
+    );
+  }
 
+  confirmSearchToggle(): void {
+    const target = this.searchToggleTarget;
+    if (!target) {
+      return;
+    }
+    this.searchToggleTarget = null;
+
+    const searchPrices = !target.searchPrices;
+
+    this.put(target, { ...this.wholeResource(target), searchPrices }, (preset) =>
+      searchPrices
+        ? `${preset.name} prices are searched again.`
+        : `${preset.name} prices are no longer searched.`
+    );
+  }
+
+  /**
+   * The row exactly as it is stored, which is what either toggle starts from. This endpoint is a
+   * `PUT` of the whole resource, so a button that sent the form's defaults instead would move a JB
+   * Metro record's market to nationwide and its prices to GST-inclusive as a side effect of pressing
+   * Disable - a financial field changed by a button that does not say so. Since issue #1077 that
+   * includes each other's flag: pressing Disable must not start or stop a search, and pressing Stop
+   * searching must not withdraw the supplier from businesses.
+   */
+  private wholeResource(preset: SuperAdminSupplierPreset): UpdateSupplierPresetRequest {
+    return {
+      name: preset.name,
+      url: preset.url,
+      isEnabled: preset.isEnabled,
+      searchPrices: preset.searchPrices,
+      servesNationwide: preset.servesNationwide,
+      servedStates: preset.servedStates,
+      pricesIncludeGst: preset.pricesIncludeGst,
+      priceConnector: preset.priceConnector,
+      priceConnectorKey: preset.priceConnectorKey
+    };
+  }
+
+  /** The one call and the one failure handling both toggles share. */
+  private put(
+    target: SuperAdminSupplierPreset,
+    request: UpdateSupplierPresetRequest,
+    succeeded: (preset: SuperAdminSupplierPreset) => string
+  ): void {
     this.presetsService.update(target.id, request).subscribe({
       next: (preset) => {
-        this.toast.success(isEnabled ? `${preset.name} is suggested again.` : `${preset.name} is no longer suggested.`);
+        this.toast.success(succeeded(preset));
         this.load();
       },
       error: (err: unknown) => {

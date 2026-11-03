@@ -76,19 +76,38 @@ public class SetWeeklySupplierPriceFreshnessMigrationTests
         int PriceCheckFreshnessHours,
         DateTime UpdatedAtUtc);
 
+    /// <summary>
+    /// The columns this test is about, projected <strong>in SQL</strong> rather than read as whole
+    /// entities: this database stands at an older migration than the current model, so a read of
+    /// every mapped property would ask for a column a later migration adds (issue #1077's
+    /// <c>SearchPrices</c>, for one) and fail on the schema rather than on the claim under test.
+    /// </summary>
     private static async Task<Dictionary<string, PresetRow>> SnapshotAsync(AppDbContext db)
     {
         db.ChangeTracker.Clear();
-        return await db.SupplierPresets
+        var rows = await db.SupplierPresets
             .AsNoTracking()
-            .ToDictionaryAsync(
-                preset => preset.NormalisedName,
-                preset => new PresetRow(
-                    preset.Name,
-                    preset.Url,
-                    preset.IsEnabled,
-                    preset.PricesIncludeGst,
-                    preset.PriceCheckFreshnessHours,
-                    preset.UpdatedAtUtc));
+            .Select(preset => new
+            {
+                preset.NormalisedName,
+                preset.Name,
+                preset.Url,
+                preset.IsEnabled,
+                preset.PricesIncludeGst,
+                preset.PriceCheckFreshnessHours,
+                preset.UpdatedAtUtc,
+            })
+            .ToListAsync();
+
+        return rows.ToDictionary(
+            row => row.NormalisedName,
+            row => new PresetRow(
+                row.Name,
+                row.Url,
+                row.IsEnabled,
+                row.PricesIncludeGst,
+                row.PriceCheckFreshnessHours,
+                row.UpdatedAtUtc),
+            StringComparer.Ordinal);
     }
 }

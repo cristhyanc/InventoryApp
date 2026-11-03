@@ -189,6 +189,11 @@ public class RolePreviewApiTests : IClassFixture<RolePreviewApiTests.ApiFactory>
     // The "Track supplier prices" switch of issue #938, on the same terms: a previewed role cannot
     // turn tracking on or off for one of the business's products.
     [InlineData("PUT", "/api/products/999999/price-tracking")]
+    // "Set GST rule in bulk" of issue #1076, both actions, on the same terms: a previewed role can
+    // neither configure every unconfigured product of the business nor read the count that would
+    // authorise it, because both are POSTs and the method rule refuses them before the endpoint.
+    [InlineData("POST", "/api/products/gst-rule/bulk-preview")]
+    [InlineData("POST", "/api/products/gst-rule/bulk")]
     // The product create, which issue #1051 let link a new product to a master product: a previewed
     // role cannot create a product, and so cannot decide what one of the business's products is.
     [InlineData("POST", "/api/products")]

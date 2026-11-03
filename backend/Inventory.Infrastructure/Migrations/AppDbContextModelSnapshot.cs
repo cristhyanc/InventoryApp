@@ -3018,6 +3018,11 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<bool>("PricesIncludeGst")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("SearchPrices")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true);
+
                     b.Property<string>("ServedStates")
                         .IsRequired()
                         .HasMaxLength(28)

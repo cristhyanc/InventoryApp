@@ -14,6 +14,7 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
     name: 'Coles',
     url: 'https://www.coles.com.au',
     isEnabled: true,
+    searchPrices: true,
     servesNationwide: true,
     servedStates: [],
     pricesIncludeGst: true,
@@ -27,6 +28,7 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
 
 /** The supplier-master half of every create the dialog sends when nothing was changed. */
 const nationwideGstInclusive = {
+  searchPrices: true,
   servesNationwide: true,
   servedStates: [],
   pricesIncludeGst: true,
@@ -116,6 +118,57 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
     const { host } = await render({ create: jest.fn() });
 
     expect(host.querySelector('#preset-enabled')).toBeNull();
+  });
+
+  /**
+   * The Search prices switch (issue #1077) is offered on an Add as well as an Edit, unlike the
+   * enabled one: a route that charges per search is one somebody may want to record before they
+   * start paying for it. It starts on, which is what the server defaults an omitted value to.
+   */
+  it('offers the search prices switch when adding, starting on', async () => {
+    const create = jest.fn(() => of(preset({ id: 7, name: 'Aldi' })));
+    const { fixture, host } = await render({ create });
+
+    const searching = host.querySelector('#preset-search-prices') as HTMLInputElement;
+    expect(searching).not.toBeNull();
+    expect(searching.checked).toBe(true);
+
+    type(fixture, host, 'preset-name', 'Aldi');
+    check(fixture, host, 'preset-search-prices', false);
+    buttonWithText(host, 'Save').click();
+    fixture.detectChanges();
+
+    expect(create).toHaveBeenCalledWith({
+      name: 'Aldi',
+      url: null,
+      ...nationwideGstInclusive,
+      searchPrices: false
+    });
+  });
+
+  /**
+   * And on an edit it is pre-filled from the row and submitted independently of the enabled switch,
+   * which is the whole of this issue: one `PUT` carries both, and neither moves the other.
+   */
+  it('pre-fills the search prices switch when editing and submits it independently', async () => {
+    const stored = preset({ isEnabled: false, searchPrices: true });
+    const update = jest.fn(() => of(stored));
+    const { fixture, host } = await render({ update }, stored);
+
+    expect((host.querySelector('#preset-enabled') as HTMLInputElement).checked).toBe(false);
+    expect((host.querySelector('#preset-search-prices') as HTMLInputElement).checked).toBe(true);
+
+    check(fixture, host, 'preset-search-prices', false);
+    buttonWithText(host, 'Save').click();
+    fixture.detectChanges();
+
+    expect(update).toHaveBeenCalledWith(4, {
+      name: 'Coles',
+      url: 'https://www.coles.com.au',
+      isEnabled: false,
+      ...nationwideGstInclusive,
+      searchPrices: false
+    });
   });
 
   it('pre-fills the form when editing and puts the whole resource', async () => {
@@ -236,6 +289,7 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
       expect(create).toHaveBeenCalledWith({
         name: 'JB Metro SA & NT',
         url: null,
+        searchPrices: true,
         servesNationwide: false,
         // In the server's own order, whatever order the boxes were ticked in, so one market has one
         // spelling on the wire as well as in the database.
@@ -265,6 +319,7 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
       expect(create).toHaveBeenCalledWith({
         name: 'Kmart',
         url: null,
+        searchPrices: true,
         servesNationwide: true,
         servedStates: [],
         pricesIncludeGst: true,
@@ -404,6 +459,7 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
         name: 'Coles',
         url: 'https://www.coles.com.au',
         isEnabled: true,
+        searchPrices: true,
         servesNationwide: false,
         servedStates: ['SA', 'NT'],
         pricesIncludeGst: false,
