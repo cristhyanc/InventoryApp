@@ -1223,6 +1223,22 @@ POST /api/super-admin/price-catalogue-review/automatic-matches/{id}/undo
   what is stored, and shows the API's own refusal sentence verbatim — including the `409` that says
   somebody else decided the same row first. See
   [docs/architecture.md § Super Admin review of the supplier price catalogue](docs/architecture.md#super-admin-review-of-the-supplier-price-catalogue-issue-928).
+- **Confirming several listings at once (issue #1055).** Each listing in "Supplier listings awaiting
+  a decision" has its own checkbox, and the section header has a **Select all** checkbox - showing
+  the indeterminate state while only some listings are ticked - and a **Confirm selected (N)**
+  button. Confirming is still the Super Admin confirming each listing exactly as its own card shows
+  it: the button opens the same confirmation dialog a destructive action uses, and once confirmed
+  the page submits one `POST .../decision` per selected listing, one at a time, with that card's
+  current form values - any correction made on it included - and `approvePriceException: false`
+  for every one of them. Approving a price exception is only ever done on a single listing's own
+  button; it is never part of a bulk confirmation. One listing's refusal does not stop the rest: when
+  the run ends the page shows one summary (how many were confirmed and how many were not), the queue
+  is re-read exactly once rather than after each listing, and any listing that could not be confirmed
+  stays on screen, stays selected, and shows the server's own refusal reason exactly as a single
+  confirmation would. While a run is in progress every card's own buttons, every checkbox and
+  Select all are disabled, and the button reports its own progress. There is no bulk **Refuse**, no
+  bulk action on the other two sections, and no new endpoint: this is a frontend loop over the
+  existing per-listing decision endpoint above.
 
 ## Super Admin master products
 

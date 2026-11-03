@@ -107,21 +107,57 @@
 
     @if (queue.listings.length > 0) {
       <section class="card">
-        <div class="card-header">
-          <h2 class="card-title">Supplier listings awaiting a decision</h2>
-          <p class="text-sm value-muted">
-            Barcode matches first. A listing's price is only ever accepted once the listing is
-            confirmed, and only while the reading it is holding is fresh, describes the pack that was
-            confirmed and is inside the band around its last accepted price.
-          </p>
+        <div class="card-header flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="card-title">Supplier listings awaiting a decision</h2>
+            <p class="text-sm value-muted">
+              Barcode matches first. A listing's price is only ever accepted once the listing is
+              confirmed, and only while the reading it is holding is fresh, describes the pack that was
+              confirmed and is inside the band around its last accepted price.
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                aria-label="Select all supplier listings"
+                [checked]="allListingsSelected"
+                [indeterminate]="someListingsSelected"
+                [disabled]="bulkConfirmInProgress"
+                (change)="toggleSelectAllListings($any($event.target).checked)"
+              />
+              Select all
+            </label>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              [disabled]="confirmSelectedDisabled"
+              (click)="requestConfirmSelected()"
+            >
+              {{ confirmSelectedButtonLabel }}
+            </button>
+          </div>
         </div>
         <div class="card-body space-y-3">
           @for (listing of queue.listings; track listing.id) {
-            <app-supplier-listing-review
-              [listing]="listing"
-              (decided)="onDecided($event)"
-              (staleState)="onStaleState()"
-            ></app-supplier-listing-review>
+            <div class="flex items-start gap-3">
+              <input
+                type="checkbox"
+                class="mt-4"
+                [attr.aria-label]="'Select ' + listing.supplierName + ' ' + listing.supplierProductId"
+                [checked]="isListingSelected(listing.id)"
+                [disabled]="bulkConfirmInProgress"
+                (change)="toggleListingSelected(listing.id, $any($event.target).checked)"
+              />
+              <app-supplier-listing-review
+                class="flex-1"
+                [listing]="listing"
+                [bulkDisabled]="bulkConfirmInProgress"
+                [externalError]="bulkConfirmErrorFor(listing.id)"
+                (decided)="onDecided($event)"
+                (staleState)="onStaleState()"
+              ></app-supplier-listing-review>
+            </div>
           }
         </div>
       </section>
@@ -137,5 +173,16 @@
     cancelLabel="Cancel"
     (confirmed)="confirmUndo()"
     (canceled)="cancelUndo()"
+  ></app-confirmation-dialog>
+}
+
+@if (confirmSelectedRequested) {
+  <app-confirmation-dialog
+    [title]="confirmSelectedTitle"
+    [message]="confirmSelectedMessage"
+    confirmLabel="Confirm selected"
+    cancelLabel="Cancel"
+    (confirmed)="confirmSelected()"
+    (canceled)="cancelConfirmSelected()"
   ></app-confirmation-dialog>
 }

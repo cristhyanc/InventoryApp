@@ -1,11 +1,12 @@
 import { CommonModule, DatePipe } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, QueryList, ViewChildren } from '@angular/core';
 import { Subject, takeUntil } from 'rxjs';
 import { ToastService } from '../../../services/toast.service';
 import {
   MASTER_PRODUCT_SIZE_UNIT_LABELS,
   PriceCatalogueReviewQueue,
   ReviewAutomaticMatch,
+  ReviewSupplierListing,
   SuperAdminPriceCatalogueReviewService
 } from '../../../services/super-admin-price-catalogue-review.service';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
@@ -60,6 +61,32 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
   /** Which automatic match is being decided, so its two buttons can be disabled while it is. */
   decidingSuggestionId: number | null = null;
 
+  /**
+   * The ids of the supplier listings a "Confirm selected" run would confirm (issue #1055), checked
+   * on their own card rather than this page's. Pruned to the queue's own listing ids on every read,
+   * so a stale id never inflates "Confirm selected (N)" after a listing has left the section.
+   */
+  selectedListingIds = new Set<number>();
+
+  /** Whether a "Confirm selected" run is sequencing its requests, one listing at a time. */
+  bulkConfirmInProgress = false;
+
+  /** Which listing of the run is in flight and how many there are in total, while one is running. */
+  bulkConfirmProgress: { current: number; total: number } | null = null;
+
+  /**
+   * The server's own refusal reason for a listing the last "Confirm selected" run could not confirm,
+   * kept here rather than on the card (issue #1055) because the one queue re-read after the whole
+   * run replaces every card's `listing` input and would otherwise clear it through `ngOnChanges`.
+   */
+  bulkConfirmErrorsByListingId: Record<number, string> = {};
+
+  /** Whether the "Confirm N supplier listings?" dialog is open. */
+  confirmSelectedRequested = false;
+
+  @ViewChildren(SupplierListingReviewComponent)
+  private readonly listingCards?: QueryList<SupplierListingReviewComponent>;
+
   private readonly destroying$ = new Subject<void>();
 
   constructor(
@@ -87,6 +114,7 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
         next: (queue) => {
           this.queue = queue;
           this.loading = false;
+          this.pruneBulkConfirmStateToQueue(queue);
         },
         error: () => {
           this.loading = false;
@@ -136,6 +164,160 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
   /** A refusal that says the page is stale re-reads the queue; the refusal itself stays on screen. */
   onStaleState(): void {
     this.load();
+  }
+
+  isListingSelected(listingId: number): boolean {
+    return this.selectedListingIds.has(listingId);
+  }
+
+  toggleListingSelected(listingId: number, selected: boolean): void {
+    if (selected) {
+      this.selectedListingIds.add(listingId);
+    } else {
+      this.selectedListingIds.delete(listingId);
+    }
+  }
+
+  /** Every listing currently shown is selected, none is, or - the indeterminate state - some are. */
+  get allListingsSelected(): boolean {
+    const listings = this.queue?.listings ?? [];
+
+    return listings.length > 0 && listings.every((listing) => this.selectedListingIds.has(listing.id));
+  }
+
+  get someListingsSelected(): boolean {
+    return this.selectedListingIds.size > 0 && !this.allListingsSelected;
+  }
+
+  toggleSelectAllListings(selected: boolean): void {
+    if (!this.queue) {
+      return;
+    }
+
+    if (selected) {
+      this.queue.listings.forEach((listing) => this.selectedListingIds.add(listing.id));
+    } else {
+      this.selectedListingIds.clear();
+    }
+  }
+
+  bulkConfirmErrorFor(listingId: number): string | null {
+    return this.bulkConfirmErrorsByListingId[listingId] ?? null;
+  }
+
+  get confirmSelectedDisabled(): boolean {
+    return this.selectedListingIds.size === 0 || this.bulkConfirmInProgress;
+  }
+
+  get confirmSelectedButtonLabel(): string {
+    return this.bulkConfirmInProgress && this.bulkConfirmProgress
+      ? `Confirming ${this.bulkConfirmProgress.current} of ${this.bulkConfirmProgress.total}…`
+      : `Confirm selected (${this.selectedListingIds.size})`;
+  }
+
+  requestConfirmSelected(): void {
+    this.confirmSelectedRequested = true;
+  }
+
+  cancelConfirmSelected(): void {
+    this.confirmSelectedRequested = false;
+  }
+
+  get confirmSelectedTitle(): string {
+    return `Confirm ${this.selectedListingIds.size} supplier listings?`;
+  }
+
+  get confirmSelectedMessage(): string {
+    return (
+      'Each selected listing is confirmed with the values currently shown on its own card, including ' +
+      'any edits made there, and none of them will approve a price exception.'
+    );
+  }
+
+  /**
+   * Confirms every selected listing through the same per-listing decision endpoint
+   * `SupplierListingReviewComponent.confirm()` uses, one request at a time rather than in parallel,
+   * and with `approvePriceException` forced to `false` for every one of them (issue #1055). One
+   * failure does not stop the rest; the queue is re-read once, after the whole run, rather than
+   * after each listing.
+   */
+  confirmSelected(): void {
+    this.confirmSelectedRequested = false;
+
+    const queue = this.queue;
+
+    if (!queue) {
+      return;
+    }
+
+    const targets = queue.listings.filter((listing) => this.selectedListingIds.has(listing.id));
+
+    if (targets.length === 0) {
+      return;
+    }
+
+    this.bulkConfirmInProgress = true;
+    this.bulkConfirmErrorsByListingId = {};
+    this.confirmNextSelected(targets, 0, new Set<number>());
+  }
+
+  private confirmNextSelected(
+    targets: readonly ReviewSupplierListing[],
+    index: number,
+    failedListingIds: Set<number>
+  ): void {
+    if (index >= targets.length) {
+      this.finishConfirmSelected(targets.length, failedListingIds);
+      return;
+    }
+
+    this.bulkConfirmProgress = { current: index + 1, total: targets.length };
+
+    const target = targets[index];
+    const card = this.listingCards?.find((listingCard) => listingCard.listing.id === target.id);
+    const request = card!.buildConfirmationRequest();
+
+    this.reviewService
+      .decideListing(target.id, request)
+      .pipe(takeUntil(this.destroying$))
+      .subscribe({
+        next: () => this.confirmNextSelected(targets, index + 1, failedListingIds),
+        error: (err: unknown) => {
+          failedListingIds.add(target.id);
+          this.bulkConfirmErrorsByListingId[target.id] = extractReviewErrorMessage(
+            err,
+            'Unable to record this decision.'
+          );
+          this.confirmNextSelected(targets, index + 1, failedListingIds);
+        }
+      });
+  }
+
+  private finishConfirmSelected(total: number, failedListingIds: Set<number>): void {
+    this.bulkConfirmInProgress = false;
+    this.bulkConfirmProgress = null;
+
+    const confirmedCount = total - failedListingIds.size;
+    this.selectedListingIds = failedListingIds;
+
+    if (failedListingIds.size === 0) {
+      this.toast.success(`${confirmedCount} ${confirmedCount === 1 ? 'listing' : 'listings'} confirmed.`);
+    } else {
+      this.toast.warning(`${confirmedCount} confirmed, ${failedListingIds.size} not confirmed.`);
+    }
+
+    this.load();
+  }
+
+  /** Drops a selected or failed listing id the moment it is no longer in the queue read back. */
+  private pruneBulkConfirmStateToQueue(queue: PriceCatalogueReviewQueue): void {
+    const presentIds = new Set(queue.listings.map((listing) => listing.id));
+
+    this.selectedListingIds = new Set([...this.selectedListingIds].filter((id) => presentIds.has(id)));
+
+    this.bulkConfirmErrorsByListingId = Object.fromEntries(
+      Object.entries(this.bulkConfirmErrorsByListingId).filter(([id]) => presentIds.has(Number(id)))
+    );
   }
 
   confirmAutomaticMatch(match: ReviewAutomaticMatch): void {
