@@ -9297,14 +9297,26 @@ renders it as five parts:
    [Per-machine low and empty counts on the site read](#per-machine-low-and-empty-counts-on-the-site-read-issue-1019)),
    and `GET api/machines` for the machine rows and the fleet totals.
 4. **Reorder priorities**: since issue #1017 the card pages the whole authoritative low-stock list in
-   its own order, `REORDER_PAGE_SIZE` (5) rows to a page, and `reorderViewAllLabel` still names the
-   list's real length. `reorderPriorities` is the current page - `lowStock.slice()` at
-   `reorderPageIndex`, so nothing re-ranks or re-filters the list and the pages hold every product
-   exactly once - and `reorderPageCount`, `reorderRangeLabel` and `isReorderPagerShown` are what the
-   one pager renders for both the desktop table and the narrow-screen cards, which therefore cannot
-   disagree about which page is shown. The page size is fixed (no selector), the page is not
-   persisted anywhere, and `keepReorderPageInRange` is the rule for a re-read: the same page when it
-   still exists, the new last page when the list has shrunk past it, never an empty page. The two
+   its own order, and `reorderViewAllLabel` still names the list's real length. Since issue #1080 the
+   page size is a local, unpersisted `reorderPageSize` selected from `REORDER_PAGE_SIZE_OPTIONS` (5,
+   10, 20, 50, 100), defaulting to the first entry on every visit; `onReorderPageSizeChange` validates
+   the selected `<select>` value against that list and resets `reorderPageIndex` to 0, since a new
+   size is a fresh view of the same loaded list. `reorderPriorities` is the current page -
+   `lowStock.slice()` at `reorderPageIndex * reorderPageSize`, so nothing re-ranks or re-filters the
+   list and the pages hold every product exactly once - and `reorderPageCount`, `reorderRangeLabel`
+   and `isReorderPagerShown` are derived from `reorderPageSize` and are what the one pager renders for
+   both the desktop table and the narrow-screen cards, which therefore cannot disagree about which
+   page is shown. The "Items per page" selector is independent of `isReorderPagerShown`: it stays
+   visible for every successfully loaded non-empty list, even a single page, so a size that currently
+   fits the whole list on one page can be made smaller again; Previous and Next stay hidden on a
+   single page since there is nowhere to go. The selector's layout and keyboard criterion - no
+   horizontal page overflow and a visible focus indication at 390 and 1440px - is held by the browser
+   run, not by the jsdom specs, and is described with the other visual evidence under
+   [Styles](#restockroo-dashboard-and-authenticated-navigation-issue-972). Neither the page nor the
+   selected size is persisted
+   anywhere, and `keepReorderPageInRange` is the rule for a re-read: the selected size is kept for the
+   rest of the visit, and the same page is kept when it still exists at that size, the new last page
+   when the list has shrunk past it, never an empty page. The two
    **enrichment reads are per reorder read, not per page**: `reorderPriorityIds` carries every listed
    id, so the purchase-cost read (#788/#789) asks for all of them as one logical load -
    `ProductPurchaseCostService.getSummariesBatched` splits it into `GET`s of at most
@@ -9312,7 +9324,8 @@ renders it as five parts:
    310 real 15-digit ids in one `GET` already exceed Kestrel's default 8,192-byte request line; any
    failed batch fails the whole load ("Unavailable" with Retry, never partial costs) - still only
    with `Dashboard.ViewFinancials`, and still never with an empty id list or an empty batch, which
-   that endpoint reads as "every product" - and turning a page issues no request at all. Last and Cheapest purchase are named by their own column headings;
+   that endpoint reads as "every product" - and turning a page or changing the page size issues no
+   request at all. Last and Cheapest purchase are named by their own column headings;
    the note row that used to repeat that they are historical costs was removed by issue #1016 and
    the sentence was not moved anywhere else. The **Cheapest supplier** column (issue #981, the same column #939
    asks for) reuses #930's `CheapestSuppliersComponent` and `CheapestSupplierCellComponent`
@@ -9400,6 +9413,25 @@ its own two captures, `reorder-storage-only-1440px.png` and `reorder-storage-onl
 with the reorder read answered with the `X-Reorder-Mode: StorageOnly` header the API publishes: the
 run asserts neither layout renders Machine need or Storage after refill at all, while the
 storage-only sentence, the storage figures and the pager are unchanged.
+
+Issue #1080's **Items per page** selector is measured by the same run at the two widths its layout
+criterion names, 1440 and 390px, because rendered overflow and a visible focus ring are layout
+outcomes that neither a CSS argument nor a jsdom assertion can establish. The fixture adds a second,
+deliberately long synthetic reorder list - the same seven products followed by generated ones up to
+120 - so that *every* offered size leaves more than one page and the last page at 50 and at 100 is a
+short one. At each width the run applies all five sizes in turn and checks the rows the rendered
+layout actually paints, the range output, the page count and the Previous/Next states for each; that
+the page and the pager row both have nothing to scroll sideways and the control stays inside its
+card at every size; that turning pages at a chosen size works and that choosing a new size from a
+later page returns to page 1; that a one-page list keeps the selector and its label while the
+indicator, Previous and Next go away, and that a smaller size can then be chosen again; and that the
+selector is reached by Shift+Tab from the pager, carries the repository's 2px `md-info`
+`:focus-visible` ring at 2px offset with room for it inside the `overflow-hidden` card, changes the
+size from one key press alone, and hands focus on into the pager. Its captures are
+`reorder-page-size-1440px.png` / `-390px` (20 of 120 per page), `reorder-page-size-one-page-*`
+(the seven-product list on one page at size 20, selector kept, no navigation),
+`reorder-page-size-last-page-*` (the short last page at size 50) and `reorder-page-size-focus-*`
+(the focus ring on the selector).
 
 #### Shared help toggletip (issues #1015 and #1016)
 
