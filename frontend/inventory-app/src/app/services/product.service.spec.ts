@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { GstClassification, Product, ReorderAlertListing } from '../models/models';
+import { GstClassification, MasterProductSuggestionPage, Product, ReorderAlertListing } from '../models/models';
 import { ConfigService } from './config.service';
 import { ProductService } from './product.service';
 
@@ -237,6 +237,50 @@ describe('ProductService reorder-alert listing metadata (issue #727)', () => {
       expect(request.request.method).toBe('GET');
       expect(request.request.params.keys()).toEqual([]);
       request.flush([]);
+    });
+  });
+
+  /**
+   * The master product lookup the New Product Name suggestions read (issue #1052) over the route
+   * issue #1049 published. The request itself is pinned here - where it goes and what it carries -
+   * because the picker's own spec stubs this service and would not notice a renamed route or
+   * parameter.
+   */
+  describe('master product suggestions (issue #1052)', () => {
+    const url = '/api/products/master-product-suggestions';
+
+    it('asks the lookup for the trimmed term and nothing else, and answers the published page', () => {
+      const { service, httpMock } = createService();
+      let page: MasterProductSuggestionPage | undefined;
+
+      service.getMasterProductSuggestions('  cheese corn  ').subscribe((received) => (page = received));
+      const request = httpMock.expectOne((candidate) => candidate.url === url);
+
+      expect(request.request.method).toBe('GET');
+      expect(request.request.params.get('q')).toBe('cheese corn');
+      // The page size, the ordering and the term's maximum length are the server's decisions.
+      expect(request.request.params.keys()).toEqual(['q']);
+
+      request.flush({
+        products: [
+          {
+            id: 12,
+            brand: "CC's",
+            name: 'Tasty Cheese Corn Chips',
+            sizeValue: 45,
+            sizeUnit: 'g',
+            productName: "CC's Tasty Cheese Corn Chips",
+            unitLabel: '45g'
+          }
+        ],
+        page: 1,
+        pageSize: 10,
+        hasMore: false
+      } satisfies MasterProductSuggestionPage);
+
+      expect(page?.products.map((suggestion) => suggestion.unitLabel)).toEqual(['45g']);
+      expect(page?.pageSize).toBe(10);
+      expect(page?.hasMore).toBe(false);
     });
   });
 

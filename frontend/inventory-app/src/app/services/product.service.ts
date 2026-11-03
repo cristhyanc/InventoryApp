@@ -7,6 +7,7 @@ import {
   BulkProductGstRulePreview,
   GstClassification,
   InventoryValuationSummary,
+  MasterProductSuggestionPage,
   Product,
   ProductCreateDto,
   ProductGstRule,
@@ -116,6 +117,20 @@ export class ProductService {
   /** Creates a product this business maintains itself (issue #737). */
   create(payload: ProductCreateDto): Observable<Product> {
     return this.http.post<Product>(this.baseUrl, payload);
+  }
+
+  /**
+   * One bounded page of the shared master product catalogue, for the New Product Name suggestions
+   * (`GET api/products/master-product-suggestions`, issue #1049 - used by issue #1052).
+   *
+   * The term is sent trimmed and nothing else is sent: the page size, the ordering and the maximum
+   * term length are the server's decisions, and it answers with the page size it actually served. A
+   * term the server refuses (shorter than 2 characters, longer than its own maximum) is a `400`, so
+   * the caller decides what to ask rather than this method wording the rule a second time.
+   */
+  getMasterProductSuggestions(term: string): Observable<MasterProductSuggestionPage> {
+    const params = new HttpParams().set('q', term.trim());
+    return this.http.get<MasterProductSuggestionPage>(`${this.baseUrl}/master-product-suggestions`, { params });
   }
 
   /** The product's configured GST rule (issue #430); it is its own resource, not a catalogue field. */
