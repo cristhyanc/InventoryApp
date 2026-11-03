@@ -9265,7 +9265,11 @@ renders it as five parts:
    page is shown. The "Items per page" selector is independent of `isReorderPagerShown`: it stays
    visible for every successfully loaded non-empty list, even a single page, so a size that currently
    fits the whole list on one page can be made smaller again; Previous and Next stay hidden on a
-   single page since there is nowhere to go. Neither the page nor the selected size is persisted
+   single page since there is nowhere to go. The selector's layout and keyboard criterion - no
+   horizontal page overflow and a visible focus indication at 390 and 1440px - is held by the browser
+   run, not by the jsdom specs, and is described with the other visual evidence under
+   [Styles](#restockroo-dashboard-and-authenticated-navigation-issue-972). Neither the page nor the
+   selected size is persisted
    anywhere, and `keepReorderPageInRange` is the rule for a re-read: the selected size is kept for the
    rest of the visit, and the same page is kept when it still exists at that size, the new last page
    when the list has shrunk past it, never an empty page. The two
@@ -9365,6 +9369,25 @@ its own two captures, `reorder-storage-only-1440px.png` and `reorder-storage-onl
 with the reorder read answered with the `X-Reorder-Mode: StorageOnly` header the API publishes: the
 run asserts neither layout renders Machine need or Storage after refill at all, while the
 storage-only sentence, the storage figures and the pager are unchanged.
+
+Issue #1080's **Items per page** selector is measured by the same run at the two widths its layout
+criterion names, 1440 and 390px, because rendered overflow and a visible focus ring are layout
+outcomes that neither a CSS argument nor a jsdom assertion can establish. The fixture adds a second,
+deliberately long synthetic reorder list - the same seven products followed by generated ones up to
+120 - so that *every* offered size leaves more than one page and the last page at 50 and at 100 is a
+short one. At each width the run applies all five sizes in turn and checks the rows the rendered
+layout actually paints, the range output, the page count and the Previous/Next states for each; that
+the page and the pager row both have nothing to scroll sideways and the control stays inside its
+card at every size; that turning pages at a chosen size works and that choosing a new size from a
+later page returns to page 1; that a one-page list keeps the selector and its label while the
+indicator, Previous and Next go away, and that a smaller size can then be chosen again; and that the
+selector is reached by Shift+Tab from the pager, carries the repository's 2px `md-info`
+`:focus-visible` ring at 2px offset with room for it inside the `overflow-hidden` card, changes the
+size from one key press alone, and hands focus on into the pager. Its captures are
+`reorder-page-size-1440px.png` / `-390px` (20 of 120 per page), `reorder-page-size-one-page-*`
+(the seven-product list on one page at size 20, selector kept, no navigation),
+`reorder-page-size-last-page-*` (the short last page at size 50) and `reorder-page-size-focus-*`
+(the focus ring on the selector).
 
 #### Shared help toggletip (issues #1015 and #1016)
 

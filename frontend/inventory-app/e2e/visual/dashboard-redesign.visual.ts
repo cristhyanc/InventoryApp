@@ -30,7 +30,12 @@ import { join, resolve } from 'node:path';
  * `X-Reorder-Mode` header the API publishes. Issue #987's own interaction evidence
  * is here as well: a collapsed group at 1440 and 390px, the
  * shared period control switched to Last week, and the keyboard focus ring on a site expander with
- * the group toggled from the keyboard alone. The More sheet's modality is exercised in the browser
+ * the group toggled from the keyboard alone. Issue #1080's **Items per page** selector is measured
+ * here too, at both widths the issue names: every offered size applied to a deliberately long
+ * synthetic list, the pager's range and navigation moving with it, a size change returning to page
+ * 1, a one-page list keeping the selector while Previous and Next go away, the selector reached and
+ * operated from the keyboard alone with the ring the browser actually paints on it, and the page
+ * never scrolling sideways at any of it. The More sheet's modality is exercised in the browser
  * at 390px from both of its openers. It runs once, in the `desktop-1440` project, and sets each
  * width itself.
  */
@@ -228,6 +233,28 @@ const reorder = [
   product(7, 'Coca-Cola 375mL', 14, 3, 6)
 ];
 
+/**
+ * How long the synthetic reorder list is when a test asks for the long one (issue #1080). It is
+ * deliberately more than the largest offered page size, so **every** one of 5, 10, 20, 50 and 100
+ * leaves more than one page - the pager always has somewhere to go - and so the last page at 50 and
+ * at 100 is a short one whose range has to be reported correctly.
+ */
+const LONG_REORDER_COUNT = 120;
+
+/**
+ * The same seven products the rest of this file measures, followed by generated ones up to
+ * {@link LONG_REORDER_COUNT}. Keeping the first seven identical is what lets the long list reuse
+ * every shared assertion in `openDashboard` - the Costco supplier cell among them - while giving the
+ * page sizes a list worth paging.
+ */
+const longReorder = [
+  ...reorder,
+  ...Array.from({ length: LONG_REORDER_COUNT - reorder.length }, (_, index) => {
+    const id = reorder.length + index + 1;
+    return product(id, `Synthetic reorder product ${id}`, 2, 6, 24);
+  })
+];
+
 const purchaseCosts = [
   { productId: 1, lastUnitCost: 1.05, lastSupplierName: 'Woolworths', lastPurchaseDate: '2026-10-12', lowestUnitCost: 1, lowestSupplierName: 'Woolworths', lowestPurchaseDate: '2026-02-12' },
   { productId: 2, lastUnitCost: 1.6, lastSupplierName: 'Costco', lastPurchaseDate: '2026-10-02', lowestUnitCost: 1.54, lowestSupplierName: 'Costco', lowestPurchaseDate: '2026-01-28' },
@@ -306,7 +333,11 @@ const STORAGE_ONLY_REORDER_HEADERS = {
   'X-Reorder-Machine-Need-Unavailable-Reason': 'NayaxNotConnected'
 };
 
-async function answerApi(page: Page, options: { storageOnlyReorder?: boolean } = {}): Promise<void> {
+async function answerApi(
+  page: Page,
+  options: { storageOnlyReorder?: boolean; longReorderList?: boolean } = {}
+): Promise<void> {
+  const reorderList = options.longReorderList ? longReorder : reorder;
   await page.route('**/api/**', (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -319,7 +350,7 @@ async function answerApi(page: Page, options: { storageOnlyReorder?: boolean } =
     if (path.endsWith('/dashboard/summary')) return json(route, summary);
     if (path.endsWith('/machine-restock-sync/reminder')) return json(route, restockReminder);
     if (path.endsWith('/products/alerts/low-stock')) {
-      return json(route, reorder, options.storageOnlyReorder ? STORAGE_ONLY_REORDER_HEADERS : {});
+      return json(route, reorderList, options.storageOnlyReorder ? STORAGE_ONLY_REORDER_HEADERS : {});
     }
     if (path.endsWith('/products/purchase-cost-summary')) return json(route, purchaseCosts);
     if (path.endsWith('/sites')) return json(route, sites);
@@ -333,7 +364,7 @@ async function answerApi(page: Page, options: { storageOnlyReorder?: boolean } =
 async function openDashboard(
   page: Page,
   width: number,
-  options: { failSitesRead?: boolean; storageOnlyReorder?: boolean } = {}
+  options: { failSitesRead?: boolean; storageOnlyReorder?: boolean; longReorderList?: boolean } = {}
 ): Promise<void> {
   await page.setViewportSize({ width, height: 900 });
   await answerApi(page, options);
@@ -412,6 +443,49 @@ async function reorderHeadings(page: Page): Promise<string[]> {
 /** The narrow-screen reorder cards, which render the same page of rows as the table. */
 function reorderCards(page: Page): Locator {
   return reorderSection(page).getByTestId('reorder-cards').locator('> li');
+}
+
+/**
+ * The rows of the current reorder page in whichever of the two layouts this width actually paints -
+ * the desktop table's rows above `md`, the phone cards below it. Both are in the document at every
+ * width, so only the rendered one may be counted; that is also what makes one count an answer about
+ * the shared page state rather than about one layout's copy of it.
+ */
+function visibleReorderRows(page: Page): Locator {
+  return reorderSection(page).locator('table:visible tbody tr, [data-testid="reorder-cards"]:visible > li');
+}
+
+/** The "Items per page" selector of the one shared pager (issue #1080). */
+function pageSizeSelect(page: Page): Locator {
+  return reorderSection(page).getByTestId('reorder-page-size');
+}
+
+/** Its visible label, found the way an assistive technology finds it: by the `for` association. */
+function pageSizeLabel(page: Page): Locator {
+  return reorderSection(page).locator('label[for="reorder-page-size"]');
+}
+
+/** The one shared pager row, which holds the range output, the selector and Previous/Next. */
+function reorderPagination(page: Page): Locator {
+  return reorderSection(page).getByTestId('reorder-pagination');
+}
+
+/**
+ * The focus ring the browser is actually painting on an element right now. Taken from the computed
+ * style of the live element rather than from the stylesheet, so a `:focus-visible` rule that never
+ * matches - or one some later rule removes - reads as the absence this returns for an unfocused
+ * control.
+ */
+function focusRing(element: Locator): Promise<{ style: string; width: string; offset: string; colour: string }> {
+  return element.evaluate((node) => {
+    const painted = getComputedStyle(node);
+    return {
+      style: painted.outlineStyle,
+      width: painted.outlineWidth,
+      offset: painted.outlineOffset,
+      colour: painted.outlineColor
+    };
+  });
 }
 
 /** A card's value for one labelled entry, taken from the `dd` beside that `dt`. */
@@ -591,6 +665,206 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       const height = await page.evaluate(() => document.documentElement.scrollHeight);
       await page.setViewportSize({ width, height });
       await page.screenshot({ path: join(screenshotDirectory, `reorder-page-2-${width}px.png`) });
+    });
+  }
+
+  /**
+   * Issue #1080's own evidence, at the two widths its layout criterion names, and the part no
+   * jsdom test and no reading of the CSS can answer: the **Items per page** selector added to the
+   * one shared pager row, every size it offers actually applied to a list long enough to page, and
+   * the page measurably not scrolling sideways with the control in place at any of them.
+   */
+  const REORDER_PAGE_SIZES = [5, 10, 20, 50, 100] as const;
+
+  for (const width of [1440, 390]) {
+    test(`Reorder priorities page-size selector applies every offered size at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width, { longReorderList: true });
+      await reorderSection(page).scrollIntoViewIfNeeded();
+
+      const select = pageSizeSelect(page);
+      const label = pageSizeLabel(page);
+      // A label a reader can see, associated with the control rather than merely standing near it.
+      await expect(label).toBeVisible();
+      await expect(label).toHaveText('Items per page');
+      expect(await label.getAttribute('for')).toBe(await select.getAttribute('id'));
+      await expect(select).toBeVisible();
+      await expect(select.locator('option')).toHaveText(['5', '10', '20', '50', '100']);
+      // Five on arrival, which is the default the issue asks for on every visit.
+      await expect(select).toHaveValue('5');
+
+      const card = await box(reorderSection(page));
+      for (const size of REORDER_PAGE_SIZES) {
+        await select.selectOption(String(size));
+
+        // The shared page, the range output and the navigation all move with the chosen size.
+        await expect(select).toHaveValue(String(size));
+        await expect(visibleReorderRows(page)).toHaveCount(size);
+        await expect(page.getByTestId('reorder-range')).toHaveText(
+          `Showing 1–${size} of ${LONG_REORDER_COUNT} products`
+        );
+        await expect(page.getByTestId('reorder-page-indicator')).toHaveText(
+          `Page 1 of ${Math.ceil(LONG_REORDER_COUNT / size)}`
+        );
+        await expect(page.getByTestId('reorder-previous-page')).toBeDisabled();
+        await expect(page.getByTestId('reorder-next-page')).toBeEnabled();
+
+        // The layout rule, measured rather than argued: the page has nothing to scroll sideways,
+        // the pager row itself has nothing to scroll sideways either - so the control reaches
+        // everybody without dragging the row - and the control stays inside the card it is in.
+        await expectNoHorizontalOverflow(page);
+        expect(await reorderPagination(page).evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+        const control = await box(select);
+        expect(control.x).toBeGreaterThanOrEqual(card.x - 1);
+        expect(control.x + control.width).toBeLessThanOrEqual(card.x + card.width + 1);
+        expect(control.x + control.width).toBeLessThanOrEqual(width);
+      }
+
+      // The capture is taken at one of the chosen sizes rather than at the default, because what
+      // the evidence has to show is a size the operator picked actually paging a long list. 20 of
+      // 120 is the one that fits in a reviewable image at both widths.
+      await select.selectOption('20');
+      await expect(page.getByTestId('reorder-range')).toHaveText('Showing 1–20 of 120 products');
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width, height });
+      await reorderSection(page).screenshot({ path: join(screenshotDirectory, `reorder-page-size-${width}px.png`) });
+    });
+  }
+
+  /**
+   * Turning pages at a chosen size, and what a size change does from a later page: it is a fresh
+   * view of the same loaded list, so it returns to page 1. The short last page at 50 is here too,
+   * because its range is the longest line the pager row ever has to fit.
+   */
+  for (const width of [1440, 390]) {
+    test(`Reorder priorities pages at a chosen size and returns to page 1 at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width, { longReorderList: true });
+      await reorderSection(page).scrollIntoViewIfNeeded();
+
+      await pageSizeSelect(page).selectOption('10');
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText('Page 1 of 12');
+      await page.getByTestId('reorder-next-page').click();
+      await page.getByTestId('reorder-next-page').click();
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText('Page 3 of 12');
+      await expect(page.getByTestId('reorder-range')).toHaveText('Showing 21–30 of 120 products');
+      await expect(page.getByTestId('reorder-previous-page')).toBeEnabled();
+
+      await pageSizeSelect(page).selectOption('50');
+
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText('Page 1 of 3');
+      await expect(page.getByTestId('reorder-range')).toHaveText('Showing 1–50 of 120 products');
+      await expect(page.getByTestId('reorder-previous-page')).toBeDisabled();
+      await expect(visibleReorderRows(page)).toHaveCount(50);
+      // The head of the list is back on screen, which is what "page 1" means for these rows.
+      await expect(reorderSection(page).getByText('Cadbury Dairy Milk 45g').filter({ visible: true })).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+
+      // The last page at that size is the short one, and it reports its own range.
+      await page.getByTestId('reorder-next-page').click();
+      await page.getByTestId('reorder-next-page').click();
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText('Page 3 of 3');
+      await expect(page.getByTestId('reorder-range')).toHaveText('Showing 101–120 of 120 products');
+      await expect(visibleReorderRows(page)).toHaveCount(20);
+      await expect(page.getByTestId('reorder-next-page')).toBeDisabled();
+      await expect(pageSizeSelect(page)).toHaveValue('50');
+      await expectNoHorizontalOverflow(page);
+      expect(await reorderPagination(page).evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+
+      await reorderPagination(page).screenshot({
+        path: join(screenshotDirectory, `reorder-page-size-last-page-${width}px.png`)
+      });
+    });
+  }
+
+  /**
+   * The one-page case the issue is explicit about: the selector has to stay, so a size that
+   * currently fits the whole list on one page can be made smaller again, while Previous, Next and
+   * the page indicator go away because there is nowhere to go. The default seven-product fixture is
+   * the list, so this is also the capture that shows the card as an operator usually meets it.
+   */
+  for (const width of [1440, 390]) {
+    test(`Reorder priorities keeps the page-size selector on a single page at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width);
+      await reorderSection(page).scrollIntoViewIfNeeded();
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText('Page 1 of 2');
+
+      await pageSizeSelect(page).selectOption('20');
+
+      await expect(visibleReorderRows(page)).toHaveCount(7);
+      await expect(page.getByTestId('reorder-range')).toHaveText('Showing 1–7 of 7 products');
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveCount(0);
+      await expect(page.getByTestId('reorder-previous-page')).toHaveCount(0);
+      await expect(page.getByTestId('reorder-next-page')).toHaveCount(0);
+      // Still there, still labelled, and still the whole of the pager row's content.
+      await expect(pageSizeSelect(page)).toBeVisible();
+      await expect(pageSizeLabel(page)).toBeVisible();
+      await expectNoHorizontalOverflow(page);
+
+      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      await page.setViewportSize({ width, height });
+      await reorderSection(page).screenshot({
+        path: join(screenshotDirectory, `reorder-page-size-one-page-${width}px.png`)
+      });
+      await page.setViewportSize({ width, height: 900 });
+
+      // And a smaller size can indeed be chosen again, which brings the navigation back.
+      await pageSizeSelect(page).selectOption('5');
+      await expect(visibleReorderRows(page)).toHaveCount(5);
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText('Page 1 of 2');
+      await expect(page.getByTestId('reorder-next-page')).toBeEnabled();
+      await expectNoHorizontalOverflow(page);
+    });
+  }
+
+  /**
+   * Keyboard access and *visible* focus, which is the half of the criterion a markup assertion
+   * cannot reach: the selector is arrived at by pressing keys rather than by calling `focus()`, the
+   * ring the repository's one `:focus-visible` rule promises is the ring the browser is measurably
+   * painting on it, that ring is not clipped away by the card it sits in, a key press alone changes
+   * the size, and focus carries on into the pager instead of stopping on the control.
+   */
+  for (const width of [1440, 390]) {
+    test(`the page-size selector is reached, shown and operated from the keyboard at ${width}px`, async ({ page }) => {
+      await openDashboard(page, width, { longReorderList: true });
+      await reorderSection(page).scrollIntoViewIfNeeded();
+      const select = pageSizeSelect(page);
+
+      // Nothing is painted around it while it is not focused, so the ring below is the focus ring.
+      expect((await focusRing(select)).style).toBe('none');
+
+      // Shift+Tab from Next walks back over the disabled Previous onto the selector: it is in the
+      // page's tab sequence, not merely programmatically focusable.
+      await page.getByTestId('reorder-next-page').focus();
+      await page.keyboard.press('Shift+Tab');
+      await expect(select).toBeFocused();
+
+      expect(await focusRing(select)).toEqual({
+        style: 'solid',
+        width: '2px',
+        offset: '2px',
+        colour: 'rgb(26, 115, 232)'
+      });
+      // A ring at 2px offset needs 4px of room on each side, and the card is `overflow-hidden`:
+      // measured here so a ring the card clips can never pass as a visible one.
+      const card = await box(reorderSection(page));
+      const control = await box(select);
+      expect(control.x - 4).toBeGreaterThanOrEqual(card.x);
+      expect(control.x + control.width + 4).toBeLessThanOrEqual(card.x + card.width);
+      expect(control.y - 4).toBeGreaterThanOrEqual(card.y);
+      await reorderPagination(page).screenshot({
+        path: join(screenshotDirectory, `reorder-page-size-focus-${width}px.png`)
+      });
+
+      // One key press moves to the next offered size and applies it, with no pointer involved.
+      await page.keyboard.press('ArrowDown');
+      await expect(select).toHaveValue('10');
+      await expect(visibleReorderRows(page)).toHaveCount(10);
+      await expect(page.getByTestId('reorder-page-indicator')).toHaveText('Page 1 of 12');
+      await expect(page.getByTestId('reorder-range')).toHaveText('Showing 1–10 of 120 products');
+
+      // Focus is not trapped on it: Tab carries on into the pager it stands beside.
+      await page.keyboard.press('Tab');
+      await expect(page.getByTestId('reorder-next-page')).toBeFocused();
+      await expectNoHorizontalOverflow(page);
     });
   }
 
