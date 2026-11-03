@@ -18,8 +18,10 @@ namespace InventoryApi.Adapters.PlatformAdmin;
 /// whole entry could not emit one - the same restraint the two audits beside it show about a
 /// business's name, contact address and rejection text. The acting administrator's Entra
 /// <c>(tid, oid)</c> pair, the preset's key, which change it was and whether the preset is suggested
-/// afterwards <em>are</em> recorded, because an audit trail that cannot say who changed which preset
-/// is not an audit trail, and all four are identifiers or states rather than content.</para>
+/// and searched afterwards <em>are</em> recorded, because an audit trail that cannot say who changed
+/// which preset is not an audit trail, and all five are identifiers or states rather than content.
+/// The searching flag in particular is money on the paid routes (issue #1077), so "who switched this
+/// supplier's searches off" is exactly what this trail is read for.</para>
 ///
 /// <para><strong>And so are the supplier-master fields of issue #931</strong> - the market, whether
 /// the published prices include GST, the collection route and its key - because they are the
@@ -52,7 +54,8 @@ public sealed class LoggingSupplierPresetAudit : ISupplierPresetAudit
 
         _logger.LogInformation(
             "Platform supplier preset audit. Actor {ActorDirectoryTenantId}/{ActorObjectId}; "
-                + "preset {PresetId}; change {Change}; enabled {IsEnabled}; nationwide "
+                + "preset {PresetId}; change {Change}; enabled {IsEnabled}; search prices "
+                + "{SearchPrices}; nationwide "
                 + "{ServesNationwide}; states {ServedStates}; prices include GST "
                 + "{PricesIncludeGst}; connector {PriceConnector}; connector key "
                 + "{PriceConnectorKey}; occurred {OccurredAtUtc:O}; correlation {CorrelationId}.",
@@ -61,6 +64,7 @@ public sealed class LoggingSupplierPresetAudit : ISupplierPresetAudit
             entry.PresetId,
             entry.Change,
             entry.IsEnabled,
+            entry.SearchPrices,
             entry.ServesNationwide,
             entry.ServedStates,
             entry.PricesIncludeGst,

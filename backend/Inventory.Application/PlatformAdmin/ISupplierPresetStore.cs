@@ -9,7 +9,12 @@ namespace Inventory.Application.PlatformAdmin;
 /// <param name="Id">The row's own key.</param>
 /// <param name="Name">The name as a Super Admin typed it, trimmed.</param>
 /// <param name="Url">Its website, or <see langword="null"/> when none is recorded.</param>
-/// <param name="IsEnabled">Whether it is still suggested.</param>
+/// <param name="IsEnabled">Whether it is still suggested to businesses.</param>
+/// <param name="SearchPrices">
+/// Whether the price collector searches it (issue #1077). Separate from
+/// <paramref name="IsEnabled"/>: a supplier may be suggested and unsearched, or searched and no
+/// longer suggested.
+/// </param>
 /// <param name="ServesNationwide">Whether it serves the whole country.</param>
 /// <param name="ServedStates">
 /// The states and territories it serves, in <c>SupplierPresetMasterPolicy.ServedStateCodes</c>'s own
@@ -32,6 +37,7 @@ public sealed record SupplierPresetRecord(
     string Name,
     string? Url,
     bool IsEnabled,
+    bool SearchPrices,
     bool ServesNationwide,
     IReadOnlyList<string> ServedStates,
     bool PricesIncludeGst,
@@ -47,6 +53,12 @@ public sealed record SupplierPresetRecord(
 /// <param name="Name">The validated, trimmed display name.</param>
 /// <param name="NormalisedName">Its comparison key, which the unique index is over.</param>
 /// <param name="Url">The validated website, or <see langword="null"/>.</param>
+/// <param name="SearchPrices">
+/// Whether the collector is to search it (issue #1077). It <em>is</em> carried on a create, unlike
+/// whether the preset is suggested: a new preset is always created suggested, while "add this
+/// supplier but do not search it yet" is a real thing to want of a route that costs money. A create
+/// that states nothing defaults it to <see langword="true"/> at the boundary.
+/// </param>
 /// <param name="ServesNationwide">Whether it serves the whole country.</param>
 /// <param name="ServedStates">
 /// The canonical stored served-state value <c>SupplierPresetMasterPolicy.NormaliseServedStates</c>
@@ -62,6 +74,7 @@ public sealed record NewSupplierPreset(
     string Name,
     string NormalisedName,
     string? Url,
+    bool SearchPrices,
     bool ServesNationwide,
     string ServedStates,
     bool PricesIncludeGst,
@@ -76,7 +89,8 @@ public sealed record NewSupplierPreset(
 /// <param name="Name">The validated, trimmed display name.</param>
 /// <param name="NormalisedName">Its comparison key.</param>
 /// <param name="Url">The validated website, or <see langword="null"/> to clear it.</param>
-/// <param name="IsEnabled">Whether it stays suggested.</param>
+/// <param name="IsEnabled">Whether it stays suggested to businesses.</param>
+/// <param name="SearchPrices">Whether the collector keeps searching it (issue #1077).</param>
 /// <param name="ServesNationwide">Whether it serves the whole country.</param>
 /// <param name="ServedStates">
 /// The canonical stored served-state value, on the terms <see cref="NewSupplierPreset"/> states.
@@ -90,6 +104,7 @@ public sealed record SupplierPresetEdit(
     string NormalisedName,
     string? Url,
     bool IsEnabled,
+    bool SearchPrices,
     bool ServesNationwide,
     string ServedStates,
     bool PricesIncludeGst,
@@ -134,7 +149,10 @@ public interface ISupplierPresetStore
         int? excludingId,
         CancellationToken cancellationToken);
 
-    /// <summary>Stores a new preset, enabled, and answers it as it was stored.</summary>
+    /// <summary>
+    /// Stores a new preset, enabled - and searched or not as <see cref="NewSupplierPreset.SearchPrices"/>
+    /// says - and answers it as it was stored.
+    /// </summary>
     Task<SupplierPresetRecord> AddAsync(NewSupplierPreset preset, CancellationToken cancellationToken);
 
     /// <summary>

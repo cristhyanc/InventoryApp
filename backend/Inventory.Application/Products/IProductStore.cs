@@ -22,6 +22,20 @@ public interface IProductStore
     /// way a blank name is: the create use case has already applied that rule, and the adapter
     /// applies it again at the write so the column cannot be written blank. An accepted label is
     /// stored trimmed.</para>
+    ///
+    /// <para><strong>Since issue #1051 it also writes the price-tracking mapping of a product created
+    /// from a master product suggestion, in the same transaction as the product.</strong> With
+    /// <see cref="ProductCreateFields.SelectedMasterProductId"/> set and
+    /// <see cref="ProductCreateFields.TrackSupplierPrices"/> left on, the adapter reads that master
+    /// product with the write lock held, recomputes the Name and unit label from it and links only
+    /// while the submitted values are still those - otherwise it answers
+    /// <see cref="ProductWriteOutcome.MasterProductConflict"/> with one of
+    /// <c>Inventory.Domain.PriceCatalogue.MasterProductSelectionPolicy</c>'s codes and writes nothing
+    /// at all, the product included. A link is one <c>Matched</c> mapping with the match source
+    /// <c>BusinessSelection</c> and the search text the tracking switch itself would have captured;
+    /// no master product, suggestion, listing or observation is written by any of it, and a failure
+    /// of either write rolls back both. A create that carries no selection reads nothing of the
+    /// shared catalogue and is the write it always was.</para>
     /// </summary>
     Task<ProductWriteAttempt> CreateAsync(ProductCreateFields fields, CancellationToken cancellationToken);
 

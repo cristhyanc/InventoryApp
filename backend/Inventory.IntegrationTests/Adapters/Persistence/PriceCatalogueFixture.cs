@@ -1065,6 +1065,105 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     }
 
     /// <summary>
+    /// Creates a product through the <strong>real</strong> product store on that business's own
+    /// scope, which is the only way issue #1051's link is under test: the master product is read and
+    /// the mapping written inside that store's own create transaction, so arranging either by hand
+    /// would prove nothing.
+    ///
+    /// <para>Everything but the name, the unit label and the selection is sent as the fixture's
+    /// seeded products hold it - no SKU, no description, no category, no stock, no initial cost -
+    /// because what is under test is the link.</para>
+    /// </summary>
+    public async Task<ProductWriteAttempt> CreateProductAsync(
+        int businessId,
+        string name,
+        string? unit,
+        long? selectedMasterProductId = null,
+        bool trackSupplierPrices = true)
+    {
+        await using var db = TestAppDbContext.For(_options, businessId);
+
+        var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
+
+        return await store.CreateAsync(
+            new ProductCreateFields(
+                name,
+                null,
+                null,
+                0,
+                0,
+                0,
+                unit,
+                null,
+                true,
+                null,
+                selectedMasterProductId,
+                trackSupplierPrices),
+            CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Makes the database refuse every insert into the mappings table, which is how a test forces the
+    /// <em>second</em> write of a linked create to fail after the first has succeeded.
+    ///
+    /// <para>A trigger rather than a mock, because what is under test is the real transaction: with
+    /// no transaction around the two writes the product would survive its own link failing, which is
+    /// exactly the half-created product this issue's criterion forbids.</para>
+    /// </summary>
+    public async Task RefuseMappingInsertsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        await db.Database.ExecuteSqlRawAsync(
+            "CREATE TRIGGER RefuseMappingInserts BEFORE INSERT ON ProductPriceTrackings "
+                + "BEGIN SELECT RAISE(ABORT, 'refused by the test'); END;");
+    }
+
+    /// <summary>Every product either business owns, for the "nothing was created" assertions.</summary>
+    public async Task<IReadOnlyList<Product>> AllProductsAsync()
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.Products.AsNoTracking().OrderBy(product => product.Id).ToListAsync();
+    }
+
+    /// <summary>
+    /// Every product of either business with that name, which is how a test states that a refused
+    /// create left no product behind.
+    /// </summary>
+    public async Task<IReadOnlyList<Product>> AllProductsNamed(string name)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        return await db.Products
+            .AsNoTracking()
+            .Where(product => product.Name == name)
+            .OrderBy(product => product.Id)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Corrects a master product's name directly, which is how a test arranges "the catalogue was
+    /// edited after the operator looked it up". The Super Admin edit of #1024 is the real writer and
+    /// has its own tests; what is under test here is that the comparison reads the stored row.
+    /// </summary>
+    public async Task RenameMasterProductAsync(long masterProductId, string name)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var master = await db.MasterProducts.SingleAsync(row => row.Id == masterProductId);
+        master.Name = name;
+        master.NormalisedKey = MasterProductPolicy.NormalisedKey(
+            master.Brand,
+            name,
+            master.SizeValue,
+            master.SizeUnit);
+        master.UpdatedAtUtc = CreatedAt;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
     /// Records a decided match on an existing mapping, which no port method does yet: deciding one is
     /// the matcher of #941 and the review of #928, both out of this issue's scope, so the state is
     /// arranged directly and only the reads are under test.
@@ -1129,10 +1228,15 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     }
 
     /// <summary>
-    /// Records how one supplier master record's prices are collected (issue #931's fields), which is
-    /// what makes it due on a collector run at all. No port writes these - the Super Admin's preset
-    /// edit does, and it is out of #924's scope - so the state is arranged directly and only the reads
-    /// are under test.
+    /// Records how one supplier master record's prices are collected (issue #931's fields) and
+    /// whether they are searched for at all (issue #1077's <c>searchPrices</c>), which together are
+    /// what makes it due on a collector run. No port writes these - the Super Admin's preset edit
+    /// does, and it is out of #924's scope - so the state is arranged directly and only the reads are
+    /// under test.
+    ///
+    /// <para><c>isEnabled</c> is deliberately <em>not</em> part of that decision since #1077: it says
+    /// only whether the platform still suggests the record, so a test about the work list sets
+    /// <c>searchPrices</c> and may leave the suggestion flag either way.</para>
     /// </summary>
     public async Task SetSupplierCollectionAsync(
         int supplierPresetId,
@@ -1140,7 +1244,8 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         string? connectorKey = null,
         string? url = null,
         int freshnessHours = SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
-        bool isEnabled = true)
+        bool isEnabled = true,
+        bool searchPrices = true)
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
 
@@ -1150,6 +1255,7 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
         preset.Url = url;
         preset.PriceCheckFreshnessHours = freshnessHours;
         preset.IsEnabled = isEnabled;
+        preset.SearchPrices = searchPrices;
         preset.UpdatedAtUtc = CreatedAt;
 
         await db.SaveChangesAsync();

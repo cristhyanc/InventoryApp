@@ -229,15 +229,17 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<RecordCollectorProductMatches>();
 
         // And the Super Admin's review of what all of that proposed (issue #928): the queue and the
-        // four decisions - a listing, a waiting product's match, and confirming or undoing an
-        // automatic one. Scoped like the platform-admin surfaces above and for the same reason: each
-        // decision reads and writes through the request's own AppDbContext, which carries a denied
-        // business scope because the reviewer is a member of no business, and inside one
-        // BEGIN IMMEDIATE transaction on that same context.
+        // five decisions - a listing, a waiting product's match, confirming or undoing an automatic
+        // one, and undoing a match a business made itself (issue #1051). Scoped like the
+        // platform-admin surfaces above and for the same reason: each decision reads and writes
+        // through the request's own AppDbContext, which carries a denied business scope because the
+        // reviewer is a member of no business, and inside one BEGIN IMMEDIATE transaction on that
+        // same context.
         services.AddScoped<GetPriceCatalogueReviewQueue>();
         services.AddScoped<DecideSupplierListingReview>();
         services.AddScoped<DecideProductMatchReview>();
         services.AddScoped<DecideAutomaticProductMatchReview>();
+        services.AddScoped<UndoBusinessSelectionMatch>();
 
         // And the Super Admin's view of the master products themselves (issue #1023): one bounded,
         // searchable page of the shared catalogue and one product with its supplier listings. Scoped
@@ -417,6 +419,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<DeleteProduct>();
         services.AddScoped<GetProductGstRule>();
         services.AddScoped<SetProductGstRule>();
+        // "Set GST rule in bulk" (issue #1076): the preview that counts the products carrying no
+        // rule, and the apply that configures exactly those. Scoped like every other tenant-scoped
+        // use case: both answers belong to one caller's resolved business.
+        services.AddScoped<PreviewBulkProductGstRule>();
+        services.AddScoped<SetBulkProductGstRule>();
         // The "Track supplier prices" switch (issue #938, fourth task of #817). Scoped like every
         // other tenant-scoped use case: each answer belongs to one caller's resolved business.
         services.AddScoped<GetProductPriceTracking>();

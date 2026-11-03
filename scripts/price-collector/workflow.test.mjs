@@ -64,6 +64,16 @@ test('the interruption test stops Claude after a chosen number of minutes, and a
   for (const bad of ['0', '15', '1.5', '-1', 'ten', '03']) assert.throws(() => collectorDeadlineMinutes(bad), bad);
 });
 
+test('the JB Metro search words prompt.md recommends pass the guard, and the punctuated ones it warns about do not', () => {
+  // Production run 41558756584: "Nobby's ..." and "M&M's ..." were refused, and one search was never retried.
+  for (const words of ['Nobbys Peanuts', 'M M Peanut', 'Smiths Salt Vinegar', 'Cheezels']) {
+    assert.equal(permittedCommand(`node scripts/price-collector/jbmetro-lookup.mjs --search "${words}" https://www.jbmetro.com.au`), true, words);
+  }
+  for (const words of ["Nobby's Peanuts", "M&M's Peanut"]) {
+    assert.equal(permittedCommand(`node scripts/price-collector/jbmetro-lookup.mjs --search "${words}" https://www.jbmetro.com.au`), false, words);
+  }
+});
+
 test('tool policy refuses arbitrary shell, command substitution, redirects, extra tools and background commands', async () => {
   assert.equal(permittedCommand('node scripts/price-collector/read-work.mjs'), true);
   assert.equal(permittedCommand('node scripts/price-collector/jbmetro-lookup.mjs --search "Coke Classic" https://www.jbmetro.com.au'), true);

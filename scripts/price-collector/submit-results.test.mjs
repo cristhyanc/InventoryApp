@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { API_BASE_URL_ENV, API_TOKEN_ENV } from './collector-api.mjs';
 import { startStubServer } from './stub-server.mjs';
-import { normaliseStockStatus, readOutputFiles, runSubmission, stampObservedAt } from './submit-results.mjs';
+import { normaliseStockStatus, readOutputFiles, runSubmission, stampObservedAt, tidyResultRows } from './submit-results.mjs';
 
 const MATCHES = 'POST /api/price-collector/matches';
 const RESULTS = 'POST /api/price-collector/results';
@@ -570,5 +570,68 @@ describe('observation instant', () => {
       assert.deepEqual(found.skipped, []);
       assert.deepEqual(found.results[0].file.rows.map(r => r.observedAtUtc), ['2026-11-01T01:14:28Z', '2026-11-01T01:14:28Z']);
     } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('one bad row loses only itself (production run 41558756584)', () => {
+  it('removes a barcode with no unit or carton scope and keeps the row', () => {
+    const file = resultFile(7, {
+      rows: [
+        row('woolworths:1', { barcode: '09300000000001' }),
+        row('woolworths:2', { barcode: '09300000000002', barcodeScope: 'pallet' }),
+        row('woolworths:3', { barcode: '09300000000003', barcodeScope: 'unit' }),
+      ],
+    });
+    const notes = tidyResultRows(file);
+    assert.equal(file.rows.length, 3);
+    assert.equal(Object.hasOwn(file.rows[0], 'barcode'), false);
+    assert.equal(Object.hasOwn(file.rows[1], 'barcode'), false);
+    assert.equal(Object.hasOwn(file.rows[1], 'barcodeScope'), false);
+    assert.equal(file.rows[2].barcode, '09300000000003');
+    assert.equal(file.outcome, 'complete');
+    assert.deepEqual(notes, ['removed 2 barcode(s) without a unit or carton scope, kept the row(s)']);
+  });
+
+  it('drops a row with no price and submits a complete search as truncated', () => {
+    const missing = row('woolworths:1');
+    delete missing.packPrice;
+    const file = resultFile(7, {
+      rows: [missing, row('woolworths:2', { packPrice: null }), row('woolworths:3', { packPrice: 0 }), row('woolworths:4')],
+    });
+    const notes = tidyResultRows(file);
+    assert.deepEqual(file.rows.map((r) => r.supplierProductId), ['woolworths:4']);
+    assert.equal(file.outcome, 'truncated');
+    assert.deepEqual(notes, ['removed 3 row(s) without a price', 'submitted the search as truncated, not complete']);
+  });
+
+  it('changes nothing in a file with no bad row', () => {
+    const file = resultFile(7, { rows: [row('coles:1', { barcode: '1', barcodeScope: 'carton' })] });
+    const before = structuredClone(file);
+    assert.deepEqual(tidyResultRows(file), []);
+    assert.deepEqual(file, before);
+    assert.deepEqual(tidyResultRows({}), []);
+  });
+
+  it('submits the tidied file, says what it tidied, and does not fail the submission for it', async () => {
+    const priceless = row('woolworths:9');
+    delete priceless.packPrice;
+    await outputDir({
+      '7.json': resultFile(7, { rows: [row('woolworths:7', { barcode: '09300000000007' })] }),
+      '8.json': resultFile(8, { rows: [priceless, row('woolworths:8')] }),
+    });
+    stub = await startStubServer(happyRoutes);
+    const answer = await submit();
+
+    assert.equal(answer.exitCode, 0);
+    const sentRows = stub.requests.filter((r) => r.key === RESULTS).flatMap((r) => r.body.rows);
+    assert.deepEqual(sentRows.map((r) => r.supplierProductId), ['woolworths:7', 'woolworths:8']);
+    assert.equal(Object.hasOwn(sentRows[0], 'barcode'), false);
+    const outcome = stub.requests.find((r) => r.key === outcomeRoute(8));
+    assert.equal(outcome.body.submittedRowCount, 1);
+    assert.match(answer.out, /skipped 0/);
+    assert.match(answer.out, /tidied 7\.json: removed 1 barcode\(s\) without a unit or carton scope/);
+    assert.match(answer.out, /tidied 8\.json: removed 1 row\(s\) without a price/);
+    assert.match(answer.out, /tidied 8\.json: submitted the search as truncated, not complete/);
+    assert.match(answer.out, /searches: complete 1, truncated 1,/);
   });
 });

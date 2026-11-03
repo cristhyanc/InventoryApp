@@ -319,4 +319,84 @@ describe('SupplierListingReviewComponent (issue #928)', () => {
     expect(component.unitsPerPack).toBe(24);
     expect(component.approvePriceException).toBe(false);
   });
+
+  /**
+   * The page's "Confirm selected" run (issue #1055) asks each card for exactly what its own
+   * Confirm listing button would send, with any edits included, and the price exception never
+   * approved in bulk even when the reviewer ticked it on this card.
+   */
+  it('builds the bulk confirmation request from this card own current values, never approving the price exception', async () => {
+    const { component } = await render(
+      listing({
+        matchStatus: SupplierListingMatchStatus.NeedsReview,
+        lastAcceptedPackPrice: 40,
+        pendingObservation: pending({ packPrice: 9, needsPriceException: true })
+      })
+    );
+
+    component.unitsPerPack = 36;
+    component.approvePriceException = true;
+
+    expect(component.buildConfirmationRequest()).toEqual({
+      outcome: SupplierListingReviewOutcome.Confirmed,
+      unitsPerPack: 36,
+      barcode: '0012345678905',
+      barcodeScope: BarcodeScope.Unit,
+      variant: 'Classic',
+      sizeValue: 375,
+      sizeUnit: MasterProductSizeUnit.Millilitre,
+      approvePriceException: false
+    });
+  });
+
+  it('disables its own fields and buttons while a bulk run is in progress', async () => {
+    const { host, fixture, component } = await render(listing());
+
+    fixture.componentRef.setInput('bulkDisabled', true);
+    fixture.detectChanges();
+
+    expect(component.controlsDisabled).toBe(true);
+    expect(buttonWithText(host, 'Confirm listing').disabled).toBe(true);
+    expect(buttonWithText(host, 'Reject listing').disabled).toBe(true);
+  });
+
+  /**
+   * A bulk run disables every card the moment it starts, and that must not be read as a new listing:
+   * the run confirms each selected listing with exactly what its own card shows, so resetting the
+   * form here would send the stored pack quantity for every card whose request has not gone yet.
+   */
+  it('keeps this card edits when the page disables it for a bulk run, or reports a reason on it', async () => {
+    const { fixture, component } = await render(listing());
+
+    component.unitsPerPack = 36;
+    component.variant = 'Zero Sugar';
+
+    fixture.componentRef.setInput('bulkDisabled', true);
+    fixture.detectChanges();
+
+    expect(component.unitsPerPack).toBe(36);
+    expect(component.variant).toBe('Zero Sugar');
+
+    fixture.componentRef.setInput('externalError', 'This supplier listing is not waiting for a decision.');
+    fixture.detectChanges();
+
+    expect(component.unitsPerPack).toBe(36);
+    expect(component.buildConfirmationRequest().unitsPerPack).toBe(36);
+  });
+
+  /**
+   * The page's bulk run keeps a failed listing's refusal reason outside this card (issue #1055),
+   * because the one queue re-read after the run replaces `listing` and resets this card's own
+   * `error` - so the card shows the externally supplied reason the same way it shows its own.
+   */
+  it('shows a bulk run own refusal reason for this listing, the same way a single confirm does', async () => {
+    const { host, fixture } = await render(listing());
+
+    fixture.componentRef.setInput('externalError', 'This supplier listing is not waiting for a decision.');
+    fixture.detectChanges();
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(
+      'This supplier listing is not waiting for a decision.'
+    );
+  });
 });

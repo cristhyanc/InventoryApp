@@ -2,8 +2,8 @@ namespace Inventory.Application.PriceCatalogue;
 
 /// <summary>
 /// The narrow port the Super Admin's review of the shared price catalogue is read and written through
-/// (issue #928, parent #817): the queue, one listing decision, one match decision, and one decision
-/// about an automatic match.
+/// (issue #928, parent #817): the queue, one listing decision, one match decision, one decision about
+/// an automatic match, and the undo of one match a business made itself (issue #1051).
 ///
 /// <para><strong>What it may touch.</strong> It writes the platform tables of the catalogue -
 /// <c>MasterProducts</c> (one of their two writers, the other being
@@ -102,6 +102,33 @@ public interface IPriceCatalogueReviewStore
     Task<AutomaticMatchReviewResult?> DecideAutomaticMatchAsync(
         long suggestionId,
         Domain.PriceCatalogue.AutomaticMatchReviewDecision decision,
+        DateTime asOfUtc,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Undoes one match a business made itself (issue #1051): every mapping that carries the
+    /// <c>(waiting key, master product)</c> pair as a settled
+    /// <c>ProductPriceTrackingMatchSource.BusinessSelection</c> match returns to awaiting a match, in
+    /// every business that carries it.
+    ///
+    /// <para><strong>It is the same four columns as every other decision here</strong> - the status,
+    /// the master product, the source and the instant - so it is this issue's existing reviewed write
+    /// window and not a new exception. No suggestion row, master product, supplier listing, observation
+    /// or price is written or read for a decision, which is why a business's selection can be taken
+    /// back without the reviewer first being asked to judge a pair nobody proposed.</para>
+    ///
+    /// <para>A confirmation is deliberately absent: the mapping is already settled, so there is
+    /// nothing a reviewer would be confirming. Leaving it alone <em>is</em> the confirmation, and the
+    /// pair then simply stops appearing as one a person has still to check once it is undone or
+    /// decided another way.</para>
+    ///
+    /// <para>Answers <see langword="null"/> when no master product has that id or no settled business
+    /// selection of that pair is left, which the endpoint reports as <c>404</c>: the pair has been
+    /// undone, re-decided or withdrawn since the page was read.</para>
+    /// </summary>
+    Task<BusinessSelectionUndoResult?> UndoBusinessSelectionAsync(
+        string? waitingKey,
+        long masterProductId,
         DateTime asOfUtc,
         CancellationToken cancellationToken);
 }

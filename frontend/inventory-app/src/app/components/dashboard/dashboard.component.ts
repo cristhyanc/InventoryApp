@@ -102,11 +102,12 @@ export interface AttentionAlert {
 }
 
 /**
- * How many products one page of the Reorder priorities card shows (issue #1017). The size is fixed:
- * the owner's decision is that the card pages the whole reorder list five rows at a time, with no
- * "Rows per page" selector, and it supersedes issue #972's top-five-only requirement for this card.
+ * The page-size choices the Reorder priorities card's "Items per page" selector offers (issue
+ * #1080), superseding issue #1017's fixed-five-with-no-selector decision. The first is the default
+ * on every Dashboard visit; selecting another resets the card to page 1 (see
+ * {@link DashboardComponent.onReorderPageSizeChange}).
  */
-export const REORDER_PAGE_SIZE = 5;
+export const REORDER_PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100] as const;
 
 /**
  * What the Cheapest supplier column explains about itself (issue #1016). It is the sentence the row
@@ -175,6 +176,16 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * page still exists (see {@link refreshLowStock}).
    */
   reorderPageIndex = 0;
+
+  /**
+   * The selected "Items per page" size for the Reorder priorities card (issue #1080). Defaults to
+   * the first of {@link REORDER_PAGE_SIZE_OPTIONS} on every Dashboard visit - it is deliberately not
+   * remembered anywhere - and a re-read keeps the selected size for the rest of this visit.
+   */
+  reorderPageSize: number = REORDER_PAGE_SIZE_OPTIONS[0];
+
+  /** The choices the selector offers. */
+  readonly reorderPageSizeOptions = REORDER_PAGE_SIZE_OPTIONS;
 
   /**
    * The Cheapest supplier column's read for those products (issue #981, the shared component of
@@ -507,10 +518,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * Reads the last and cheapest recorded purchase cost of every product the Reorder Alerts table is
    * about (issue #789, over issue #788's bulk endpoint), and is also what the Retry control calls.
    * Since issue #1017 "every product the table is about" is the whole reorder list the card pages,
-   * not the five rows currently on screen: the read happens once per reorder read, which is what
-   * lets a page turn send nothing and still show costs on every page. That one logical load is split
-   * by `getSummariesBatched` into `GET`s of at most `PURCHASE_COST_MAX_IDS_PER_REQUEST` ids, so a
-   * long reorder list never builds a request line the server refuses; any failed batch fails the
+   * not the rows currently on screen: the read happens once per reorder read, which is what lets a
+   * page or page-size change (issue #1080) send nothing and still show costs on every page. That
+   * one logical load is split by `getSummariesBatched` into `GET`s of at most
+   * `PURCHASE_COST_MAX_IDS_PER_REQUEST` ids, so a long reorder list never builds a request line the
+   * server refuses; any failed batch fails the
    * whole load, which shows "Unavailable" and the Retry rather than partial costs.
    *
    * It is the one place the three preconditions live, because each of them has to leave the columns
@@ -944,19 +956,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * together hold every product exactly once (issue #1017).
    */
   get reorderPriorities(): readonly Product[] {
-    const start = this.reorderPageIndex * REORDER_PAGE_SIZE;
-    return this.lowStock.slice(start, start + REORDER_PAGE_SIZE);
+    const start = this.reorderPageIndex * this.reorderPageSize;
+    return this.lowStock.slice(start, start + this.reorderPageSize);
   }
 
   /** At least 1, so the pager never reads "Page 1 of 0" for a list with one short page. */
   get reorderPageCount(): number {
-    return Math.max(1, Math.ceil(this.lowStock.length / REORDER_PAGE_SIZE));
+    return Math.max(1, Math.ceil(this.lowStock.length / this.reorderPageSize));
   }
 
   /**
    * Whether to offer Previous and Next at all. With one page there is nowhere to go, so the range
    * text stands alone rather than beside two permanently disabled controls; an empty, loading or
    * failed list renders no pager at all, which the template decides by not rendering this section.
+   * The "Items per page" selector is independent of this (issue #1080): it stays visible even on a
+   * single page, so a size that currently fits the whole list on one page can be made smaller again.
    */
   get isReorderPagerShown(): boolean {
     return this.reorderPageCount > 1;
@@ -969,8 +983,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   get reorderRangeLabel(): string {
     const total = this.lowStock.length;
-    const first = total === 0 ? 0 : this.reorderPageIndex * REORDER_PAGE_SIZE + 1;
-    const last = Math.min((this.reorderPageIndex + 1) * REORDER_PAGE_SIZE, total);
+    const first = total === 0 ? 0 : this.reorderPageIndex * this.reorderPageSize + 1;
+    const last = Math.min((this.reorderPageIndex + 1) * this.reorderPageSize, total);
     return `Showing ${first}–${last} of ${plural(total, 'product')}`;
   }
 
@@ -980,6 +994,17 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   nextReorderPage(): void {
     this.reorderPageIndex = Math.min(this.reorderPageCount - 1, this.reorderPageIndex + 1);
+  }
+
+  /** A new page size is a fresh view of the same loaded list, so it returns to page 1 (issue #1080). */
+  onReorderPageSizeChange(event: Event): void {
+    const value = Number((event.target as HTMLSelectElement).value);
+    if (!this.reorderPageSizeOptions.includes(value as (typeof REORDER_PAGE_SIZE_OPTIONS)[number])) {
+      return;
+    }
+
+    this.reorderPageSize = value;
+    this.reorderPageIndex = 0;
   }
 
   /**
@@ -1007,6 +1032,32 @@ export class DashboardComponent implements OnInit, OnDestroy {
   /** A storage figure of zero is the most urgent state, and says so by more than its colour. */
   storageStockClass(product: Product): string {
     return product.quantityInStock <= 0 ? 'badge-danger' : 'badge-warning';
+  }
+
+  /**
+   * "Storage after refill" (issue #1020): what storage stock minus machine need leaves behind,
+   * purely so an operator is not left doing that subtraction themselves. It is the same two figures
+   * the row already carries - never a second reorder formula, and never shown where
+   * {@link isMachineNeedShownInReorderAlerts} is false, because the machine need there is an unread
+   * `0` and the subtraction would be misleading. `null` only for a figure genuinely not a number, so
+   * it is shown as unavailable rather than coerced to zero.
+   */
+  storageAfterRefill(product: Product): number | null {
+    const { quantityInStock, machineReplenishmentNeed } = product;
+    if (!Number.isFinite(quantityInStock) || !Number.isFinite(machineReplenishmentNeed)) return null;
+    return quantityInStock - machineReplenishmentNeed;
+  }
+
+  /** The cell's text: the signed figure, or an em dash for the unavailable case above. */
+  storageAfterRefillDisplay(product: Product): string {
+    const value = this.storageAfterRefill(product);
+    return value === null ? '—' : String(value);
+  }
+
+  /** A shortfall (machines need more than storage holds) is styled exactly like any other negative. */
+  storageAfterRefillClass(product: Product): string {
+    const value = this.storageAfterRefill(product);
+    return value !== null && value < 0 ? 'value-negative' : '';
   }
 
 }

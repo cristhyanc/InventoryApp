@@ -62,8 +62,9 @@ In GitHub → Actions → **Price collector (manual)** → Run workflow:
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
-   or overrides the backend's supplier list. Every enabled supplier with a collection route is in
-   every run's work, however recently it was checked.
+   or overrides the backend's supplier list. Every supplier whose **Search prices** switch is on and
+   that has a collection route is in every run's work, however recently it was checked — see
+   [Pausing one supplier's searches](#pausing-one-suppliers-searches) below.
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.
@@ -166,6 +167,24 @@ When a result file fails validation, the summary shows `skipped <work item>.json
 validator's message. One skipped file marks the submission failed, but every other file is still
 submitted and the run is still completed.
 
+One bad row no longer costs a whole search (owner decision, 3 November 2026). In production run
+41558756584, ten Woolworths files were skipped: eight had a barcode with no `barcodeScope` and two
+had a row with no `packPrice` (one an out-of-stock listing). Before it validates a result file,
+`submit-results.mjs` now removes a barcode that has no `unit` or `carton` scope and keeps the rest of
+that row, and drops a row with no usable price. A `complete` search that lost a row is submitted as
+`truncated`, so the API never records that listing as not found. The summary lists each change as
+`tidied <work item>.json: ...`, and tidying never marks the submission failed. `prompt.md` also tells
+Claude not to write either kind of row in the first place.
+
+Searches use short words (owner decision, 3 November 2026). Supplier searches return only items
+that contain every word typed, so in run 41558756584 full names such as `Cheezels Original` or
+`M&M's Peanut 46g` found nothing although JB Metro lists `45G CHEEZELS` and Coles lists
+`M&M's Peanut Milk Chocolate Snack Bag 46g`. `prompt.md` now has Claude search with the brand and
+one or two product words, with no size, and check the size and variant when it picks matches. A
+search that returns nothing is tried once more with fewer words; that second call counts towards
+the run's Apify call cap (600) and, at Kmart and BIG W, is charged like any other search. JB Metro
+search words are written without apostrophes or `&`, because the command guard refuses them.
+
 ## Production run
 
 A **production** run (owner decision, 1 November 2026) collects real supplier prices into the
@@ -252,6 +271,36 @@ prices (see [Run log](#run-log)), never credentials.
 The workflow uploads the masked run log described above, then deletes temporary state, CLI files and
 output in an `always()` cleanup step. A hard runner loss can skip cleanup; verified ephemeral/reset
 runners are still required in self-hosted mode.
+
+## Pausing one supplier's searches
+
+A Super Admin can stop paying for one supplier's searches without hiding that supplier from
+businesses (issue #1077, the owner's decision of 3 November 2026). In the app, **Super Admin →
+Supplier presets** has a **Search prices** column beside the existing **Suggested** column:
+
+1. Find the supplier's row. The column shows **On** or **Off**, or **No price route** for a record
+   nothing collects — Costco, for example — which has no search to start or stop and so offers no
+   button.
+2. Press **Stop searching** and confirm. From the next run the collector is issued no work for that
+   supplier, on any product. Nothing in the workflow, `apify-limits.json` or the collector scripts
+   needs changing: the API simply stops putting that supplier in the work list.
+3. Press **Start searching** to resume. The next run includes it again.
+
+What that switch does **not** do, which is the point of having two:
+
+- It does not change what businesses see. **Suggested** is still what decides whether the record is
+  copied into a newly approved business and offered under "Available to add", so pausing the paid
+  Kmart and BIG W searches leaves both suppliers on offer.
+- It removes nothing already collected. That supplier's listings, observed prices and pending
+  readings stay exactly as they are, and the Cheapest supplier column keeps reading them until they
+  age out by the record's own freshness limit (174 hours for BIG W and Kmart) — after which the
+  supplier simply has no comparable price rather than a wrong one.
+- It does not cancel work a run already holds. A run issued before the switch moved can still submit
+  its results and complete, because a submitted row is resolved through the work item it names.
+
+Pressing **Disable** on the same page is still the separate decision it always was: it stops the
+supplier being suggested to businesses and, since #1077, no longer stops its searches. Choosing
+which of the searched suppliers run on which day is still the later scheduled-run part of #929.
 
 ## Implementation and checks
 

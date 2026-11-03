@@ -117,6 +117,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
                 SupplierPresetPolicy.NormalisedName(UnusedName),
                 null,
                 IsEnabled: true,
+                SearchPrices: true,
                 ServesNationwide: true,
                 ServedStates: string.Empty,
                 PricesIncludeGst: true,
@@ -131,6 +132,85 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
         Assert.True(edited.PricesIncludeGst);
         Assert.Null(edited.PriceConnector);
         Assert.Null(edited.PriceConnectorKey);
+    }
+
+    /// <summary>
+    /// The searching switch of issue #1077 survives the round trip in both states, which is the one
+    /// thing a column with a <c>DEFAULT 1</c> cannot be taken on trust for: a write of
+    /// <see langword="false"/> has to reach the database rather than be dropped as "the CLR default"
+    /// and left at the column default.
+    ///
+    /// <para>Both directions are read back through the list's own projection as well as from the
+    /// write's own answer, because those are two code paths over one column.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_preset_is_created_with_the_searching_state_the_caller_asked_for(bool searchPrices)
+    {
+        await using var db = Context();
+        var store = new EfSupplierPresetStore(db);
+
+        var created = await store.AddAsync(
+            NewPreset(UnusedName, searchPrices: searchPrices),
+            CancellationToken.None);
+
+        Assert.Equal(searchPrices, created.SearchPrices);
+
+        // Created suggested either way: the two flags are independent, and a create never chooses
+        // the first one.
+        Assert.True(created.IsEnabled);
+
+        var listed = (await store.ListOrderedByNameAsync(CancellationToken.None))
+            .Single(preset => preset.Id == created.Id);
+        Assert.Equal(searchPrices, listed.SearchPrices);
+
+        await using var verify = Context();
+        Assert.Equal(
+            searchPrices,
+            (await verify.SupplierPresets.AsNoTracking().SingleAsync(row => row.Id == created.Id))
+                .SearchPrices);
+    }
+
+    /// <summary>
+    /// And an edit writes the two flags independently: a preset can be withdrawn from the
+    /// suggestions while it is still searched, and searched while it is still suggested, which is the
+    /// whole of issue #1077.
+    /// </summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task An_edit_stores_the_two_flags_independently(bool isEnabled, bool searchPrices)
+    {
+        await using var db = Context();
+        var store = new EfSupplierPresetStore(db);
+        var created = await store.AddAsync(NewPreset(UnusedName), CancellationToken.None);
+
+        var edited = await store.UpdateAsync(
+            created.Id,
+            new SupplierPresetEdit(
+                UnusedName,
+                SupplierPresetPolicy.NormalisedName(UnusedName),
+                null,
+                IsEnabled: isEnabled,
+                SearchPrices: searchPrices,
+                ServesNationwide: true,
+                ServedStates: string.Empty,
+                PricesIncludeGst: true,
+                PriceConnector: null,
+                PriceConnectorKey: null,
+                Now),
+            CancellationToken.None);
+
+        Assert.NotNull(edited);
+        Assert.Equal(isEnabled, edited.IsEnabled);
+        Assert.Equal(searchPrices, edited.SearchPrices);
+
+        await using var verify = Context();
+        var stored = await verify.SupplierPresets.AsNoTracking().SingleAsync(row => row.Id == created.Id);
+        Assert.Equal(isEnabled, stored.IsEnabled);
+        Assert.Equal(searchPrices, stored.SearchPrices);
     }
 
     /// <summary>
@@ -150,6 +230,11 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
         Assert.True(coles.PricesIncludeGst);
         Assert.Equal(SupplierPriceConnector.Varnmill, coles.PriceConnector);
         Assert.Equal("coles", coles.PriceConnectorKey);
+
+        // And every seeded record is searched, because AddSupplierPresetSearchPrices copied their
+        // IsEnabled into the new column and the migrations leave all nine enabled (issue #1077).
+        Assert.All(presets, preset => Assert.Equal(preset.IsEnabled, preset.SearchPrices));
+        Assert.True(coles.SearchPrices);
 
         var jbMetro = presets.Single(preset => preset.Name == "JB Metro SA & NT");
         Assert.False(jbMetro.ServesNationwide);
@@ -279,6 +364,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
     /// </summary>
     private static NewSupplierPreset NewPreset(
         string name,
+        bool searchPrices = true,
         bool servesNationwide = true,
         string servedStates = "",
         bool pricesIncludeGst = true,
@@ -288,6 +374,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
             name,
             SupplierPresetPolicy.NormalisedName(name),
             null,
+            searchPrices,
             servesNationwide,
             servedStates,
             pricesIncludeGst,
@@ -303,6 +390,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
         new(
             name,
             null,
+            SearchPrices: true,
             ServesNationwide: true,
             ServedStates: null,
             PricesIncludeGst: true,

@@ -6,7 +6,7 @@ import { ProductListComponent } from './product-list.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { ToastService } from '../../services/toast.service';
-import { Product, TrackedProduct } from '../../models/models';
+import { GstClassification, Product, TrackedProduct } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { AccessService } from '../../access/access.service';
 import { Capability } from '../../access/capabilities';
@@ -1497,7 +1497,16 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
     const order = Array.from(toolbar(host).querySelectorAll<HTMLElement>('input, select, button, a')).map(
       (control) => control.getAttribute('placeholder') ?? control.getAttribute('name') ?? control.textContent?.trim()
     );
-    expect(order).toEqual(['Search name or SKU', 'All Categories', 'statusFilter', 'Reset', 'New Product']);
+    // "Set GST rule in bulk" joined the action group with issue #1076, ahead of New Product so the
+    // primary action stays last in the keyboard order.
+    expect(order).toEqual([
+      'Search name or SKU',
+      'All Categories',
+      'statusFilter',
+      'Reset',
+      'Set GST rule in bulk',
+      'New Product'
+    ]);
     // No control is taken out of the tab order or made unreachable to get the layout.
     expect(toolbar(host).querySelector('[tabindex="-1"]')).toBeNull();
   });
@@ -2129,5 +2138,160 @@ describe('ProductListComponent has no Tracked column (issue #1022)', () => {
 
     expect(header()).toBeNull();
     expect(cells()).toHaveLength(0);
+  });
+});
+
+/**
+ * "Set GST rule in bulk" on the Products list (issue #1076). The page owns one thing: whether the
+ * question is open. The eligible count, the choice, the confirmation, the write, its conflict and
+ * its failures all live in `ProductGstRuleBulkComponent` and are tested on it
+ * (`product-gst-rule-bulk.component.spec.ts`); what is here is the composition - the control, the
+ * support-session rule, and what the page does with what the dialog reports.
+ */
+describe('ProductListComponent Set GST rule in bulk (issue #1076)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(options: { sessionActive?: boolean; changedCount?: number } = {}) {
+    const getAll = jest.fn(() => of([product({ id: 1, name: 'Widget' })]));
+    const previewBulkGstRule = jest.fn(() => of({ eligibleCount: 3 }));
+    const setBulkGstRule = jest.fn((gstRule: GstClassification) =>
+      of({ gstRule, changedCount: options.changedCount ?? 3 })
+    );
+    const success = jest.fn();
+
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: ProductService,
+          useValue: { getAll, getTrackedProducts: noTrackedProducts, previewBulkGstRule, setBulkGstRule }
+        },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success, error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(options.sessionActive ?? false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        { provide: CheapestSupplierService, useValue: cheapestSupplierServiceStub() }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+
+    const openButton = () => host.querySelector<HTMLButtonElement>('[data-testid="bulk-gst-rule-button"]');
+    const dialog = () => host.querySelector('[data-testid="bulk-gst-rule-dialog"]');
+    const open = () => {
+      openButton()!.click();
+      fixture.detectChanges();
+    };
+    const dialogButton = (text: string) =>
+      Array.from(host.querySelectorAll<HTMLButtonElement>('dialog button')).find(
+        (candidate) => candidate.textContent?.trim() === text
+      );
+    const clickInDialog = (text: string) => {
+      dialogButton(text)!.click();
+      fixture.detectChanges();
+    };
+    const chooseTaxable = () => {
+      host.querySelector<HTMLInputElement>('dialog input[type="radio"]')!.click();
+      fixture.detectChanges();
+    };
+
+    return {
+      fixture,
+      host,
+      openButton,
+      dialog,
+      open,
+      clickInDialog,
+      chooseTaxable,
+      getAll,
+      previewBulkGstRule,
+      setBulkGstRule,
+      success
+    };
+  }
+
+  it('offers the action in the toolbar and reads nothing until it is opened', async () => {
+    const { openButton, dialog, previewBulkGstRule } = await render();
+
+    expect(openButton()).not.toBeNull();
+    expect(dialog()).toBeNull();
+    expect(previewBulkGstRule).not.toHaveBeenCalled();
+  });
+
+  it('opens the dedicated dialog, which reads the eligible count itself', async () => {
+    const { open, dialog, previewBulkGstRule } = await render();
+
+    open();
+
+    expect(dialog()).not.toBeNull();
+    expect(previewBulkGstRule).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Hidden rather than disabled while a support session is active, the way New Product and Delete
+   * are on this page: a session grants `Inventory.Operate`, so the write would otherwise render -
+   * and the endpoints refuse it by the central read-only method rule either way.
+   */
+  it('hides the action while a support session is active, and refuses to open it in code', async () => {
+    const { fixture, openButton, dialog } = await render({ sessionActive: true });
+
+    expect(openButton()).toBeNull();
+
+    fixture.componentInstance.openBulkGstRule();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.settingGstRuleInBulk).toBe(false);
+    expect(dialog()).toBeNull();
+  });
+
+  it('withdraws the dialog and writes nothing when it is cancelled', async () => {
+    const { fixture, open, dialog, clickInDialog, setBulkGstRule } = await render();
+
+    open();
+    clickInDialog('Cancel');
+
+    expect(dialog()).toBeNull();
+    expect(fixture.componentInstance.settingGstRuleInBulk).toBe(false);
+    expect(setBulkGstRule).not.toHaveBeenCalled();
+  });
+
+  it('summarises what the write actually changed and refetches the list', async () => {
+    const { open, chooseTaxable, clickInDialog, dialog, getAll, success } = await render({ changedCount: 2 });
+    const fetchesBefore = getAll.mock.calls.length;
+
+    open();
+    chooseTaxable();
+    clickInDialog('Continue');
+    clickInDialog('Apply');
+
+    expect(success).toHaveBeenCalledWith('GST rule set on 2 products that had no rule.');
+    expect(getAll.mock.calls).toHaveLength(fetchesBefore + 1);
+    expect(dialog()).toBeNull();
+  });
+
+  it('words the summary for a single product', async () => {
+    const { open, chooseTaxable, clickInDialog, success } = await render({ changedCount: 1 });
+
+    open();
+    chooseTaxable();
+    clickInDialog('Continue');
+    clickInDialog('Apply');
+
+    expect(success).toHaveBeenCalledWith('GST rule set on 1 product that had no rule.');
+  });
+
+  /**
+   * The page authors no dialog of its own: the markup is the child component's, which is what
+   * `page-composition.guard.ts` requires of a routed page.
+   */
+  it('delegates the dialog to the feature component rather than authoring it', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('app-product-gst-rule-bulk')).not.toBeNull();
   });
 });

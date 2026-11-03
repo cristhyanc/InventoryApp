@@ -31,8 +31,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// What crosses that boundary is the waiting key, the search name and unit label it folds from, the
 /// mapping's own match state and - for the queue alone - the <em>count</em> of distinct businesses
 /// waiting under a key, which is the one thing issue #928 asks for and bounds in the same sentence:
-/// "a count of businesses waiting, never which business asked". No business id, name or product id
-/// leaves this adapter in any answer. See AGENTS.md § Tenant ownership and data isolation and
+/// "a count of businesses waiting, never which business asked". The business-selection section of
+/// issue #1051 is narrower still: it publishes no count, so its own projection
+/// (<see cref="SelectionFacts"/>) does not read the ownership column at all. No business id, name or
+/// product id leaves this adapter in any answer. See AGENTS.md § Tenant ownership and data isolation and
 /// docs/architecture.md § Super Admin review of the supplier price catalogue.</para>
 ///
 /// <para><strong>Each decision is one <c>BEGIN IMMEDIATE</c> transaction, and the write lock is taken
@@ -88,6 +90,26 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
                 mapping.BusinessId,
                 mapping.Status,
                 mapping.MasterProductId,
+                mapping.WaitingKey,
+                mapping.SearchName,
+                mapping.UnitLabel,
+                mapping.CreatedAtUtc,
+                mapping.UpdatedAtUtc))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        // The matches businesses made themselves (issue #1051), read separately from the mappings
+        // above rather than as a fourth status in that query: the projection above carries the
+        // ownership key for its count of waiting businesses, and this section publishes no count at
+        // all, so it does not read the business key - and keeping the sets apart also keeps a settled
+        // selection out of the representative description an automatic match is shown under.
+        var selections = await MappingsAcrossBusinesses()
+            .AsNoTracking()
+            .Where(mapping => mapping.Status == ProductPriceTrackingStatus.Matched
+                && mapping.MatchSource == ProductPriceTrackingMatchSource.BusinessSelection
+                && mapping.MasterProductId != null)
+            .Select(mapping => new SelectionFacts(
+                mapping.MasterProductId!.Value,
                 mapping.WaitingKey,
                 mapping.SearchName,
                 mapping.UnitLabel,
@@ -180,6 +202,7 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
         return new PriceCatalogueReviewQueue(
             WaitingProducts(mappings, suggestions, ordered),
             AutomaticMatches(mappings, suggestions),
+            BusinessSelections(selections, catalogue),
             ordered,
             catalogue);
     }
@@ -645,6 +668,85 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
             suggestion.WaitingKey,
             Describe(master),
             listingsMoved);
+    }
+
+    /// <inheritdoc />
+    public async Task<BusinessSelectionUndoResult?> UndoBusinessSelectionAsync(
+        string? waitingKey,
+        long masterProductId,
+        DateTime asOfUtc,
+        CancellationToken cancellationToken)
+    {
+        var key = (waitingKey ?? string.Empty).Trim();
+
+        if (key.Length == 0)
+        {
+            return null;
+        }
+
+        await using var transaction = await SqliteWriteLockTransaction
+            .BeginAsync(_db, cancellationToken)
+            .ConfigureAwait(false);
+
+        var master = await _db.MasterProducts
+            .AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == masterProductId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (master is null)
+        {
+            return null;
+        }
+
+        // Tracked, and read inside the write lock: whether this pair is still a settled business
+        // selection is the comparison this decision is, so the read, the comparison and the write are
+        // one operation - the shape every decision on this surface has.
+        var mappings = await MappingsAcrossBusinesses()
+            .Where(mapping => mapping.WaitingKey == key)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var selected = mappings
+            .Where(mapping => ProductMatchReviewPolicy.ReturnsToWaitingFromSelection(
+                mapping.Status,
+                mapping.MatchSource,
+                mapping.MasterProductId,
+                master.Id))
+            .ToList();
+
+        if (selected.Count == 0)
+        {
+            // Nothing of that pair is a settled business selection any more: it has been undone,
+            // decided another way or withdrawn since the page was read.
+            return null;
+        }
+
+        foreach (var mapping in selected)
+        {
+            mapping.Status = ProductPriceTrackingStatus.Requested;
+            mapping.MasterProductId = null;
+            mapping.MatchSource = null;
+            mapping.UpdatedAtUtc = asOfUtc;
+
+            ProductPriceTrackingPolicy.RequireConsistentMatch(
+                mapping.Status,
+                mapping.MasterProductId,
+                mapping.MatchSource);
+        }
+
+        // No supplier listing moves and no suggestion row is written: a business's selection wrote
+        // neither (issue #1051's eighth criterion), so there is nothing of the shared catalogue for an
+        // undo of one to put back. What the key does next is the ordinary reviewed flow - it is
+        // awaiting a match again, so it reappears in the waiting products and may be matched, refused
+        // or recorded as not found on this same surface.
+        using (_db.BeginPriceCatalogueReview())
+        {
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return new BusinessSelectionUndoResult(key, Describe(master));
     }
 
     /// <summary>
@@ -1205,6 +1307,56 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
     }
 
     /// <summary>
+    /// The matches businesses made themselves, by the <c>(waiting key, master product)</c> pair a
+    /// reviewer undoes (issue #1051): one entry per pair however many businesses' mappings carry it,
+    /// described by the mappings' own text and by the master product they name.
+    ///
+    /// <para>The master product comes from <paramref name="catalogue"/> - the whole shared catalogue
+    /// this queue already reads - rather than from a second query, and a pair whose master product is
+    /// not in it is left out rather than invented: a mapping names a master product by a restricted
+    /// foreign key, so that cannot happen while the row exists, and a section that guessed would be
+    /// worse than one that is short.</para>
+    /// </summary>
+    private static IReadOnlyList<ReviewedBusinessSelection> BusinessSelections(
+        IReadOnlyList<SelectionFacts> selections,
+        IReadOnlyList<ReviewedMasterProduct> catalogue)
+    {
+        var byId = catalogue.ToDictionary(master => master.Id);
+
+        return
+        [
+            .. selections
+                .GroupBy(selection => (selection.WaitingKey, selection.MasterProductId))
+                .Where(group => byId.ContainsKey(group.Key.MasterProductId))
+                .Select(group =>
+                {
+                    var representative = Representative(group);
+
+                    return new ReviewedBusinessSelection(
+                        group.Key.WaitingKey,
+                        representative.SearchName,
+                        representative.UnitLabel,
+                        byId[group.Key.MasterProductId],
+                        group.Min(selection => selection.CreatedAtUtc),
+                        group.Max(selection => selection.UpdatedAtUtc));
+                })
+                .OrderBy(selection => selection.SearchName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(selection => selection.UnitLabel, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(selection => selection.MasterProduct.Id),
+        ];
+    }
+
+    /// <summary>
+    /// The spelling a selected pair is shown under, which is the waiting products' and the automatic
+    /// matches' own rule: the ordinally first of the mappings' own stored text.
+    /// </summary>
+    private static SelectionFacts Representative(IEnumerable<SelectionFacts> selections) =>
+        selections
+            .OrderBy(selection => selection.SearchName, StringComparer.Ordinal)
+            .ThenBy(selection => selection.UnitLabel, StringComparer.Ordinal)
+            .First();
+
+    /// <summary>
     /// The spelling a waiting key is shown under: the ordinally first of the mappings' own, which is
     /// the rule the collector work list states (#923's representative rule). So the description a
     /// reviewer reads is the description the collector was given.
@@ -1358,6 +1510,23 @@ public sealed class EfPriceCatalogueReviewStore : IPriceCatalogueReviewStore
         int BusinessId,
         ProductPriceTrackingStatus Status,
         long? MasterProductId,
+        string WaitingKey,
+        string SearchName,
+        string UnitLabel,
+        DateTime CreatedAtUtc,
+        DateTime UpdatedAtUtc);
+
+    /// <summary>
+    /// What one business-selected mapping contributes to the queue (issue #1051): the pair it carries
+    /// and the product description it was settled under.
+    ///
+    /// <para><strong>There is no business key on it at all</strong>, unlike
+    /// <see cref="MappingFacts"/>: the section it builds publishes no count, so this projection never
+    /// reads the ownership column in the first place - the narrowest form the reviewed cross-business
+    /// read can take for a section that needs no count.</para>
+    /// </summary>
+    private sealed record SelectionFacts(
+        long MasterProductId,
         string WaitingKey,
         string SearchName,
         string UnitLabel,

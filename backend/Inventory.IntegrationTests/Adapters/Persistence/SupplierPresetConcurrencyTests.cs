@@ -158,6 +158,7 @@ public class SupplierPresetConcurrencyTests : IDisposable
                 var submitted = new SupplierPresetSubmission(
                     name,
                     null,
+                    SearchPrices: true,
                     ServesNationwide: true,
                     ServedStates: null,
                     PricesIncludeGst: true,

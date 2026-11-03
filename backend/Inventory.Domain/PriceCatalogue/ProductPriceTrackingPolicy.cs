@@ -59,6 +59,27 @@ public enum ProductPriceTrackingMatchSource
 
     /// <summary>A Super Admin, through the matching and review surface (#928).</summary>
     SuperAdmin = 2,
+
+    /// <summary>
+    /// The business itself, by creating a product from an unchanged master product suggestion
+    /// (#1051, the owner's decision of 1 November 2026).
+    ///
+    /// <para><strong>It is the narrowest of the three and the only one a business can produce.</strong>
+    /// It is written by <c>POST /api/products</c> alone, only for a product being created, only when
+    /// the submitted Name and unit label are still the ones
+    /// <see cref="MasterProductSelectionPolicy"/> recomputed from the selected master product, and
+    /// never for a pair a Super Admin refused. A business asking for a price is still not a business
+    /// asserting what its product is: what it may assert is that it has just created the product the
+    /// shared catalogue described to it, unedited.</para>
+    ///
+    /// <para>The mapping it writes is <see cref="ProductPriceTrackingStatus.Matched"/> - settled, so
+    /// the matcher (#941) leaves it alone like any other decided mapping - and it is the one settled
+    /// match the Super Admin review can undo by naming its <c>(waiting key, master product)</c> pair:
+    /// the review lists every such pair and <see cref="ProductMatchReviewPolicy.ReturnsToWaitingFromSelection"/>
+    /// is the rule that undo follows, which returns the mappings to
+    /// <see cref="ProductPriceTrackingStatus.Requested"/>.</para>
+    /// </summary>
+    BusinessSelection = 3,
 }
 
 /// <summary>

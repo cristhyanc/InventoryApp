@@ -500,6 +500,134 @@ public class SuperAdminPriceCatalogueReviewApiTests
 
     #endregion
 
+    #region Undoing a match a business made itself
+
+    /// <summary>
+    /// Issue #1051's ninth criterion over the wire: a match a business made itself by creating a
+    /// product from the catalogue's own description of it is <strong>listed</strong> in the queue's own
+    /// section and can be <strong>undone</strong> - the mappings return to awaiting a match in every
+    /// business that carried the pair, and the pair stops being listed.
+    ///
+    /// <para><strong>And the decisive assertion of this surface, asked of the new section and the new
+    /// decision too</strong>: no business name, business id or product id is in either body. A
+    /// selected pair is published as a search name, a unit label and the master product it names, with
+    /// no count of businesses at all.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_business_selection_is_listed_and_can_be_undone()
+    {
+        var arranged = await ArrangeAsync();
+        await SelectMasterProductAsync(arranged);
+
+        var client = _factory.AsAdministrator();
+        var productsBefore = await ProductsAsync();
+
+        var queueBody = await (await client.GetAsync(ReviewUrl)).Content.ReadAsStringAsync();
+        var queue = JsonDocument.Parse(queueBody).RootElement;
+
+        var selection = Assert.Single(queue.GetProperty("businessSelections").EnumerateArray());
+        Assert.Equal(arranged.WaitingKey, selection.GetProperty("waitingKey").GetString());
+        Assert.Equal("Coca-Cola Classic", selection.GetProperty("searchName").GetString());
+        Assert.Equal("375mL", selection.GetProperty("unitLabel").GetString());
+        Assert.Equal(
+            arranged.MasterProductId,
+            selection.GetProperty("masterProduct").GetProperty("id").GetInt64());
+        Assert.Equal(
+            "Coca-Cola",
+            selection.GetProperty("masterProduct").GetProperty("brand").GetString());
+
+        // A settled selection is not a waiting product and not an automatic match.
+        Assert.Empty(queue.GetProperty("waitingProducts").EnumerateArray());
+        Assert.Empty(queue.GetProperty("automaticMatches").EnumerateArray());
+
+        Assert.DoesNotContain(SuperAdminBusinessesApiFactory.TradingBusinessName, queueBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(SecondBusinessName, queueBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"businessId\"", queueBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"productId\"", queueBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("businessesWaitingCount\":", queueBody, StringComparison.Ordinal);
+
+        var undone = await client.PostAsJsonAsync(
+            $"{ReviewUrl}/business-selections/undo",
+            new { waitingKey = arranged.WaitingKey, masterProductId = arranged.MasterProductId });
+
+        Assert.Equal(HttpStatusCode.OK, undone.StatusCode);
+
+        var undoneBody = await undone.Content.ReadAsStringAsync();
+        var result = JsonDocument.Parse(undoneBody).RootElement;
+        Assert.Equal(arranged.WaitingKey, result.GetProperty("waitingKey").GetString());
+        Assert.Equal(
+            arranged.MasterProductId,
+            result.GetProperty("masterProduct").GetProperty("id").GetInt64());
+        Assert.DoesNotContain(SuperAdminBusinessesApiFactory.TradingBusinessName, undoneBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(SecondBusinessName, undoneBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"businessId\"", undoneBody, StringComparison.OrdinalIgnoreCase);
+
+        // Both businesses' mappings are awaiting a match again, with their own search text intact, and
+        // nothing else about either business moved.
+        var mappings = await MappingsAsync();
+        Assert.Equal(2, mappings.Count);
+        Assert.All(mappings, mapping =>
+        {
+            Assert.Equal(ProductPriceTrackingStatus.Requested, mapping.Status);
+            Assert.Null(mapping.MasterProductId);
+            Assert.Null(mapping.MatchSource);
+            Assert.Equal(arranged.WaitingKey, mapping.WaitingKey);
+        });
+
+        Assert.Equal(productsBefore, await ProductsAsync());
+
+        // The queue now shows it as a waiting product and no longer as a selection to check.
+        var after = JsonDocument
+            .Parse(await (await client.GetAsync(ReviewUrl)).Content.ReadAsStringAsync())
+            .RootElement;
+        Assert.Empty(after.GetProperty("businessSelections").EnumerateArray());
+        Assert.Equal(
+            2,
+            Assert.Single(after.GetProperty("waitingProducts").EnumerateArray())
+                .GetProperty("businessesWaitingCount")
+                .GetInt32());
+    }
+
+    /// <summary>
+    /// A pair that is not a settled business selection is <c>404</c> and writes nothing: an unknown
+    /// master product, a key nothing carries, and the same pair a second time. The last of the three
+    /// is what makes the decision safe to repeat from a page somebody else has already acted on.
+    /// </summary>
+    [Fact]
+    public async Task An_undo_of_a_pair_that_is_not_selected_is_not_found()
+    {
+        var arranged = await ArrangeAsync();
+        await SelectMasterProductAsync(arranged);
+
+        var client = _factory.AsAdministrator();
+
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await UndoAsync(client, arranged.WaitingKey, arranged.MasterProductId + 9_999)).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await UndoAsync(
+                client,
+                PriceCatalogueWaitingKey.For("Nothing", "1L"),
+                arranged.MasterProductId)).StatusCode);
+
+        Assert.All(await MappingsAsync(), mapping =>
+        {
+            Assert.Equal(ProductPriceTrackingStatus.Matched, mapping.Status);
+            Assert.Equal(arranged.MasterProductId, mapping.MasterProductId);
+            Assert.Equal(ProductPriceTrackingMatchSource.BusinessSelection, mapping.MatchSource);
+        });
+
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await UndoAsync(client, arranged.WaitingKey, arranged.MasterProductId)).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await UndoAsync(client, arranged.WaitingKey, arranged.MasterProductId)).StatusCode);
+    }
+
+    #endregion
+
     private const string SecondBusinessName = "Harbour Vending";
 
     private sealed record Arranged(
@@ -753,6 +881,74 @@ public class SuperAdminPriceCatalogueReviewApiTests
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// The state issue #1051's create leaves behind: both businesses' mappings settled as
+    /// <c>Matched</c> with the <c>BusinessSelection</c> source, naming the master product the
+    /// operators picked.
+    ///
+    /// <para>Arranged directly, for the reason <see cref="ApplyAutomaticMatchAsync"/> arranges #941's
+    /// state directly: the writer is <c>POST api/products</c>, which this class is not about and
+    /// which no actor of this fixture is a member for. The create itself, and that it writes exactly
+    /// this row, is <c>CreateProductMasterProductLinkTests</c>' and
+    /// <c>ProductMasterProductLinkApiTests</c>' - and the rule the row must satisfy is asserted here
+    /// too, so an arrangement the real writer could not have produced would fail.</para>
+    /// </summary>
+    private async Task SelectMasterProductAsync(Arranged arranged)
+    {
+        await using var db = _factory.Database();
+
+        foreach (var mapping in await db.ProductPriceTrackings
+            .Where(mapping => mapping.WaitingKey == arranged.WaitingKey)
+            .ToListAsync())
+        {
+            mapping.Status = ProductPriceTrackingStatus.Matched;
+            mapping.MasterProductId = arranged.MasterProductId;
+            mapping.MatchSource = ProductPriceTrackingMatchSource.BusinessSelection;
+
+            ProductPriceTrackingPolicy.RequireConsistentMatch(
+                mapping.Status,
+                mapping.MasterProductId,
+                mapping.MatchSource);
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    private static Task<HttpResponseMessage> UndoAsync(
+        HttpClient client,
+        string? waitingKey,
+        long masterProductId) =>
+        client.PostAsJsonAsync(
+            $"{ReviewUrl}/business-selections/undo",
+            new { waitingKey, masterProductId });
+
+    /// <summary>
+    /// Every product either business owns, by the fields a review must never touch: a decision about
+    /// the shared catalogue changes what a product <em>is</em> matched to and nothing a business owns.
+    /// </summary>
+    private async Task<string> ProductsAsync()
+    {
+        await using var db = _factory.Database();
+
+        var products = await db.Products
+            .AsNoTracking()
+            .OrderBy(product => product.Id)
+            .Select(product => new
+            {
+                product.Id,
+                product.BusinessId,
+                product.Name,
+                product.Unit,
+                product.QuantityInStock,
+                product.AverageUnitCost,
+                product.InventoryValue,
+                product.MachinePrice,
+            })
+            .ToListAsync();
+
+        return JsonSerializer.Serialize(products);
+    }
+
     private static Product Product(int businessId, string name, string unit) =>
         new()
         {
@@ -855,6 +1051,13 @@ public class SuperAdminPriceCatalogueReviewApiTests
             await client.PostAsync(
                 $"{ReviewUrl}/automatic-matches/{arranged.SuggestionId}/undo",
                 content: null),
+            // Issue #1051's undo of a match a business made itself: the same authority, so it is in
+            // the same sweep - a member, an Owner, an unauthenticated caller, the administrator
+            // without the delegated scope, a support-session header and a role preview must each be
+            // refused by it exactly as they are by the four above.
+            await client.PostAsJsonAsync(
+                $"{ReviewUrl}/business-selections/undo",
+                new { waitingKey = arranged.WaitingKey, masterProductId = arranged.MasterProductId }),
         ];
 
     private static async Task<string?> CodeAsync(HttpResponseMessage response)

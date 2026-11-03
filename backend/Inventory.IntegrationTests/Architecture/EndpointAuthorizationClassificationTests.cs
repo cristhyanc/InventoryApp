@@ -384,6 +384,12 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/Products", "GET", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}/gst-rule", "PUT", Capability.InventoryOperate)]
+    // Issue #1076's bulk GST rule change declares no capability of its own either: it is the same
+    // configuration as the single-product rule above, on the same controller, so it is the same
+    // class and the same capability. Both rows are asserted because the confirmation step is as
+    // restricted as the write it authorises.
+    [InlineData("api/Products/gst-rule/bulk-preview", "POST", Capability.InventoryOperate)]
+    [InlineData("api/Products/gst-rule/bulk", "POST", Capability.InventoryOperate)]
     [InlineData("api/products/{productId:long}/inventory-count/apply", "POST", Capability.InventoryOperate)]
     // Issue #1049's business lookup of the shared master products declares no capability of its own
     // either: looking a product up in order to create it is the same catalogue work as the create
@@ -731,6 +737,10 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/price-catalogue-review/matches", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm", "POST")]
     [InlineData("api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo", "POST")]
+    // And issue #1051's undo of a match a business made itself, which is the same authority deciding
+    // the same four columns of the same mappings: class 2 on the same controller, same marker, same
+    // policy - a business's own selection is reviewed here or nowhere.
+    [InlineData("api/super-admin/price-catalogue-review/business-selections/undo", "POST")]
     // Issue #1023's view of the shared catalogue's master products: the searchable, paged listing and
     // one product with its supplier listings. Class 2 again - the same marker and the same policy as
     // the review beside it.

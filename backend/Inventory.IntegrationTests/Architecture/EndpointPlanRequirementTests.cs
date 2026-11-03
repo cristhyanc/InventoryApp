@@ -273,6 +273,12 @@ public class EndpointPlanRequirementTests
         new("ProductsController.MasterProductSuggestions", PlanRequirementKind.None), // GET api/Products/master-product-suggestions
         new("ProductsController.PriceHistory", PlanRequirementKind.None), // GET api/Products/{id:long}/price-history
         new("ProductsController.PriceTracking", PlanRequirementKind.None), // GET api/Products/price-tracking
+        // "Set GST rule in bulk" (issue #1076). On every plan, for the reason the single-product
+        // rule below is: a product's GST rule is purchase bookkeeping configuration, which is
+        // Free's own feature, and the Bookkeeping and GST *reports* that read it are gated
+        // separately on their own endpoints.
+        new("ProductsController.PreviewBulkGstRule", PlanRequirementKind.None), // POST api/Products/gst-rule/bulk-preview
+        new("ProductsController.SetBulkGstRule", PlanRequirementKind.None), // POST api/Products/gst-rule/bulk
         new("ProductsController.SetGstRule", PlanRequirementKind.None), // PUT api/Products/{id:long}/gst-rule
         new("ProductsController.SetPriceTracking", PlanRequirementKind.None), // PUT api/Products/{id:long}/price-tracking
         new("ProductsController.Update", PlanRequirementKind.None), // PUT api/Products/{id:long}
@@ -345,6 +351,7 @@ public class EndpointPlanRequirementTests
         new("SuperAdminPriceCatalogueReviewController.DecideMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/matches
         new("SuperAdminPriceCatalogueReviewController.Queue", PlanRequirementKind.None), // GET api/super-admin/price-catalogue-review
         new("SuperAdminPriceCatalogueReviewController.UndoAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/undo
+        new("SuperAdminPriceCatalogueReviewController.UndoBusinessSelection", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/business-selections/undo
         new("SuperAdminPlanGrantsController.End", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/plan-grant/end
         new("SuperAdminPlanGrantsController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/plan-grant
         new("SuperAdminPlanGrantsController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/plan-grant

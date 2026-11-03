@@ -176,9 +176,28 @@ public class AddSupplierPriceObservationsMigrationTests
 
         await migrator.MigrateAsync(TargetMigration);
 
+        // Projected column by column rather than read as whole entities, for the reason the `before`
+        // read above is: this database is at an older migration than the current model, so a read of
+        // every mapped property would ask for a column a later migration adds (issue #1077's
+        // `SearchPrices`, for one) and fail on the schema rather than on the claim under test.
         var after = await db.SupplierPresets
             .AsNoTracking()
             .OrderBy(preset => preset.NormalisedName)
+            .Select(preset => new
+            {
+                preset.NormalisedName,
+                preset.Name,
+                preset.Url,
+                preset.IsEnabled,
+                preset.ServesNationwide,
+                preset.ServedStates,
+                preset.PricesIncludeGst,
+                preset.PriceConnector,
+                preset.PriceConnectorKey,
+                preset.CreatedAtUtc,
+                preset.UpdatedAtUtc,
+                preset.PriceCheckFreshnessHours,
+            })
             .ToListAsync();
 
         Assert.Equal(

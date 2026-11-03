@@ -1657,6 +1657,14 @@ public class AppDbContext : DbContext
         // column constraint cannot express.
         preset.Property(x => x.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
 
+        // Whether the price collector searches this supplier (issue #1077). It is its own column
+        // rather than a second reading of IsEnabled above, because "offer this supplier to
+        // businesses" and "pay to search this supplier's prices" are different decisions - the
+        // column default is true because a supplier somebody adds to this list is one they want
+        // priced, and AddSupplierPresetSearchPrices gave every row that already existed its own
+        // IsEnabled value so nothing changed on deploy.
+        preset.Property(x => x.SearchPrices).HasDefaultValue(true);
+
         // The supplier-master fields of issue #931. The market is two columns because the two claims
         // are different: ServesNationwide is "everywhere", and ServedStates is the closed, ordered,
         // comma-separated code list SupplierPresetMasterPolicy writes - bounded at the longest value

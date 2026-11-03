@@ -38,7 +38,9 @@ const CONNECTOR_WITH_A_KEY = SupplierPriceConnector.Varnmill;
  * workflow per docs/architecture.md § Page composition boundary - the routed page composes it
  * through `[preset]` and reacts only to `(saved)`/`(canceled)`. A `null` `preset` is an Add and an
  * existing one is an Edit; the only difference is which call is made and whether the enabled toggle
- * is offered, because a new preset is always created enabled.
+ * is offered, because a new preset is always created enabled. The *Search prices* switch of issue
+ * #1077 is offered on both, because "add this supplier but do not search it yet" is a real thing to
+ * want of a route that charges per search.
  *
  * **Field validation mirrors the server and never replaces it.** The name rule is
  * `SupplierPresetPolicy`'s; the website rule is the one supplier-website helper there is,
@@ -181,6 +183,21 @@ const CONNECTOR_WITH_A_KEY = SupplierPriceConnector.Varnmill;
           <p class="mb-2 text-sm text-red-600" role="alert">{{ connectorKeyError }}</p>
         }
 
+        <!-- Offered on an Add as well as an Edit, unlike the enabled switch below: a route that
+             charges per search is one somebody may want recorded before it is switched on. -->
+        <label
+          class="mb-1 mt-3 flex items-center gap-2 text-sm text-md-gray-700"
+          for="preset-search-prices"
+        >
+          <input
+            id="preset-search-prices"
+            type="checkbox"
+            [disabled]="submitting"
+            [(ngModel)]="searchPrices"
+          />
+          Search prices for this supplier
+        </label>
+
         @if (preset) {
           <label class="mb-3 mt-3 flex items-center gap-2 text-sm text-md-gray-700" for="preset-enabled">
             <input
@@ -260,6 +277,14 @@ export class SupplierPresetDialogComponent implements OnInit {
   isEnabled = true;
 
   /**
+   * Whether the price collector searches this supplier (issue #1077). It starts on for a new preset,
+   * which is what the server defaults an omitted value to, and is pre-filled from the row on an
+   * edit. It is submitted on both calls and is independent of {@link isEnabled}: neither switch
+   * moves the other.
+   */
+  searchPrices = true;
+
+  /**
    * Whether the preset serves the whole country. A new preset starts nationwide, because that is
    * what most suppliers on this list are and because the alternative - starting with no market at
    * all - would open the form on a refusal.
@@ -302,6 +327,7 @@ export class SupplierPresetDialogComponent implements OnInit {
     this.name = this.preset?.name ?? '';
     this.url = this.preset?.url ?? '';
     this.isEnabled = this.preset?.isEnabled ?? true;
+    this.searchPrices = this.preset?.searchPrices ?? true;
 
     // An existing preset is shown exactly as it is stored, including a row the issue #931 migration
     // could not recognise: that reads as neither nationwide nor any state, and the form shows it that
@@ -382,6 +408,7 @@ export class SupplierPresetDialogComponent implements OnInit {
     this.submitting = true;
 
     const master = {
+      searchPrices: this.searchPrices,
       servesNationwide: this.servesNationwide,
       servedStates,
       pricesIncludeGst: this.pricesIncludeGst,

@@ -220,6 +220,40 @@ public class EfBusinessSupplierProvisioningStoreTests
     }
 
     /// <summary>
+    /// What a newly approved business receives is decided by whether the platform still
+    /// <em>suggests</em> each record, and by nothing about price searching (issue #1077): a record
+    /// whose searches a Super Admin has paused is still copied, and a record that is no longer
+    /// suggested is still withheld however searched it is.
+    ///
+    /// <para>That is the criterion that the provisioning copy is unaffected by the new switch, and
+    /// the combination that could have been got wrong is the first one: pausing a paid supplier's
+    /// searches must not quietly stop businesses being given that supplier, because they still buy
+    /// from it.</para>
+    /// </summary>
+    [Fact]
+    public async Task What_is_copied_ignores_whether_the_record_is_searched()
+    {
+        await using var fixture = await ProvisioningFixture.CreateAsync();
+        await fixture.ReplacePresetsAsync(
+            ("Unsearched Grocer", "https://unsearched.test", true),
+            ("Retired But Searched", null, false));
+        await fixture.SetSearchPricesAsync("Unsearched Grocer", searchPrices: false);
+        await fixture.SetSearchPricesAsync("Retired But Searched", searchPrices: true);
+
+        await fixture.CopyAsync(fixture.ApprovedBusinessId);
+
+        var copy = Assert.Single(await fixture.SuppliersOfAsync(fixture.ApprovedBusinessId));
+        Assert.Equal("Unsearched Grocer", copy.Name);
+        Assert.Equal("https://unsearched.test", copy.Url);
+
+        // And the platform list is untouched: the copy goes one way, so neither record's searching
+        // state moved.
+        var presets = await fixture.PresetsAsync();
+        Assert.False(presets.Single(preset => preset.Name == "Unsearched Grocer").SearchPrices);
+        Assert.True(presets.Single(preset => preset.Name == "Retired But Searched").SearchPrices);
+    }
+
+    /// <summary>
     /// The marker is stamped with the instant it was given - the approval's decision instant - in the
     /// same save as the suppliers.
     /// </summary>
@@ -595,6 +629,18 @@ public class EfBusinessSupplierProvisioningStoreTests
                 });
             }
 
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Switches price searching on or off for one preset (issue #1077), as the Super Admin's own
+        /// surface does, so a test can prove the copy does not read it.
+        /// </summary>
+        public async Task SetSearchPricesAsync(string name, bool searchPrices)
+        {
+            await using var db = TestAppDbContext.Unrestricted(_options);
+            (await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name))
+                .SearchPrices = searchPrices;
             await db.SaveChangesAsync();
         }
 

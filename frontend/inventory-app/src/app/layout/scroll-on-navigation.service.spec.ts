@@ -1,7 +1,8 @@
 import { ApplicationRef, Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Location, ViewportScroller } from '@angular/common';
-import { CanActivateFn, Router, RouterOutlet, provideRouter, withInMemoryScrolling } from '@angular/router';
+import { CanActivateFn, Router, RouterOutlet, Scroll, provideRouter, withInMemoryScrolling } from '@angular/router';
+import { filter, firstValueFrom, throwError, timeout } from 'rxjs';
 import { ScrollOnNavigationService } from './scroll-on-navigation.service';
 
 @Component({ standalone: true, selector: 'app-scroll-test-root', imports: [RouterOutlet], template: '<router-outlet></router-outlet>' })
@@ -26,6 +27,13 @@ class FragmentPageComponent {}
  * alone, which is all `RouterTestingHarness` does. These tests therefore bootstrap a real root
  * component the same way `bootstrapApplication` does, so the router drives the same deferred
  * `Scroll` event production code depends on, rather than a synthetic stand-in for it.
+ *
+ * Every step is awaited on that event rather than on a delay (see `awaitingScroll`). A fixed timer
+ * cannot be right here: a Back or a Forward runs through jsdom's own `popstate` task, the router's
+ * navigation and only then the `setTimeout`-deferred `Scroll`, and a wait that expired before the
+ * end of that chain made this file fail intermittently under load - "expected [0, 640], received
+ * [0, 0]", which is a restoration that had not happened yet rather than a handler that scrolled to
+ * the top.
  */
 describe('ScrollOnNavigationService (issue #1048)', () => {
   let scrollToPosition: jest.Mock;
@@ -50,14 +58,63 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
     return true;
   };
 
-  /** Lets the real, `setTimeout`-deferred `Scroll` event (see `RouterScroller`) run. */
-  async function flushScrollEvent(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  /**
+   * How long a `Scroll` event the router owes us may take to arrive before the test gives up and
+   * says so. It is a safety net rather than a wait: `awaitingScroll` resolves on the event itself,
+   * so this bound is reached only when the router produced no event at all - and a test that said
+   * "expected [0, 640], received [0, 0]" because a fixed delay expired first is exactly the failure
+   * this file no longer has.
+   */
+  const scrollEventTimeoutMs = 2000;
+
+  /**
+   * The next deferred `Scroll` event the router delivers (see `RouterScroller`, which schedules it
+   * with `setTimeout` after the navigation it belongs to has ended).
+   *
+   * Subscribing is what makes this deterministic, and it must happen *before* the action that
+   * produces the event: the subscription is in place for the whole async chain a Back or Forward
+   * runs through - jsdom's own `popstate` task, the router's navigation, `NavigationEnd` and finally
+   * the deferred event - however long that chain takes under load. `ScrollOnNavigationService` has
+   * already handled the event when this promise's continuation runs, because RxJS notifies every
+   * subscriber synchronously and an awaited promise resumes in a later microtask.
+   */
+  function nextScrollEvent(): Promise<Scroll> {
+    return firstValueFrom(
+      router.events.pipe(
+        filter((event): event is Scroll => event instanceof Scroll),
+        timeout({
+          first: scrollEventTimeoutMs,
+          with: () =>
+            throwError(
+              () =>
+                new Error(
+                  `The router delivered no Scroll event within ${scrollEventTimeoutMs} ms of the navigation.`
+                )
+            )
+        })
+      )
+    );
+  }
+
+  /** Runs `act` and resolves once the `Scroll` event it produces has been handled. */
+  async function awaitingScroll(act: () => unknown): Promise<void> {
+    const scrolled = nextScrollEvent();
+    await act();
+    await scrolled;
+  }
+
+  /**
+   * Settles a navigation that produces **no** `Scroll` event at all - the one a guard cancels, which
+   * reaches neither `NavigationEnd` nor the same-URL `NavigationSkipped` the router turns into one.
+   * There is no event to await, so this waits the one macrotask turn `RouterScroller` defers by:
+   * had the router scheduled an event, it would have run by now.
+   */
+  async function flushPendingScrollEvent(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
   async function navigate(url: string): Promise<void> {
-    await router.navigateByUrl(url);
-    await flushScrollEvent();
+    await awaitingScroll(() => router.navigateByUrl(url));
   }
 
   /** The operator scrolling the page they are on, before they navigate away from it. */
@@ -66,13 +123,11 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
   }
 
   async function goBack(): Promise<void> {
-    TestBed.inject(Location).back();
-    await flushScrollEvent();
+    await awaitingScroll(() => TestBed.inject(Location).back());
   }
 
   async function goForward(): Promise<void> {
-    TestBed.inject(Location).forward();
-    await flushScrollEvent();
+    await awaitingScroll(() => TestBed.inject(Location).forward());
   }
 
   async function harness(): Promise<void> {
@@ -107,13 +162,16 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
 
     host = document.createElement('app-scroll-test-root');
     document.body.appendChild(host);
-    TestBed.inject(ApplicationRef).bootstrap(RootComponent, host);
-    // Starts the handler, exactly as `provideEnvironmentInitializer` does in `app.config.ts`.
+
+    // Starts the handler, exactly as `provideEnvironmentInitializer` does in `app.config.ts`, and
+    // before the bootstrap below so it sees that navigation's own event - which is also what lets
+    // the baseline be awaited rather than assumed.
     TestBed.inject(ScrollOnNavigationService);
     router = TestBed.inject(Router);
 
-    // The initial navigation the bootstrap above triggers, settled to a known baseline path.
-    await flushScrollEvent();
+    // The initial navigation the bootstrap triggers, settled to a known baseline path.
+    await awaitingScroll(() => TestBed.inject(ApplicationRef).bootstrap(RootComponent, host));
+
     scrollToPosition.mockClear();
     scrollToAnchor.mockClear();
   }
@@ -199,8 +257,9 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
     await navigate('/a');
     scrollToPosition.mockClear();
 
-    await router.navigate(['/a'], { queryParams: { open: '1' }, replaceUrl: true });
-    await flushScrollEvent();
+    await awaitingScroll(() =>
+      router.navigate(['/a'], { queryParams: { open: '1' }, replaceUrl: true })
+    );
 
     expect(scrollToPosition).not.toHaveBeenCalled();
   });
@@ -210,8 +269,7 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
     await navigate('/a');
     scrollToPosition.mockClear();
 
-    await router.navigate(['/a'], { onSameUrlNavigation: 'reload' });
-    await flushScrollEvent();
+    await awaitingScroll(() => router.navigate(['/a'], { onSameUrlNavigation: 'reload' }));
 
     expect(scrollToPosition).not.toHaveBeenCalled();
   });
@@ -232,7 +290,9 @@ describe('ScrollOnNavigationService (issue #1048)', () => {
     scrollToPosition.mockClear();
     blockedPath = '/b';
 
-    await navigate('/b');
+    // A cancelled navigation reaches no `NavigationEnd`, so there is no `Scroll` event to await.
+    await router.navigateByUrl('/b');
+    await flushPendingScrollEvent();
 
     expect(scrollToPosition).not.toHaveBeenCalled();
     expect(scrollToAnchor).not.toHaveBeenCalled();

@@ -12,6 +12,7 @@ using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Application.Businesses;
+using Inventory.Application.Products;
 using InventoryApi.Adapters.Businesses;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
@@ -19,6 +20,7 @@ using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
+using InventoryApi.Adapters.Products;
 using InventoryApi.Adapters.Subscriptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
@@ -294,6 +296,13 @@ builder.Services.AddScoped<IMemberInviteAudit, LoggingMemberInviteAudit>();
 // transport fact. The event names the fields that changed and never a value - see
 // LoggingBusinessSettingsAudit.
 builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>();
+// The bulk product GST rule audit trail (issue #1076), on exactly the terms the settings one above
+// is satisfied: a structured event at the boundary that knows the request's correlation id, and no
+// audit table, because this issue authorises no schema change. It is a separate port because
+// configuring every unconfigured product's GST rule is a different event with different fields -
+// and because its entry type has no field for a product of any kind, which keeps the business's
+// catalogue out of the audit trail structurally rather than by a sink's discretion.
+builder.Services.AddScoped<IBulkProductGstRuleAudit, LoggingBulkProductGstRuleAudit>();
 // The self-service business application audit trail (issue #541), on the same terms again. It is a
 // separate port from the three above because an application is a different event with different
 // fields - and because its entry type has no field for a business name, a contact address or an
