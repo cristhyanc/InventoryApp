@@ -95,6 +95,15 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Inventory.Operate", "GET", "/api/products/price-tracking", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
         { "Inventory.Operate", "PUT", $"/api/products/{MissingId}/price-tracking", "Operator,Manager,Owner" },
+        // Issue #1076. "Set GST rule in bulk" declares no capability of its own either: it is the
+        // same configuration as the single-product GST rule on the same controller, which is the
+        // "same permission as the existing single-product GST rule operation" that issue requires.
+        // Both rows are safe to call in both directions - the preview only counts, and the apply's
+        // "{}" body names no target rule, which the Domain policy refuses with 400 before anything
+        // is read or written. These two rows are also what assert the issue's criterion for a
+        // caller whose business does not resolve, through the no-membership theory below.
+        { "Inventory.Operate", "POST", "/api/products/gst-rule/bulk-preview", "Operator,Manager,Owner" },
+        { "Inventory.Operate", "POST", "/api/products/gst-rule/bulk", "Operator,Manager,Owner" },
         // Issue #1049. The business lookup of the shared master products declares no capability of
         // its own either: it is the capability that creates a product, because looking a product up
         // in order to create it is the same catalogue work. Safe to call in both directions - it is

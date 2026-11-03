@@ -9,6 +9,7 @@ using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Domain.Gst;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Clock;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
@@ -16,7 +17,9 @@ using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.SupportSessions;
+using InventoryApi.Tests.Application.Tenancy;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +30,14 @@ namespace InventoryApi.Tests.Controllers;
 
 public class ProductsControllerTests
 {
+    /// <summary>
+    /// The business the bulk GST rule use case is constructed with (issue #1076). These tests use
+    /// an unrestricted context, so nothing is scoped by it; it exists because that use case records
+    /// an audit event against a resolved business, and its own behaviour is asserted in
+    /// BulkProductGstRuleApiTests and BulkProductGstRuleUseCaseTests.
+    /// </summary>
+    private const int TestBusinessId = 1;
+
     private static AppDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -67,6 +78,18 @@ public class ProductsControllerTests
             getProductPriceComparison,
             new GetProductGstRule(store),
             new SetProductGstRule(store),
+            // "Set GST rule in bulk" (issue #1076). Its own behaviour is relational - one
+            // BEGIN IMMEDIATE transaction whose count, comparison and write are one operation - and
+            // is asserted over the real pipeline in BulkProductGstRuleApiTests and over a real
+            // relational database in EfBulkProductGstRuleStoreTests; these tests construct it only
+            // because the controller needs it.
+            new PreviewBulkProductGstRule(new EfBulkProductGstRuleStore(db)),
+            new SetBulkProductGstRule(
+                new EfBulkProductGstRuleStore(db),
+                new FakeCurrentBusinessProvider(TestBusinessId),
+                FakeAuthenticatedActorAccessor.Identified(BulkGstRuleActor()),
+                new FakeBulkProductGstRuleAudit(),
+                new SystemClock()),
             // The "Track supplier prices" switch (issue #938). Its own behaviour is relational and
             // is asserted over the real pipeline in ProductPriceTrackingApiTests and over the real
             // migration history in EfProductPriceTrackingStoreTests; these tests construct it only
@@ -92,6 +115,21 @@ public class ProductsControllerTests
             // InventoryApi.Tests.Controllers.LowStockReorderMetadataApiTests.
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
         };
+    }
+
+    /// <summary>
+    /// An identified actor for the bulk GST rule use case's audit event (issue #1076). These tests
+    /// never assert that event; the use case refuses to write at all without an identified actor,
+    /// which is what this satisfies.
+    /// </summary>
+    private static ActorIdentity BulkGstRuleActor()
+    {
+        Assert.True(
+            ActorIdentity.TryCreate(
+                "33333333-3333-3333-3333-333333333333",
+                "44444444-4444-4444-4444-444444444444",
+                out var actor));
+        return actor!;
     }
 
     private static ProductResponse SingleProduct(ActionResult<IEnumerable<ProductResponse>> result) =>

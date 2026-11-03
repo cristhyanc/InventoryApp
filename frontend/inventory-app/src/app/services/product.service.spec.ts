@@ -1,7 +1,7 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { Product, ReorderAlertListing } from '../models/models';
+import { GstClassification, Product, ReorderAlertListing } from '../models/models';
 import { ConfigService } from './config.service';
 import { ProductService } from './product.service';
 
@@ -238,5 +238,38 @@ describe('ProductService reorder-alert listing metadata (issue #727)', () => {
       expect(request.request.params.keys()).toEqual([]);
       request.flush([]);
     });
+  });
+
+  /**
+   * "Set GST rule in bulk" (issue #1076). Both are `POST`s on the catalogue's own resources, and
+   * what the write carries is the whole contract: the target rule and the count that was confirmed,
+   * and never a business, a product id or a filter.
+   */
+  describe('bulk product GST rules (issue #1076)', () => {
+    it('reads the eligible count with no parameter and no body of its own', () => {
+      const { service, httpMock } = createService();
+
+      service.previewBulkGstRule().subscribe();
+      const request = httpMock.expectOne((candidate) => candidate.url === '/api/products/gst-rule/bulk-preview');
+
+      expect(request.request.method).toBe('POST');
+      expect(request.request.params.keys()).toEqual([]);
+      expect(request.request.body).toEqual({});
+      request.flush({ eligibleCount: 4 });
+    });
+
+    it.each([GstClassification.Taxable, GstClassification.GstFree])(
+      'writes the target rule and the confirmed count, and nothing else (%s)',
+      (gstRule) => {
+        const { service, httpMock } = createService();
+
+        service.setBulkGstRule(gstRule, 4).subscribe();
+        const request = httpMock.expectOne('/api/products/gst-rule/bulk');
+
+        expect(request.request.method).toBe('POST');
+        expect(request.request.body).toEqual({ gstRule, expectedEligibleCount: 4 });
+        request.flush({ gstRule, changedCount: 4 });
+      }
+    );
   });
 });

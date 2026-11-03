@@ -154,6 +154,13 @@ public class SupportSessionRequestApiTests
     // rule refuses it under the capability the session does grant, so somebody from outside the
     // business cannot decide which of its products get sent to the price collector.
     [InlineData("Inventory.Operate", "PUT", "/api/products/999999/price-tracking")]
+    // "Set GST rule in bulk" of issue #1076, both actions, neither carrying a rule of its own: the
+    // method rule refuses them under the capability the session does grant, so somebody from
+    // outside the business can neither configure every one of its unconfigured products nor even
+    // read the count that would authorise doing so. The preview is a POST for exactly that reason -
+    // its answer is the confirmation the write is checked against.
+    [InlineData("Inventory.Operate", "POST", "/api/products/gst-rule/bulk-preview")]
+    [InlineData("Inventory.Operate", "POST", "/api/products/gst-rule/bulk")]
     // The product create, which issue #1051 let link a new product to a master product and so turn
     // that tracking on: the method rule refuses it for the same reason the switch beside it is
     // refused, so somebody from outside the business cannot create one of its products at all.
