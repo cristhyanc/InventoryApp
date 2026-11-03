@@ -73,8 +73,11 @@ public enum ProductPriceTrackingMatchSource
     /// shared catalogue described to it, unedited.</para>
     ///
     /// <para>The mapping it writes is <see cref="ProductPriceTrackingStatus.Matched"/> - settled, so
-    /// the matcher (#941) leaves it alone like any other decided mapping - and a Super Admin may
-    /// still undo it on the terms every settled match has.</para>
+    /// the matcher (#941) leaves it alone like any other decided mapping - and it is the one settled
+    /// match the Super Admin review can undo by naming its <c>(waiting key, master product)</c> pair:
+    /// the review lists every such pair and <see cref="ProductMatchReviewPolicy.ReturnsToWaitingFromSelection"/>
+    /// is the rule that undo follows, which returns the mappings to
+    /// <see cref="ProductPriceTrackingStatus.Requested"/>.</para>
     /// </summary>
     BusinessSelection = 3,
 }

@@ -8,7 +8,8 @@ namespace Inventory.Application.PriceCatalogue;
 
 /// <summary>
 /// The whole Super Admin review queue (issue #928, parent #817): the products awaiting a match, the
-/// automatic matches waiting to be checked, and the supplier listings waiting for a decision.
+/// automatic matches waiting to be checked, the matches businesses made themselves (issue #1051), and
+/// the supplier listings waiting for a decision.
 ///
 /// <para>It takes no filter, page, sort or search parameter, for the reason
 /// <c>ListSupplierPresets</c> and <c>ListPlatformBusinesses</c> take none. The one value it supplies
@@ -332,6 +333,91 @@ public sealed class DecideAutomaticProductMatchReview
             SupplierListingId: null,
             result.MasterProduct.Id,
             result.SuggestionId,
+            result.WaitingKey,
+            PriceAccepted: false,
+            ConfirmedUnitsPerPack: null,
+            decidedAtUtc));
+
+        return result;
+    }
+
+    private ActorIdentity CurrentActor() =>
+        _actorAccessor.GetCurrentActor().Actor
+            ?? throw new BusinessAccessDeniedException(BusinessAccessDenialReason.NotAuthenticated);
+}
+
+/// <summary>
+/// Undoes one match a business made itself (issue #1051, on #928's surface).
+///
+/// <para><strong>This is what makes a business's own selection reviewable at all.</strong> A business
+/// may settle one of its mappings by creating a product from the shared catalogue's own description of
+/// it, which is the only match source a business can produce - and the owner's decision of 1 November
+/// 2026 that allows it says in the same sentence that a Super Admin can still undo it. The review
+/// therefore lists every such <c>(waiting key, master product)</c> pair and takes one back here: the
+/// mappings return to awaiting a match, in every business that carries the pair, and the collector
+/// searches for the description again.</para>
+///
+/// <para><strong>There is no confirmation beside it, deliberately.</strong> The mapping is already
+/// settled, so a reviewer confirming one would be writing the state it is already in; leaving it alone
+/// is the confirmation. And nothing of the shared catalogue is written either way - no suggestion row,
+/// no listing, no price - because a business's selection wrote none of them for an undo to reverse.
+/// </para>
+/// </summary>
+public sealed class UndoBusinessSelectionMatch
+{
+    private readonly IPriceCatalogueReviewStore _store;
+    private readonly IAuthenticatedActorAccessor _actorAccessor;
+    private readonly IPriceCatalogueReviewAudit _audit;
+    private readonly IClock _clock;
+
+    public UndoBusinessSelectionMatch(
+        IPriceCatalogueReviewStore store,
+        IAuthenticatedActorAccessor actorAccessor,
+        IPriceCatalogueReviewAudit audit,
+        IClock clock)
+    {
+        _store = store;
+        _actorAccessor = actorAccessor;
+        _audit = audit;
+        _clock = clock;
+    }
+
+    /// <returns>
+    /// What the undo did, or <see langword="null"/> when no settled business selection of that pair is
+    /// left.
+    /// </returns>
+    /// <exception cref="BusinessAccessDeniedException">
+    /// The request carries no identifiable actor, so there is nobody to record the decision for.
+    /// </exception>
+    public async Task<BusinessSelectionUndoResult?> Handle(
+        string? waitingKey,
+        long masterProductId,
+        CancellationToken cancellationToken)
+    {
+        // Read before anything else, so nothing is undone for a request whose actor the audit trail
+        // could not name.
+        var actor = CurrentActor();
+
+        var decidedAtUtc = _clock.UtcNow;
+
+        var result = await _store
+            .UndoBusinessSelectionAsync(waitingKey, masterProductId, decidedAtUtc, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result is null)
+        {
+            return null;
+        }
+
+        _audit.Record(new PriceCatalogueReviewAuditEntry(
+            actor.DirectoryTenantId,
+            actor.ObjectId,
+            PriceCatalogueReviewAction.BusinessSelectionUndone,
+            SupplierListingId: null,
+            result.MasterProduct.Id,
+            // A business's selection writes no suggestion row, so there is none to name: the pair
+            // itself is the whole identifier this decision has.
+            SuggestionId: null,
             result.WaitingKey,
             PriceAccepted: false,
             ConfirmedUnitsPerPack: null,

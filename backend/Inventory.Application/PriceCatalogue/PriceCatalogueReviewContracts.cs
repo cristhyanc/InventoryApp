@@ -169,13 +169,40 @@ public sealed record ReviewedAutomaticMatch(
     DateTime AppliedAtUtc);
 
 /// <summary>
-/// The whole review queue (issue #928), in the three sections the page is built from: the products
-/// nothing has matched, the matches a collector run applied by itself, and the listings waiting for a
-/// decision.
+/// One match a business made itself, waiting to be checked (issue #1051, as #928 presents it): the
+/// <c>(waiting key, master product)</c> pair a business settled by creating a product from the shared
+/// catalogue's own description of it, and when that happened.
+///
+/// <para><strong>It is a pair and not a mapping, and it carries no count.</strong> One pair may be
+/// carried by several businesses' mappings - the key is a folded description several catalogues
+/// share - and an undo settles all of them, exactly as every other decision on this surface settles a
+/// key. What a reviewer needs is the product description and the master product it was matched to; how
+/// many businesses hold it is not theirs to know, and unlike <see cref="ReviewedWaitingProduct"/>
+/// there is no field here for it - the adapter does not read the business key for this section at
+/// all.</para>
+///
+/// <para>The search name and the unit label are the mappings' own stored text under the representative
+/// rule the rest of this queue uses, so the description a reviewer reads is the description the
+/// business was shown.</para>
+/// </summary>
+public sealed record ReviewedBusinessSelection(
+    string WaitingKey,
+    string SearchName,
+    string UnitLabel,
+    ReviewedMasterProduct MasterProduct,
+    DateTime FirstSelectedAtUtc,
+    DateTime LastSelectedAtUtc);
+
+/// <summary>
+/// The whole review queue (issue #928), in the four sections the page is built from: the products
+/// nothing has matched, the matches a collector run applied by itself, the matches a business made
+/// itself (issue #1051), and the listings waiting for a decision.
 ///
 /// <para>The automatic matches are a section of their own because the issue asks for exactly that -
 /// "listed separately, flagged auto-matched" - and because what a reviewer does with one is confirm
-/// or undo rather than match.</para>
+/// or undo rather than match. <see cref="BusinessSelections"/> is a section of its own for the second
+/// of those reasons: a business's own selection (#1051) is already settled, so there is nothing to
+/// confirm, and the only decision a reviewer has about one is to undo it.</para>
 ///
 /// <para><strong><see cref="MasterProducts"/> is the whole shared catalogue, and it is here because
 /// one of the criteria needs it</strong>: a reviewer may "pick another existing master product", and
@@ -189,6 +216,7 @@ public sealed record ReviewedAutomaticMatch(
 public sealed record PriceCatalogueReviewQueue(
     IReadOnlyList<ReviewedWaitingProduct> WaitingProducts,
     IReadOnlyList<ReviewedAutomaticMatch> AutomaticMatches,
+    IReadOnlyList<ReviewedBusinessSelection> BusinessSelections,
     IReadOnlyList<ReviewedSupplierListing> Listings,
     IReadOnlyList<ReviewedMasterProduct> MasterProducts);
 
@@ -305,3 +333,17 @@ public sealed record AutomaticMatchReviewResult(
     string WaitingKey,
     ReviewedMasterProduct MasterProduct,
     int ListingsMovedCount);
+
+/// <summary>
+/// What became of one undo of a business's own selection (issue #1051, on #928's surface): the pair
+/// that was taken back.
+///
+/// <para><strong>There is deliberately no count of anything.</strong> The mappings an undo returned
+/// are a count about businesses, which this surface never publishes - #941's own restraint, kept here;
+/// and no supplier listing moves, because a business's selection never moved one: it writes exactly
+/// one mapping of its own and nothing of the shared catalogue (issue #1051's eighth criterion), so
+/// there is nothing for an undo of it to move back.</para>
+/// </summary>
+public sealed record BusinessSelectionUndoResult(
+    string WaitingKey,
+    ReviewedMasterProduct MasterProduct);

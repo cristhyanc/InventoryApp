@@ -8,7 +8,8 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// <summary>
 /// Relational tests for the link a product created from a master product suggestion gets
 /// (issue #1051, parent #817): the create that writes one <c>Matched</c> mapping with the new
-/// <c>BusinessSelection</c> source, and the three conflicts that write nothing at all.
+/// <c>BusinessSelection</c> source, the three conflicts that write nothing at all, and what the Super
+/// Admin review of #928 then sees of such a match and undoes.
 ///
 /// <para>Two businesses over real SQLite and the real migration history, because what is under test
 /// is the boundary itself - the ownership stamp, the central query filters, the foreign keys and
@@ -494,11 +495,240 @@ public class CreateProductMasterProductLinkTests
     #region What the Super Admin review makes of it
 
     /// <summary>
-    /// The eighth criterion, first half: the review treats a <c>BusinessSelection</c> mapping as the
-    /// settled match it is, exactly like a <c>Matched</c> mapping any other source decided. A Super
-    /// Admin matching the same waiting key to another master product moves only the mapping still
-    /// <em>awaiting</em> a match (<c>ProductMatchReviewPolicy.MayMatch</c>); this business's own
-    /// decision is left standing, untouched instant included.
+    /// The ninth criterion's see half, through the <strong>real review adapter</strong>: the pair a
+    /// created product settled is listed in the queue's own business-selections section, described by
+    /// the mapping's stored text and naming the master product it was matched to - and it is in that
+    /// section alone, because it is neither awaiting a match nor an automatic match somebody applied.
+    ///
+    /// <para>And the decisive assertion of this surface, asked of the new section too: nothing about
+    /// the business that selected it is in the answer. There is no field for a business id, a product
+    /// id or even a count, and the adapter does not read the ownership column for this section at
+    /// all.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_review_queue_lists_a_created_business_selection()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var masterProductId = await fixture.SeedMasterProductAsync(Brand, Name);
+        var waitingKey = PriceCatalogueWaitingKey.For(Prefill.ProductName, Prefill.UnitLabel);
+
+        var created = await fixture.CreateProductAsync(
+            fixture.FirstBusinessId,
+            Prefill.ProductName,
+            Prefill.UnitLabel,
+            masterProductId);
+        Assert.Equal(ProductWriteOutcome.Succeeded, created.Outcome);
+        var ours = Assert.Single(await fixture.AllMappingsAsync());
+
+        var queue = await fixture.DeniedReviewStore()
+            .ReadQueueAsync(ReviewedAt, CancellationToken.None);
+
+        var listed = Assert.Single(queue.BusinessSelections);
+        Assert.Equal(waitingKey, listed.WaitingKey);
+        Assert.Equal(Prefill.ProductName, listed.SearchName);
+        Assert.Equal(Prefill.UnitLabel, listed.UnitLabel);
+        Assert.Equal(masterProductId, listed.MasterProduct.Id);
+        Assert.Equal(Brand, listed.MasterProduct.Brand);
+        Assert.Equal(Name, listed.MasterProduct.Name);
+        Assert.Equal(ours.CreatedAtUtc, listed.FirstSelectedAtUtc);
+        Assert.Equal(ours.UpdatedAtUtc, listed.LastSelectedAtUtc);
+
+        // A settled selection is not waiting for a match and is not an automatic one, so it appears
+        // in neither of those sections.
+        Assert.Empty(queue.WaitingProducts);
+        Assert.Empty(queue.AutomaticMatches);
+    }
+
+    /// <summary>
+    /// The ninth criterion's undo half, through the real review adapter: a Super Admin naming the
+    /// <c>(waiting key, master product)</c> pair returns the mapping to awaiting a match - the master
+    /// product and the source cleared, the instant the decision's - and the pair stops being listed as
+    /// one somebody has still to check.
+    ///
+    /// <para><strong>And nothing else moves.</strong> The product itself is untouched: its name, unit
+    /// label, quantity, average unit cost, inventory value and machine price are what the create
+    /// stored, because an undo decides what a product <em>is</em> in the shared catalogue and never
+    /// anything a business owns. No master product, suggestion row or supplier listing is written
+    /// either - a business's selection created none of them for an undo to put back.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_super_admin_undo_returns_a_created_selection_to_waiting()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var masterProductId = await fixture.SeedMasterProductAsync(Brand, Name);
+        await fixture.SeedListingAsync(masterProductId, "zedco-375", fixture.SupplierPresetId);
+        var waitingKey = PriceCatalogueWaitingKey.For(Prefill.ProductName, Prefill.UnitLabel);
+
+        var created = await fixture.CreateProductAsync(
+            fixture.FirstBusinessId,
+            Prefill.ProductName,
+            Prefill.UnitLabel,
+            masterProductId);
+        Assert.Equal(ProductWriteOutcome.Succeeded, created.Outcome);
+
+        var ours = Assert.Single(await fixture.AllMappingsAsync());
+        var sharedBefore = await Describe(fixture);
+        var productsBefore = await DescribeProducts(fixture);
+
+        var undone = await fixture.DeniedReviewStore().UndoBusinessSelectionAsync(
+            waitingKey,
+            masterProductId,
+            ReviewedAt,
+            CancellationToken.None);
+
+        Assert.NotNull(undone);
+        Assert.Equal(waitingKey, undone!.WaitingKey);
+        Assert.Equal(masterProductId, undone.MasterProduct.Id);
+
+        var returned = Assert.Single(await fixture.AllMappingsAsync());
+        Assert.Equal(ours.Id, returned.Id);
+        Assert.Equal(fixture.FirstBusinessId, returned.BusinessId);
+        Assert.Equal(created.ProductId, returned.ProductId);
+        Assert.Equal(ProductPriceTrackingStatus.Requested, returned.Status);
+        Assert.Null(returned.MasterProductId);
+        Assert.Null(returned.MatchSource);
+        Assert.Equal(ReviewedAt, returned.UpdatedAtUtc);
+
+        // The search text it is waiting under is untouched, so the collector searches for exactly
+        // what the business recorded.
+        Assert.Equal(ours.WaitingKey, returned.WaitingKey);
+        Assert.Equal(ours.SearchName, returned.SearchName);
+        Assert.Equal(ours.UnitLabel, returned.UnitLabel);
+
+        Assert.Equal(sharedBefore, await Describe(fixture));
+        Assert.Equal(productsBefore, await DescribeProducts(fixture));
+
+        // It is a waiting product now and no longer a selection to check, which is the state a
+        // reviewer can then match, refuse or record as not found on the same surface.
+        var queue = await fixture.DeniedReviewStore()
+            .ReadQueueAsync(ReviewedAt, CancellationToken.None);
+        Assert.Empty(queue.BusinessSelections);
+        Assert.Equal(waitingKey, Assert.Single(queue.WaitingProducts).WaitingKey);
+    }
+
+    /// <summary>
+    /// An undo is decided for a pair and therefore reaches every business that carries it - which is
+    /// the rule every decision on this surface follows - and reaches nothing else: another business's
+    /// settled match of another key, decided by a Super Admin, is left exactly as it was.
+    /// </summary>
+    [Fact]
+    public async Task An_undo_returns_every_businesss_selection_of_the_pair_and_nothing_else()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var masterProductId = await fixture.SeedMasterProductAsync(Brand, Name);
+        var otherMasterProductId = await fixture.SeedMasterProductAsync(Brand, "No Sugar");
+        var waitingKey = PriceCatalogueWaitingKey.For(Prefill.ProductName, Prefill.UnitLabel);
+
+        // Both businesses create their own product from the same catalogue description: two mappings,
+        // one pair.
+        var ourCreate = await fixture.CreateProductAsync(
+            fixture.FirstBusinessId,
+            Prefill.ProductName,
+            Prefill.UnitLabel,
+            masterProductId);
+        var theirCreate = await fixture.CreateProductAsync(
+            fixture.SecondBusinessId,
+            Prefill.ProductName.ToUpperInvariant(),
+            Prefill.UnitLabel,
+            masterProductId);
+        Assert.Equal(ProductWriteOutcome.Succeeded, ourCreate.Outcome);
+        Assert.Equal(ProductWriteOutcome.Succeeded, theirCreate.Outcome);
+
+        // And the second business's own cola, which folds to another key and was matched by a Super
+        // Admin to another master product.
+        var elsewhere = await fixture.TrackAsync(
+            fixture.SecondBusinessId,
+            fixture.SecondBusinessColaId);
+        await fixture.MatchAsync(elsewhere.Id, otherMasterProductId);
+
+        var undone = await fixture.DeniedReviewStore().UndoBusinessSelectionAsync(
+            waitingKey,
+            masterProductId,
+            ReviewedAt,
+            CancellationToken.None);
+
+        Assert.NotNull(undone);
+
+        var mappings = await fixture.AllMappingsAsync();
+
+        foreach (var productId in new[] { ourCreate.ProductId, theirCreate.ProductId })
+        {
+            var returned = Assert.Single(mappings.Where(mapping => mapping.ProductId == productId));
+            Assert.Equal(ProductPriceTrackingStatus.Requested, returned.Status);
+            Assert.Null(returned.MasterProductId);
+            Assert.Null(returned.MatchSource);
+            Assert.Equal(ReviewedAt, returned.UpdatedAtUtc);
+        }
+
+        var untouched = Assert.Single(mappings.Where(mapping => mapping.Id == elsewhere.Id));
+        Assert.Equal(ProductPriceTrackingStatus.Matched, untouched.Status);
+        Assert.Equal(otherMasterProductId, untouched.MasterProductId);
+        Assert.Equal(ProductPriceTrackingMatchSource.SuperAdmin, untouched.MatchSource);
+        Assert.Equal(elsewhere.UpdatedAtUtc, untouched.UpdatedAtUtc);
+    }
+
+    /// <summary>
+    /// A pair that is not a settled business selection is no decision anybody can make: an unknown
+    /// master product, a key nothing carries, a key submitted empty, the same key against another
+    /// master product, a settled match another source decided, and the same pair a second time are
+    /// each answered with nothing - which the endpoint reports as <c>404</c> - and each writes nothing
+    /// at all.
+    /// </summary>
+    [Fact]
+    public async Task An_undo_of_anything_but_a_settled_selection_writes_nothing()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateAsync();
+        var masterProductId = await fixture.SeedMasterProductAsync(Brand, Name);
+        var otherMasterProductId = await fixture.SeedMasterProductAsync(Brand, "No Sugar");
+        var waitingKey = PriceCatalogueWaitingKey.For(Prefill.ProductName, Prefill.UnitLabel);
+
+        var created = await fixture.CreateProductAsync(
+            fixture.FirstBusinessId,
+            Prefill.ProductName,
+            Prefill.UnitLabel,
+            masterProductId);
+        Assert.Equal(ProductWriteOutcome.Succeeded, created.Outcome);
+
+        // Another business's mapping of the same key, settled by a Super Admin: not a selection, so
+        // no undo of a selection may take it back.
+        var theirProduct = await fixture.SeedProductAsync(
+            fixture.SecondBusinessId,
+            Prefill.ProductName,
+            Prefill.UnitLabel);
+        var theirs = await fixture.TrackAsync(fixture.SecondBusinessId, theirProduct);
+        await fixture.MatchAsync(theirs.Id, masterProductId);
+
+        var before = await fixture.TenantOwnedFingerprintAsync();
+        var sharedBefore = await Describe(fixture);
+
+        Assert.Null(await Undo(fixture, waitingKey, masterProductId + 9_999));
+        Assert.Null(await Undo(fixture, PriceCatalogueWaitingKey.For("Nothing", "1L"), masterProductId));
+        Assert.Null(await Undo(fixture, "   ", masterProductId));
+        Assert.Null(await Undo(fixture, waitingKey, otherMasterProductId));
+
+        Assert.Equal(before, await fixture.TenantOwnedFingerprintAsync());
+        Assert.Equal(sharedBefore, await Describe(fixture));
+
+        // The real pair is undone once, and a second undo of it is nothing to do either - which is
+        // what makes the decision safe to repeat from a stale page.
+        Assert.NotNull(await Undo(fixture, waitingKey, masterProductId));
+        Assert.Null(await Undo(fixture, waitingKey, masterProductId));
+
+        // And the Super Admin's own settled match of the same pair stood through all of it.
+        var untouched = Assert.Single(
+            (await fixture.AllMappingsAsync()).Where(mapping => mapping.Id == theirs.Id));
+        Assert.Equal(ProductPriceTrackingStatus.Matched, untouched.Status);
+        Assert.Equal(masterProductId, untouched.MasterProductId);
+        Assert.Equal(ProductPriceTrackingMatchSource.SuperAdmin, untouched.MatchSource);
+        Assert.Equal(theirs.UpdatedAtUtc, untouched.UpdatedAtUtc);
+    }
+
+    /// <summary>
+    /// A Super Admin matching the same waiting key to another master product moves only the mapping
+    /// still <em>awaiting</em> a match (<c>ProductMatchReviewPolicy.MayMatch</c>): a settled
+    /// <c>BusinessSelection</c> mapping is left standing, untouched instant included, exactly like a
+    /// <c>Matched</c> mapping any other source decided. Undoing one is the decision that does take it
+    /// back, and it is asserted above.
     /// </summary>
     [Fact]
     public async Task A_review_match_of_the_same_key_leaves_a_business_selection_settled()
@@ -554,11 +784,11 @@ public class CreateProductMasterProductLinkTests
     }
 
     /// <summary>
-    /// The eighth criterion, second half: an undo of an <em>automatic</em> match under the same key
-    /// returns the mapping that match applied to and leaves this one exactly as it is - because an
-    /// undo of a matcher's guess must not undo a decision a person made
-    /// (<c>ProductMatchReviewPolicy.ReturnsToWaiting</c>), and a business creating a product from the
-    /// catalogue's own description of it is such a decision.
+    /// An undo of an <em>automatic</em> match under the same key returns the mapping that match
+    /// applied to and leaves this one exactly as it is: the two undos reach disjoint sets
+    /// (<c>ProductMatchReviewPolicy.ReturnsToWaiting</c> against
+    /// <c>ReturnsToWaitingFromSelection</c>), so taking a matcher's guess back never takes a
+    /// business's own selection with it.
     /// </summary>
     [Fact]
     public async Task An_undo_of_an_automatic_match_leaves_a_business_selection_alone()
@@ -618,6 +848,33 @@ public class CreateProductMasterProductLinkTests
         Assert.False(string.IsNullOrWhiteSpace(attempt.Refusal));
         Assert.Null(attempt.ProductId);
     }
+
+    /// <summary>
+    /// One undo of a business's own selection, through the real review adapter on the denied scope a
+    /// platform-admin request carries - a new context each time, because every decision a reviewer
+    /// makes is its own request.
+    /// </summary>
+    private static Task<BusinessSelectionUndoResult?> Undo(
+        PriceCatalogueFixture fixture,
+        string? waitingKey,
+        long masterProductId) =>
+        fixture.DeniedReviewStore().UndoBusinessSelectionAsync(
+            waitingKey,
+            masterProductId,
+            ReviewedAt,
+            CancellationToken.None);
+
+    /// <summary>
+    /// Every product either business owns, by the fields a review must never touch: the identity the
+    /// operator typed and the quantity, cost and value the create recorded.
+    /// </summary>
+    private static async Task<string> DescribeProducts(PriceCatalogueFixture fixture) =>
+        string.Join(
+            "|",
+            (await fixture.AllProductsAsync()).Select(product =>
+                $"P{product.Id}/{product.BusinessId}/{product.Name}/{product.Unit}"
+                    + $"/{product.QuantityInStock}/{product.AverageUnitCost}"
+                    + $"/{product.InventoryValue}/{product.MachinePrice}/{product.UpdatedAt:O}"));
 
     /// <summary>
     /// Every master product, suggestion and supplier listing as they stand, so a test can state that

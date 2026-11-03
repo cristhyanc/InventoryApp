@@ -147,9 +147,11 @@ internal static class SelectedMasterProductLink
             // resolved scope on SaveChanges, and a denied scope is refused there rather than here.
             ProductId = productId,
             // Settled, because an operator who created this product from the catalogue's own
-            // description of it has decided what it is - and a Super Admin may still undo it, like
-            // any other settled match. The matcher (#941) therefore leaves it alone: it only ever
-            // moves mappings that are still awaiting a match.
+            // description of it has decided what it is. The matcher (#941) therefore leaves it
+            // alone: it only ever moves mappings that are still awaiting a match. A Super Admin
+            // sees the pair in the review queue's own business-selections section and may undo it
+            // there (POST api/super-admin/price-catalogue-review/business-selections/undo), which
+            // returns this mapping to awaiting a match.
             Status = ProductPriceTrackingStatus.Matched,
             MasterProductId = link.MasterProductId,
             MatchSource = ProductPriceTrackingMatchSource.BusinessSelection,
