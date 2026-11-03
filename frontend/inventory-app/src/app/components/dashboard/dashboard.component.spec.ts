@@ -505,20 +505,18 @@ describe('DashboardComponent template rendering', () => {
   });
 
   /**
-   * Issue #789 removed the "Stock after machine need" column: it was a frontend subtraction of two
-   * figures the row already carries, and the row now reports what the business paid instead. The
-   * machine need itself, and every other reorder column, is unchanged.
+   * Issue #789 removed the "Stock after machine need" column entirely, so that the row reported what
+   * the business paid instead of a frontend subtraction. Issue #1020 reintroduces the same
+   * subtraction as "Storage after refill", positioned beside Machine need rather than Need to Order;
+   * `dashboard.component.storage-after-refill.spec.ts` carries that column's own specs.
    */
-  it('no longer shows the Stock after machine need column, and keeps the machine need', async () => {
+  it('no longer shows the old Stock after machine need heading, and keeps the machine need', async () => {
     const host = await renderDashboard({ products: [product({ quantityInStock: 10, machineReplenishmentNeed: 16 })] });
 
     const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
     expect(headers).not.toContain('Stock after machine need');
     expect(headers).toContain('Machine need');
     expect(headers).toContain('Need to Order');
-
-    // -6 was that column's value for this row; nothing computes it any more.
-    expect(Array.from(host.querySelectorAll('td')).map((td) => td.textContent?.trim())).not.toContain('-6');
   });
 
   it('no longer renders the permanent Admin tools banner', async () => {

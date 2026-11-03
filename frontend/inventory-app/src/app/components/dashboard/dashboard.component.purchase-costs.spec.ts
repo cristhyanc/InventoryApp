@@ -217,6 +217,7 @@ describe('Reorder Alerts purchase-cost columns (issue #789)', () => {
       'Product',
       'Storage stock',
       'Machine need',
+      'Storage after refill',
       'Need to Order',
       'Last purchase',
       'Cheapest purchase',
@@ -318,8 +319,15 @@ describe('Reorder Alerts purchase costs without Dashboard.ViewFinancials (issue 
 
     // The observed Cheapest supplier column (issue #981) follows its endpoint's own Dashboard.View,
     // exactly as on Needs Ordering; only the recorded purchase costs are withheld.
-    expect(alertHeaders(host)).toEqual(['Product', 'Storage stock', 'Machine need', 'Need to Order', 'Cheapest supplier']);
-    expect(alertRows(host)[0]).toEqual(['Cola 375mL', '2', '4', '28']);
+    expect(alertHeaders(host)).toEqual([
+      'Product',
+      'Storage stock',
+      'Machine need',
+      'Storage after refill',
+      'Need to Order',
+      'Cheapest supplier'
+    ]);
+    expect(alertRows(host)[0]).toEqual(['Cola 375mL', '2', '4', '-2', '28']);
     expect(host.querySelector('[data-testid="purchase-cost-note"]')).toBeNull();
   });
 
@@ -348,7 +356,7 @@ describe('Reorder Alerts purchase costs when the request fails (issue #789)', ()
     expect(alertRows(host)[0].slice(-2)).toEqual(['Unavailable', 'Unavailable']);
     expect(retryButton(host)).not.toBeNull();
     // The dashboard around the two columns is untouched by their failure.
-    expect(alertRows(host)[0].slice(0, 4)).toEqual(['Cola 375mL', '2', '4', '28']);
+    expect(alertRows(host)[0].slice(0, 5)).toEqual(['Cola 375mL', '2', '4', '-2', '28']);
     expect(host.textContent).toContain('Sales this week');
     expect(host.textContent).toContain('$1,234.56');
   });
@@ -504,8 +512,8 @@ describe('Reorder priorities card (issues #972 and #1017)', () => {
   it('keeps the reorder quantities as published, with what is already on order beside the need', async () => {
     const { host } = await render({ alerts: [of(machineAwareAlerts(seven))] });
 
-    expect(alertRows(host)[0][3]).toContain('30');
-    expect(alertRows(host)[0][3]).toContain('6 on order');
+    expect(alertRows(host)[0][4]).toContain('30');
+    expect(alertRows(host)[0][4]).toContain('6 on order');
   });
 
   it('renders the same page of five as cards for a narrow screen', async () => {
