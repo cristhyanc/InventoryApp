@@ -3,14 +3,17 @@ namespace Inventory.Application.PriceCatalogue;
 /// <summary>
 /// Which decision one price-catalogue audit event is about (issues #928 and #1024).
 ///
-/// <para>Ten values, because each is a different thing an administrator did and an audit trail that
-/// merged any two of them could not answer "who decided this, and what did they decide". Numbered
+/// <para>Eleven values, because each is a different thing an administrator did and an audit trail
+/// that merged any two of them could not answer "who decided this, and what did they decide". Numbered
 /// from 1.</para>
 ///
-/// <para>Nine of them are the review's own decisions (issue #928). The tenth,
-/// <see cref="MasterProductEdited"/>, is the Master Products page's correction of an existing master
-/// product (issue #1024), which is a change to the shared catalogue and belongs on the same trail
-/// rather than on a second one an investigation would have to know about.</para>
+/// <para>Nine of them are the review's own decisions (issue #928), and the eleventh,
+/// <see cref="BusinessSelectionUndone"/>, is its own because it takes back a settled match no person
+/// decided (issue #1051) rather than a matcher's application: an investigation asking "who undid this,
+/// and what kind of match was it?" must not have to infer the answer from the absence of a suggestion
+/// row. The tenth, <see cref="MasterProductEdited"/>, is the Master Products page's correction of an
+/// existing master product (issue #1024), which is a change to the shared catalogue and belongs on the
+/// same trail rather than on a second one an investigation would have to know about.</para>
 /// </summary>
 public enum PriceCatalogueReviewAction
 {
@@ -61,6 +64,14 @@ public enum PriceCatalogueReviewAction
     /// trail that says which edits went through.
     /// </summary>
     MasterProductEdited = 10,
+
+    /// <summary>
+    /// A match a business made itself was undone (issue #1051): the mappings that carried the
+    /// <c>(waiting key, master product)</c> pair returned to awaiting a match. The entry names the
+    /// pair - the waiting key and the master product - and no suggestion, because a business's
+    /// selection writes none.
+    /// </summary>
+    BusinessSelectionUndone = 11,
 }
 
 /// <summary>

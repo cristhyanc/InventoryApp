@@ -10,9 +10,9 @@ namespace InventoryApi.Controllers;
 
 /// <summary>
 /// The Super Admin's review of the shared supplier price catalogue (issue #928, parent #817): the
-/// products awaiting a match, the matches a collector run applied by itself, and the supplier
-/// listings waiting for a decision - with the one authority that may confirm, correct or refuse any
-/// of them.
+/// products awaiting a match, the matches a collector run applied by itself, the matches a business
+/// made itself (issue #1051), and the supplier listings waiting for a decision - with the one
+/// authority that may confirm, correct, refuse or undo any of them.
 ///
 /// <para><strong>Only a Super Admin reaches it, and that is the owner's decision of 27 October
 /// 2026.</strong> A supplier listing, a pack quantity and a master product are shared by every
@@ -65,22 +65,26 @@ public sealed class SuperAdminPriceCatalogueReviewController : ControllerBase
     private readonly DecideSupplierListingReview _decideListing;
     private readonly DecideProductMatchReview _decideMatch;
     private readonly DecideAutomaticProductMatchReview _decideAutomaticMatch;
+    private readonly UndoBusinessSelectionMatch _undoBusinessSelection;
 
     public SuperAdminPriceCatalogueReviewController(
         GetPriceCatalogueReviewQueue queue,
         DecideSupplierListingReview decideListing,
         DecideProductMatchReview decideMatch,
-        DecideAutomaticProductMatchReview decideAutomaticMatch)
+        DecideAutomaticProductMatchReview decideAutomaticMatch,
+        UndoBusinessSelectionMatch undoBusinessSelection)
     {
         _queue = queue;
         _decideListing = decideListing;
         _decideMatch = decideMatch;
         _decideAutomaticMatch = decideAutomaticMatch;
+        _undoBusinessSelection = undoBusinessSelection;
     }
 
     /// <summary>
     /// The whole review queue: products awaiting a match, automatic matches waiting to be checked,
-    /// and listings waiting for a decision - the last of them with barcode matches first.
+    /// the matches businesses made themselves (issue #1051), and listings waiting for a decision -
+    /// the last of them with barcode matches first.
     ///
     /// <para>It takes no filter, page, sort or search parameter, for the reason the supplier presets
     /// and the business directory take none: a caller-supplied predicate is how a fixed platform list
@@ -222,6 +226,48 @@ public sealed class SuperAdminPriceCatalogueReviewController : ControllerBase
         long suggestionId,
         CancellationToken cancellationToken) =>
         DecideAutomaticMatch(suggestionId, AutomaticMatchReviewDecision.Undo, cancellationToken);
+
+    /// <summary>
+    /// Undoes one match a business made itself (issue #1051): every mapping that carries the
+    /// <c>(waiting key, master product)</c> pair as a settled business selection returns to awaiting a
+    /// match, in every business that carries it, and the collector searches for the description again.
+    ///
+    /// <para>These are the matches no person with platform authority has seen: a business settled one
+    /// by creating a product from the shared catalogue's own description of it, which is the one match
+    /// source a business can produce. They are listed in the queue's <c>businessSelections</c> section
+    /// and this is how one is taken back. There is no confirmation beside it because the mapping is
+    /// already settled - leaving it alone is the confirmation - and nothing of the shared catalogue is
+    /// written either way: a business's selection creates no suggestion row, no listing and no price
+    /// for an undo to reverse.</para>
+    ///
+    /// <para>The pair is in the body rather than in the route for the reason the match decision's key
+    /// is: a waiting key is a folded description containing <c>|</c> and <c>:</c>, and putting one in
+    /// a path segment would make a URL's escaping part of the comparison.</para>
+    /// </summary>
+    /// <response code="200">The pair that was taken back.</response>
+    /// <response code="404">
+    /// No master product has that id, or nothing of that pair is a settled business selection any
+    /// more: it has been undone, decided another way or withdrawn since this page was read. Nothing
+    /// was written.
+    /// </response>
+    [HttpPost("business-selections/undo")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<SuperAdminBusinessSelectionUndoResponse>> UndoBusinessSelection(
+        SuperAdminBusinessSelectionUndoRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var result = await _undoBusinessSelection.Handle(
+            request.WaitingKey,
+            request.MasterProductId,
+            cancellationToken);
+
+        return result is null
+            ? NotFound()
+            : Ok(SuperAdminBusinessSelectionUndoResponse.From(result));
+    }
 
     private async Task<ActionResult<SuperAdminAutomaticMatchDecisionResponse>> DecideAutomaticMatch(
         long suggestionId,

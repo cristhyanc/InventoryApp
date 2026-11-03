@@ -287,12 +287,43 @@ public sealed record SuperAdminReviewAutomaticMatchResponse(
 }
 
 /// <summary>
+/// One match a business made itself, as the review publishes it (issue #1051): the
+/// <c>(waiting key, master product)</c> pair, the description it was settled under, and when.
+///
+/// <para>There is no count of businesses and no field for one, unlike a waiting product's: the undo
+/// settles the pair in every business that carries it, and how many that is is not the reviewer's to
+/// know.</para>
+/// </summary>
+public sealed record SuperAdminReviewBusinessSelectionResponse(
+    string WaitingKey,
+    string SearchName,
+    string UnitLabel,
+    SuperAdminReviewMasterProductResponse MasterProduct,
+    DateTime FirstSelectedAtUtc,
+    DateTime LastSelectedAtUtc)
+{
+    public static SuperAdminReviewBusinessSelectionResponse From(ReviewedBusinessSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+
+        return new SuperAdminReviewBusinessSelectionResponse(
+            selection.WaitingKey,
+            selection.SearchName,
+            selection.UnitLabel,
+            SuperAdminReviewMasterProductResponse.From(selection.MasterProduct),
+            selection.FirstSelectedAtUtc,
+            selection.LastSelectedAtUtc);
+    }
+}
+
+/// <summary>
 /// The whole review queue as <c>GET /api/super-admin/price-catalogue-review</c> reports it (issue
-/// #928), in its three sections.
+/// #928), in its four sections.
 /// </summary>
 public sealed record SuperAdminPriceCatalogueReviewResponse(
     IReadOnlyList<SuperAdminReviewWaitingProductResponse> WaitingProducts,
     IReadOnlyList<SuperAdminReviewAutomaticMatchResponse> AutomaticMatches,
+    IReadOnlyList<SuperAdminReviewBusinessSelectionResponse> BusinessSelections,
     IReadOnlyList<SuperAdminReviewSupplierListingResponse> Listings,
     IReadOnlyList<SuperAdminReviewMasterProductResponse> MasterProducts)
 {
@@ -303,6 +334,7 @@ public sealed record SuperAdminPriceCatalogueReviewResponse(
         return new SuperAdminPriceCatalogueReviewResponse(
             [.. queue.WaitingProducts.Select(SuperAdminReviewWaitingProductResponse.From)],
             [.. queue.AutomaticMatches.Select(SuperAdminReviewAutomaticMatchResponse.From)],
+            [.. queue.BusinessSelections.Select(SuperAdminReviewBusinessSelectionResponse.From)],
             [.. queue.Listings.Select(SuperAdminReviewSupplierListingResponse.From)],
             [.. queue.MasterProducts.Select(SuperAdminReviewMasterProductResponse.From)]);
     }
@@ -419,6 +451,32 @@ public sealed record SuperAdminProductMatchDecisionResponse(
             result.MasterProductCreated,
             result.SuggestionId,
             result.ListingsMovedCount);
+    }
+}
+
+/// <summary>
+/// What a Super Admin submits to undo one match a business made itself (issue #1051): the
+/// <c>(waiting key, master product)</c> pair, which is the whole identifier such a match has.
+///
+/// <para>Both values are in the body and neither is in the route, for the reason the match decision's
+/// key is: a waiting key is a folded description containing <c>|</c> and <c>:</c>, a key is compared
+/// and never parsed, and a pair split across a path segment and a body would be one decision submitted
+/// in two places.</para>
+/// </summary>
+public sealed record SuperAdminBusinessSelectionUndoRequest(string? WaitingKey, long MasterProductId);
+
+/// <summary>What became of one undo of a business's own selection (issue #1051).</summary>
+public sealed record SuperAdminBusinessSelectionUndoResponse(
+    string WaitingKey,
+    SuperAdminReviewMasterProductResponse MasterProduct)
+{
+    public static SuperAdminBusinessSelectionUndoResponse From(BusinessSelectionUndoResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        return new SuperAdminBusinessSelectionUndoResponse(
+            result.WaitingKey,
+            SuperAdminReviewMasterProductResponse.From(result.MasterProduct));
     }
 }
 

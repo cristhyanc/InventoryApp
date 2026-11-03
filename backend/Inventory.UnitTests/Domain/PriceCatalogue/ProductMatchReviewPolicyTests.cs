@@ -134,6 +134,73 @@ public class ProductMatchReviewPolicyTests
             ProductMatchReviewPolicy.ReturnsToWaiting(status, masterProductId, 7L));
 
     /// <summary>
+    /// An undo of a business's own selection (issue #1051) returns exactly the mappings that carry
+    /// that pair as a settled <c>BusinessSelection</c> match, and nothing else: not a mapping a Super
+    /// Admin matched, not a confirmed automatic one, not one still awaiting a match or auto-matched,
+    /// and not one selected against another master product.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        ProductPriceTrackingStatus.Matched,
+        ProductPriceTrackingMatchSource.BusinessSelection,
+        7L,
+        true)]
+    [InlineData(
+        ProductPriceTrackingStatus.Matched,
+        ProductPriceTrackingMatchSource.BusinessSelection,
+        8L,
+        false)]
+    [InlineData(ProductPriceTrackingStatus.Matched, ProductPriceTrackingMatchSource.SuperAdmin, 7L, false)]
+    [InlineData(
+        ProductPriceTrackingStatus.Matched,
+        ProductPriceTrackingMatchSource.CollectorAutomaticMatch,
+        7L,
+        false)]
+    [InlineData(
+        ProductPriceTrackingStatus.AutoMatched,
+        ProductPriceTrackingMatchSource.CollectorAutomaticMatch,
+        7L,
+        false)]
+    [InlineData(ProductPriceTrackingStatus.Requested, null, null, false)]
+    [InlineData(ProductPriceTrackingStatus.NotFound, null, null, false)]
+    [InlineData(ProductPriceTrackingStatus.AwaitingProductDetails, null, null, false)]
+    public void An_undo_of_a_selection_returns_only_that_pairs_own_selected_mappings(
+        ProductPriceTrackingStatus status,
+        ProductPriceTrackingMatchSource? matchSource,
+        long? masterProductId,
+        bool returns) =>
+        Assert.Equal(
+            returns,
+            ProductMatchReviewPolicy.ReturnsToWaitingFromSelection(
+                status,
+                matchSource,
+                masterProductId,
+                7L));
+
+    /// <summary>
+    /// The two undos reach disjoint sets of mappings, which is what keeps either from taking the
+    /// other's decision back: no status and source pair satisfies both predicates.
+    /// </summary>
+    [Fact]
+    public void The_two_undos_never_reach_the_same_mapping()
+    {
+        foreach (var status in Enum.GetValues<ProductPriceTrackingStatus>())
+        {
+            foreach (var source in Enum.GetValues<ProductPriceTrackingMatchSource>())
+            {
+                Assert.False(
+                    ProductMatchReviewPolicy.ReturnsToWaiting(status, 7L, 7L)
+                        && ProductMatchReviewPolicy.ReturnsToWaitingFromSelection(
+                            status,
+                            source,
+                            7L,
+                            7L),
+                    $"{status} decided by {source} is reached by both undos.");
+            }
+        }
+    }
+
+    /// <summary>
     /// An undo moves back the listings that are still only proposals. A confirmed listing is a
     /// person's own decision about that pack, a flagged one is a confirmed listing whose shelf moved,
     /// and a refused one is a refusal - none of them is a guess for an undo to reverse.

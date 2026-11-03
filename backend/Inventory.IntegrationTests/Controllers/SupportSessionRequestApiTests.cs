@@ -154,6 +154,10 @@ public class SupportSessionRequestApiTests
     // rule refuses it under the capability the session does grant, so somebody from outside the
     // business cannot decide which of its products get sent to the price collector.
     [InlineData("Inventory.Operate", "PUT", "/api/products/999999/price-tracking")]
+    // The product create, which issue #1051 let link a new product to a master product and so turn
+    // that tracking on: the method rule refuses it for the same reason the switch beside it is
+    // refused, so somebody from outside the business cannot create one of its products at all.
+    [InlineData("Inventory.Operate", "POST", "/api/products")]
     // The pick list's two refill writes (issues #743 and #897). Neither carries a rule of its own:
     // the method rule is what refuses them, which is why a multi-machine batch needed no support
     // session handling when it was added.

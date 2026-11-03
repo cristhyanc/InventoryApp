@@ -84,6 +84,13 @@ public enum AutomaticMatchReviewDecision
 /// exactly as they are, because an undo of a matcher's guess must not undo a decision a person made.
 /// </para>
 ///
+/// <para><strong>A business's own selection is undone by its pair rather than by a suggestion
+/// row.</strong> Issue #1051 lets a business settle one mapping by creating a product from the shared
+/// catalogue's own description of it, and writes no suggestion row for that - so
+/// <see cref="ReturnsToWaitingFromSelection"/> is the predicate the review's undo of such a match
+/// uses, over the <c>(waiting key, master product)</c> pair the mappings themselves carry. It reaches
+/// no other source and no other status.</para>
+///
 /// <para><strong>It stores nothing and reads nothing</strong>, like every policy in this folder.</para>
 /// </summary>
 public static class ProductMatchReviewPolicy
@@ -228,6 +235,33 @@ public static class ProductMatchReviewPolicy
         long? masterProductId,
         long undoneMasterProductId) =>
         status is ProductPriceTrackingStatus.AutoMatched && masterProductId == undoneMasterProductId;
+
+    /// <summary>
+    /// Whether an undo of a business's own selection of <paramref name="undoneMasterProductId"/>
+    /// returns this mapping to awaiting a match: it is
+    /// <see cref="ProductPriceTrackingStatus.Matched"/>, it records
+    /// <see cref="ProductPriceTrackingMatchSource.BusinessSelection"/> as how that was decided, and it
+    /// names that master product.
+    ///
+    /// <para><strong>All three halves matter, and the source is why this is a separate predicate from
+    /// <see cref="ReturnsToWaiting"/>.</strong> A settled match is otherwise never taken back by this
+    /// surface: a <see cref="ProductPriceTrackingMatchSource.SuperAdmin"/> mapping is a reviewer's own
+    /// decision and a confirmed <see cref="ProductPriceTrackingMatchSource.CollectorAutomaticMatch"/>
+    /// one is a reviewer's confirmation of a guess, and neither is undone by naming a pair. A
+    /// <see cref="ProductPriceTrackingMatchSource.BusinessSelection"/> mapping is the one settled match
+    /// <em>nobody with platform authority has seen</em> - the business created a product from the
+    /// catalogue's own description of it (issue #1051) - so the review is where it is checked, exactly
+    /// as the automatic matcher's own applications are. The master product, because a mapping matched
+    /// to something else under the same key was never this pair's to move.</para>
+    /// </summary>
+    public static bool ReturnsToWaitingFromSelection(
+        ProductPriceTrackingStatus status,
+        ProductPriceTrackingMatchSource? matchSource,
+        long? masterProductId,
+        long undoneMasterProductId) =>
+        status is ProductPriceTrackingStatus.Matched
+            && matchSource is ProductPriceTrackingMatchSource.BusinessSelection
+            && masterProductId == undoneMasterProductId;
 
     /// <summary>
     /// Whether an undo moves this listing back to the waiting key it was discovered under:

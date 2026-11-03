@@ -354,6 +354,75 @@ public class PriceCatalogueReviewUseCaseTests
         Assert.Equal(WaitingKey, entry.WaitingKey);
     }
 
+    /// <summary>
+    /// Undoing a match a business made itself is audited as its own action (issue #1051), with the
+    /// pair it took back and no suggestion - because a business's selection writes no suggestion row
+    /// for the trail to name.
+    /// </summary>
+    [Fact]
+    public async Task Undoing_a_business_selection_is_audited_as_its_own_action()
+    {
+        var store = new FakeStore
+        {
+            BusinessSelectionUndoResult = new BusinessSelectionUndoResult(
+                WaitingKey,
+                new ReviewedMasterProduct(5, "Coca-Cola", "Classic", 375m, MasterProductSizeUnit.Millilitre)),
+        };
+        var audit = new FakeAudit();
+
+        var result = await Selection(store, audit).Handle(WaitingKey, 5, CancellationToken.None);
+
+        Assert.Equal(WaitingKey, result!.WaitingKey);
+        Assert.Equal(Now, store.AsOfUtc);
+
+        var entry = Assert.Single(audit.Entries);
+        Assert.Equal(PriceCatalogueReviewAction.BusinessSelectionUndone, entry.Action);
+        Assert.Equal(Tenant, entry.ActorDirectoryTenantId, ignoreCase: true);
+        Assert.Equal(ObjectId, entry.ActorObjectId, ignoreCase: true);
+        Assert.Equal(WaitingKey, entry.WaitingKey);
+        Assert.Equal(5, entry.MasterProductId);
+        Assert.Null(entry.SuggestionId);
+        Assert.Null(entry.SupplierListingId);
+        Assert.False(entry.PriceAccepted);
+        Assert.Equal(Now, entry.OccurredAtUtc);
+    }
+
+    /// <summary>
+    /// A pair that is no longer a settled business selection is answered with nothing - which the
+    /// endpoint reports as <c>404</c> - and audits nothing, because nothing happened.
+    /// </summary>
+    [Fact]
+    public async Task An_undo_of_a_pair_that_is_not_selected_audits_nothing()
+    {
+        var store = new FakeStore { BusinessSelectionUndoResult = null };
+        var audit = new FakeAudit();
+
+        Assert.Null(await Selection(store, audit).Handle(WaitingKey, 5, CancellationToken.None));
+        Assert.Empty(audit.Entries);
+    }
+
+    /// <summary>
+    /// And nothing is undone for a request whose actor the trail could not name either: the actor is
+    /// read before the store is reached, exactly as the four decisions beside it read it.
+    /// </summary>
+    [Fact]
+    public async Task An_undo_with_no_identifiable_actor_undoes_nothing()
+    {
+        var store = new FakeStore();
+        var audit = new FakeAudit();
+
+        await Assert.ThrowsAsync<BusinessAccessDeniedException>(() =>
+            new UndoBusinessSelectionMatch(
+                store,
+                FakeAuthenticatedActorAccessor.Unidentifiable(),
+                audit,
+                new FakeClock(Now))
+                .Handle(WaitingKey, 5, CancellationToken.None));
+
+        Assert.Null(store.AsOfUtc);
+        Assert.Empty(audit.Entries);
+    }
+
     private static SupplierListingReviewSubmission Confirm() =>
         new(
             7,
@@ -373,6 +442,9 @@ public class PriceCatalogueReviewUseCaseTests
         new(store, Actor(), audit, new FakeClock(Now));
 
     private static DecideAutomaticProductMatchReview Automatic(FakeStore store, FakeAudit audit) =>
+        new(store, Actor(), audit, new FakeClock(Now));
+
+    private static UndoBusinessSelectionMatch Selection(FakeStore store, FakeAudit audit) =>
         new(store, Actor(), audit, new FakeClock(Now));
 
     private static FakeAuthenticatedActorAccessor Actor()
@@ -401,13 +473,15 @@ public class PriceCatalogueReviewUseCaseTests
 
         public AutomaticMatchReviewResult? AutomaticResult { get; init; }
 
+        public BusinessSelectionUndoResult? BusinessSelectionUndoResult { get; init; }
+
         public Task<PriceCatalogueReviewQueue> ReadQueueAsync(
             DateTime asOfUtc,
             CancellationToken cancellationToken)
         {
             AsOfUtc = asOfUtc;
 
-            return Task.FromResult(new PriceCatalogueReviewQueue([], [], [], []));
+            return Task.FromResult(new PriceCatalogueReviewQueue([], [], [], [], []));
         }
 
         public Task<SupplierListingReviewResult?> DecideListingAsync(
@@ -439,6 +513,17 @@ public class PriceCatalogueReviewUseCaseTests
             AsOfUtc = asOfUtc;
 
             return Task.FromResult(AutomaticResult);
+        }
+
+        public Task<BusinessSelectionUndoResult?> UndoBusinessSelectionAsync(
+            string? waitingKey,
+            long masterProductId,
+            DateTime asOfUtc,
+            CancellationToken cancellationToken)
+        {
+            AsOfUtc = asOfUtc;
+
+            return Task.FromResult(BusinessSelectionUndoResult);
         }
     }
 }
