@@ -166,6 +166,24 @@ When a result file fails validation, the summary shows `skipped <work item>.json
 validator's message. One skipped file marks the submission failed, but every other file is still
 submitted and the run is still completed.
 
+One bad row no longer costs a whole search (owner decision, 3 November 2026). In production run
+41558756584, ten Woolworths files were skipped: eight had a barcode with no `barcodeScope` and two
+had a row with no `packPrice` (one an out-of-stock listing). Before it validates a result file,
+`submit-results.mjs` now removes a barcode that has no `unit` or `carton` scope and keeps the rest of
+that row, and drops a row with no usable price. A `complete` search that lost a row is submitted as
+`truncated`, so the API never records that listing as not found. The summary lists each change as
+`tidied <work item>.json: ...`, and tidying never marks the submission failed. `prompt.md` also tells
+Claude not to write either kind of row in the first place.
+
+Searches use short words (owner decision, 3 November 2026). Supplier searches return only items
+that contain every word typed, so in run 41558756584 full names such as `Cheezels Original` or
+`M&M's Peanut 46g` found nothing although JB Metro lists `45G CHEEZELS` and Coles lists
+`M&M's Peanut Milk Chocolate Snack Bag 46g`. `prompt.md` now has Claude search with the brand and
+one or two product words, with no size, and check the size and variant when it picks matches. A
+search that returns nothing is tried once more with fewer words; that second call counts towards
+the run's Apify call cap (600) and, at Kmart and BIG W, is charged like any other search. JB Metro
+search words are written without apostrophes or `&`, because the command guard refuses them.
+
 ## Production run
 
 A **production** run (owner decision, 1 November 2026) collects real supplier prices into the
