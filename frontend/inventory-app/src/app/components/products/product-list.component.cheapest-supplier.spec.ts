@@ -123,8 +123,13 @@ describe('ProductListComponent Cheapest supplier column (issue #940)', () => {
     return { fixture, host: fixture.nativeElement as HTMLElement };
   }
 
+  /** The desktop table's Cheapest supplier cells (issue #1093's summary), one per row. */
   function cells(host: HTMLElement): HTMLElement[] {
-    return Array.from(host.querySelectorAll('[data-testid="cheapest-supplier-cell"]'));
+    return Array.from(host.querySelectorAll('tbody [data-testid="cheapest-supplier-summary"]'));
+  }
+
+  function text(cell: HTMLElement): string {
+    return (cell.textContent ?? '').replace(/\s+/g, ' ').trim();
   }
 
   it('asks once for exactly the rows on screen and shows a cell for each of them', async () => {
@@ -133,9 +138,9 @@ describe('ProductListComponent Cheapest supplier column (issue #940)', () => {
 
     expect(getSummary).toHaveBeenCalledTimes(1);
     expect(getSummary).toHaveBeenCalledWith([1, 2]);
-    expect(cells(host).map((cell) => cell.textContent?.trim())).toEqual([
-      'JB Metro $0.95/unit inc GST',
-      'JB Metro $0.95/unit inc GST'
+    expect(cells(host).map(text)).toEqual([
+      '$0.95 / unit inc GST JB Metro Compare (1) ›',
+      '$0.95 / unit inc GST JB Metro Compare (1) ›'
     ]);
   });
 
@@ -153,14 +158,14 @@ describe('ProductListComponent Cheapest supplier column (issue #940)', () => {
     const getSummary = jest.fn(() => of({ displayBasis: SupplierPriceBasis.InclusiveOfGst, products: [] } as CheapestSupplierSummary));
     const { host } = await render([product({ id: 1 })], getSummary);
 
-    expect(cells(host).map((cell) => cell.textContent?.trim())).toEqual(['Not tracked']);
+    expect(cells(host).map(text)).toEqual(['Not tracked']);
   });
 
   it('opens the popup from a row and lists that product\'s suppliers', async () => {
     const getSummary = jest.fn(() => of(summary([1])));
     const { fixture, host } = await render([product({ id: 1 })], getSummary);
 
-    (cells(host)[0] as HTMLButtonElement).click();
+    (cells(host)[0].querySelector('[data-testid="cheapest-supplier-compare"]') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     const popup = host.querySelector('[data-testid="cheapest-supplier-popup"]') as HTMLElement;
@@ -174,7 +179,7 @@ describe('ProductListComponent Cheapest supplier column (issue #940)', () => {
     const { host } = await render([product({ id: 1 })], getSummary);
 
     expect(host.textContent).toContain(CHEAPEST_SUPPLIERS_FAILED_MESSAGE);
-    expect(cells(host).map((cell) => cell.textContent?.trim())).toEqual(['Unavailable']);
+    expect(cells(host).map(text)).toEqual(['Unavailable']);
     // The page's own rows and other columns are untouched: the row is still there with its name.
     expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
     expect(host.textContent).toContain('Coca-Cola Classic');
@@ -188,7 +193,7 @@ describe('ProductListComponent Cheapest supplier column (issue #940)', () => {
     );
 
     const nameHeaderButton = Array.from(host.querySelectorAll('thead button')).find(
-      (button) => button.textContent?.trim().startsWith('Name')
+      (button) => button.textContent?.trim().startsWith('Product')
     ) as HTMLButtonElement;
     nameHeaderButton.click();
     fixture.detectChanges();

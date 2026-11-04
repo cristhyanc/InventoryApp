@@ -1,33 +1,36 @@
-<div class="page">
-  <header class="page-header">
-    <h1 class="page-title">Products</h1>
-    <!-- "New Product" is not here (issue #825): a create action in the shared header reached every
-         view the shell wraps, including Needs Ordering, which orders products that already exist.
-         It lives in the All Products search/filter toolbar instead, which is also where it is
-         hidden during a support session. -->
-    <nav
-      aria-label="Products views"
-      class="flex overflow-hidden rounded-md-control border border-md-gray-300 bg-white text-md-body text-md-gray-800"
-    >
+<div class="page font-rr text-rr-navy">
+  <!--
+    The Products header on the Dashboard and Pick List's `rr` scale (issue #1093): the title and a
+    segmented control for the three views. "New Product" is not here (issue #825): a create action
+    in the shared header reached every view the shell wraps, including Needs Ordering, which orders
+    products that already exist. It lives in the All Products toolbar instead, which is also where
+    it is hidden during a support session.
+  -->
+  <header class="flex flex-wrap items-center gap-x-4 gap-y-3">
+    <h1 class="page-title m-0 text-2xl font-bold tracking-tight text-rr-navy sm:text-3xl">Products</h1>
+    <nav aria-label="Products views" class="inline-flex max-w-full overflow-x-auto rounded-lg border border-rr-line bg-rr-surface p-1 text-sm font-semibold">
       <a
         routerLink="/products"
         [routerLinkActiveOptions]="{ exact: true }"
-        routerLinkActive="bg-md-dark-gradient text-white"
-        class="px-3 py-2"
+        routerLinkActive="bg-white text-rr-navy shadow-sm"
+        ariaCurrentWhenActive="page"
+        class="inline-flex min-h-10 items-center whitespace-nowrap rounded-md px-3 text-rr-muted no-underline hover:text-rr-navy sm:px-4"
       >
         All products
       </a>
       <a
         routerLink="/products/needs-ordering"
-        routerLinkActive="bg-md-dark-gradient text-white"
-        class="border-x border-md-gray-300 px-3 py-2"
+        routerLinkActive="bg-white text-rr-navy shadow-sm"
+        ariaCurrentWhenActive="page"
+        class="inline-flex min-h-10 items-center whitespace-nowrap rounded-md px-3 text-rr-muted no-underline hover:text-rr-navy sm:px-4"
       >
         Needs ordering
       </a>
       <a
         routerLink="/purchases/orders"
-        routerLinkActive="bg-md-dark-gradient text-white"
-        class="px-3 py-2"
+        routerLinkActive="bg-white text-rr-navy shadow-sm"
+        ariaCurrentWhenActive="page"
+        class="inline-flex min-h-10 items-center whitespace-nowrap rounded-md px-3 text-rr-muted no-underline hover:text-rr-navy sm:px-4"
       >
         On order
       </a>

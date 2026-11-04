@@ -1,0 +1,75 @@
+@let summary = view;
+<div
+  class="flex min-w-0 flex-col gap-0.5 text-sm"
+  [class.items-end]="layout === 'card'"
+  [class.text-right]="layout === 'card'"
+  data-testid="cheapest-supplier-summary"
+  [attr.data-state]="summary.kind"
+>
+  @switch (summary.kind) {
+    @case ('price') {
+      <span class="flex flex-wrap items-center gap-1.5" [class.justify-end]="layout === 'card'">
+        <span class="font-semibold tabular-nums text-rr-navy" data-testid="cheapest-supplier-summary-price">{{ summary.unitPrice }} / unit</span>
+        @if (summary.basis) {
+          {{ ' ' }}<span class="rounded bg-rr-surface-strong px-1.5 py-0.5 text-xs font-medium text-rr-muted" data-testid="cheapest-supplier-summary-basis">{{ summary.basis }}</span>
+        }
+      </span>
+      {{ ' ' }}<span class="flex flex-wrap items-center gap-1.5 text-rr-muted" [class.justify-end]="layout === 'card'">
+        <span class="break-words" data-testid="cheapest-supplier-summary-suppliers">{{ summary.supplierNames.join(' / ') }}</span>
+        @if (summary.tied) {
+          {{ ' ' }}<span class="rounded bg-rr-surface-strong px-1.5 py-0.5 text-xs font-medium text-rr-muted" data-testid="cheapest-supplier-summary-tied">Tied</span>
+        }
+        @if (summary.special) {
+          {{ ' ' }}<span class="rounded bg-rr-warn-bg px-1.5 py-0.5 text-xs font-semibold text-rr-warn-text" data-testid="cheapest-supplier-summary-special">Special</span>
+        }
+      </span>
+    }
+    @case ('stale') {
+      <span class="flex flex-wrap items-center gap-1.5" [class.justify-end]="layout === 'card'">
+        @if (summary.unitPrice) {
+          <span class="font-semibold tabular-nums text-rr-navy">{{ summary.unitPrice }} / unit</span>
+          @if (summary.basis) {
+            {{ ' ' }}<span class="rounded bg-rr-surface-strong px-1.5 py-0.5 text-xs font-medium text-rr-muted">{{ summary.basis }}</span>
+          }
+        }
+        {{ ' ' }}<span class="rounded bg-rr-warn-bg px-1.5 py-0.5 text-xs font-semibold text-rr-warn-text" data-testid="cheapest-supplier-summary-stale">Stale price</span>
+      </span>
+      {{ ' ' }}<span class="break-words text-rr-muted" data-testid="cheapest-supplier-summary-freshness">
+        @if (summary.lastCheckedAtUtc) {
+          Checked {{ summary.lastCheckedAtUtc | businessDateTime }} ({{ summary.supplierName }})
+        } @else {
+          {{ summary.supplierName }}
+        }
+      </span>
+    }
+    @case ('notTracked') {
+      <span><span class="inline-flex rounded bg-rr-surface-strong px-1.5 py-0.5 text-xs font-medium text-rr-muted" data-testid="cheapest-supplier-summary-text">{{ labels.notTracked }}</span></span>
+    }
+    @default {
+      <span class="italic text-rr-muted" data-testid="cheapest-supplier-summary-text">{{ stateLabel(summary.kind) }}</span>
+    }
+  }
+  @if (canOpen) {
+    {{ ' ' }}<button
+      #trigger
+      type="button"
+      class="w-fit text-xs font-semibold text-rr-teal hover:underline"
+      aria-haspopup="dialog"
+      [attr.aria-expanded]="open"
+      [attr.aria-label]="'Compare ' + supplierCount + ' supplier prices for ' + productName"
+      data-testid="cheapest-supplier-compare"
+      (click)="openComparison()"
+    >Compare ({{ supplierCount }}) ›</button>
+  }
+</div>
+
+@if (open && product) {
+  <app-supplier-comparison-dialog
+    [product]="product"
+    [displayBasis]="displayBasis"
+    [productName]="productName"
+    [productSku]="productSku"
+    [categoryName]="categoryName"
+    (closed)="onComparisonClosed()"
+  ></app-supplier-comparison-dialog>
+}

@@ -8142,6 +8142,59 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **Export parity.** The reconciliation CSV/XLSX rows add `AdjustmentsSupported`, `AdjustmentsBasis` (the assumption above), the five status counts and `DataQualityNotes`. Each period row carries its own counts and its own notes; the `TOTAL` row carries the report's range-wide counts and notes rather than a sum of the period rows'. A clean period exports an empty `DataQualityNotes` cell and no boilerplate, and the export keeps every figure, filter and status it exported before.
 
+### The All Products page layout (issue #1093)
+
+**Products → All products** (`ProductListComponent`, routed inside `ProductsShellComponent`) was
+redesigned on the Dashboard and Pick List's `rr` scale. It is a presentation change: the page reads
+exactly what it read before - one `GET api/products` per filter change, and the two composed reads,
+`<app-product-purchase-costs>` (Last/Cheapest purchase, `Dashboard.ViewFinancials`) and
+`<app-cheapest-suppliers>` (observed supplier prices), each asked once for **every** listed product
+id - and no calculation, GST rule, threshold, permission or write moved or changed.
+
+**Page state is local and unpersisted.** The page owns its filters and sort as before, plus three
+pieces of view state: the optional history columns (`optionalColumns`, empty on every visit; a
+column is shown only while it is turned on *and* the role holds `Dashboard.ViewFinancials`), the
+page index and the page size (`PRODUCT_PAGE_SIZE_OPTIONS` = 5, 10, 20, 50, 100; default 10).
+Paging is client-side over the list already read, the strategy the Dashboard's Reorder priorities
+uses: `pagedProducts` is a window onto `sortedProducts` through the pure helpers in
+`components/shared/list-pagination/paging.ts`, so a page or size change, or turning a column on or
+off, issues no request. A size, filter or sort change returns to page 1; a refetch clamps the page
+to the last one that still exists. The desktop table and the narrow-screen cards (below `md`, both
+rendered and switched by CSS like the Dashboard's) iterate the same `pagedProducts`, so they cannot
+show different products or values.
+
+**Composition.** The page composes shared, presentation-only components and owns none of their
+behaviour:
+
+- `ActionMenuComponent` (`components/shared/action-menu`) - the menu button behind More actions and
+  each row's ⋮ menu (`kind="menu"`: `role="menu"`, Arrow/Home/End, an item closes it) and the
+  Columns disclosure (`kind="panel"`). Each panel is a manual `popover` positioned from its trigger
+  (so no table `overflow` clips it), closes on Escape (focus back to the trigger), outside click and
+  focus leaving it, and only one is open at a time. The items are the page's own buttons and links,
+  projected in, so every permission check (`sessionActive`, `canDelete`, `showImportProducts`) and
+  write handler stays where it was.
+- `ListPaginationComponent` (`components/shared/list-pagination`) - the range, the per-page selector
+  and Previous/Next; it only reports what was asked for.
+- `CheapestSupplierSummaryComponent` (`components/shared/cheapest-supplier`) - the Products layout of
+  the Cheapest supplier answer (unit price, server GST basis, supplier or tied suppliers, Special,
+  Stale with its last check, Compare (N)), from the pure `cheapestSupplierSummaryView`. It formats
+  the server's answer and decides nothing.
+- `SupplierComparisonDialogComponent` (`components/shared/cheapest-supplier`) - **the one supplier
+  comparison**, extracted from `CheapestSupplierCellComponent`'s popup so the Dashboard, Needs
+  Ordering and Products open the same native modal `<dialog>` with the same columns (Supplier, Pack
+  size, Pack price, Unit price, Status & freshness, Link), the same values and the same Tab cycle,
+  Escape/backdrop dismissal and `closed` report; each opener returns focus to its own trigger.
+  Unpublished pack or price data is shown as `—`. The shared wording (`money`, `basisLabel`,
+  `offerStatus`, the notes) lives in `cheapest-supplier-format.ts` and is re-exported by the cell.
+
+The general Cheapest supplier guidance (observed prices, stock may differ) is one
+`HelpToggletipComponent` on the column heading and on each card rather than a note in every cell.
+Deactivate/Reactivate and Delete moved from row buttons into the row menu with their existing
+confirmations; Adjust stock (the existing `/products/:id/stock` workflow) stays on the row. The
+page still authors no dialog markup itself (`page-composition.guard.ts`). Rendered evidence:
+`frontend/inventory-app/e2e/visual/products-redesign.visual.ts`, written to
+`docs/screenshots/issue-1093/`.
+
 ### A product carries no selling price (issue #792)
 
 **`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
