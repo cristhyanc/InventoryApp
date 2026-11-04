@@ -104,6 +104,44 @@ function product(overrides: Partial<Product> = {}): Product {
   };
 }
 
+/**
+ * Opens one table row's overflow menu (issue #1093): Deactivate/Reactivate and Delete moved off the
+ * row into it, so a test that uses them opens it first, the way an operator does. Returns the open
+ * menu, or `null` when the row offers no menu (a support session).
+ */
+function openRowMenu(fixture: ComponentFixture<ProductListComponent>, host: HTMLElement, rowIndex = 0): HTMLElement | null {
+  const trigger = host.querySelectorAll<HTMLButtonElement>('tbody [data-testid="product-row-menu"]')[rowIndex];
+  if (!trigger) {
+    return null;
+  }
+  trigger.click();
+  fixture.detectChanges();
+  return host.querySelector('[data-testid="product-row-menu-panel"]');
+}
+
+/**
+ * Opens the toolbar's More actions menu (issue #1093), which holds Import products and Set GST rule
+ * in bulk, unless it is already open. Returns the open menu, or `null` when the toolbar offers none.
+ */
+function openMoreActions(fixture: ComponentFixture<ProductListComponent>, host: HTMLElement): HTMLElement | null {
+  const open = host.querySelector<HTMLElement>('[data-testid="products-more-actions-panel"]');
+  if (open) {
+    return open;
+  }
+  const trigger = host.querySelector<HTMLButtonElement>('[data-testid="products-more-actions"]');
+  if (!trigger) {
+    return null;
+  }
+  trigger.click();
+  fixture.detectChanges();
+  return host.querySelector('[data-testid="products-more-actions-panel"]');
+}
+
+/** The labels of the items in an open row menu, in order. */
+function menuItems(menu: HTMLElement | null): string[] {
+  return Array.from(menu?.querySelectorAll('[role="menuitem"]') ?? []).map((item) => item.textContent?.trim() ?? '');
+}
+
 describe('ProductListComponent Actions column layout (issue #451)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
@@ -146,7 +184,7 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
   });
 
   it("keeps each row's Actions cell pinned to the right, opaque, and laid out on one line, without changing the action controls", async () => {
-    const { host } = await render([product({ id: 42, name: 'Widget' })]);
+    const { fixture, host } = await render([product({ id: 42, name: 'Widget' })]);
 
     const row = host.querySelector('tbody tr') as HTMLTableRowElement;
     const cells = Array.from(row.querySelectorAll<HTMLTableCellElement>('td'));
@@ -155,17 +193,17 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
     expect(Array.from(actionsCell.classList)).toEqual(expect.arrayContaining(['sticky', 'right-0', 'z-10', 'bg-white']));
     expect(Array.from(actionsCell.classList).filter((cssClass) => cssClass.startsWith('shadow'))).toEqual([]);
 
-    // Issue #876: fixed slots on one line at every width, rather than wrapping onto a second line.
-    const actionsWrapper = actionsCell.querySelector('div');
+    // Issue #876: the actions stay on one line at every width, rather than wrapping onto a second line.
+    const actionsWrapper = actionsCell.querySelector('[data-testid="product-row-actions"]');
     expect(actionsWrapper).not.toBeNull();
     expect(Array.from(actionsWrapper!.classList)).toEqual(expect.arrayContaining(['flex-nowrap']));
 
-    // Stock and Delete remain; Edit is gone from the Actions column (issue #497 moves it to the row).
+    // Adjust stock stays on the row (issue #1093) and the row menu holds Delete; Edit is gone from
+    // the Actions column (issue #497 moves it to the row).
     const stockLink = actionsCell.querySelector('a[href="/products/42/stock"]');
-    const deleteButton = Array.from(actionsCell.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
     expect(actionsCell.querySelector('a[href="/products/42/edit"]')).toBeNull();
-    expect(stockLink?.textContent?.trim()).toBe('Stock');
-    expect(deleteButton).toBeDefined();
+    expect(stockLink?.textContent?.trim()).toBe('Adjust stock');
+    expect(menuItems(openRowMenu(fixture, host))).toContain('Delete');
   });
 
   it('preserves every product field already shown alongside the Actions column', async () => {
@@ -204,14 +242,12 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
 });
 
 /**
- * Three fixed slots, always in the order Stock, Deactivate/Reactivate, Delete (issues #876, #900),
- * so an action lines up under itself down the table regardless of which actions a given row
- * offers. The middle slot always shows one of Deactivate or Reactivate - never both, never neither
- * - while the Delete slot keeps its width empty rather than disappearing on a row the API refuses
- * to delete; both are skipped entirely during a support session (issue #554), where neither can
- * ever be shown.
+ * The Actions column since issue #1093: Adjust stock is always on the row, and the row's overflow
+ * menu holds exactly one of Deactivate (active) or Reactivate (inactive) - issues #825 and #900 -
+ * followed by Delete only where the API allows it (issue #737). During a support session (issue
+ * #554) neither write can ever be shown, so the row renders no menu at all.
  */
-describe('ProductListComponent Actions fixed slots (issue #876)', () => {
+describe('ProductListComponent Actions column and row menu (issues #876, #1093)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   async function render(products: Product[], sessionActive: Observable<boolean> = of(false)) {
@@ -236,59 +272,71 @@ describe('ProductListComponent Actions fixed slots (issue #876)', () => {
     return { fixture, host };
   }
 
-  /** The Actions cell's slot `<div>`s, in DOM order, for the one rendered row. */
-  function slotsOf(host: HTMLElement): HTMLElement[] {
-    const row = host.querySelector('tbody tr') as HTMLTableRowElement;
-    const cells = Array.from(row.querySelectorAll<HTMLTableCellElement>('td'));
-    const actionsCell = cells[cells.length - 1];
-    const wrapper = actionsCell.querySelector('div') as HTMLElement;
-    return Array.from(wrapper.children) as HTMLElement[];
-  }
+  it('keeps Adjust stock on the row and offers Deactivate then Delete in the row menu', async () => {
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: true })]);
 
-  it('orders Stock, Deactivate and Delete for a row that offers all three', async () => {
-    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: true })]);
-
-    const slots = slotsOf(host);
-    expect(slots).toHaveLength(3);
-    expect(slots[0].querySelector('a')?.textContent?.trim()).toBe('Stock');
-    expect(slots[1].querySelector('button')?.textContent?.trim()).toBe('Deactivate');
-    expect(slots[2].querySelector('button')?.textContent?.trim()).toBe('Delete');
+    expect(host.querySelector('tbody a[href="/products/1/stock"]')?.textContent?.trim()).toBe('Adjust stock');
+    expect(host.querySelector('[data-testid="product-row-menu-panel"]')).toBeNull();
+    expect(menuItems(openRowMenu(fixture, host))).toEqual(['Deactivate', 'Delete']);
   });
 
-  it('keeps the Delete slot present but empty for a row that may not be deleted, with Deactivate still in its own slot', async () => {
-    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: false })]);
+  it('offers Deactivate alone in the row menu for a row that may not be deleted', async () => {
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: false })]);
 
-    const slots = slotsOf(host);
-    expect(slots).toHaveLength(3);
-    expect(slots[1].querySelector('button')?.textContent?.trim()).toBe('Deactivate');
-    expect(slots[2].querySelector('button')).toBeNull();
+    expect(menuItems(openRowMenu(fixture, host))).toEqual(['Deactivate']);
   });
 
-  it('shows Reactivate in the Deactivate slot for an inactive product, with Delete still in its own slot', async () => {
-    const { host } = await render([product({ id: 1, name: 'Widget', isActive: false, canDelete: true })]);
+  it('offers Reactivate instead of Deactivate for an inactive product, with Delete still after it', async () => {
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget', isActive: false, canDelete: true })]);
 
-    const slots = slotsOf(host);
-    expect(slots).toHaveLength(3);
-    expect(slots[1].querySelector('button')?.textContent?.trim()).toBe('Reactivate');
-    expect(slots[2].querySelector('button')?.textContent?.trim()).toBe('Delete');
+    expect(menuItems(openRowMenu(fixture, host))).toEqual(['Reactivate', 'Delete']);
   });
 
-  it('renders only the Stock slot during a support session, reserving no width for actions the session can never show', async () => {
+  it('renders no row menu during a support session, keeping Adjust stock', async () => {
     const { host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: true })], of(true));
 
-    const slots = slotsOf(host);
-    expect(slots).toHaveLength(1);
-    expect(slots[0].querySelector('a')?.textContent?.trim()).toBe('Stock');
+    expect(host.querySelector('tbody [data-testid="product-row-menu"]')).toBeNull();
+    expect(host.querySelector('tbody a[href="/products/1/stock"]')?.textContent?.trim()).toBe('Adjust stock');
     expect(host.querySelector('tbody')?.querySelector('button')).toBeNull();
   });
 
-  it('renders only the Stock slot for an inactive product during a support session, hiding Reactivate the same way', async () => {
+  it('renders no row menu for an inactive product during a support session either', async () => {
     const { host } = await render([product({ id: 1, name: 'Widget', isActive: false, canDelete: true })], of(true));
 
-    const slots = slotsOf(host);
-    expect(slots).toHaveLength(1);
-    expect(slots[0].querySelector('a')?.textContent?.trim()).toBe('Stock');
+    expect(host.querySelector('tbody [data-testid="product-row-menu"]')).toBeNull();
     expect(host.querySelector('tbody')?.querySelector('button')).toBeNull();
+  });
+
+  it('labels each row menu by its product and closes it on Escape, returning focus to the trigger', async () => {
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget' })]);
+
+    const trigger = host.querySelector('tbody [data-testid="product-row-menu"]') as HTMLButtonElement;
+    expect(trigger.getAttribute('aria-label')).toBe('More actions for Widget');
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    const menu = openRowMenu(fixture, host)!;
+    expect(menu.getAttribute('role')).toBe('menu');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement?.textContent?.trim()).toBe('Deactivate');
+
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="product-row-menu-panel"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('keeps only one row menu open at a time', async () => {
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget' }), product({ id: 2, name: 'Gadget' })]);
+
+    openRowMenu(fixture, host, 0);
+    openRowMenu(fixture, host, 1);
+
+    expect(host.querySelectorAll('[data-testid="product-row-menu-panel"]')).toHaveLength(1);
+    const triggers = host.querySelectorAll('tbody [data-testid="product-row-menu"]');
+    expect(triggers[0].getAttribute('aria-expanded')).toBe('false');
+    expect(triggers[1].getAttribute('aria-expanded')).toBe('true');
   });
 });
 
@@ -401,6 +449,8 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
   it('does not navigate when the Delete button is clicked, including while opening the delete confirmation', async () => {
     const { fixture, host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
 
+    openRowMenu(fixture, host);
+    expect(navigate).not.toHaveBeenCalled();
     const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement;
     deleteButton.click();
     fixture.detectChanges();
@@ -452,7 +502,7 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
       product({ id: 3, name: 'C', quantityInStock: 2 })
     ]);
 
-    const stockHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Stock')) as HTMLTableCellElement;
+    const stockHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Storage stock')) as HTMLTableCellElement;
     (stockHeader.querySelector('button') as HTMLButtonElement).click();
     fixture.detectChanges();
 
@@ -539,7 +589,8 @@ describe('ProductListComponent write controls during a support session (issue #5
   });
 
   it('shows the Delete button and leaves the status toggle enabled while no session is active', async () => {
-    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true })], of(false));
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget', isActive: true })], of(false));
+    openRowMenu(fixture, host);
 
     const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
     const statusButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Active') as HTMLButtonElement;
@@ -582,13 +633,24 @@ describe('ProductListComponent write controls during a support session (issue #5
 describe('ProductListComponent delete vs deactivate (issue #737)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
+  let current: ComponentFixture<ProductListComponent> | undefined;
+
+  /** Opens the row menu, where Delete and Deactivate live since issue #1093, unless it is already open. */
+  function ensureRowMenu(host: HTMLElement): void {
+    if (current && !host.querySelector('[data-testid="product-row-menu-panel"]')) {
+      openRowMenu(current, host);
+    }
+  }
+
   function deleteButtonOf(host: HTMLElement): HTMLButtonElement | undefined {
+    ensureRowMenu(host);
     return Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Delete') as
       | HTMLButtonElement
       | undefined;
   }
 
   function deactivateButtonOf(host: HTMLElement): HTMLButtonElement | undefined {
+    ensureRowMenu(host);
     return Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Deactivate') as
       | HTMLButtonElement
       | undefined;
@@ -616,6 +678,7 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
+    current = fixture;
     return { fixture, host: fixture.nativeElement as HTMLElement, toastService };
   }
 
@@ -873,7 +936,7 @@ describe('ProductListComponent Status filter (issue #791)', () => {
     fixture.detectChanges();
     expect(fixture.componentInstance.statusFilter).toBe('all');
 
-    (Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Reset') as HTMLButtonElement).click();
+    (Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Clear filters') as HTMLButtonElement).click();
     fixture.detectChanges();
     // NgModel's model-to-view write for a standalone control is a deferred microtask (to avoid
     // ExpressionChangedAfterItHasBeenCheckedError), so the reset state needs one more tick.
@@ -882,6 +945,8 @@ describe('ProductListComponent Status filter (issue #791)', () => {
 
     expect(fixture.componentInstance.statusFilter).toBe('active');
     expect(statusSelect(host).value).toBe('active');
+    // Back at the defaults, there is nothing left to clear (issue #1093).
+    expect(host.querySelector('[data-testid="products-clear-filters"]')).toBeNull();
   });
 
   /**
@@ -904,36 +969,37 @@ describe('ProductListComponent Status filter (issue #791)', () => {
     const { fixture, host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
 
     expect(host.textContent).not.toContain('All Suppliers');
-    // Status is excluded here: under "Only active" (the default) it is hidden entirely (issue #828).
+    // Status is excluded here: under "Only active" (the default) it is hidden entirely (issue #828),
+    // and the two history columns are optional and off by default (issue #1093).
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
     ).toEqual([
-      'Name',
+      'Product',
       'Category',
-      'Stock',
+      'Storage stock',
       'Average cost',
-      'Last purchase',
-      'Cheapest purchase',
       'Cheapest supplier',
-      ''
+      'Actions'
     ]);
 
     statusSelect(host).value = 'all';
     statusSelect(host).dispatchEvent(new Event('change'));
+    fixture.componentInstance.toggleColumn('lastPurchase', true);
+    fixture.componentInstance.toggleColumn('cheapestPurchase', true);
     fixture.detectChanges();
 
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
     ).toEqual([
-      'Name',
+      'Product',
       'Category',
-      'Stock',
+      'Storage stock',
       'Status',
       'Average cost',
       'Last purchase',
       'Cheapest purchase',
       'Cheapest supplier',
-      ''
+      'Actions'
     ]);
   });
 });
@@ -1124,13 +1190,13 @@ describe('ProductListComponent Status column visibility (issue #828)', () => {
     expect(getAll).toHaveBeenCalledWith(expect.objectContaining({ includeRetired: true }));
   });
 
-  it('hides the Status column again after Reset', async () => {
+  it('hides the Status column again after Clear filters', async () => {
     const { fixture, host } = await render([product({ id: 1, name: 'Widget', isActive: true })]);
 
     selectStatusFilter(fixture, host, 'all');
     expect(headerLabels(host)).toContain('Status');
 
-    (Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Reset') as HTMLButtonElement).click();
+    (Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Clear filters') as HTMLButtonElement).click();
     fixture.detectChanges();
     // NgModel's model-to-view write for a standalone control is a deferred microtask (to avoid
     // ExpressionChangedAfterItHasBeenCheckedError), so the reset state needs one more tick.
@@ -1218,9 +1284,12 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
-    // Status is shown only under "All" (issue #828); switched here so this block's existing
-    // column-index assertions keep describing the same cells.
+    // Status is shown only under "All" (issue #828), and the two history columns only once Columns
+    // turns them on (issue #1093); both are switched here so this block's existing column-index
+    // assertions keep describing the same cells.
     fixture.componentInstance.statusFilter = 'all';
+    fixture.componentInstance.toggleColumn('lastPurchase', true);
+    fixture.componentInstance.toggleColumn('cheapestPurchase', true);
     fixture.detectChanges();
     return { fixture, host: fixture.nativeElement as HTMLElement, getSummaries };
   }
@@ -1373,9 +1442,11 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
-    // Status is shown only under "All" (issue #828); switched here so this test's column-index
-    // assertions keep describing the same cells.
+    // Status is shown only under "All" (issue #828) and the history columns once turned on (issue
+    // #1093); switched here so this test's column-index assertions keep describing the same cells.
     fixture.componentInstance.statusFilter = 'all';
+    fixture.componentInstance.toggleColumn('lastPurchase', true);
+    fixture.componentInstance.toggleColumn('cheapestPurchase', true);
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
 
@@ -1478,48 +1549,78 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
   }
 
   function toolbar(host: HTMLElement): HTMLElement {
-    return host.querySelector('.card .card-body') as HTMLElement;
+    return host.querySelector('[data-testid="products-toolbar"]') as HTMLElement;
   }
 
-  it('renders New Product inside the search/filter toolbar, linking to the create route', async () => {
+  it('renders New product inside the search/filter toolbar as the primary action, linking to the create route', async () => {
     const { host } = await render();
 
     const newProduct = toolbar(host).querySelector('a[href="/products/new"]') as HTMLAnchorElement;
     expect(newProduct).not.toBeNull();
-    expect(newProduct.textContent?.trim()).toBe('New Product');
+    expect(newProduct.textContent?.trim()).toBe('New product');
+    expect(newProduct.classList).toContain('rr-button-primary');
   });
 
-  it('keeps search, category, status, Reset and New Product reachable in that keyboard order', async () => {
+  it('keeps search, category, status, Columns, More actions and New product reachable in that keyboard order', async () => {
     const { host } = await render();
 
     // Each control named by whatever identifies it: the search placeholder, the category select's
-    // only option, the status select's name, then the two action labels.
+    // only option, the status select's name, then each action's accessible name or label.
     const order = Array.from(toolbar(host).querySelectorAll<HTMLElement>('input, select, button, a')).map(
-      (control) => control.getAttribute('placeholder') ?? control.getAttribute('name') ?? control.textContent?.trim()
+      (control) =>
+        control.getAttribute('placeholder')
+        ?? control.getAttribute('name')
+        ?? control.getAttribute('aria-label')
+        ?? control.textContent?.trim()
     );
-    // "Set GST rule in bulk" joined the action group with issue #1076, ahead of New Product so the
-    // primary action stays last in the keyboard order.
-    expect(order).toEqual([
-      'Search name or SKU',
-      'All Categories',
-      'statusFilter',
-      'Reset',
-      'Set GST rule in bulk',
-      'New Product'
-    ]);
+    // Clear filters is not offered at the defaults (issue #1093), and Import products and Set GST
+    // rule in bulk sit inside More actions, which is closed.
+    expect(order).toEqual(['Search name or SKU', 'All categories', 'statusFilter', 'Columns', 'More actions', 'New product']);
     // No control is taken out of the tab order or made unreachable to get the layout.
     expect(toolbar(host).querySelector('[tabindex="-1"]')).toBeNull();
   });
 
-  it('lets the toolbar wrap instead of overflowing, and spaces it from the table card', async () => {
+  it('lets the toolbar wrap instead of overflowing', async () => {
     const { host } = await render();
 
-    const toolbarCard = host.querySelector('.card') as HTMLElement;
     expect(Array.from(toolbar(host).classList)).toEqual(expect.arrayContaining(['flex', 'flex-wrap']));
-    // One existing Tailwind spacing step (1.5rem) between the toolbar card and the table card.
-    expect(Array.from(toolbarCard.classList)).toContain('mb-6');
     // Nothing on the toolbar introduces a horizontal scroll area of its own.
     expect(Array.from(toolbar(host).classList)).not.toContain('overflow-x-auto');
+  });
+
+  it('offers Clear filters only while a filter differs from its default', async () => {
+    const { fixture, host } = await render();
+    const clear = () => host.querySelector('[data-testid="products-clear-filters"]');
+
+    expect(clear()).toBeNull();
+
+    fixture.componentInstance.onSearchChange('wid');
+    fixture.detectChanges();
+    expect(clear()).not.toBeNull();
+
+    fixture.componentInstance.resetFilters();
+    fixture.detectChanges();
+    expect(clear()).toBeNull();
+
+    fixture.componentInstance.onStatusFilterChange('all');
+    fixture.detectChanges();
+    expect(clear()).not.toBeNull();
+  });
+
+  it('clears the search from its own button and refreshes straight away', async () => {
+    const { fixture, host } = await render();
+
+    expect(host.querySelector('[data-testid="products-search-clear"]')).toBeNull();
+    fixture.componentInstance.onSearchChange('wid');
+    fixture.detectChanges();
+
+    const clearSearch = host.querySelector('[data-testid="products-search-clear"]') as HTMLButtonElement;
+    expect(clearSearch.getAttribute('aria-label')).toBe('Clear search');
+    clearSearch.click();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.search).toBe('');
+    expect(host.querySelector('[data-testid="products-search-clear"]')).toBeNull();
   });
 
   it('hides New Product while a support session is active', async () => {
@@ -1538,6 +1639,8 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
  */
 describe('ProductListComponent Deactivate (issue #825)', () => {
   afterEach(() => TestBed.resetTestingModule());
+
+  let current: ComponentFixture<ProductListComponent> | undefined;
 
   async function render(products: Product[], options: { update?: jest.Mock; sessionActive?: Observable<boolean> } = {}) {
     const update = options.update ?? jest.fn(() => of(undefined));
@@ -1568,10 +1671,15 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
+    current = fixture;
     return { fixture, host: fixture.nativeElement as HTMLElement, update, getAll, toastService };
   }
 
   function rowButton(host: HTMLElement, label: string): HTMLButtonElement | undefined {
+    // Deactivate, Reactivate and Delete are in the row menu since issue #1093; open it first.
+    if (current && !host.querySelector('[data-testid="product-row-menu-panel"]')) {
+      openRowMenu(current, host);
+    }
     return Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === label) as
       | HTMLButtonElement
       | undefined;
@@ -1766,6 +1874,8 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
 describe('ProductListComponent Reactivate (issue #900)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
+  let current: ComponentFixture<ProductListComponent> | undefined;
+
   async function render(products: Product[], options: { update?: jest.Mock; sessionActive?: Observable<boolean> } = {}) {
     const update = options.update ?? jest.fn(() => of(undefined));
     const getAll = jest.fn(() => of(products));
@@ -1795,10 +1905,15 @@ describe('ProductListComponent Reactivate (issue #900)', () => {
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
+    current = fixture;
     return { fixture, host: fixture.nativeElement as HTMLElement, update, getAll, toastService };
   }
 
   function rowButton(host: HTMLElement, label: string): HTMLButtonElement | undefined {
+    // Deactivate, Reactivate and Delete are in the row menu since issue #1093; open it first.
+    if (current && !host.querySelector('[data-testid="product-row-menu-panel"]')) {
+      openRowMenu(current, host);
+    }
     return Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === label) as
       | HTMLButtonElement
       | undefined;
@@ -1967,10 +2082,17 @@ describe('ProductListComponent Import products in the toolbar (issue #875)', () 
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
+    current = fixture;
     return { fixture, host: fixture.nativeElement as HTMLElement, provider };
   }
 
+  let current: ComponentFixture<ProductListComponent> | undefined;
+
+  /** Import products is inside More actions since issue #1093, so the menu is opened first. */
   function importLink(host: HTMLElement): HTMLAnchorElement | null {
+    if (current) {
+      openMoreActions(current, host);
+    }
     return host.querySelector('[data-testid="import-products-link"]');
   }
 
@@ -2181,7 +2303,11 @@ describe('ProductListComponent Set GST rule in bulk (issue #1076)', () => {
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
 
-    const openButton = () => host.querySelector<HTMLButtonElement>('[data-testid="bulk-gst-rule-button"]');
+    // Set GST rule in bulk is inside More actions since issue #1093, so the menu is opened first.
+    const openButton = () => {
+      openMoreActions(fixture, host);
+      return host.querySelector<HTMLButtonElement>('[data-testid="bulk-gst-rule-button"]');
+    };
     const dialog = () => host.querySelector('[data-testid="bulk-gst-rule-dialog"]');
     const open = () => {
       openButton()!.click();

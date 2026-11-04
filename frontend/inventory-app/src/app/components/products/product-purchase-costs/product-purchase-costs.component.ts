@@ -74,6 +74,30 @@ export function purchaseCostSupplierDisplay(
   return supplierName ?? 'None';
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * The date of the purchase behind a found Last/Cheapest cost (issue #1093), e.g. `18 Oct 2026`,
+ * or `null` while there is no cost to show one beside. It is the purchase's own recorded date, not
+ * an instant, so it is read from its `YYYY-MM-DD` part as written and never shifted through a
+ * time zone; a value in any other shape is not shown rather than guessed at.
+ */
+export function purchaseCostDateDisplay(
+  costs: ProductPurchaseCosts,
+  productId: number,
+  column: ProductPurchaseCostColumn
+): string | null {
+  const summary = summaryOf(costs, productId);
+  if (!summary) {
+    return null;
+  }
+
+  const date = column === 'lastPurchase' ? summary.lastPurchaseDate : summary.lowestPurchaseDate;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date ?? '');
+  const month = match ? MONTHS[Number(match[2]) - 1] : undefined;
+  return match && month ? `${match[3]} ${month} ${match[1]}` : null;
+}
+
 /** The cost a Last/Cheapest purchase column sorts on - never its supplier - or `null` when there is none to sort on. */
 export function purchaseCostSortValue(
   costs: ProductPurchaseCosts,

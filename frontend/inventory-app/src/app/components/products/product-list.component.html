@@ -1,239 +1,419 @@
 <!--
-  `mb-6` is the spacing between this toolbar card and the table card below it (issue #825): the
-  routed page is one flex child of the shell's `.page`, so the page's own 1.5rem gap falls between
-  the header and this component, never between the two cards inside it.
+  All products (issue #1093's approved Restockroo layout, on the Dashboard and Pick List's `rr`
+  scale): one card holding the toolbar, the table (or, below `md`, the product cards) and the pager.
+  The table and the cards render the same `pagedProducts`, from the same filters, sort, columns and
+  page, so the two layouts can never show different products or different values.
 -->
-<div class="card mb-6">
-  <div class="card-body flex flex-wrap gap-4">
-    <input class="max-w-[220px]" [ngModel]="search" (ngModelChange)="onSearchChange($event)" placeholder="Search name or SKU" />
-
-    <select class="max-w-[180px]" [(ngModel)]="categoryId" (ngModelChange)="applyFilters()">
-      <option value="">All Categories</option>
-      @for (c of categories; track c.id) {
-        <option [ngValue]="c.id">{{ c.name }}</option>
+<section class="card overflow-hidden rounded-xl border-rr-line font-rr text-rr-navy" aria-label="All products">
+  <div class="flex flex-wrap items-center gap-2 border-b border-rr-line p-3 sm:gap-3 sm:p-4" data-testid="products-toolbar">
+    <label class="relative flex min-w-0 basis-full items-center sm:basis-64 sm:flex-1 lg:max-w-md">
+      <span class="sr-only">Search name or SKU</span>
+      <span class="pointer-events-none absolute left-3 text-rr-caption" aria-hidden="true"><app-icon name="search" [size]="18" /></span>
+      <input
+        class="min-h-10 w-full rounded-lg border border-rr-line bg-white pl-9 pr-9 text-sm text-rr-navy placeholder:text-rr-caption"
+        data-testid="products-search"
+        [ngModel]="search"
+        (ngModelChange)="onSearchChange($event)"
+        placeholder="Search name or SKU" />
+      @if (search) {
+        <button
+          type="button"
+          class="absolute right-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-rr-caption hover:bg-rr-canvas hover:text-rr-navy"
+          aria-label="Clear search"
+          data-testid="products-search-clear"
+          (click)="clearSearch()"><app-icon name="close" [size]="16" /></button>
       }
-    </select>
+    </label>
 
-    <label class="flex items-center gap-2 self-center">
-      <span>Status</span>
-      <select class="max-w-[180px]" [ngModel]="statusFilter" (ngModelChange)="onStatusFilterChange($event)" name="statusFilter">
+    <label class="flex min-h-10 items-center gap-1 rounded-lg border border-rr-line bg-white pl-3 text-sm">
+      <span class="text-rr-caption">Category:</span>
+      <select
+        class="min-h-9 max-w-[180px] border-0 bg-transparent pr-2 text-sm font-semibold text-rr-navy"
+        data-testid="products-category"
+        [(ngModel)]="categoryId"
+        (ngModelChange)="onCategoryChange()">
+        <option value="">All categories</option>
+        @for (c of categories; track c.id) {
+          <option [ngValue]="c.id">{{ c.name }}</option>
+        }
+      </select>
+    </label>
+
+    <label class="flex min-h-10 items-center gap-1 rounded-lg border border-rr-line bg-white pl-3 text-sm">
+      <span class="text-rr-caption">Status:</span>
+      <select
+        class="min-h-9 max-w-[180px] border-0 bg-transparent pr-2 text-sm font-semibold text-rr-navy"
+        [ngModel]="statusFilter"
+        (ngModelChange)="onStatusFilterChange($event)"
+        name="statusFilter">
         <option value="active">Only active</option>
         <option value="all">All</option>
       </select>
     </label>
 
-    <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
+    <!-- Offered only when a filter differs from its default: with nothing to clear it would be a no-op. -->
+    @if (filtersDiffer) {
+      <button type="button" class="rr-button-ghost min-h-10 px-3" data-testid="products-clear-filters" (click)="resetFilters()">Clear filters</button>
+    }
 
     <!--
-      Import products and New Product (issues #875 and #825), last in the DOM so they are last in
-      the keyboard order. The wrapper carries `sm:ml-auto` so the pair sits at the right edge from
-      `sm` up, and its own `flex-wrap` keeps both reachable without a horizontal scroll on a narrow
-      screen, where they simply wrap onto the next line with the controls before them.
-      New Product is hidden rather than disabled while a support session is active (issue #554): a
-      session grants InventoryOperate, so this write would otherwise still render. Import products
-      is withheld on the same `showImportProducts` answer for the same reason - it also requires
-      `Imports.Run` and a provider the catalogue review can actually read.
+      Columns, More actions and New product, last in the DOM so they are last in the keyboard order.
+      Columns exists only for a role that may see the history columns it offers. More actions holds
+      exactly Import products and Set GST rule in bulk, each on its existing permission, and is not
+      rendered when neither is offered. New product and Set GST rule in bulk are hidden rather than
+      disabled during a support session (issue #554): a session grants InventoryOperate, so these
+      writes would otherwise still render.
     -->
-    <div class="flex flex-wrap items-center gap-2 self-center sm:ml-auto">
-      <!--
-        Set GST rule in bulk (issue #1076). It is offered on the same permission as the
-        single-product GST rule - this page already requires Inventory.Operate - and is hidden
-        rather than disabled while a support session is active, for the reason New Product is: a
-        session grants that capability, so this write would otherwise still render.
-      -->
-      @if (!sessionActive) {
-        <button
-          type="button"
-          data-testid="bulk-gst-rule-button"
-          class="btn btn-secondary"
-          (click)="openBulkGstRule()">Set GST rule in bulk</button>
+    <div class="ml-auto flex flex-wrap items-center gap-2">
+      @if (canViewFinancials) {
+        <app-action-menu
+          kind="panel"
+          icon="view_column"
+          label="Columns"
+          [text]="activeColumnCount > 6 ? 'Columns (' + activeColumnCount + ' active)' : 'Columns'"
+          triggerClass="rr-button-secondary min-h-10 px-3"
+          testId="products-columns">
+          <div class="flex items-center justify-between gap-4 px-2 pb-1 pt-1">
+            <span class="text-xs font-semibold uppercase tracking-wide text-rr-muted">Optional columns</span>
+            <button
+              type="button"
+              class="text-xs font-semibold text-rr-teal hover:underline"
+              data-testid="products-columns-reset"
+              (click)="resetColumns()">Reset to default</button>
+          </div>
+          @for (option of optionalColumnOptions; track option.column) {
+            <label class="flex min-h-10 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-rr-canvas">
+              <input
+                type="checkbox"
+                [attr.data-testid]="'products-column-' + option.column"
+                [checked]="optionalColumns.has(option.column)"
+                (change)="toggleColumn(option.column, $any($event.target).checked)" />
+              <span>{{ option.label }}</span>
+            </label>
+          }
+        </app-action-menu>
       }
-      @if (showImportProducts) {
-        <a
-          data-testid="import-products-link"
-          routerLink="/products/import"
-          class="btn btn-secondary">Import products</a>
+      @if (showImportProducts || !sessionActive) {
+        <app-action-menu
+          icon="more_vert"
+          label="More actions"
+          triggerClass="rr-button-secondary min-h-10 w-10 px-0"
+          testId="products-more-actions">
+          @if (showImportProducts) {
+            <a
+              role="menuitem"
+              data-testid="import-products-link"
+              routerLink="/products/import"
+              class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-rr-navy no-underline hover:bg-rr-canvas focus:bg-rr-canvas"><app-icon name="upload" [size]="18" />Import products</a>
+          }
+          @if (!sessionActive) {
+            <!-- Set GST rule in bulk (issue #1076), on the single-product GST rule's own permission. -->
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="bulk-gst-rule-button"
+              class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left hover:bg-rr-canvas focus:bg-rr-canvas"
+              (click)="openBulkGstRule()"><app-icon name="receipt" [size]="18" />Set GST rule in bulk</button>
+          }
+        </app-action-menu>
       }
       @if (!sessionActive) {
-        <a routerLink="/products/new" class="btn btn-primary">New Product</a>
+        <a routerLink="/products/new" class="rr-button-primary min-h-10" data-testid="products-new"><app-icon name="add" [size]="18" />New product</a>
       }
     </div>
   </div>
-</div>
 
-<div class="card">
-  <div class="card-body p-0">
-    <!--
-      The purchase-cost read behind the Last and Cheapest purchase columns is its own feature
-      component (issue #191's page composition boundary): this page hands it the product ids it is
-      displaying and lays out the answer it publishes, while the read, its capability gate, its
-      failure message and its Retry control stay inside it.
-    -->
+  <!--
+    The purchase-cost read behind the optional Last and Cheapest purchase columns is its own feature
+    component (issue #191's page composition boundary): this page hands it the product ids it is
+    displaying and lays out the answer it publishes. Its failure message and Retry are shown only
+    while one of those columns is, because they describe columns nobody has turned on otherwise.
+  -->
+  <div [hidden]="!isColumnShown('lastPurchase') && !isColumnShown('cheapestPurchase')">
     <app-product-purchase-costs
       [productIds]="productIds"
       (costsChange)="onPurchaseCostsChange($event)"></app-product-purchase-costs>
+  </div>
+  <!--
+    The Cheapest supplier column's one read for every listed product (issue #940, reusing #930's
+    shared component), which owns the request, its failure message and its Retry.
+  -->
+  <app-cheapest-suppliers
+    [productIds]="productIds"
+    (suppliersChange)="cheapestSuppliers = $event"></app-cheapest-suppliers>
+
+  @if (loadState.loadFailed) {
+    <p class="p-4 text-md-body value-negative">Failed to load products. Change a filter or reload the page to try again.</p>
+  } @else if (loadState.loaded && products.length === 0) {
+    <p class="p-4 text-md-body value-muted">No products match your filters.</p>
+  } @else if (loadState.loaded) {
     <!--
-      The Cheapest supplier column's one read for the rows on screen (issue #940, reusing #930's
-      shared component), the same feature-component boundary the purchase-cost read above keeps:
-      this page hands it the ids it is displaying and lays out the answer it publishes, while the
-      read, its batching, its failure message and its Retry control stay inside it.
+      The Actions column is pinned to the right edge of this scroll area so Adjust stock and the row
+      menu stay reachable when the optional history columns push the table wider than the viewport;
+      each sticky cell carries its own opaque background so scrolled columns never show through.
     -->
-    <app-cheapest-suppliers
-      [productIds]="productIds"
-      (suppliersChange)="cheapestSuppliers = $event"></app-cheapest-suppliers>
-    @if (loadState.loadFailed) {
-      <p class="p-4 text-md-body value-negative">Failed to load products. Change a filter or reload the page to try again.</p>
-    } @else if (loadState.loaded && products.length === 0) {
-      <p class="p-4 text-md-body value-muted">No products match your filters.</p>
-    } @else if (loadState.loaded) {
-      <!--
-        The Actions column is pinned to the right edge of this scroll area (rather than the whole
-        table) so Stock/Deactivate/Delete stay visible and usable without scrolling to discover them
-        when long product names or a populated Category/Stock/Status set of columns push
-        the table wider than the viewport. Each sticky cell carries its own opaque #410 token
-        background, because a transparent cell would let scrolled columns show through underneath it.
-      -->
-      <div class="overflow-x-auto">
-        <table class="table">
-          <thead class="table-head">
-            <tr>
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('name')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('name')">{{ sortLabel('Name', 'name') }}</button>
+    <div class="hidden overflow-x-auto md:block" data-testid="products-table">
+      <table class="table">
+        <thead class="table-head">
+          <tr>
+            <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('name')">
+              <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('name')">{{ sortLabel('Product', 'name') }}</button>
+            </th>
+            <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('category')">
+              <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('category')">{{ sortLabel('Category', 'category') }}</button>
+            </th>
+            <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
+              <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Storage stock', 'stock') }}</button>
+            </th>
+            @if (statusFilter === 'all') {
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
               </th>
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('category')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('category')">{{ sortLabel('Category', 'category') }}</button>
+            }
+            <th scope="col" class="table-cell text-right" [attr.aria-sort]="ariaSort('averageCost')">
+              <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageCost')">{{ sortLabel('Average cost', 'averageCost') }}</button>
+            </th>
+            @if (isColumnShown('lastPurchase')) {
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lastPurchase')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastPurchase')">{{ sortLabel('Last purchase', 'lastPurchase') }}</button>
               </th>
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
+            }
+            @if (isColumnShown('cheapestPurchase')) {
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('cheapestPurchase')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchase')">{{ sortLabel('Cheapest purchase', 'cheapestPurchase') }}</button>
               </th>
+            }
+            <!--
+              Observed supplier prices (issue #940). Not sortable: a sort over a column whose values
+              are still arriving would reorder the page under the reader. Its general guidance lives
+              in this one help button rather than in every row (issue #1093).
+            -->
+            <th scope="col" class="table-cell whitespace-nowrap">Cheapest supplier<app-help-toggletip
+                class="ml-1"
+                [label]="cheapestSupplierHelpLabel"
+              >{{ cheapestSupplierHelp }}</app-help-toggletip></th>
+            <th scope="col" class="table-cell sticky right-0 z-10 bg-md-gray-100 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (p of pagedProducts; track p.id) {
+            <tr class="table-row table-row-link" (click)="onRowActivate(p, $event)" (keydown.enter)="onRowActivate(p, $event)">
+              <td class="table-cell">
+                <a
+                  class="table-row-anchor font-semibold text-rr-navy"
+                  [routerLink]="['/products', p.id, 'edit']"
+                  [attr.aria-label]="'Edit product ' + p.name">{{ p.name }}</a>
+                @if (p.sku) {
+                  <span class="block text-xs text-rr-caption" data-testid="product-sku">SKU: {{ p.sku }}</span>
+                }
+              </td>
+              <td class="table-cell">
+                @if (p.category?.name; as categoryName) {
+                  <span class="inline-flex rounded bg-rr-surface-strong px-1.5 py-0.5 text-xs font-medium text-rr-muted">{{ categoryName }}</span>
+                }
+              </td>
+              <td class="table-cell">
+                <!-- Storage stock only, with no unit suffix (issue #893); thresholds and colours unchanged. -->
+                <span class="badge" [ngClass]="p.isActive ? (p.isLowStock ? 'badge-danger' : 'badge-success') : 'badge-neutral'">
+                  {{ p.quantityInStock }}
+                </span>
+              </td>
               @if (statusFilter === 'all') {
-                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
-                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
-                </th>
-              }
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('averageCost')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageCost')">{{ sortLabel('Average cost', 'averageCost') }}</button>
-              </th>
-              @if (canViewFinancials) {
-                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lastPurchase')">
-                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastPurchase')">{{ sortLabel('Last purchase', 'lastPurchase') }}</button>
-                </th>
-                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('cheapestPurchase')">
-                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchase')">{{ sortLabel('Cheapest purchase', 'cheapestPurchase') }}</button>
-                </th>
-              }
-              <!--
-                Observed supplier prices (issue #940, parent #817). Not sortable: sorting by price is
-                explicitly out of this issue's scope, and a sort over a column whose values are still
-                arriving would reorder the page under the reader.
-              -->
-              <th scope="col" class="table-cell">Cheapest supplier</th>
-              <th scope="col" class="table-cell sticky right-0 z-10 bg-md-gray-100"></th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (p of sortedProducts; track p.id) {
-              <tr class="table-row table-row-link" (click)="onRowActivate(p, $event)" (keydown.enter)="onRowActivate(p, $event)">
                 <td class="table-cell">
-                  <a
-                    class="table-row-anchor"
-                    [routerLink]="['/products', p.id, 'edit']"
-                    [attr.aria-label]="'Edit product ' + p.name">{{ p.name }}</a>
+                  <button
+                    type="button"
+                    class="badge"
+                    [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'"
+                    [disabled]="sessionActive"
+                    (click)="toggleActive(p)"
+                  >
+                    {{ p.isActive ? 'Active' : 'Inactive' }}
+                  </button>
                 </td>
-                <td class="table-cell">{{ p.category?.name }}</td>
-                <td class="table-cell">
-                  <span class="badge" [ngClass]="p.isActive ? (p.isLowStock ? 'badge-danger' : 'badge-success') : 'badge-neutral'">
-                    {{ p.quantityInStock }}
-                  </span>
-                </td>
-                @if (statusFilter === 'all') {
-                  <td class="table-cell">
-                    <button
-                      type="button"
-                      class="badge"
-                      [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'"
-                      [disabled]="sessionActive"
-                      (click)="toggleActive(p)"
-                    >
-                      {{ p.isActive ? 'Active' : 'Inactive' }}
-                    </button>
-                  </td>
-                }
-                <td class="table-cell">{{ averageCostDisplay(p) }}</td>
-                @if (canViewFinancials) {
-                  <td class="table-cell">
-                    <div>{{ purchaseCostDisplay(p, 'lastPurchase') }}</div>
+              }
+              <td class="table-cell text-right tabular-nums">{{ averageCostDisplay(p) }}</td>
+              @if (isColumnShown('lastPurchase')) {
+                <td class="table-cell" data-testid="product-last-purchase">
+                  <div class="tabular-nums">{{ purchaseCostDisplay(p, 'lastPurchase') }}
                     @if (purchaseCostSupplierDisplay(p, 'lastPurchase'); as supplier) {
-                      <div class="mt-1 value-muted">{{ supplier }}</div>
-                    }
-                  </td>
-                  <td class="table-cell">
-                    <div>{{ purchaseCostDisplay(p, 'cheapestPurchase') }}</div>
-                    @if (purchaseCostSupplierDisplay(p, 'cheapestPurchase'); as supplier) {
-                      <div class="mt-1 value-muted">{{ supplier }}</div>
-                    }
-                  </td>
-                }
-                <!--
-                  The cheapest of this business's own linked suppliers per unit, and the popup
-                  listing every one of them (issue #940, reusing #930's shared cell). It formats
-                  the server's answer and calculates nothing.
-                -->
-                <td class="table-cell">
-                  <app-cheapest-supplier-cell
-                    [product]="cheapestSupplier(p)"
-                    [state]="cheapestSuppliers.state"
-                    [displayBasis]="cheapestSuppliers.displayBasis"
-                    [productName]="p.name"
-                  ></app-cheapest-supplier-cell>
-                </td>
-                <td class="table-cell sticky right-0 z-10 bg-white">
-                  <!--
-                    Three fixed-width slots, always in the order Stock, Deactivate/Reactivate, Delete
-                    (issues #876, #900), so each action lines up under itself down the table instead
-                    of shifting with how many buttons a given row has. The middle slot always shows
-                    one of Deactivate or Reactivate; the Delete slot stays empty (keeping its width)
-                    rather than disappearing on a row the API refuses to delete.
-                  -->
-                  <div class="flex flex-nowrap items-center gap-2">
-                    <div class="w-20 shrink-0">
-                      <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary w-full">Stock</a>
-                    </div>
-                    <!-- Hidden rather than disabled while a support session is active (issue #554): a
-                         session grants InventoryOperate, so these writes would otherwise still render.
-                         Both slots are skipped entirely during a session, not left empty, because the
-                         column must not reserve width for actions a session can never show. -->
-                    @if (!sessionActive) {
-                      <div class="w-32 shrink-0">
-                        <!-- Deactivate is always available for an active product, whether or not it
-                             may be deleted (issue #825); Reactivate is always available for an
-                             inactive one (issue #900), sharing the Status badge's own immediate
-                             activation write, `toggleActive`. Exactly one of the two shows here. -->
-                        @if (p.isActive) {
-                          <button type="button" class="btn btn-sm btn-secondary w-full" (click)="confirmDeactivate(p)">Deactivate</button>
-                        } @else {
-                          <button type="button" class="btn btn-sm btn-secondary w-full" (click)="toggleActive(p)">Reactivate</button>
-                        }
-                      </div>
-                      <div class="w-24 shrink-0">
-                        <!-- Delete is offered only where the API says it is allowed (issue #737); for
-                             every other product the row simply does not offer an action that must
-                             fail, and the reason is on the product's Edit page (issue #825). -->
-                        @if (canDelete(p)) {
-                          <button type="button" class="btn btn-sm btn-danger w-full" (click)="confirmDelete(p)">Delete</button>
-                        }
-                      </div>
+                      <span class="value-muted">{{ supplier }}</span>
                     }
                   </div>
+                  @if (purchaseCostDateDisplay(p, 'lastPurchase'); as date) {
+                    {{ ' ' }}<div class="text-xs text-rr-caption">{{ date }}</div>
+                  }
                 </td>
-              </tr>
+              }
+              @if (isColumnShown('cheapestPurchase')) {
+                <td class="table-cell" data-testid="product-cheapest-purchase">
+                  <div class="tabular-nums">{{ purchaseCostDisplay(p, 'cheapestPurchase') }}
+                    @if (purchaseCostSupplierDisplay(p, 'cheapestPurchase'); as supplier) {
+                      <span class="value-muted">{{ supplier }}</span>
+                    }
+                  </div>
+                  @if (purchaseCostDateDisplay(p, 'cheapestPurchase'); as date) {
+                    {{ ' ' }}<div class="text-xs text-rr-caption">{{ date }}</div>
+                  }
+                </td>
+              }
+              <td class="table-cell">
+                <app-cheapest-supplier-summary
+                  [product]="cheapestSupplier(p)"
+                  [state]="cheapestSuppliers.state"
+                  [displayBasis]="cheapestSuppliers.displayBasis"
+                  [productName]="p.name"
+                  [productSku]="p.sku ?? null"
+                  [categoryName]="p.category?.name ?? null"
+                ></app-cheapest-supplier-summary>
+              </td>
+              <td class="table-cell sticky right-0 z-10 bg-white">
+                <!--
+                  Adjust stock is always on the row (the existing stock workflow); Deactivate or
+                  Reactivate, and Delete where the API allows it (issue #737), are in the row menu.
+                  The menu is not rendered during a support session (issue #554): a session grants
+                  InventoryOperate, so these writes would otherwise still render.
+                -->
+                <div class="flex flex-nowrap items-center justify-end gap-1" data-testid="product-row-actions">
+                  <a
+                    [routerLink]="['/products', p.id, 'stock']"
+                    class="rr-button-secondary min-h-9 px-3 text-xs text-rr-teal"
+                    [attr.aria-label]="'Adjust stock for ' + p.name">Adjust stock</a>
+                  @if (!sessionActive) {
+                    <app-action-menu
+                      icon="more_vert"
+                      [label]="'More actions for ' + p.name"
+                      triggerClass="inline-flex h-9 w-9 items-center justify-center rounded-lg text-rr-muted hover:bg-rr-canvas hover:text-rr-navy"
+                      testId="product-row-menu">
+                      <!-- Exactly one of Deactivate (active) or Reactivate (inactive) - issues #825, #900. -->
+                      @if (p.isActive) {
+                        <button type="button" role="menuitem" class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg" (click)="confirmDeactivate(p)">Deactivate</button>
+                      } @else {
+                        <button type="button" role="menuitem" class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left hover:bg-rr-canvas focus:bg-rr-canvas" (click)="toggleActive(p)">Reactivate</button>
+                      }
+                      @if (canDelete(p)) {
+                        <button type="button" role="menuitem" class="flex min-h-10 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg" (click)="confirmDelete(p)">Delete</button>
+                      }
+                    </app-action-menu>
+                  }
+                </div>
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <!--
+      Below `md` the same page of products as compact cards: the wrapped name, category, storage
+      stock, average cost, any history column the operator turned on, the cheapest supplier, Adjust
+      stock and the same row menu.
+    -->
+    <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="product-cards">
+      @for (p of pagedProducts; track p.id) {
+        <li class="rounded-xl border border-rr-line bg-white p-3" data-testid="product-card">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <a class="break-words font-semibold text-rr-navy no-underline hover:underline" [routerLink]="['/products', p.id, 'edit']">{{ p.name }}</a>
+              @if (p.sku) {
+                <span class="block break-words text-xs text-rr-caption">SKU: {{ p.sku }}</span>
+              }
+            </div>
+            <div class="flex shrink-0 flex-col items-end gap-1">
+              @if (p.category?.name; as categoryName) {
+                <span class="inline-flex rounded bg-rr-surface-strong px-1.5 py-0.5 text-xs font-medium text-rr-muted">{{ categoryName }}</span>
+              }
+              @if (!p.isActive) {
+                <span class="badge badge-neutral">Inactive</span>
+              }
+            </div>
+          </div>
+          <dl class="m-0 mt-3 grid grid-cols-2 gap-x-3 gap-y-2 rounded-lg bg-rr-surface p-3 text-sm">
+            <div>
+              <dt class="text-xs text-rr-muted">Storage stock</dt>
+              <dd class="m-0 mt-0.5">
+                <span class="badge" [ngClass]="p.isActive ? (p.isLowStock ? 'badge-danger' : 'badge-success') : 'badge-neutral'">{{ p.quantityInStock }}</span>
+              </dd>
+            </div>
+            <div>
+              <dt class="text-xs text-rr-muted">Average cost</dt>
+              <dd class="m-0 mt-0.5 font-semibold tabular-nums">{{ averageCostDisplay(p) }}</dd>
+            </div>
+            @if (isColumnShown('lastPurchase')) {
+              <div class="col-span-2 break-words">
+                <dt class="inline text-xs text-rr-muted">Last purchase:</dt>
+                <dd class="m-0 inline tabular-nums">
+                  {{ purchaseCostDisplay(p, 'lastPurchase') }}
+                  @if (purchaseCostSupplierDisplay(p, 'lastPurchase'); as supplier) {<span class="value-muted"> {{ supplier }}</span>}
+                  @if (purchaseCostDateDisplay(p, 'lastPurchase'); as date) {<span class="text-xs text-rr-caption"> · {{ date }}</span>}
+                </dd>
+              </div>
             }
-          </tbody>
-        </table>
-      </div>
-    }
-  </div>
-</div>
+            @if (isColumnShown('cheapestPurchase')) {
+              <div class="col-span-2 break-words">
+                <dt class="inline text-xs text-rr-muted">Cheapest purchase:</dt>
+                <dd class="m-0 inline tabular-nums">
+                  {{ purchaseCostDisplay(p, 'cheapestPurchase') }}
+                  @if (purchaseCostSupplierDisplay(p, 'cheapestPurchase'); as supplier) {<span class="value-muted"> {{ supplier }}</span>}
+                  @if (purchaseCostDateDisplay(p, 'cheapestPurchase'); as date) {<span class="text-xs text-rr-caption"> · {{ date }}</span>}
+                </dd>
+              </div>
+            }
+            <div class="col-span-2 flex items-start justify-between gap-3 border-t border-rr-line pt-2">
+              <dt class="flex items-center text-xs text-rr-muted">Cheapest supplier<app-help-toggletip
+                  class="ml-1"
+                  [label]="cheapestSupplierHelpLabel"
+                >{{ cheapestSupplierHelp }}</app-help-toggletip></dt>
+              <dd class="m-0 min-w-0">
+                <app-cheapest-supplier-summary
+                  layout="card"
+                  [product]="cheapestSupplier(p)"
+                  [state]="cheapestSuppliers.state"
+                  [displayBasis]="cheapestSuppliers.displayBasis"
+                  [productName]="p.name"
+                  [productSku]="p.sku ?? null"
+                  [categoryName]="p.category?.name ?? null"
+                ></app-cheapest-supplier-summary>
+              </dd>
+            </div>
+          </dl>
+          <div class="mt-3 flex items-center gap-2">
+            <a
+              [routerLink]="['/products', p.id, 'stock']"
+              class="rr-button-secondary min-h-11 flex-1 text-rr-teal"
+              [attr.aria-label]="'Adjust stock for ' + p.name">Adjust stock</a>
+            @if (!sessionActive) {
+              <app-action-menu
+                icon="more_vert"
+                [label]="'More actions for ' + p.name"
+                triggerClass="rr-button-secondary min-h-11 w-11 px-0"
+                testId="product-card-menu">
+                @if (p.isActive) {
+                  <button type="button" role="menuitem" class="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg" (click)="confirmDeactivate(p)">Deactivate</button>
+                } @else {
+                  <button type="button" role="menuitem" class="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left hover:bg-rr-canvas focus:bg-rr-canvas" (click)="toggleActive(p)">Reactivate</button>
+                }
+                @if (canDelete(p)) {
+                  <button type="button" role="menuitem" class="flex min-h-11 items-center gap-2 rounded-lg px-3 text-left text-rr-danger-text hover:bg-rr-danger-bg focus:bg-rr-danger-bg" (click)="confirmDelete(p)">Delete</button>
+                }
+              </app-action-menu>
+            }
+          </div>
+        </li>
+      }
+    </ul>
+
+    <div class="border-t border-rr-line p-3 sm:p-4">
+      <app-list-pagination
+        itemLabel="products"
+        [totalItems]="products.length"
+        [pageIndex]="pageIndex"
+        [pageSize]="pageSize"
+        [pageSizeOptions]="pageSizeOptions"
+        (pageIndexChange)="onPageIndexChange($event)"
+        (pageSizeChange)="onPageSizeChange($event)"></app-list-pagination>
+    </div>
+  }
+</section>
 
 <app-confirmation-dialog
   confirmLabel="Delete"
@@ -247,8 +427,7 @@
 <!--
   Set GST rule in bulk (issue #1076): a dedicated feature component, composed in through one input
   and two outputs. The dialog markup, the eligible count, the choice, the confirmation, the write and
-  every refusal live inside it (issue #191's page composition boundary); this page only says whether
-  the question is open, and reacts to what it reports.
+  every refusal live inside it (issue #191's page composition boundary).
 -->
 <app-product-gst-rule-bulk
   [open]="settingGstRuleInBulk"

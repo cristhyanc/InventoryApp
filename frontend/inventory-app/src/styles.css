@@ -1286,7 +1286,7 @@ video {
 /*
    * The landing page's buttons, from the approved Restockroo design: teal primary, white
    * secondary, and a borderless ghost. The public landing page uses the `rr-` classes and, since
-   * issue #972, so do the Dashboard's own actions and, since issue #1029, the Add and Edit Purchase actions; no other authenticated page does. Each is at
+   * issue #972, so do the Dashboard's own actions since issue #1029, the Add and Edit Purchase actions and, since issue #1093, the Products page's actions; no other authenticated page does. Each is at
    * least 44px tall for touch. Each class carries the
    * whole shared base itself, so the generated stylesheet declares every selector once.
    */
@@ -1474,8 +1474,16 @@ video {
   left: 0px;
 }
 
+.left-3 {
+  left: 0.75rem;
+}
+
 .right-0 {
   right: 0px;
+}
+
+.right-1 {
+  right: 0.25rem;
 }
 
 .right-3 {
@@ -1842,6 +1850,10 @@ video {
   min-height: 3.5rem;
 }
 
+.min-h-9 {
+  min-height: 2.25rem;
+}
+
 .min-h-\[44px\] {
   min-height: 44px;
 }
@@ -1938,6 +1950,10 @@ video {
   width: 14rem;
 }
 
+.w-\[calc\(100\%-1rem\)\] {
+  width: calc(100% - 1rem);
+}
+
 .w-\[calc\(100\%-2rem\)\] {
   width: calc(100% - 2rem);
 }
@@ -1961,6 +1977,10 @@ video {
 
 .min-w-0 {
   min-width: 0px;
+}
+
+.min-w-48 {
+  min-width: 12rem;
 }
 
 .min-w-56 {
@@ -2009,6 +2029,10 @@ video {
 
 .max-w-3xl {
   max-width: 48rem;
+}
+
+.max-w-4xl {
+  max-width: 56rem;
 }
 
 .max-w-56 {
@@ -2077,6 +2101,10 @@ video {
 
 .grow {
   flex-grow: 1;
+}
+
+.basis-full {
+  flex-basis: 100%;
 }
 
 .border-collapse {
@@ -2262,6 +2290,10 @@ video {
   row-gap: 0.5rem;
 }
 
+.gap-y-3 {
+  row-gap: 0.75rem;
+}
+
 .space-y-1 > :not([hidden]) ~ :not([hidden]) {
   --tw-space-y-reverse: 0;
   margin-top: calc(0.25rem * calc(1 - var(--tw-space-y-reverse)));
@@ -2400,11 +2432,6 @@ video {
   border-width: 0px;
 }
 
-.border-x {
-  border-left-width: 1px;
-  border-right-width: 1px;
-}
-
 .border-b {
   border-bottom-width: 1px;
 }
@@ -2478,9 +2505,18 @@ video {
   border-color: rgb(226 232 240 / var(--tw-border-opacity, 1));
 }
 
+.border-rr-line-strong {
+  --tw-border-opacity: 1;
+  border-color: rgb(203 213 225 / var(--tw-border-opacity, 1));
+}
+
 .border-rr-ok-text {
   --tw-border-opacity: 1;
   border-color: rgb(21 128 61 / var(--tw-border-opacity, 1));
+}
+
+.border-rr-ok-text\/20 {
+  border-color: rgb(21 128 61 / 0.2);
 }
 
 .border-rr-teal {
@@ -2639,6 +2675,10 @@ video {
   padding: 0.25rem;
 }
 
+.p-1\.5 {
+  padding: 0.375rem;
+}
+
 .p-2 {
   padding: 0.5rem;
 }
@@ -2667,6 +2707,11 @@ video {
 .px-1 {
   padding-left: 0.25rem;
   padding-right: 0.25rem;
+}
+
+.px-1\.5 {
+  padding-left: 0.375rem;
+  padding-right: 0.375rem;
 }
 
 .px-2 {
@@ -2796,8 +2841,16 @@ video {
   padding-left: 1.25rem;
 }
 
+.pl-9 {
+  padding-left: 2.25rem;
+}
+
 .pr-1 {
   padding-right: 0.25rem;
+}
+
+.pr-2 {
+  padding-right: 0.5rem;
 }
 
 .pr-3 {
@@ -2810,6 +2863,10 @@ video {
 
 .pr-9 {
   padding-right: 2.25rem;
+}
+
+.pt-1 {
+  padding-top: 0.25rem;
 }
 
 .pt-12 {
@@ -3312,6 +3369,16 @@ img {
   }
 }
 
+.placeholder\:text-rr-caption::-moz-placeholder {
+  --tw-text-opacity: 1;
+  color: rgb(100 116 139 / var(--tw-text-opacity, 1));
+}
+
+.placeholder\:text-rr-caption::placeholder {
+  --tw-text-opacity: 1;
+  color: rgb(100 116 139 / var(--tw-text-opacity, 1));
+}
+
 .backdrop\:bg-md-dark\/40::backdrop {
   background-color: rgb(38 38 38 / 0.4);
 }
@@ -3436,6 +3503,16 @@ img {
   border-color: rgb(26 115 232 / var(--tw-border-opacity, 1));
 }
 
+.focus\:bg-rr-canvas:focus {
+  --tw-bg-opacity: 1;
+  background-color: rgb(250 248 255 / var(--tw-bg-opacity, 1));
+}
+
+.focus\:bg-rr-danger-bg:focus {
+  --tw-bg-opacity: 1;
+  background-color: rgb(254 226 226 / var(--tw-bg-opacity, 1));
+}
+
 .focus-visible\:outline:focus-visible {
   outline-style: solid;
 }
@@ -3452,6 +3529,10 @@ img {
   cursor: not-allowed;
 }
 
+.disabled\:opacity-50:disabled {
+  opacity: 0.5;
+}
+
 .disabled\:opacity-60:disabled {
   opacity: 0.6;
 }
@@ -3461,6 +3542,87 @@ img {
     transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
     transition-duration: 150ms;
+  }
+}
+
+@media not all and (min-width: 640px) {
+  .max-sm\:sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  .max-sm\:col-span-2 {
+    grid-column: span 2 / span 2;
+  }
+
+  .max-sm\:block {
+    display: block;
+  }
+
+  .max-sm\:grid {
+    display: grid;
+  }
+
+  .max-sm\:grid-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .max-sm\:gap-x-3 {
+    -moz-column-gap: 0.75rem;
+         column-gap: 0.75rem;
+  }
+
+  .max-sm\:px-1 {
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+  }
+
+  .max-sm\:py-1 {
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+  }
+
+  .max-sm\:py-2 {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .max-sm\:text-left {
+    text-align: left;
+  }
+
+  .max-sm\:before\:block::before {
+    content: var(--tw-content);
+    display: block;
+  }
+
+  .max-sm\:before\:text-xs::before {
+    content: var(--tw-content);
+    font-size: 0.75rem;
+    line-height: 1rem;
+  }
+
+  .max-sm\:before\:font-medium::before {
+    content: var(--tw-content);
+    font-weight: 500;
+  }
+
+  .max-sm\:before\:text-rr-caption::before {
+    content: var(--tw-content);
+    --tw-text-opacity: 1;
+    color: rgb(100 116 139 / var(--tw-text-opacity, 1));
+  }
+
+  .max-sm\:before\:content-\[attr\(data-label\)\]::before {
+    --tw-content: attr(data-label);
+    content: var(--tw-content);
   }
 }
 
@@ -3503,8 +3665,16 @@ img {
     display: grid;
   }
 
+  .sm\:w-\[calc\(100\%-2rem\)\] {
+    width: calc(100% - 2rem);
+  }
+
   .sm\:w-auto {
     width: auto;
+  }
+
+  .sm\:min-w-\[640px\] {
+    min-width: 640px;
   }
 
   .sm\:max-w-md {
@@ -3513,6 +3683,14 @@ img {
 
   .sm\:max-w-xs {
     max-width: 20rem;
+  }
+
+  .sm\:flex-1 {
+    flex: 1 1 0%;
+  }
+
+  .sm\:basis-64 {
+    flex-basis: 16rem;
   }
 
   .sm\:grid-cols-2 {
@@ -3555,6 +3733,10 @@ img {
     justify-content: space-between;
   }
 
+  .sm\:gap-3 {
+    gap: 0.75rem;
+  }
+
   .sm\:p-10 {
     padding: 2.5rem;
   }
@@ -3574,6 +3756,11 @@ img {
   .sm\:px-3 {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
+  }
+
+  .sm\:px-4 {
+    padding-left: 1rem;
+    padding-right: 1rem;
   }
 
   .sm\:px-6 {
@@ -3629,6 +3816,11 @@ img {
 
   .sm\:text-lg {
     font-size: 1.125rem;
+    line-height: 1.75rem;
+  }
+
+  .sm\:text-xl {
+    font-size: 1.25rem;
     line-height: 1.75rem;
   }
 }
@@ -3710,6 +3902,10 @@ img {
 
   .lg\:hidden {
     display: none;
+  }
+
+  .lg\:max-w-md {
+    max-width: 28rem;
   }
 
   .lg\:grid-cols-2 {
