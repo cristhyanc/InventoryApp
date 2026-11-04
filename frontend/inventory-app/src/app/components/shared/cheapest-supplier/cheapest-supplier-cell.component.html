@@ -20,6 +20,9 @@
     data-testid="cheapest-supplier-cell"
   >{{ display }}</span>
 }
+@if (onlinePriceNote) {
+  <span class="block text-md-body value-muted" data-testid="cheapest-supplier-online-note">{{ onlinePriceNote }}</span>
+}
 @if (stockNote) {
   <span class="block text-md-body value-muted" data-testid="cheapest-supplier-stock-note">{{ stockNote }}</span>
 }
@@ -128,6 +131,9 @@
                   <span>{{ stock }}</span>
                 } @else {
                   <span class="value-muted">—</span>
+                }
+                @if (onlinePriceOf(offer); as onlineNote) {
+                  <span class="block text-md-body value-muted" data-testid="cheapest-supplier-row-online-note">{{ onlineNote }}</span>
                 }
               </td>
               <td class="table-cell whitespace-nowrap">
