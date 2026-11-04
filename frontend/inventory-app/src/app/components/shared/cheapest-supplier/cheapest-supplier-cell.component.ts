@@ -142,6 +142,27 @@ export function cheapestSupplierDisplay(
 export const STOCK_MAY_DIFFER_NOTE = 'Stock may differ';
 
 /**
+ * The note under every observed price (owner decision, 4 November 2026): every price in this column
+ * was read from a supplier's website, and a website's price (an online-only special, another
+ * state's online store) can differ from the shelf price in the store this business buys from. It
+ * is a label and nothing more: an online price is still compared and can still be the cheapest.
+ */
+export const ONLINE_PRICE_NOTE = 'Online price, may differ in store';
+
+/** The online-price note for the cell, shown exactly where the stock note is (a cheapest price). */
+export function cheapestOnlinePriceNote(
+  state: CheapestSuppliersState,
+  product: CheapestSupplierProduct | undefined
+): string | null {
+  return cheapestStockNote(state, product) === null ? null : ONLINE_PRICE_NOTE;
+}
+
+/** The online-price note for one popup row: any row that shows a price, and none that shows no price. */
+export function offerOnlinePriceNote(offer: CheapestSupplierOffer): string | null {
+  return offer.unitPrice !== null || offer.packPrice !== null ? ONLINE_PRICE_NOTE : null;
+}
+
+/**
  * The stock note for the cell, or `null` when the cell shows no price. Stock never removes a price
  * from the comparison (owner decision, 1 November 2026), so every cheapest price carries it.
  */
@@ -233,6 +254,11 @@ export class CheapestSupplierCellComponent {
   /** "Stock may differ" under a cheapest price, and nothing otherwise. */
   get stockNote(): string | null {
     return cheapestStockNote(this.state, this.product);
+  }
+
+  /** "Online price, may differ in store" under a cheapest price, and nothing otherwise. */
+  get onlinePriceNote(): string | null {
+    return cheapestOnlinePriceNote(this.state, this.product);
   }
 
   /**
@@ -356,6 +382,10 @@ export class CheapestSupplierCellComponent {
 
   statusOf(offer: CheapestSupplierOffer): string | null {
     return offerStatus(offer);
+  }
+
+  onlinePriceOf(offer: CheapestSupplierOffer): string | null {
+    return offerOnlinePriceNote(offer);
   }
 
   /** The popup's accessible name, which names the product it is about. */
