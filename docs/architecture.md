@@ -13213,7 +13213,9 @@ verification.
 `DropProviderIdentityLinkTables` (#760) is a destructive migration, so the decision rather than the
 `DROP` is the whole of it. It first refuses unless #759's migration is in the migration history **and**
 its verification is recorded for both tables — that record is the reason deleting these rows is safe at
-all. It then classifies every remaining row, in this order: **orphaned**, the local row it names no
+all. It then classifies every remaining row, in this order: **unexplained — unsupported provider**, the
+row's `Provider` is not `1`, the stored `ExternalProvider.Nayax` and the only value #732's backfill and
+#759's copy ever wrote; **orphaned**, the local row it names no
 longer exists (the cascading foreign keys make that impossible, so the expected count is zero, and a
 database where foreign keys were not enforced could still hold one); **unexplained — external id on
 another row**, the local row exists and the row's external id is now on a different row of the same
@@ -13223,8 +13225,17 @@ its local row does not and an orphan names a row that is gone, so both are dropp
 counted; anything unexplained **fails the migration loudly and drops nothing**, because the column is
 what every lookup reads and this migration cannot tell which of the two disagreeing values is right.
 A column set with no row behind it is expected rather than checked: every external id written since
-#759 exists only there. There is no provider filter — a row naming a provider the column model cannot
-represent (nothing ever wrote one) is refused rather than silently dropped.
+#759 exists only there.
+
+**An unsupported provider is decided first, and refused twice.** The local external id columns hold
+one provider's id and do not record who issued it, so a row naming any other provider holds a value the
+column model cannot represent. Deciding it before the local row is looked at is what stops an external
+id that happens to equal the column from reading as matched, or a missing local row from reading as
+orphaned — either would drop it. The decision step then also counts rows whose `Provider IS NOT 1`
+straight out of both link tables before either is dropped, so the refusal depends neither on the
+classification's ordering nor on the recorded classification. `1` is a literal, as in #732 and #759,
+because a migration is a historical statement about rows and must not change meaning if the enum is
+renumbered; `IS NOT` is null-safe, so a `NULL` provider is counted too.
 
 The counts, and the ids of every row that is not matched, are recorded in
 `ProviderLinkTableDropClassifications` by statements that suppress the migration's transaction, so the
@@ -13234,9 +13245,12 @@ the local row it named — never a name, an external id or anything else about a
 #759's verification table it is not part of the EF model. `Down` recreates both tables empty, with
 their indexes and composite foreign keys: the rows are not recoverable and nothing is invented in their
 place. `DropProviderIdentityLinkTablesMigrationTests` covers the matched case, an orphan seeded with
-foreign key enforcement off, both unexplained refusals, a missing verification record and `Down`.
+foreign key enforcement off, both value refusals, an unsupported provider on a product link and on a
+category link (each once with an external id equal to the column and once as an orphan), a missing
+verification record and `Down`.
 Before the release, the same classification is run read-only against production and its counts are
-recorded on the issue, with the unexplained count required to be zero.
+recorded on the issue, with every unexplained count (unsupported provider, column differs, external id
+on another row) required to be zero.
 
 **Nothing refers to the tables any longer.** The two EF entities, their `DbSet`s and their mapping went
 with the schema, so the type system — not a source scan — is what now keeps anything from reading them;

@@ -16,7 +16,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 ///
 /// <para><strong>The drop is destructive, so what this test proves is the decision, not the
 /// <c>DROP</c>.</strong> Every remaining link row is classified first - matched, orphaned or
-/// unexplained - and the migration drops the tables only when nothing is unexplained. Each case
+/// unexplained (including a link naming a provider other than Nayax) - and the migration drops the tables only when nothing is unexplained. Each case
 /// below is one of those classes and the decision it must produce, because a dropped row is not
 /// recoverable and a link that disagrees with the column every lookup now trusts is the one thing
 /// that must stop the drop rather than disappear with it.</para>
@@ -81,10 +81,12 @@ public class DropProviderIdentityLinkTablesMigrationTests
                 ("CategoryExternalIds", "Orphaned", 0L, null),
                 ("CategoryExternalIds", "Unexplained: column differs", 0L, null),
                 ("CategoryExternalIds", "Unexplained: external id on another row", 0L, null),
+                ("CategoryExternalIds", "Unexplained: unsupported provider", 0L, null),
                 ("ProductExternalIds", "Matched", 2L, null),
                 ("ProductExternalIds", "Orphaned", 0L, null),
                 ("ProductExternalIds", "Unexplained: column differs", 0L, null),
                 ("ProductExternalIds", "Unexplained: external id on another row", 0L, null),
+                ("ProductExternalIds", "Unexplained: unsupported provider", 0L, null),
             ],
             await ClassificationsAsync(connection));
 
@@ -155,10 +157,12 @@ public class DropProviderIdentityLinkTablesMigrationTests
                 ("CategoryExternalIds", "Orphaned", 1L, "3/88888"),
                 ("CategoryExternalIds", "Unexplained: column differs", 0L, null),
                 ("CategoryExternalIds", "Unexplained: external id on another row", 0L, null),
+                ("CategoryExternalIds", "Unexplained: unsupported provider", 0L, null),
                 ("ProductExternalIds", "Matched", 2L, null),
                 ("ProductExternalIds", "Orphaned", 1L, "3/99999"),
                 ("ProductExternalIds", "Unexplained: column differs", 0L, null),
                 ("ProductExternalIds", "Unexplained: external id on another row", 0L, null),
+                ("ProductExternalIds", "Unexplained: unsupported provider", 0L, null),
             ],
             await ClassificationsAsync(connection));
     }
@@ -202,6 +206,41 @@ public class DropProviderIdentityLinkTablesMigrationTests
             Assert.Single(
                 classification,
                 row => row.Classification == "Unexplained: external id on another row" && row.RowCount > 0));
+    }
+
+    /// <summary>
+    /// A link naming a provider other than Nayax (stored <c>1</c>, the only value #732 and #759 ever
+    /// wrote) holds an identifier the local column cannot attribute to its issuer. It must stop the
+    /// drop even when its external id happens to equal the column, and even when its local row is
+    /// gone - the two shapes that would otherwise be read as matched or orphaned and dropped.
+    /// </summary>
+    [Theory]
+    [InlineData("ProductExternalIds", "INSERT INTO ProductExternalIds (BusinessId, Provider, ExternalId, ProductId) VALUES (1, 99, '100', 5001);", "3/5001")]
+    [InlineData("ProductExternalIds", "INSERT INTO ProductExternalIds (BusinessId, Provider, ExternalId, ProductId) VALUES (1, 99, '777', 99999);", "3/99999")]
+    [InlineData("CategoryExternalIds", "INSERT INTO CategoryExternalIds (BusinessId, Provider, ExternalId, CategoryId) VALUES (1, 99, '10', 55);", "3/55")]
+    [InlineData("CategoryExternalIds", "INSERT INTO CategoryExternalIds (BusinessId, Provider, ExternalId, CategoryId) VALUES (1, 99, '77', 88888);", "3/88888")]
+    public async Task A_link_naming_an_unsupported_provider_fails_the_migration(
+        string linkTable, string insert, string expectedRowIds)
+    {
+        var isProduct = linkTable == "ProductExternalIds";
+
+        var classification = await AssertRefusedAsync(
+            $"PRAGMA foreign_keys = OFF; {insert}",
+            "a sales provider this schema cannot represent",
+            expectedProductLinks: isProduct ? 3 : 2,
+            expectedCategoryLinks: isProduct ? 2 : 3);
+
+        // The row is recorded as unsupported, and as nothing else: it was neither matched nor
+        // orphaned, whatever its external id or its local row.
+        Assert.Equal(
+            [
+                (linkTable, "Matched", 2L, null),
+                (linkTable, "Orphaned", 0L, null),
+                (linkTable, "Unexplained: column differs", 0L, null),
+                (linkTable, "Unexplained: external id on another row", 0L, null),
+                (linkTable, "Unexplained: unsupported provider", 1L, expectedRowIds),
+            ],
+            classification.Where(row => row.LinkTable == linkTable));
     }
 
     /// <summary>
@@ -282,7 +321,11 @@ public class DropProviderIdentityLinkTablesMigrationTests
     /// read which rows stopped it.
     /// </summary>
     private static async Task<List<(string LinkTable, string Classification, long RowCount, string? RowIds)>>
-        AssertRefusedAsync(string damage, string expectedReason)
+        AssertRefusedAsync(
+            string damage,
+            string expectedReason,
+            long expectedProductLinks = 2,
+            long expectedCategoryLinks = 2)
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         var options = await SeededUpToAsync(connection, PreviousMigration);
@@ -297,8 +340,12 @@ public class DropProviderIdentityLinkTablesMigrationTests
         var tables = await MigrationSchemaProbe.TableNamesAsync(connection);
         Assert.Contains("ProductExternalIds", tables);
         Assert.Contains("CategoryExternalIds", tables);
-        Assert.Equal(2L, await MigrationSchemaProbe.RowCountAsync(connection, "ProductExternalIds"));
-        Assert.Equal(2L, await MigrationSchemaProbe.RowCountAsync(connection, "CategoryExternalIds"));
+        Assert.Equal(
+            expectedProductLinks,
+            await MigrationSchemaProbe.RowCountAsync(connection, "ProductExternalIds"));
+        Assert.Equal(
+            expectedCategoryLinks,
+            await MigrationSchemaProbe.RowCountAsync(connection, "CategoryExternalIds"));
 
         // And the migration is not recorded as applied, so the next startup runs it again.
         await using var db = TestAppDbContext.Unrestricted(options);

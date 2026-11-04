@@ -23,8 +23,15 @@ namespace Inventory.Infrastructure.Migrations
     /// deleting the only other copy of a provider's identifiers.</para>
     ///
     /// <para><strong>Then it classifies every remaining link row, and the classification decides.</strong>
-    /// Each row is exactly one of four things, in this order:</para>
+    /// Each row is exactly one of five things, in this order:</para>
     /// <list type="bullet">
+    /// <item><description><c>Unexplained: unsupported provider</c> - the link's <c>Provider</c> is not
+    /// <c>1</c>, the stored value of <c>ExternalProvider.Nayax</c> and the only value #732's backfill
+    /// and #759's copy ever wrote. The local external id columns hold one provider's identifier and do
+    /// not record who issued it, so such a row holds something the column model cannot represent. It
+    /// is decided first, before the local row is looked at, so neither an external id that happens to
+    /// equal the column nor a missing local row can let it through as matched or orphaned. The
+    /// migration refuses.</description></item>
     /// <item><description><c>Orphaned</c> - the local row it names no longer exists. The link tables'
     /// foreign keys cascade on delete, so this should be impossible and the expected count is zero; a
     /// database where foreign keys were not enforced could hold one. There is nothing left to compare
@@ -46,8 +53,13 @@ namespace Inventory.Infrastructure.Migrations
     ///
     /// <para><strong>Every link row is classified, whichever provider it names.</strong> There is no
     /// <c>Provider = 1</c> filter, unlike #759's copy: a link naming another provider (nothing ever
-    /// wrote one - <c>ExternalProvider</c> has one member) holds a value the column model cannot
-    /// represent, so it is refused as unexplained rather than silently dropped.</para>
+    /// wrote one - <c>ExternalProvider</c> has one member) is classified as unsupported and refused,
+    /// rather than silently dropped. The decision step also counts such rows straight out of both link
+    /// tables before either is dropped, so that refusal depends neither on the <c>CASE</c> ordering nor
+    /// on the classification record. <c>1</c> is a literal for the same reason #732 and #759 give: a
+    /// migration is a historical statement about rows and must keep meaning the same thing if the enum
+    /// is ever renumbered. <c>IS NOT</c> is SQLite's null-safe comparison, so a <c>NULL</c> provider is
+    /// counted rather than compared away.</para>
     ///
     /// <para><strong>The classification is recorded outside this migration's transaction.</strong> The
     /// counts and the offending rows' ids are written into
@@ -82,6 +94,10 @@ namespace Inventory.Infrastructure.Migrations
         /// <summary>Where this migration records what it classified and what it dropped.</summary>
         private const string ClassificationTable = "ProviderLinkTableDropClassifications";
 
+        /// <summary>The stored <c>ExternalProvider.Nayax</c>: the only provider #732 and #759 wrote.</summary>
+        private const int SupportedProvider = 1;
+
+        private const string UnsupportedProvider = "Unexplained: unsupported provider";
         private const string Orphaned = "Orphaned";
         private const string ExternalIdOnAnotherRow = "Unexplained: external id on another row";
         private const string ColumnDiffers = "Unexplained: column differs";
@@ -142,18 +158,29 @@ namespace Inventory.Infrastructure.Migrations
             Classify(migrationBuilder, "ProductExternalIds", "Products", "ProductId", "ExternalProductId");
             Classify(migrationBuilder, "CategoryExternalIds", "Categories", "CategoryId", "ExternalCategoryId");
 
-            // 3. The decision and the drop, in one transaction again: if the refusal fires, the drops
-            //    after it never run and the whole statement list rolls back to here.
+            // 3. The decision and the drop, in one transaction again: if a refusal fires, the drops
+            //    after it never run and the whole statement list rolls back to here. The unsupported
+            //    provider is refused first and directly from the link tables, so no CASE ordering and
+            //    no recorded row can stand between such a link and the refusal.
             guard.Create(migrationBuilder);
+            guard.RefuseWhenNotZero(
+                migrationBuilder,
+                "Some provider link rows name a sales provider this schema cannot represent: their "
+                    + $"Provider is not {SupportedProvider} (Nayax). Nothing was dropped. Those rows are "
+                    + $"listed by id in {ClassificationTable}.",
+                $"""
+                SELECT (SELECT COUNT(*) FROM "ProductExternalIds" WHERE "Provider" IS NOT {SupportedProvider})
+                     + (SELECT COUNT(*) FROM "CategoryExternalIds" WHERE "Provider" IS NOT {SupportedProvider})
+                """);
             guard.RefuseWhenNotZero(
                 migrationBuilder,
                 "Some provider link rows are unexplained: the local row still exists and its external "
                     + "id column is empty, holds a different value, or that value is now on another row "
-                    + "of the same business. Nothing was dropped. Every classified row is listed by id "
+                    + "of the same business, or the row names an unsupported provider. Nothing was dropped. Every classified row is listed by id "
                     + $"in {ClassificationTable}.",
                 $"""
                 SELECT COALESCE(SUM("RowCount"), 0) FROM "{ClassificationTable}"
-                WHERE "Classification" IN ('{ExternalIdOnAnotherRow}', '{ColumnDiffers}')
+                WHERE "Classification" IN ('{UnsupportedProvider}', '{ExternalIdOnAnotherRow}', '{ColumnDiffers}')
                 """);
             guard.Drop(migrationBuilder);
 
@@ -178,9 +205,10 @@ namespace Inventory.Infrastructure.Migrations
         /// everything that is not <see cref="Matched"/> the ids of the rows themselves - the link
         /// row's own key and the local row it names, and nothing else about either.
         ///
-        /// <para>All four classifications are written even when they count zero, so the record says
+        /// <para>All five classifications are written even when they count zero, so the record says
         /// what was looked for rather than only what was found. The <c>CASE</c> is ordered: a link
-        /// whose local row is gone is orphaned and is never also read as a mismatch, and the id that
+        /// naming an unsupported provider is that before anything else, so it can be neither matched
+        /// nor orphaned; a link whose local row is gone is orphaned and is never also read as a mismatch, and the id that
         /// moved to another row is reported as that rather than as a plain difference.</para>
         /// </summary>
         private static void Classify(
@@ -193,12 +221,14 @@ namespace Inventory.Infrastructure.Migrations
             migrationBuilder.Sql(
                 $"""
                 WITH "classes"("Classification") AS (
-                    VALUES ('{Matched}'), ('{Orphaned}'), ('{ExternalIdOnAnotherRow}'), ('{ColumnDiffers}')
+                    VALUES ('{Matched}'), ('{Orphaned}'), ('{ExternalIdOnAnotherRow}'), ('{ColumnDiffers}'),
+                           ('{UnsupportedProvider}')
                 ),
                 "classified" AS (
                     SELECT link."Id" AS "LinkRowId",
                            link."{localIdColumn}" AS "LocalRowId",
                            CASE
+                               WHEN link."Provider" IS NOT {SupportedProvider} THEN '{UnsupportedProvider}'
                                WHEN local."Id" IS NULL THEN '{Orphaned}'
                                WHEN EXISTS (SELECT 1 FROM "{localTable}" other
                                             WHERE other."BusinessId" = link."BusinessId"
