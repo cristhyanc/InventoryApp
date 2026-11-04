@@ -31,6 +31,13 @@ public class GetMachineRestockSyncReminderTests
     /// <summary>Midnight UTC on 25 October 2026, which the business calendars below date from.</summary>
     private static readonly DateTime NowUtc = new(2026, 10, 25, 0, 0, 0, DateTimeKind.Utc);
 
+    /// <summary>
+    /// A sale an hour ago: after every recorded fetch in these cases and inside the pending window,
+    /// so an overdue machine carrying it is one that has sold since it was last checked (issue
+    /// #1090).
+    /// </summary>
+    private static readonly DateTime SoldRecently = NowUtc.AddHours(-1);
+
     [Fact]
     public async Task A_support_session_is_shown_no_reminder_and_nothing_is_read()
     {
@@ -138,7 +145,7 @@ public class GetMachineRestockSyncReminderTests
     {
         var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
             new MachineRestockSyncCoverageRecord(
-                AvenueHotelId, "Avenue Hotel", null, null, 0, null));
+                AvenueHotelId, "Avenue Hotel", null, null, 0, null, SoldRecently));
 
         var reminder = await ApplicableReminder(coverage);
 
@@ -160,7 +167,7 @@ public class GetMachineRestockSyncReminderTests
     {
         var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
             new MachineRestockSyncCoverageRecord(
-                AvenueHotelId, "Avenue Hotel", NowUtc.AddDays(-daysAgo), CurrentRevision, 0, null));
+                AvenueHotelId, "Avenue Hotel", NowUtc.AddDays(-daysAgo), CurrentRevision, 0, null, SoldRecently));
 
         var reminder = await ApplicableReminder(coverage);
 
@@ -185,7 +192,7 @@ public class GetMachineRestockSyncReminderTests
     {
         var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
             new MachineRestockSyncCoverageRecord(
-                AvenueHotelId, "Avenue Hotel", NowUtc.AddDays(-3), CurrentRevision, 0, null));
+                AvenueHotelId, "Avenue Hotel", NowUtc.AddDays(-3), CurrentRevision, 0, null, SoldRecently));
 
         var reminder = Assert.IsType<MachineRestockSyncReminderDto>(
             await UseCase(ReadyConnection(), coverage, calendar: new ShiftedBusinessCalendar(shiftDays: 1))
@@ -271,7 +278,7 @@ public class GetMachineRestockSyncReminderTests
             new MachineRestockSyncCoverageRecord(
                 AvenueHotelId, "Avenue Hotel", NowUtc.AddHours(-1), CurrentRevision, 0, null),
             new MachineRestockSyncCoverageRecord(
-                StationCafeId, "Station Cafe", null, null, 0, null));
+                StationCafeId, "Station Cafe", null, null, 0, null, SoldRecently));
 
         var machine = Assert.Single((await ApplicableReminder(coverage)).Machines);
 
@@ -293,11 +300,83 @@ public class GetMachineRestockSyncReminderTests
             new MachineRestockSyncCoverageRecord(
                 AvenueHotelId, "Avenue Hotel", NowUtc.AddHours(-2), CurrentRevision, 0, null),
             new MachineRestockSyncCoverageRecord(
-                StationCafeId, "Station Cafe", NowUtc.AddDays(-4), CurrentRevision, 0, null));
+                StationCafeId, "Station Cafe", NowUtc.AddDays(-4), CurrentRevision, 0, null, SoldRecently));
 
         var reminder = await ApplicableReminder(coverage);
 
         Assert.Equal(StationCafeId, Assert.Single(reminder.Machines).LocalMachineId);
+    }
+
+    /// <summary>
+    /// Issue #1090: an overdue machine that has sold nothing since its last fetch has nothing to
+    /// check, so it is not listed - whether it has no sale at all or only sales from before that
+    /// fetch.
+    /// </summary>
+    [Fact]
+    public async Task An_overdue_machine_with_no_sales_since_its_last_fetch_is_not_listed()
+    {
+        var lastSync = NowUtc.AddDays(-3);
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
+            new MachineRestockSyncCoverageRecord(
+                AvenueHotelId, "Avenue Hotel", lastSync, CurrentRevision, 0, null, null),
+            new MachineRestockSyncCoverageRecord(
+                StationCafeId, "Station Cafe", lastSync, CurrentRevision, 0, null, lastSync.AddMinutes(-1)));
+
+        Assert.Empty((await ApplicableReminder(coverage)).Machines);
+    }
+
+    /// <summary>
+    /// Issue #1090: the same overdue machine is listed once it has sold since that fetch, and says
+    /// so.
+    /// </summary>
+    [Fact]
+    public async Task An_overdue_machine_with_a_sale_since_its_last_fetch_is_listed()
+    {
+        var lastSync = NowUtc.AddDays(-3);
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
+            new MachineRestockSyncCoverageRecord(
+                AvenueHotelId, "Avenue Hotel", lastSync, CurrentRevision, 0, null, lastSync.AddMinutes(1)));
+
+        var machine = Assert.Single((await ApplicableReminder(coverage)).Machines);
+
+        Assert.True(machine.IsFetchOverdue);
+        Assert.True(machine.HasSalesSinceLastSync);
+        Assert.Equal(0, machine.KnownPendingEventCount);
+    }
+
+    /// <summary>
+    /// Issue #1090: with no recorded fetch, a sale counts only inside the pending window.
+    /// </summary>
+    [Fact]
+    public async Task With_no_recorded_fetch_only_a_sale_inside_the_pending_window_lists_the_machine()
+    {
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
+            new MachineRestockSyncCoverageRecord(
+                AvenueHotelId, "Avenue Hotel", null, null, 0, null, NowUtc.AddDays(-14)),
+            new MachineRestockSyncCoverageRecord(
+                StationCafeId, "Station Cafe", null, null, 0, null, NowUtc.AddDays(-14).AddTicks(-1)));
+
+        var machine = Assert.Single((await ApplicableReminder(coverage)).Machines);
+
+        Assert.Equal(AvenueHotelId, machine.LocalMachineId);
+        Assert.True(machine.HasSalesSinceLastSync);
+    }
+
+    /// <summary>
+    /// Issue #1090 changes nothing for pending work: a machine with known pending events is listed
+    /// whether or not it has sold since, recent fetch or not.
+    /// </summary>
+    [Fact]
+    public async Task Pending_events_list_a_machine_with_no_sales_since_its_last_fetch()
+    {
+        var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
+            new MachineRestockSyncCoverageRecord(
+                AvenueHotelId, "Avenue Hotel", NowUtc.AddDays(-5), CurrentRevision, 1, NowUtc.AddDays(-6), null));
+
+        var machine = Assert.Single((await ApplicableReminder(coverage)).Machines);
+
+        Assert.Equal(1, machine.KnownPendingEventCount);
+        Assert.False(machine.HasSalesSinceLastSync);
     }
 
     /// <summary>
@@ -309,7 +388,7 @@ public class GetMachineRestockSyncReminderTests
     {
         var coverage = new FakeMachineRestockSyncCoverageStore().WithMachines(
             new MachineRestockSyncCoverageRecord(
-                AvenueHotelId, "Avenue Hotel", NowUtc.AddMinutes(-5), CurrentRevision - 1, 0, null));
+                AvenueHotelId, "Avenue Hotel", NowUtc.AddMinutes(-5), CurrentRevision - 1, 0, null, NowUtc.AddMinutes(-10)));
 
         var machine = Assert.Single((await ApplicableReminder(coverage)).Machines);
 
@@ -395,7 +474,7 @@ public class GetMachineRestockSyncReminderTests
         new("op", "token", NayaxConnectionStatus.Ready, CurrentRevision);
 
     private static MachineRestockSyncCoverageRecord Overdue(long localMachineId, string name) =>
-        new(localMachineId, name, NowUtc.AddDays(-7), CurrentRevision, 0, null);
+        new(localMachineId, name, NowUtc.AddDays(-7), CurrentRevision, 0, null, SoldRecently);
 
     private static IBusinessScope ResolvedMember()
     {

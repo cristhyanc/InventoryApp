@@ -26,6 +26,7 @@ function machine(
     oldestKnownPendingEventAtUtc: null,
     oldestKnownPendingEventBusinessDate: null,
     hasPendingWorkBeforeDefaultFrom: false,
+    hasSalesSinceLastSync: true,
     ...overrides
   };
 }
@@ -98,12 +99,59 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
     const { host } = await render();
 
     expect(banner(host)).not.toBeNull();
-    expect(banner(host)?.textContent).toContain('Restock sync pending');
-    expect(banner(host)?.textContent).toContain("Recorded refills haven't been synced yet.");
     expect(banner(host)?.textContent).toContain('Avenue Hotel');
     expect(banner(host)?.textContent).toContain('last synced 7 days ago');
     expect(banner(host)?.textContent).toContain('Sync Restock');
-    expect(banner(host)?.textContent).toContain('Review restocks to keep storage inventory accurate.');
+  });
+
+  /**
+   * Issue #1090: a machine listed only because its sync is overdue and it has sold since has no
+   * refill known to be waiting, so it is a check that is due - never "Restock sync pending" and
+   * never "Recorded refills haven't been synced yet".
+   */
+  it('lists an overdue machine with nothing pending under "Restock check due"', async () => {
+    const { host } = await render();
+
+    const checkDue = host.querySelector('[data-testid="restock-sync-reminder-check-due"]');
+    expect(checkDue?.textContent).toContain('Restock check due');
+    expect(checkDue?.textContent).toContain('No restock events are waiting for these machines');
+    expect(checkDue?.textContent).toContain('sales since their last restock sync 3 or more days ago');
+    expect(checkDue?.querySelector('[data-testid="restock-sync-reminder-machine-31"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="restock-sync-reminder-pending"]')).toBeNull();
+    expect(banner(host)?.textContent).not.toContain('Restock sync pending');
+    expect(banner(host)?.textContent).not.toContain("Recorded refills haven't been synced yet.");
+  });
+
+  it('lists a machine with known pending events under "Restock sync pending"', async () => {
+    const { host } = await render({
+      response: of(reminder([machine({ knownPendingEventCount: 1, oldestKnownPendingEventAtUtc: '2026-10-24T03:00:00Z' })]))
+    });
+
+    const pending = host.querySelector('[data-testid="restock-sync-reminder-pending"]');
+    expect(pending?.textContent).toContain('Restock sync pending');
+    expect(pending?.textContent).toContain("Recorded refills haven't been synced yet.");
+    expect(pending?.textContent).toContain('Review restocks to keep storage inventory accurate.');
+    expect(pending?.querySelector('[data-testid="restock-sync-reminder-machine-31"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="restock-sync-reminder-check-due"]')).toBeNull();
+  });
+
+  it('shows both headings in the one alert when both kinds of machine are listed', async () => {
+    const { host } = await render({
+      response: of(
+        reminder([
+          machine({ localMachineId: 31, machineName: 'Pavillion Left', knownPendingEventCount: 2 }),
+          machine({ localMachineId: 32, machineName: 'Pavillion Right' })
+        ])
+      )
+    });
+
+    expect(host.querySelectorAll('[data-testid="restock-sync-reminder"]')).toHaveLength(1);
+    const pending = host.querySelector('[data-testid="restock-sync-reminder-pending"]');
+    const checkDue = host.querySelector('[data-testid="restock-sync-reminder-check-due"]');
+    expect(pending?.textContent).toContain('Pavillion Left');
+    expect(pending?.textContent).not.toContain('Pavillion Right');
+    expect(checkDue?.textContent).toContain('Pavillion Right');
+    expect(checkDue?.textContent).not.toContain('Pavillion Left');
   });
 
   it('links each row to that machine details page by its local machine id', async () => {
@@ -149,9 +197,9 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
   });
 
   it('says pending events are counted over the published window', async () => {
-    const { host } = await render();
+    const { host } = await render({ response: of(reminder([machine({ knownPendingEventCount: 1 })])) });
 
-    expect(banner(host)?.textContent).toContain('restock events from the last 14 days are still waiting for you');
+    expect(banner(host)?.textContent).toContain('restock events from the last 14 days still waiting for you');
   });
 
   /**

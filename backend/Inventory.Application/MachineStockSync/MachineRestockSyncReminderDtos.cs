@@ -159,6 +159,11 @@ public sealed record HiddenMachineRestockSyncReminderDto(string Reason) : IMachi
 /// Whether some of that pending work is dated before the Sync Restock dialog's default From date,
 /// so an operator who opens the dialog and leaves the default would not see it.
 /// </param>
+/// <param name="HasSalesSinceLastSync">
+/// Whether an imported sale of this machine is dated after its last successful fetch, or inside the
+/// pending window when no fetch is recorded (issue #1090). An overdue machine is listed only when
+/// this is true; a machine listed for pending events carries it for information.
+/// </param>
 public sealed record MachineRestockSyncReminderMachineDto(
     long LocalMachineId,
     string MachineName,
@@ -169,7 +174,8 @@ public sealed record MachineRestockSyncReminderMachineDto(
     int KnownPendingEventCount,
     DateTime? OldestKnownPendingEventAtUtc,
     DateTime? OldestKnownPendingEventBusinessDate,
-    bool HasPendingWorkBeforeDefaultFrom);
+    bool HasPendingWorkBeforeDefaultFrom,
+    bool HasSalesSinceLastSync);
 
 /// <summary>
 /// The reminder itself (issue #891): the provider-named machines whose explicit <em>Sync

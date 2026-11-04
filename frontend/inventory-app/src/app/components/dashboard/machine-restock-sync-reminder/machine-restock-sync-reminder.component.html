@@ -23,16 +23,46 @@
   <output class="flex items-start gap-3 rounded-lg border border-rr-line bg-white p-3 font-rr" data-testid="restock-sync-reminder">
     <span class="mt-0.5 shrink-0 text-rr-warn-text" aria-hidden="true"><app-icon name="sync_alt" [size]="20" /></span>
     <span class="block min-w-0">
-      <span class="block text-sm font-semibold text-rr-navy">Restock sync pending</span>
-      <span class="block text-sm text-rr-muted">
-        Recorded refills haven't been synced yet. Review restocks to keep storage inventory accurate.
-        A machine is listed here when its last successful
-        restock sync is {{ reminder.overdueAfterDays }} or more days old, or when restock events from
-        the last {{ reminder.pendingLookbackDays }} days are still waiting for you.
-      </span>
+      <!--
+        Two kinds of machine, never described as each other (issue #1090): ones with known pending
+        restock events, and ones with nothing pending whose last sync is overdue while they have
+        sold since it. The second kind has no refill known to be waiting, so it is a check that is
+        due, not a sync that is pending.
+      -->
+      @if (pendingMachines.length > 0) {
+        <span class="block" data-testid="restock-sync-reminder-pending">
+          <span class="block text-sm font-semibold text-rr-navy">Restock sync pending</span>
+          <span class="block text-sm text-rr-muted">
+            Recorded refills haven't been synced yet. Review restocks to keep storage inventory accurate.
+            These machines have restock events from the last {{ reminder.pendingLookbackDays }} days
+            still waiting for you.
+          </span>
+          <ul class="m-0 mt-2 list-none p-0 text-sm text-rr-muted" data-testid="restock-sync-reminder-machines">
+            @for (machine of pendingMachines; track machine.localMachineId) {
+              <ng-container *ngTemplateOutlet="machineRow; context: { $implicit: machine }"></ng-container>
+            }
+          </ul>
+        </span>
+      }
+
+      @if (checkDueMachines.length > 0) {
+        <span class="block" [class.mt-3]="pendingMachines.length > 0" data-testid="restock-sync-reminder-check-due">
+          <span class="block text-sm font-semibold text-rr-navy">Restock check due</span>
+          <span class="block text-sm text-rr-muted">
+            No restock events are waiting for these machines, but they have had sales since their last
+            restock sync {{ reminder.overdueAfterDays }} or more days ago, so any refills since then
+            haven't been fetched from Nayax yet.
+          </span>
+          <ul class="m-0 mt-2 list-none p-0 text-sm text-rr-muted" data-testid="restock-sync-reminder-check-due-machines">
+            @for (machine of checkDueMachines; track machine.localMachineId) {
+              <ng-container *ngTemplateOutlet="machineRow; context: { $implicit: machine }"></ng-container>
+            }
+          </ul>
+        </span>
+      }
 
       @if (isSyncAvailabilityUnconfirmed) {
-        <span class="mt-1 block text-sm text-rr-muted" data-testid="restock-sync-reminder-availability">
+        <span class="mt-2 block text-sm text-rr-muted" data-testid="restock-sync-reminder-availability">
           This business's Nayax connection has not been confirmed for machine restock alerts, so Sync
           Restock may be unavailable until it is.
           @if (canManageIntegration) {
@@ -46,39 +76,37 @@
           }
         </span>
       }
-
-      <ul class="m-0 mt-2 list-none p-0 text-sm text-rr-muted" data-testid="restock-sync-reminder-machines">
-        @for (machine of reminder.machines; track machine.localMachineId) {
-          <li class="mt-2" [attr.data-testid]="'restock-sync-reminder-machine-' + machine.localMachineId">
-            <span class="font-semibold text-rr-navy">{{ machine.machineName }}</span>:
-            <span
-              [attr.title]="machine.lastSuccessfulSyncAtUtc ? (machine.lastSuccessfulSyncAtUtc | businessDateTime) : null"
-            >{{ lastSyncedLabel(machine) }}</span>,
-            <span
-              [attr.title]="machine.oldestKnownPendingEventAtUtc ? ('Oldest: ' + (machine.oldestKnownPendingEventAtUtc | businessDateTime)) : null"
-            >{{ pendingLabel(machine) }}</span>.
-            @if (machine.hasPendingWorkBeforeDefaultFrom && machine.oldestKnownPendingEventBusinessDate) {
-              <span [attr.data-testid]="'restock-sync-reminder-older-than-default-' + machine.localMachineId">
-                Following this link opens Sync Restock from
-                {{ machine.oldestKnownPendingEventBusinessDate | date: 'd MMM yyyy' }}, the oldest of them.
-              </span>
-            }
-            <!--
-              Opens the machine's page with its Sync Restock dialog already open (issues #891, #948
-              and #1011). Opening the dialog fetches and imports the machine's new Nayax alerts, as
-              the Sync Restock button does, but applies nothing: no inventory changes until the
-              operator applies events there, so the link is never described as having synced.
-            -->
-            <a
-              [routerLink]="['/machines', machine.localMachineId]"
-              [queryParams]="restockLinkQueryParams(machine)"
-              class="mt-1 flex min-h-11 items-center gap-1 font-semibold text-rr-teal"
-              [attr.aria-label]="'Open Sync Restock for ' + machine.machineName"
-              [attr.data-testid]="'restock-sync-reminder-link-' + machine.localMachineId"
-            ><app-icon name="sync_alt" [size]="16" /> Open Sync Restock</a>
-          </li>
-        }
-      </ul>
     </span>
   </output>
 }
+
+<ng-template #machineRow let-machine>
+  <li class="mt-2" [attr.data-testid]="'restock-sync-reminder-machine-' + machine.localMachineId">
+    <span class="font-semibold text-rr-navy">{{ machine.machineName }}</span>:
+    <span
+      [attr.title]="machine.lastSuccessfulSyncAtUtc ? (machine.lastSuccessfulSyncAtUtc | businessDateTime) : null"
+    >{{ lastSyncedLabel(machine) }}</span>,
+    <span
+      [attr.title]="machine.oldestKnownPendingEventAtUtc ? ('Oldest: ' + (machine.oldestKnownPendingEventAtUtc | businessDateTime)) : null"
+    >{{ pendingLabel(machine) }}</span>.
+    @if (machine.hasPendingWorkBeforeDefaultFrom && machine.oldestKnownPendingEventBusinessDate) {
+      <span [attr.data-testid]="'restock-sync-reminder-older-than-default-' + machine.localMachineId">
+        Following this link opens Sync Restock from
+        {{ machine.oldestKnownPendingEventBusinessDate | date: 'd MMM yyyy' }}, the oldest of them.
+      </span>
+    }
+    <!--
+      Opens the machine's page with its Sync Restock dialog already open (issues #891, #948
+      and #1011). Opening the dialog fetches and imports the machine's new Nayax alerts, as
+      the Sync Restock button does, but applies nothing: no inventory changes until the
+      operator applies events there, so the link is never described as having synced.
+    -->
+    <a
+      [routerLink]="['/machines', machine.localMachineId]"
+      [queryParams]="restockLinkQueryParams(machine)"
+      class="mt-1 flex min-h-11 items-center gap-1 font-semibold text-rr-teal"
+      [attr.aria-label]="'Open Sync Restock for ' + machine.machineName"
+      [attr.data-testid]="'restock-sync-reminder-link-' + machine.localMachineId"
+    ><app-icon name="sync_alt" [size]="16" /> Open Sync Restock</a>
+  </li>
+</ng-template>

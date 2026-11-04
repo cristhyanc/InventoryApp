@@ -1015,6 +1015,12 @@ export interface MachineRestockSyncReminderMachine {
   oldestKnownPendingEventBusinessDate: string | null;
   /** Some of that pending work predates the Sync Restock dialog's default From date. */
   hasPendingWorkBeforeDefaultFrom: boolean;
+  /**
+   * An imported sale of this machine is dated after its last successful sync, or inside the pending
+   * window when none is recorded (issue #1090). A machine with no known pending events is listed
+   * only when this is true, as "Restock check due".
+   */
+  hasSalesSinceLastSync: boolean;
 }
 
 /**

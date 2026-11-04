@@ -3,6 +3,7 @@ using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Nayax;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
@@ -908,6 +909,110 @@ public class MachineRestockSyncCoverageTests
     }
 
     /// <summary>
+    /// Issue #1090: the read reports each machine's latest imported sale, as a UTC instant, from its
+    /// own business only - the other business's later sale on the same provider number is not this
+    /// machine's - and a sale of another provider number is not either.
+    /// </summary>
+    [Fact]
+    public async Task The_aggregate_read_reports_the_latest_sale_of_each_machine_inside_its_own_business()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        var latest = new DateTime(2026, 11, 3, 4, 30, 0, DateTimeKind.Utc);
+
+        await using (var seller = Scoped(options))
+        {
+            seller.NayaxSales.AddRange(
+                Sale(1, NayaxMachineId, latest.AddDays(-2)),
+                Sale(2, NayaxMachineId, latest),
+                Sale(3, NayaxMachineId + 1, latest.AddDays(1)));
+            await seller.SaveChangesAsync();
+        }
+
+        await using (var other = TestAppDbContext.For(options, OtherBusinessId))
+        {
+            other.NayaxSales.Add(Sale(4, NayaxMachineId, latest.AddDays(2)));
+            await other.SaveChangesAsync();
+        }
+
+        await using var db = Scoped(options);
+        var machine = Assert.Single(
+            await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
+
+        Assert.Equal(latest, machine.LatestSaleAtUtc);
+        Assert.Equal(DateTimeKind.Utc, machine.LatestSaleAtUtc!.Value.Kind);
+    }
+
+    /// <summary>
+    /// Issue #1090: the sales read is bounded below by the earliest instant the reminder compares
+    /// against - here the pending window's start, since no fetch is recorded - so a sale before it
+    /// is not reported, and a machine with none after it is reported with no latest sale.
+    /// </summary>
+    [Fact]
+    public async Task The_aggregate_read_ignores_sales_before_the_earliest_instant_that_matters()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        var pendingFrom = new DateTime(2026, 10, 20, 13, 0, 0, DateTimeKind.Utc);
+
+        await using (var seller = Scoped(options))
+        {
+            seller.NayaxSales.Add(Sale(1, NayaxMachineId, pendingFrom.AddTicks(-1)));
+            await seller.SaveChangesAsync();
+        }
+
+        await using (var db = Scoped(options))
+        {
+            var machine = Assert.Single(
+                await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(pendingFrom, CancellationToken.None));
+            Assert.Null(machine.LatestSaleAtUtc);
+        }
+
+        await using (var seller = Scoped(options))
+        {
+            seller.NayaxSales.Add(Sale(2, NayaxMachineId, pendingFrom));
+            await seller.SaveChangesAsync();
+        }
+
+        await using var reread = Scoped(options);
+        Assert.Equal(
+            pendingFrom,
+            Assert.Single(
+                await new EfMachineRestockSyncCoverageStore(reread).GetProviderMachineCoverageAsync(pendingFrom, CancellationToken.None))
+                .LatestSaleAtUtc);
+    }
+
+    /// <summary>
+    /// Issue #1090: a recorded fetch older than the pending window widens the bound to that fetch,
+    /// so a sale between the fetch and the window - the one that makes the machine worth checking -
+    /// is still reported.
+    /// </summary>
+    [Fact]
+    public async Task A_recorded_fetch_older_than_the_pending_window_widens_the_sales_read()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        var pendingFrom = SyncStartedAt.AddDays(20);
+        var saleAfterFetch = SyncStartedAt.AddDays(1);
+
+        await using (var seller = Scoped(options))
+        {
+            seller.NayaxSales.Add(Sale(1, NayaxMachineId, saleAfterFetch));
+            await seller.SaveChangesAsync();
+            Assert.True(
+                await new EfMachineRestockSyncCoverageStore(seller)
+                    .TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, NayaxMachineId, AfterEveryEvent, default));
+        }
+
+        await using var db = Scoped(options);
+        var machine = Assert.Single(
+            await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(pendingFrom, CancellationToken.None));
+
+        Assert.Equal(SyncStartedAt, machine.LastSuccessfulSyncStartedAtUtc);
+        Assert.Equal(saleAfterFetch, machine.LatestSaleAtUtc);
+    }
+
+    /// <summary>
     /// A caller whose business could not be resolved reads nothing and writes nothing: the central
     /// filter, not a predicate in this adapter, is what makes that true.
     /// </summary>
@@ -1005,6 +1110,18 @@ public class MachineRestockSyncCoverageTests
 
     private static AppDbContext Scoped(DbContextOptions<AppDbContext> options) =>
         TestAppDbContext.For(options, SellerBusinessId);
+
+    /// <summary>A completed Nayax sale of provider machine <paramref name="nayaxMachineId"/> (issue #1090).</summary>
+    private static NayaxSales Sale(long transactionId, long nayaxMachineId, DateTime authorizedAtUtc) =>
+        new()
+        {
+            TransactionID = transactionId,
+            MachineID = nayaxMachineId,
+            SettlementValue = 3.50m,
+            PaymentMethod = "Credit",
+            MachineAuthorizationTime = authorizedAtUtc,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+        };
 
     /// <summary>
     /// Stores new credentials for a business through the real

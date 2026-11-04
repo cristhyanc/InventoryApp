@@ -16175,19 +16175,36 @@ error, the selection or a toast - even after the page has moved back to the mach
 Ordinary visits leave the dialog closed. The reminder also publishes `pendingLookbackDays`
 and `pendingFromBusinessDate` so the banner never restates the window. The counts describe **persisted** facts only: a zero says nothing about alerts
 Nayax holds that nobody has fetched, which is why an overdue fetch and pending events are reported as
-two separate conditions and either one alone puts a machine on the banner.
+two separate conditions.
+
+**Who is listed, and under which heading (issue #1090, by the owner's decision of 4 November 2026).**
+Any known pending event alone puts a machine on the banner, under **"Restock sync pending"**. An
+overdue fetch alone does not: `MachineRestockSyncReminderPolicy.NeedsAttention` lists a machine with
+no known pending event only when its fetch is overdue **and** `HasSalesSinceLastSync` holds — an
+imported Nayax sale of the machine is dated strictly after its last current fetch started, or, with
+no current fetch recorded, at or after the pending window's start. Such a machine is shown under
+**"Restock check due"**, whose wording says no restock events are waiting but refills since the last
+check have not been fetched from Nayax; it is never described as having refills waiting. An overdue
+machine that has sold nothing since its last fetch is not listed, because before #1090 every quiet
+machine reappeared every three days under "Restock sync pending" with nothing to do. The sales read is
+local: the same aggregate reads each machine's latest `NayaxSales.MachineAuthorizationTime` in one
+grouped statement keyed by the provider's machine number, bounded below by the earliest instant any
+row is compared against (the oldest recorded fetch start or the pending window's start). It can only
+see sales already imported, so a machine whose recent sales have not been imported reads as quiet —
+a trade-off the owner accepted. Each row publishes `hasSalesSinceLastSync`; the client groups rows by
+`knownPendingEventCount` alone and derives nothing else.
 
 **The Dashboard read is local, and it is read-only.**
 `Inventory.Application.MachineStockSync.GetMachineRestockSyncReminder` makes exactly two local
-reads — the business's own connection record without its token, and one aggregate query over the
-machines and their imported events (`IMachineRestockSyncCoverageStore.GetProviderMachineCoverageAsync`)
+reads — the business's own connection record without its token, and one aggregate read over the
+machines, their imported events and their imported sales (`IMachineRestockSyncCoverageStore.GetProviderMachineCoverageAsync`)
 — and no Nayax request at all. It decrypts no credential, calls no per-machine endpoint, never
-invokes the mutation-capable preview endpoint, and writes nothing. The aggregate is two statements
-rather than a join, because the two sides are keyed differently: a machine by `Machines.Id`, an
-event by the provider's machine number, with `Inventory.Domain.Providers.NayaxExternalId` as the one
+invokes the mutation-capable preview endpoint, and writes nothing. The aggregate is three statements
+(machines, grouped events, grouped latest sales) rather than joins, because the sides are keyed
+differently: a machine by `Machines.Id`, an event or a sale by the provider's machine number, with `Inventory.Domain.Providers.NayaxExternalId` as the one
 translation (see [Local machines and external machine ids](#local-machines-and-external-machine-ids-issue-740)).
-Both halves are scoped by the central tenant query filters, so two businesses whose machines
-legitimately share provider number 900 never see one another's coverage or counts.
+Every statement is scoped by the central tenant query filters, so two businesses whose machines
+legitimately share provider number 900 never see one another's coverage, counts or sales.
 
 **Three businesses are shown nothing at all, each with its own stable reason.** The response is a
 union — `MachineRestockSyncReminderDto`, or `HiddenMachineRestockSyncReminderDto` with
@@ -16234,8 +16251,10 @@ asks for nothing at all while a support session is active. **A failed read is vi
 nothing would read as "no machine needs attention", which is the one thing a failed read cannot say.
 Each row links to `/machines/{localMachineId}` and names the **Sync Restock** action there; the
 banner itself offers no action, and the component derives no date, threshold or count of its own -
-the three-day rule, the business dates, the day counts and the pending definition are all the
-server's.
+the three-day rule, the sales-since rule, the business dates, the day counts and the pending
+definition are all the server's. Since issue #1090 it splits the listed rows by
+`knownPendingEventCount` into a "Restock sync pending" group and a "Restock check due" group inside
+the one alert, so the Needs attention panel still counts it once.
 
 ### Machine latest sales (issue #768)
 
