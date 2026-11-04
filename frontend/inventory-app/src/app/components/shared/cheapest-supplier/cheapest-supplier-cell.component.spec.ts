@@ -283,6 +283,42 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
     expect(text[2]).toContain('No match');
   });
 
+  it('shows the inc GST unit price once when the business compares inc GST', async () => {
+    const { rows, open } = await render();
+
+    open();
+
+    const text = rows()[0].textContent ?? '';
+    expect(text.split('$0.95 inc GST').length - 1).toBe(1);
+    expect(text).toContain('$0.86 ex GST');
+  });
+
+  it('shows the ex GST unit price once when the business compares ex GST', async () => {
+    const { fixture, rows, open } = await render({
+      suppliers: [offer({ unitPrice: 0.8636 })]
+    });
+    fixture.componentRef.setInput('displayBasis', SupplierPriceBasis.ExclusiveOfGst);
+    fixture.detectChanges();
+
+    open();
+
+    const text = rows()[0].textContent ?? '';
+    expect(text.split('$0.86 ex GST').length - 1).toBe(1);
+    expect(text).toContain('$0.95 inc GST');
+  });
+
+  it('shows both bases under an unlabelled headline when the business basis is not known', async () => {
+    const { fixture, rows, open } = await render();
+    fixture.componentRef.setInput('displayBasis', null);
+    fixture.detectChanges();
+
+    open();
+
+    const text = rows()[0].textContent ?? '';
+    expect(text).toContain('$0.86 ex GST');
+    expect(text).toContain('$0.95 inc GST');
+  });
+
   it('says that the prices are observed guidance rather than recorded costs', async () => {
     const { fixture, cell, host } = await render();
 

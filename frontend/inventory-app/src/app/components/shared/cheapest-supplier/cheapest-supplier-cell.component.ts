@@ -368,6 +368,14 @@ export class CheapestSupplierCellComponent {
     next.focus();
   }
 
+  readonly exclusiveOfGst = SupplierPriceBasis.ExclusiveOfGst;
+  readonly inclusiveOfGst = SupplierPriceBasis.InclusiveOfGst;
+
+  /** Whether the bold headline price is already on this basis, so its secondary line would repeat it. */
+  headlineIs(basis: SupplierPriceBasis): boolean {
+    return this.displayBasis === basis;
+  }
+
   basisOf(basis: SupplierPriceBasis | null): string {
     return basisLabel(basis);
   }

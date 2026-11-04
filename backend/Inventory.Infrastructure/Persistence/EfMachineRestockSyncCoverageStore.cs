@@ -110,10 +110,11 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
 
     /// <summary>
     /// The whole-business aggregate read behind the Dashboard reminder: one statement over
-    /// <c>Machines</c> for the provider-named machines and their coverage, and one grouped statement
-    /// over the imported restock events for the unresolved counts. Two statements rather than a
-    /// join, because the two sides are keyed differently - a machine by this application's own id,
-    /// an event by the provider's machine number (issues #740 and #741) - and the one translation
+    /// <c>Machines</c> for the provider-named machines and their coverage, one grouped statement over
+    /// the imported restock events for the unresolved counts, and one grouped statement over the
+    /// imported Nayax sales for each machine's latest sale (issue #1090). Separate statements rather
+    /// than joins, because the sides are keyed differently - a machine by this application's own id,
+    /// an event or a sale by the provider's machine number (issues #740 and #741) - and the one translation
     /// between them is <see cref="NayaxExternalId"/>, applied here over a handful of machines rather
     /// than as a <c>CAST</c> inside a join.
     ///
@@ -170,12 +171,44 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
 
         var pendingByNayaxMachineId = pending.ToDictionary(group => group.NayaxMachineId);
 
+        // Issue #1090: the latest imported completed sale of each machine, so the use case can tell whether an
+        // overdue machine has sold anything since its last fetch. Bounded below by the earliest
+        // instant any machine is compared against - the oldest recorded fetch start or the pending
+        // window's start, whichever is earlier - so the read never has to look further back than an
+        // answer could depend on. One grouped statement, never one per machine.
+        var salesFromUtc = machines
+            .Select(machine => machine.LastSuccessfulRestockSyncStartedAtUtc)
+            .Where(startedAtUtc => startedAtUtc.HasValue)
+            .Select(startedAtUtc => startedAtUtc!.Value)
+            .Append(pendingFromUtc)
+            .Min();
+
+        // Completed sales only, through the one shared completed-sale filter: a failed, cancelled,
+        // refunded or still-pending transaction after the last sync is not evidence the machine sold.
+        var latestSales = await _db.NayaxSales
+            .AsNoTracking()
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .Where(sale => sale.MachineAuthorizationTime >= salesFromUtc)
+            .GroupBy(sale => sale.MachineID)
+            .Select(group => new
+            {
+                NayaxMachineId = group.Key,
+                LatestSaleAtUtc = group.Max(sale => sale.MachineAuthorizationTime),
+            })
+            .ToListAsync(cancellationToken);
+
+        var latestSaleByNayaxMachineId = latestSales.ToDictionary(
+            group => group.NayaxMachineId, group => AsUtc(group.LatestSaleAtUtc));
+
         return machines
             .Select(machine =>
             {
-                var counts = NayaxExternalId.TryParse(machine.ExternalMachineId, out var nayaxMachineId)
-                    ? pendingByNayaxMachineId.GetValueOrDefault(nayaxMachineId)
-                    : null;
+                var resolved = NayaxExternalId.TryParse(machine.ExternalMachineId, out var nayaxMachineId);
+                var counts = resolved ? pendingByNayaxMachineId.GetValueOrDefault(nayaxMachineId) : null;
+                DateTime? latestSaleAtUtc =
+                    resolved && latestSaleByNayaxMachineId.TryGetValue(nayaxMachineId, out var latestSale)
+                        ? latestSale
+                        : null;
 
                 return new MachineRestockSyncCoverageRecord(
                     machine.Id,
@@ -183,7 +216,8 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
                     machine.LastSuccessfulRestockSyncStartedAtUtc,
                     machine.LastSuccessfulRestockSyncCredentialRevision,
                     counts?.PendingCount ?? 0,
-                    counts is null ? null : AsUtc(counts.OldestEventDateTimeGmt));
+                    counts is null ? null : AsUtc(counts.OldestEventDateTimeGmt),
+                    latestSaleAtUtc);
             })
             .ToList();
     }
@@ -203,7 +237,7 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
             && (stockEvent.ParsedQuantity == null || stockEvent.ParsedQuantity > 0);
 
     /// <summary>
-    /// The grouped <c>MIN</c> above is computed by SQLite, so its value does not pass through the
+    /// The grouped <c>MIN</c> and <c>MAX</c> above are computed by SQLite, so their values do not pass through the
     /// <c>EventDateTimeGmt</c> property's Kind conversion the way a projected column does. The
     /// stored instant is UTC (<c>SyncMachineStockFromNayax.AsUtc</c>, issue #217), so it is marked as
     /// such here: an instant with no <c>Z</c> would be read as browser-local time by the frontend's

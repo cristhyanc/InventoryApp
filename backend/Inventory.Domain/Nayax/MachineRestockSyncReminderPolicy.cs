@@ -107,15 +107,39 @@ public static class MachineRestockSyncReminderPolicy
         && oldest.Date < DefaultFromBusinessDate(businessToday);
 
     /// <summary>
-    /// Whether this machine belongs on the reminder: either its fetch is overdue, or it has known
-    /// pending restock events.
+    /// Whether the machine has sold anything since its last successful restock fetch (issue #1090),
+    /// which is what makes an overdue fetch worth a reminder: a machine that has sold nothing since
+    /// it was last checked has nothing new to fetch that anyone needs to act on.
+    ///
+    /// <para><paramref name="latestSaleAtUtc"/> is the latest imported sale instant for the machine
+    /// that the read could see, or <see langword="null"/> when there is none. A sale counts when it
+    /// is strictly after <paramref name="lastSuccessfulSyncStartedAtUtc"/>, the start of the last
+    /// fetch that is current for the credentials in use; with no current fetch recorded, a sale at
+    /// or after <paramref name="pendingFromUtc"/> - the start of the pending window - counts.</para>
+    ///
+    /// <para>It can only speak about sales that have been imported: a machine whose recent sales
+    /// have not been imported yet reads as quiet. That trade-off was accepted by the owner on 4
+    /// November 2026.</para>
+    /// </summary>
+    public static bool HasSalesSinceLastSync(
+        DateTime? latestSaleAtUtc, DateTime? lastSuccessfulSyncStartedAtUtc, DateTime pendingFromUtc) =>
+        latestSaleAtUtc is { } latestSale
+        && (lastSuccessfulSyncStartedAtUtc is { } lastSync
+            ? latestSale > lastSync
+            : latestSale >= pendingFromUtc);
+
+    /// <summary>
+    /// Whether this machine belongs on the reminder: either it has known pending restock events,
+    /// or its fetch is overdue <em>and</em> it has sold something since that fetch (issue #1090).
     ///
     /// The count it is given is already bounded to the last <see cref="PendingLookbackDays"/>
     /// business days (issue #948), which is wider than the three-day overdue window on purpose: an
-    /// event does not stop counting the moment the dialog's default From date passes it.
+    /// event does not stop counting the moment the dialog's default From date passes it. An overdue
+    /// machine with no sales since its last fetch is not listed: there is nothing for an operator to
+    /// do about it, and listing it buried the machines that do need attention.
     /// </summary>
-    public static bool NeedsAttention(bool isFetchOverdue, int knownPendingEventCount) =>
-        isFetchOverdue || knownPendingEventCount > 0;
+    public static bool NeedsAttention(bool isFetchOverdue, int knownPendingEventCount, bool hasSalesSinceLastSync) =>
+        knownPendingEventCount > 0 || (isFetchOverdue && hasSalesSinceLastSync);
 
     /// <summary>
     /// Whether recorded coverage describes the credentials the business would sync with now.
