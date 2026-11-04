@@ -82,31 +82,28 @@ public class AddProviderIdentityLinksMigrationTests
             await after.GetService<IMigrator>().MigrateAsync(TargetMigration);
 
             // One link per row, with the row's own business, and nothing else linked.
-            var productLinks = await after.ProductExternalIds.OrderBy(link => link.ProductId).ToListAsync();
+            //
+            // Read with SQL rather than through the EF model: issue #760 dropped both link tables
+            // and their entities, and this test deliberately stands on the schema this migration
+            // produced, where they still exist. The assertions are unchanged.
+            var productLinks = await LinksAsync(connection, "ProductExternalIds", "ProductId");
             Assert.Equal(
-                [(1, ExternalProvider.Nayax, "100", 100L), (2, ExternalProvider.Nayax, "200", 200L)],
-                productLinks.Select(link => (link.BusinessId, link.Provider, link.ExternalId, link.ProductId)));
+                [(1, (int)ExternalProvider.Nayax, "100", 100L), (2, (int)ExternalProvider.Nayax, "200", 200L)],
+                productLinks);
 
-            var categoryLinks = await after.CategoryExternalIds.OrderBy(link => link.CategoryId).ToListAsync();
+            var categoryLinks = await LinksAsync(connection, "CategoryExternalIds", "CategoryId");
             Assert.Equal(
-                [(1, ExternalProvider.Nayax, "10", 10L), (2, ExternalProvider.Nayax, "11", 11L)],
-                categoryLinks.Select(link => (link.BusinessId, link.Provider, link.ExternalId, link.CategoryId)));
+                [(1, (int)ExternalProvider.Nayax, "10", 10L), (2, (int)ExternalProvider.Nayax, "11", 11L)],
+                categoryLinks);
 
             // The round trip the later lookups depend on: what the migration wrote with SQLite's
             // CAST is what the shared helper reads back as the Nayax id it came from.
             Assert.All(
-                productLinks,
+                productLinks.Concat(categoryLinks),
                 link =>
                 {
                     Assert.True(NayaxExternalId.TryParse(link.ExternalId, out var nayaxId));
-                    Assert.Equal(link.ProductId, nayaxId);
-                });
-            Assert.All(
-                categoryLinks,
-                link =>
-                {
-                    Assert.True(NayaxExternalId.TryParse(link.ExternalId, out var nayaxId));
-                    Assert.Equal(link.CategoryId, nayaxId);
+                    Assert.Equal(link.LocalId, nayaxId);
                 });
 
             // The rebuild moved every row across unchanged: ids, ownership, the catalogue fields and
@@ -157,6 +154,30 @@ public class AddProviderIdentityLinksMigrationTests
             var movement = await after.StockAdjustments.SingleAsync();
             Assert.Equal((100L, 12, 1.10m, 13.20m), (movement.ProductId, movement.QuantityChange, movement.UnitCost, movement.TotalCost));
         }
+    }
+
+    /// <summary>
+    /// Every link row of <paramref name="table"/>, ordered by the local row it names, read over the
+    /// connection because the EF model no longer has these tables (issue #760).
+    /// </summary>
+    private static async Task<List<(int BusinessId, int Provider, string ExternalId, long LocalId)>> LinksAsync(
+        SqliteConnection connection, string table, string localIdColumn)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"""
+            SELECT "BusinessId", "Provider", "ExternalId", "{localIdColumn}" FROM "{table}"
+            ORDER BY "{localIdColumn}";
+            """;
+        await using var reader = await command.ExecuteReaderAsync();
+
+        var links = new List<(int, int, string, long)>();
+        while (await reader.ReadAsync())
+        {
+            links.Add((reader.GetInt32(0), reader.GetInt32(1), reader.GetString(2), reader.GetInt64(3)));
+        }
+
+        return links;
     }
 
     /// <summary>

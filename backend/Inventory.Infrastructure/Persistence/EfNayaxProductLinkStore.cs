@@ -19,10 +19,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// answer callers already handle as an unknown product - rather than reading some other system's
 /// identifier as a Nayax one.</para>
 ///
-/// <para>It replaced a read of the <c>ProductExternalIds</c> link table, which issue #759 stopped
-/// writing; the lookup it answers, and every caller of it, is unchanged. The column is on the product
-/// row itself, so there is no longer anything to join or any way for an id to name another business's
-/// product.</para>
+/// <para>It replaced a read of the provider link table of issue #732, which issue #759 stopped
+/// writing and issue #760 dropped; the lookup it answers, and every caller of it, is unchanged. The
+/// column is on the product row itself, so there is no longer anything to join or any way for an id
+/// to name another business's product.</para>
 ///
 /// <para><c>AppDbContext</c>'s global tenant query filter scopes the product read the way it scopes
 /// every other tenant-owned read; no per-call business filter is added here.</para>

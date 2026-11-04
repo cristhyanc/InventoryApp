@@ -15,8 +15,8 @@ namespace InventoryApi.Tests.Architecture;
 /// those would fail a test that only checked the comparison arithmetic, which is why the boundary is
 /// pinned here instead.</para>
 ///
-/// <para>The rule is checked against the source text, like <see cref="TimeAcquisitionTests"/> and
-/// <see cref="ProviderLinkTableDisuseTests"/>, because what it forbids is a reference appearing at
+/// <para>The rule is checked against the source text, like <see cref="TimeAcquisitionTests"/>,
+/// because what it forbids is a reference appearing at
 /// all rather than a type-level dependency: the financial code and this feature live in the same
 /// assemblies, so a compiler cannot express "these files may not know about those tables".</para>
 ///

@@ -339,9 +339,9 @@ pending migrations automatically and **fails closed rather than serve requests a
 code does not match**, and the repository's recovery constraints are forward-only in several places
 that have nothing to do with identity. Two of them are already on this branch's own base:
 
-- a release that reads the retired `ProductExternalIds`/`CategoryExternalIds` link tables is
-  **explicitly unsupported** after issue #759, and those tables stay in the schema only until #760
-  drops them; and
+- a release that reads the retired provider identity link tables of issue #732 is **explicitly
+  unsupported** after issue #759, and issue #760 has since dropped those tables from the schema
+  altogether; and
 - issue #758 changed which column a stored sale's local product is read from, so an earlier binary
   would reinstate the name/number re-derivation that change removed.
 
