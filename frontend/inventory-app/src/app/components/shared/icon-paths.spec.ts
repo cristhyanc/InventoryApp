@@ -45,7 +45,10 @@ describe('ICON_PATHS', () => {
     'local_shipping',
     'account_balance_wallet',
     'sync_alt',
-    'domain'
+    'domain',
+    // The Products page (issue #1093).
+    'more_vert',
+    'view_column'
   ];
 
   it('bundles exactly the icons the #409 series and the landing page need so far', () => {

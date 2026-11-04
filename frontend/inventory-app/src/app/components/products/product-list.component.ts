@@ -29,6 +29,7 @@ import {
   ProductPurchaseCostColumn,
   ProductPurchaseCosts,
   ProductPurchaseCostsComponent,
+  purchaseCostDateDisplay,
   purchaseCostDisplay,
   purchaseCostSortValue,
   purchaseCostSupplierDisplay
@@ -39,7 +40,12 @@ import {
   CheapestSuppliersComponent,
   cheapestSupplierFor
 } from '../shared/cheapest-supplier/cheapest-suppliers.component';
-import { CheapestSupplierCellComponent } from '../shared/cheapest-supplier/cheapest-supplier-cell.component';
+import { CheapestSupplierSummaryComponent } from '../shared/cheapest-supplier/cheapest-supplier-summary.component';
+import { HelpToggletipComponent } from '../shared/help-toggletip/help-toggletip.component';
+import { ActionMenuComponent } from '../shared/action-menu/action-menu.component';
+import { ListPaginationComponent } from '../shared/list-pagination/list-pagination.component';
+import { clampPageIndex, pageSlice } from '../shared/list-pagination/paging';
+import { IconComponent } from '../shared/icon.component';
 import { CheapestSupplierProduct } from '../../models/cheapest-supplier';
 import { ProductGstRuleBulkComponent } from './product-gst-rule-bulk/product-gst-rule-bulk.component';
 
@@ -59,6 +65,36 @@ type ProductSortColumn =
 /** `GET api/products`'s working-catalogue/whole-catalogue choice (issue #737), as a page filter. */
 type ProductStatusFilter = 'active' | 'all';
 
+/**
+ * The two optional history columns Columns offers (issue #1093). Neither is shown by default; the
+ * default columns - Product, Category, Storage stock, Average cost, Cheapest supplier and Actions -
+ * are always shown, so enabling either only adds to them.
+ */
+export type ProductOptionalColumn = ProductPurchaseCostColumn;
+
+/** The optional columns in the order Columns lists them and the table places them. */
+export const PRODUCT_OPTIONAL_COLUMNS: readonly { readonly column: ProductOptionalColumn; readonly label: string }[] = [
+  { column: 'lastPurchase', label: 'Last purchase' },
+  { column: 'cheapestPurchase', label: 'Cheapest purchase' }
+];
+
+/** The page sizes the Products pager offers (issue #1093), the Dashboard's own set. */
+export const PRODUCT_PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100] as const;
+
+/** The page size every visit starts at (issue #1093's approved design). Not persisted. */
+export const PRODUCT_DEFAULT_PAGE_SIZE = 10;
+
+/**
+ * What the Cheapest supplier heading's help says once for every row (issue #1093): what the prices
+ * are, and that a supplier's stock may differ - the note each cell used to repeat.
+ */
+export const PRODUCTS_CHEAPEST_SUPPLIER_HELP =
+  'Cheapest supplier is the lowest price your own suppliers currently list per unit, on the GST basis shown '
+  + 'beside it - observed prices for purchasing guidance, not costs you have paid. These are online prices and may differ in store, and supplier stock may differ. '
+  + 'Compare lists every supplier with its pack, prices and when it was last checked.';
+
+export const PRODUCTS_CHEAPEST_SUPPLIER_HELP_LABEL = 'About Cheapest supplier';
+
 @Component({
   selector: 'app-product-list',
   standalone: true,
@@ -69,7 +105,11 @@ type ProductStatusFilter = 'active' | 'all';
     ConfirmationDialogComponent,
     ProductPurchaseCostsComponent,
     CheapestSuppliersComponent,
-    CheapestSupplierCellComponent,
+    CheapestSupplierSummaryComponent,
+    HelpToggletipComponent,
+    ActionMenuComponent,
+    ListPaginationComponent,
+    IconComponent,
     ProductGstRuleBulkComponent
   ],
   templateUrl: './product-list.component.html'
@@ -100,6 +140,27 @@ export class ProductListComponent implements OnInit, OnDestroy {
   statusFilter: ProductStatusFilter = 'active';
   sortColumn: ProductSortColumn | null = null;
   sortDirection: SortDirection = 'asc';
+
+  /**
+   * The optional history columns the operator turned on (issue #1093): none by default, local to
+   * this visit, and never persisted. They are shown only while the role may also see them
+   * ({@link canViewFinancials}); turning one on or off changes the layout only - the purchase-cost
+   * read is the same either way, so it never triggers a request.
+   */
+  optionalColumns: ReadonlySet<ProductOptionalColumn> = new Set();
+  readonly optionalColumnOptions = PRODUCT_OPTIONAL_COLUMNS;
+
+  /**
+   * The page of the sorted list on screen (issue #1093). Paging is client-side over the one list
+   * already read - the same strategy as the Dashboard's Reorder priorities - so a page or size
+   * change re-requests nothing and the supplier and cost reads stay keyed to every listed product.
+   */
+  pageIndex = 0;
+  pageSize: number = PRODUCT_DEFAULT_PAGE_SIZE;
+  readonly pageSizeOptions: readonly number[] = PRODUCT_PAGE_SIZE_OPTIONS;
+
+  readonly cheapestSupplierHelp = PRODUCTS_CHEAPEST_SUPPLIER_HELP;
+  readonly cheapestSupplierHelpLabel = PRODUCTS_CHEAPEST_SUPPLIER_HELP_LABEL;
 
   /**
    * Whether a support session is active (issue #554): Delete is hidden and the Active/Inactive
@@ -227,6 +288,9 @@ export class ProductListComponent implements OnInit, OnDestroy {
         if (this.loadState.isCurrent(token)) {
           this.products = products;
           this.productIds = products.map((product) => product.id);
+          // A refresh can shorten the list (a filter, a deactivation): stay on the same page while it
+          // still exists, and never land on an empty one past the end.
+          this.pageIndex = clampPageIndex(this.pageIndex, products.length, this.pageSize);
         }
         this.loadState.succeed(token);
       }),
@@ -287,7 +351,78 @@ export class ProductListComponent implements OnInit, OnDestroy {
 
   onSearchChange(value: string): void {
     this.search = value;
+    this.pageIndex = 0;
     this.search$.next(value);
+  }
+
+  /** The search box's own clear button: an immediate refresh rather than a debounced one. */
+  clearSearch(): void {
+    if (this.search === '') {
+      return;
+    }
+    this.search = '';
+    this.pageIndex = 0;
+    this.applyFilters();
+  }
+
+  onCategoryChange(): void {
+    this.pageIndex = 0;
+    this.applyFilters();
+  }
+
+  /** Whether any filter differs from its default, which is the only time Clear filters is offered. */
+  get filtersDiffer(): boolean {
+    return this.search !== '' || this.categoryId !== '' || this.statusFilter !== 'active';
+  }
+
+  /** Whether an optional history column is on screen: turned on, and allowed for this role. */
+  isColumnShown(column: ProductOptionalColumn): boolean {
+    return this.canViewFinancials && this.optionalColumns.has(column);
+  }
+
+  /** How many columns the table shows, for the Columns trigger's "(N active)". */
+  get activeColumnCount(): number {
+    const defaults = 6 + (this.statusFilter === 'all' ? 1 : 0);
+    return defaults + this.optionalColumnOptions.filter((option) => this.isColumnShown(option.column)).length;
+  }
+
+  toggleColumn(column: ProductOptionalColumn, shown: boolean): void {
+    const next = new Set(this.optionalColumns);
+    if (shown) {
+      next.add(column);
+    } else {
+      next.delete(column);
+      if (this.sortColumn === column) {
+        this.sortColumn = null;
+        this.sortDirection = 'asc';
+      }
+    }
+    this.optionalColumns = next;
+  }
+
+  /** Columns' Reset: back to the default columns only. */
+  resetColumns(): void {
+    for (const option of this.optionalColumnOptions) {
+      this.toggleColumn(option.column, false);
+    }
+  }
+
+  /** The products on the current page, in the current sort - one list both the table and the cards render. */
+  get pagedProducts(): Product[] {
+    return pageSlice(this.sortedProducts, this.pageIndex, this.pageSize);
+  }
+
+  onPageIndexChange(index: number): void {
+    this.pageIndex = clampPageIndex(index, this.products.length, this.pageSize);
+  }
+
+  /** A new page size is a fresh view of the same list, so it returns to page 1. */
+  onPageSizeChange(size: number): void {
+    if (!this.pageSizeOptions.includes(size)) {
+      return;
+    }
+    this.pageSize = size;
+    this.pageIndex = 0;
   }
 
   /** Triggers an immediate (non-debounced) refresh, e.g. for a category change. */
@@ -299,6 +434,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.search = '';
     this.categoryId = '';
     this.statusFilter = 'active';
+    this.pageIndex = 0;
     this.clearStatusSortWhenHidden();
     this.applyFilters();
   }
@@ -309,6 +445,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
    */
   onStatusFilterChange(value: ProductStatusFilter): void {
     this.statusFilter = value;
+    this.pageIndex = 0;
     this.clearStatusSortWhenHidden();
     this.applyFilters();
   }
@@ -377,7 +514,9 @@ export class ProductListComponent implements OnInit, OnDestroy {
   onRowActivate(product: Product, rowEvent: Event): void {
     // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
     const event = rowEvent as MouseEvent | KeyboardEvent;
-    const ownControl = (event.target as Element | null)?.closest('a, button');
+    // The supplier comparison dialog and the row's overflow menu are rendered inside the row, so a
+    // click anywhere in them is theirs too, never a request to open the editor (issue #1093).
+    const ownControl = (event.target as Element | null)?.closest('a, button, input, select, dialog, [popover]');
     const browserHandlesIt =
       event.defaultPrevented ||
       (event instanceof MouseEvent && event.button !== 0) ||
@@ -444,10 +583,12 @@ export class ProductListComponent implements OnInit, OnDestroy {
     return providerToolsOffered(provider.connection) && providerFeatureOffered(provider.features.productCatalogue);
   }
 
+  /** A new sort is a new order of the whole list, so it starts again from page 1. */
   sortBy(column: ProductSortColumn): void {
     const next = nextSortState(this.sortColumn, this.sortDirection, column);
     this.sortColumn = next.column;
     this.sortDirection = next.direction;
+    this.pageIndex = 0;
   }
 
   ariaSort(column: ProductSortColumn): 'ascending' | 'descending' | 'none' {
@@ -485,6 +626,11 @@ export class ProductListComponent implements OnInit, OnDestroy {
   /** The Last/Cheapest purchase cost cell's text, as the feature component's own display rule states it. */
   purchaseCostDisplay(product: Product, column: ProductPurchaseCostColumn): string {
     return purchaseCostDisplay(this.purchaseCosts, product.id, column);
+  }
+
+  /** The recorded date of the purchase behind a found Last/Cheapest cost, or `null`. */
+  purchaseCostDateDisplay(product: Product, column: ProductPurchaseCostColumn): string | null {
+    return purchaseCostDateDisplay(this.purchaseCosts, product.id, column);
   }
 
   /** The supplier beside a found Last/Cheapest cost, or `null` while there is no cost to show one beside. */
