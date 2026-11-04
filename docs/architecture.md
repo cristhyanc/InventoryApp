@@ -10966,8 +10966,8 @@ the narrow `IPickListStorageStockStore` port (`Inventory.Infrastructure.Persiste
 an `AppDbContext` adapter following the same pattern as
 `EfOutstandingSupplierOrderQuantityStore`, scoped by the same central tenant query filter as every
 other `_db.Products` read - it adds no per-call business filter of its own). Since issue #733 that
-lookup is given local product ids, resolved from each selection's `NayaxProductID` through the Nayax
-link table (see
+lookup is given local product ids, resolved from each selection's `NayaxProductID` through the
+product's own external id column (see
 [Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)). A
 selection with no Nayax link, or whose product has no matching row in that tenant-scoped lookup, is
 excluded from the result rather than assigned a fabricated zero storage quantity, so the tenant
@@ -13176,17 +13176,19 @@ count — a count of `0` with no coverage behind it reads as "nothing happened h
 does, and must not be formatted as currency. Every page keeps one banner saying the provider side is
 incomplete and the business's own records are not.
 
-### Provider identity on the local row (issues #732, #759 and #735)
+### Provider identity on the local row (issues #732, #759, #760 and #735)
 
 `Product.Id` and `Category.Id` *were* the Nayax `NayaxProductID` and `ProductGroupID`: the catalogue
 import wrote the remote identifier as the local primary key. A local key that another system
 issues is global rather than per business, cannot be chosen at all by a business with no provider
 connected, and has room for exactly one provider's answer. Issue #732 (child A1 of #329, decision
-P1) added the place a provider id belongs instead — two link tables, `ProductExternalIds` and
-`CategoryExternalIds`, each carrying `BusinessId`, `Provider`, the opaque text `ExternalId` and the
-local row's id — and issue #759 (A1b) **moved that id onto the local row**, because decision P1 was
-revised on 18 October 2026: a business has zero or one sales provider, so a column of every mapping
-saying which provider issued it was answering a question that has one answer per business.
+P1) added the place a provider id belongs instead — two link tables, each carrying a business, a
+provider, the opaque text external id and the local row's id — and issue #759 (A1b) **moved that id
+onto the local row**, because decision P1 was revised on 18 October 2026: a business has zero or one
+sales provider, so a column of every mapping saying which provider issued it was answering a question
+that has one answer per business. Issue #760 (A1c) then **dropped those two tables**, a release after
+the code that still read them stopped running, so the column is now the only place a provider id
+lives — in the model, in the schema, and in the EF entities.
 
 Neither of those changed the keys: that is issue #735 (A4), below, which is where a row the import
 creates stopped being keyed by the provider's number. Which product a *sale* belongs to stopped
@@ -13234,12 +13236,15 @@ cascade the link tables needed have nothing left to guard. The `(BusinessId, Id)
 #732 added to `Products` and `Categories` stay, and two consequences of them are worth knowing: the
 migration that added them rebuilt both tables (SQLite cannot add a constraint in place), and
 `BusinessId` being part of a key means EF refuses outright to modify it on a tracked entity, before
-`BusinessOwnershipEnforcer`'s immutability rule is reached. The one on `Products` is **not** only the
-link tables' principal and does not go away with them: since #758 it is what
+`BusinessOwnershipEnforcer`'s immutability rule is reached. The one on `Products` was **not** only the
+link tables' principal and did not go away with them: since #758 it is what
 `NayaxSales.ProductId`'s `(BusinessId, ProductId)` foreign key points at (see
-[The sale's own product](#the-sales-own-product-issue-758)), so #760 drops the link tables alone and
+[The sale's own product](#the-sales-own-product-issue-758)), so #760 dropped the two tables alone and
 that constraint stays — it is the database-level guarantee that a sale names a product of its own
-business. The one on `Categories` has only the link table behind it today.
+business. The one on `Categories` has nothing pointing at it today and is kept all the same: it is a
+constraint on `Categories` in its own right, dropping it would rebuild the table for no behaviour, and
+#760's issue excluded it explicitly. Both are declared in `ConfigureProviderIdentityColumns`, which is
+where they moved when the mapping that used to declare them went away.
 
 **The migration copies, verifies, and refuses rather than guessing.** `AddProviderIdentityColumns`
 adds the three columns and two indexes, sets `SalesProvider = Nayax` for every business with a
@@ -13251,23 +13256,64 @@ rather than copying something ambiguous; each is guaranteed by the link tables' 
 checked anyway because SQLite enforces foreign keys only while `PRAGMA foreign_keys` is on, so a
 restored backup or an out-of-band write could leave a state they would have refused. After copying it
 verifies that every Nayax link equals its row's column, aborts on any difference, and records the
-counts and the instant in `ProviderIdentityColumnVerifications`, which exists so #760 can confirm the
-verification happened before it drops the tables. That table is deliberately not part of the EF
-model: it is evidence about a migration, read by a migration, and no application code touches it.
-`AddProviderIdentityColumnsMigrationTests` covers the copy, the three refusals and the recorded
+counts and the instant in `ProviderIdentityColumnVerifications`, which exists so the drop could
+confirm the verification happened before removing the tables. That table is deliberately not part of
+the EF model: it is evidence about a migration, read by a migration, and no application code touches
+it. `AddProviderIdentityColumnsMigrationTests` covers the copy, the three refusals and the recorded
 verification.
 
-**The link tables are not dropped in this release, and are not read either.** Production applies
-migrations at startup, through `DatabaseSchemaStartup` (AGENTS.md § Database and migrations), so when
-this migration lands the code already running there is still reading `ProductExternalIds` and
-`CategoryExternalIds`; dropping them in the same release would break it. Nothing reads or writes them
-after this change — `ProviderLinkTableDisuseTests` scans the production projects and fails if anything
-does — and #760 drops both once this release is in production.
+**The drop confirms that copy, then classifies every row it is about to delete.**
+`DropProviderIdentityLinkTables` (#760) is a destructive migration, so the decision rather than the
+`DROP` is the whole of it. It first refuses unless #759's migration is in the migration history **and**
+its verification is recorded for both tables — that record is the reason deleting these rows is safe at
+all. It then classifies every remaining row, in this order: **unexplained — unsupported provider**, the
+row's `Provider` is not `1`, the stored `ExternalProvider.Nayax` and the only value #732's backfill and
+#759's copy ever wrote; **orphaned**, the local row it names no
+longer exists (the cascading foreign keys make that impossible, so the expected count is zero, and a
+database where foreign keys were not enforced could still hold one); **unexplained — external id on
+another row**, the local row exists and the row's external id is now on a different row of the same
+business; **unexplained — column differs**, the local row exists and its column is empty or holds
+another value; **matched**, the local row exists and its column is equal. A matched row says nothing
+its local row does not and an orphan names a row that is gone, so both are dropped with the table and
+counted; anything unexplained **fails the migration loudly and drops nothing**, because the column is
+what every lookup reads and this migration cannot tell which of the two disagreeing values is right.
+A column set with no row behind it is expected rather than checked: every external id written since
+#759 exists only there.
 
-**Rollback policy.** Once this release has written external ids only to the columns, rolling back to
-code that reads the link tables is **not supported**: the tables stop being kept up to date, so that
-code would see a catalogue frozen at the moment of the release. A recovery goes forward with a fix.
-The migration's `Down` exists to undo the schema, not to make that rollback safe.
+**An unsupported provider is decided first, and refused twice.** The local external id columns hold
+one provider's id and do not record who issued it, so a row naming any other provider holds a value the
+column model cannot represent. Deciding it before the local row is looked at is what stops an external
+id that happens to equal the column from reading as matched, or a missing local row from reading as
+orphaned — either would drop it. The decision step then also counts rows whose `Provider IS NOT 1`
+straight out of both link tables before either is dropped, so the refusal depends neither on the
+classification's ordering nor on the recorded classification. `1` is a literal, as in #732 and #759,
+because a migration is a historical statement about rows and must not change meaning if the enum is
+renumbered; `IS NOT` is null-safe, so a `NULL` provider is counted too.
+
+The counts, and the ids of every row that is not matched, are recorded in
+`ProviderLinkTableDropClassifications` by statements that suppress the migration's transaction, so the
+record **survives the refusal that rolls the rest back**: a refusal saying only "something is
+unexplained" would leave an operator with nothing to look at. It holds ids only — a link row's key and
+the local row it named — never a name, an external id or anything else about a business, and like
+#759's verification table it is not part of the EF model. `Down` recreates both tables empty, with
+their indexes and composite foreign keys: the rows are not recoverable and nothing is invented in their
+place. `DropProviderIdentityLinkTablesMigrationTests` covers the matched case, an orphan seeded with
+foreign key enforcement off, both value refusals, an unsupported provider on a product link and on a
+category link (each once with an external id equal to the column and once as an orphan), a missing
+verification record and `Down`.
+Before the release, the same classification is run read-only against production and its counts are
+recorded on the issue, with every unexplained count (unsupported provider, column differs, external id
+on another row) required to be zero.
+
+**Nothing refers to the tables any longer.** The two EF entities, their `DbSet`s and their mapping went
+with the schema, so the type system — not a source scan — is what now keeps anything from reading them;
+`ProviderLinkTableDisuseTests`, which enforced that between #759 and #760, went with them.
+
+**Rollback policy.** Once #759 had written external ids only to the columns, rolling back to code that
+reads the retired link tables became **not supported**: they stopped being kept up to date then, so
+that code would see a catalogue frozen at the moment of that release, and #760 has since removed them
+entirely. A recovery goes forward with a fix. Each migration's `Down` exists to undo its schema, not to
+make that rollback safe.
 
 **The import keeps the column true.** The catalogue import writes
 `ExternalProductId`/`ExternalCategoryId` on the product or category each decided entry links or

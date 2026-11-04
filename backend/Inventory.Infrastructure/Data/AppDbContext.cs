@@ -458,14 +458,6 @@ public class AppDbContext : DbContext
     public DbSet<LocalMachine> Machines => Set<LocalMachine>();
 
     /// <summary>
-    /// Each provider's own identifier for a local product, and the same for a category (issue
-    /// #732). Ordinary tenant-owned data; see <see cref="ProductExternalId"/> for why a provider id
-    /// lives beside the local row instead of being its key.
-    /// </summary>
-    public DbSet<ProductExternalId> ProductExternalIds => Set<ProductExternalId>();
-    public DbSet<CategoryExternalId> CategoryExternalIds => Set<CategoryExternalId>();
-
-    /// <summary>
     /// What each fully successful provider sync or committed import actually accounted for (issue
     /// #730). Append-only, overlapping by design, and the one evidence a report has for telling an
     /// empty period apart from an unread one; see <see cref="ProviderDataCoverage"/>.
@@ -783,7 +775,6 @@ public class AppDbContext : DbContext
         ConfigureSubscriptions(modelBuilder);
         ConfigureAttachmentStorageReservations(modelBuilder);
         ConfigurePriceCatalogue(modelBuilder);
-        ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
         ConfigureProviderDataCoverage(modelBuilder);
@@ -2696,7 +2687,7 @@ public class AppDbContext : DbContext
     /// nothing at all; <c>Product.ExternalProductId</c> and <c>Category.ExternalCategoryId</c> hold
     /// that provider's id for the row. The provider is therefore a fact about the business rather
     /// than a column of every mapping, which is what replaced the link tables of issue #732
-    /// (<see cref="ConfigureProviderLinks"/>, kept unread until #760 drops them).</para>
+    /// (two link tables, which issue #760 dropped once this release was in production).</para>
     ///
     /// <para><strong>Opaque text with the same bound as a link's.</strong> The column is
     /// <see cref="ExternalId.MaxLength"/> characters of text, stored as written and compared
@@ -2716,8 +2707,14 @@ public class AppDbContext : DbContext
     ///
     /// <para>No foreign key and no cascade are needed any more: the id is on the row it belongs to,
     /// so it cannot name another business's row and cannot outlive a deleted one. The
-    /// <c>(BusinessId, Id)</c> alternate keys on <c>Products</c> and <c>Categories</c> stay as the
-    /// link tables' principal key until #760.</para>
+    /// <c>(BusinessId, Id)</c> alternate keys on <c>Products</c> and <c>Categories</c> that #732
+    /// added for the link tables' foreign keys stay, and are declared here now that issue #760 has
+    /// dropped those tables: the one on <c>Products</c> is the principal of
+    /// <c>NayaxSales.ProductId</c>'s foreign key since issue #758
+    /// (<see cref="ConfigureSaleProductAssociation"/>), which is the database-level guarantee that a
+    /// sale names a product of its own business, and both are constraints on their own table -
+    /// "(business, local id) identifies one row" - that the migration which added them rebuilt those
+    /// tables to state.</para>
     /// </summary>
     private static void ConfigureProviderIdentityColumns(ModelBuilder modelBuilder)
     {
@@ -2726,6 +2723,12 @@ public class AppDbContext : DbContext
         // evidence of one. ExternalProvider is numbered from 1, so no stored integer this
         // application writes means Nayax by accident.
         modelBuilder.Entity<Business>().Property(business => business.SalesProvider);
+
+        // Declared explicitly rather than left for HasPrincipalKey to infer, exactly as they were
+        // while the link tables used them: dropping those tables did not remove the keys, so nothing
+        // about Products and Categories changes in the schema here.
+        modelBuilder.Entity<Product>().HasAlternateKey(product => new { product.BusinessId, product.Id });
+        modelBuilder.Entity<Category>().HasAlternateKey(category => new { category.BusinessId, category.Id });
 
         var product = modelBuilder.Entity<Product>();
         product.Property(x => x.ExternalProductId).HasMaxLength(ExternalId.MaxLength);
@@ -2766,7 +2769,7 @@ public class AppDbContext : DbContext
     /// <para><strong>The <c>(BusinessId, Id)</c> alternate key is the principal side of every
     /// reference to a machine</strong> (issue #780). It is declared here rather than left for
     /// <c>HasPrincipalKey</c> to infer, for the reason the product and category ones are
-    /// (<see cref="ConfigureProviderLinks"/>): "(business, local id) identifies one machine" is a
+    /// (<see cref="ConfigureProviderIdentityColumns"/>): "(business, local id) identifies one machine" is a
     /// constraint on <c>Machines</c> in its own right, and the migration that added it rebuilt the
     /// table to state it.</para>
     /// </summary>
@@ -2801,78 +2804,6 @@ public class AppDbContext : DbContext
                 fromProvider => fromProvider.HasValue
                     ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                     : fromProvider);
-    }
-
-    /// <summary>
-    /// Maps the provider identity link tables of issue #732 (parent #329 decision P1).
-    ///
-    /// <para><strong>Nothing reads or writes them since issue #759</strong>, which moved a provider
-    /// id onto the local row (<see cref="ConfigureProviderIdentityColumns"/>). They are still mapped
-    /// and still in the schema only because Production applies migrations at startup and the code
-    /// already running there still reads them; #760 drops both tables once this release is in
-    /// production. The mapping below is therefore history, kept accurate rather than changed.</para>
-    ///
-    /// Both are ordinary tenant-owned entities, so <see cref="ConfigureBusinessOwnership"/> gives
-    /// each its required business key, its <c>BusinessId</c> index and its global query filter;
-    /// what is declared here is everything specific to a link.
-    ///
-    /// Two uniqueness rules, and each is a different statement. <c>(BusinessId, Provider,
-    /// ExternalId)</c> says one provider id names at most one local row - per business, because an
-    /// external id is a value two businesses may legitimately hold (docs/architecture.md § Tenant
-    /// ownership), and a global index over it would let whichever business imported first deny the
-    /// other its own catalogue. <c>(BusinessId, Provider, ProductId)</c>/<c>CategoryId</c> says a
-    /// local row carries at most one id per provider, which is what keeps "which Nayax product is
-    /// this?" a question with one answer; a second provider gets its own row rather than replacing
-    /// that one.
-    ///
-    /// The foreign key is the pair <c>(BusinessId, local id)</c> against an alternate key on the
-    /// principal, not the local id alone. That is the point of the whole mapping: it makes "a link
-    /// belongs to the same business as the row it points at" a constraint SQLite enforces on every
-    /// insert and update, rather than a rule only <see cref="BusinessOwnershipEnforcer"/> applies -
-    /// AGENTS.md requires the database-level guarantee here because the link is the thing that will
-    /// later resolve a remote identifier to a local product, and a link that crossed a business
-    /// would resolve one business's sale onto another's product. Cascade, because a link is part of
-    /// the row it names: deleting a product or category takes its provider ids with it rather than
-    /// leaving a mapping to nothing.
-    /// </summary>
-    private static void ConfigureProviderLinks(ModelBuilder modelBuilder)
-    {
-        // The principal side of both foreign keys below, declared explicitly rather than left for
-        // HasPrincipalKey to infer: it is a constraint on Products and Categories in its own right -
-        // "(business, local id) identifies one row" - and the migration that added it rebuilt those
-        // two tables to state it, which is not something to leave implied by a relationship.
-        modelBuilder.Entity<Product>().HasAlternateKey(product => new { product.BusinessId, product.Id });
-        modelBuilder.Entity<Category>().HasAlternateKey(category => new { category.BusinessId, category.Id });
-
-        var productLink = modelBuilder.Entity<ProductExternalId>();
-
-        productLink.Property(x => x.Provider).IsRequired();
-        productLink.Property(x => x.ExternalId).IsRequired().HasMaxLength(ExternalId.MaxLength);
-
-        productLink.HasIndex(x => new { x.BusinessId, x.Provider, x.ExternalId }).IsUnique();
-        productLink.HasIndex(x => new { x.BusinessId, x.Provider, x.ProductId }).IsUnique();
-
-        productLink
-            .HasOne(link => link.Product)
-            .WithMany()
-            .HasForeignKey(link => new { link.BusinessId, link.ProductId })
-            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
-            .OnDelete(DeleteBehavior.Cascade);
-
-        var categoryLink = modelBuilder.Entity<CategoryExternalId>();
-
-        categoryLink.Property(x => x.Provider).IsRequired();
-        categoryLink.Property(x => x.ExternalId).IsRequired().HasMaxLength(ExternalId.MaxLength);
-
-        categoryLink.HasIndex(x => new { x.BusinessId, x.Provider, x.ExternalId }).IsUnique();
-        categoryLink.HasIndex(x => new { x.BusinessId, x.Provider, x.CategoryId }).IsUnique();
-
-        categoryLink
-            .HasOne(link => link.Category)
-            .WithMany()
-            .HasForeignKey(link => new { link.BusinessId, link.CategoryId })
-            .HasPrincipalKey(category => new { category.BusinessId, category.Id })
-            .OnDelete(DeleteBehavior.Cascade);
     }
 
     /// <summary>

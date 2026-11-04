@@ -134,8 +134,8 @@ public class AddProviderIdentityColumnsMigrationTests
             instant => Assert.False(string.IsNullOrWhiteSpace(instant)));
 
         // The scratch guard the refusals are raised through is not left behind, and neither are the
-        // link tables - which stay until #760 precisely because the code in production still reads
-        // them.
+        // link tables - which this migration leaves in place precisely because the code in
+        // production still reads them, and which #760 dropped a release later.
         var tables = await MigrationSchemaProbe.TableNamesAsync(connection);
         Assert.DoesNotContain("ProviderIdentityCopyGuard", tables);
         Assert.Contains("ProductExternalIds", tables);
