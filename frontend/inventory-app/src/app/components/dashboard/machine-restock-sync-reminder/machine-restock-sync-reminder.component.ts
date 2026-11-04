@@ -127,6 +127,22 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
   }
 
   /**
+   * The listed machines with known pending restock events, shown under "Restock sync pending".
+   */
+  get pendingMachines(): MachineRestockSyncReminderMachine[] {
+    return (this.reminder?.machines ?? []).filter((machine) => machine.knownPendingEventCount > 0);
+  }
+
+  /**
+   * The listed machines with no known pending events (issue #1090): the backend lists those only
+   * when their last sync is overdue and they have sold since it, so they are shown under "Restock
+   * check due" and never described as having refills waiting.
+   */
+  get checkDueMachines(): MachineRestockSyncReminderMachine[] {
+    return (this.reminder?.machines ?? []).filter((machine) => machine.knownPendingEventCount === 0);
+  }
+
+  /**
    * Whether this business's Nayax account has not been confirmed to allow the machine alerts read
    * (issue #891), in which case the banner says Sync Restock may be unavailable rather than
    * sending an operator to an action that will refuse them.

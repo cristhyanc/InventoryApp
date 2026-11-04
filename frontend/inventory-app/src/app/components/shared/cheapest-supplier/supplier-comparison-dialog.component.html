@@ -87,18 +87,20 @@
               </td>
               <td data-label="Unit price" class="max-sm:block max-sm:py-1 max-sm:text-left max-sm:before:block max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-rr-caption max-sm:before:content-[attr(data-label)] px-3 py-3 text-right tabular-nums whitespace-nowrap">
                 <!--
-                  Both bases, always, with the one this business is compared on first: a price that
-                  is not knowable is left blank rather than written as a zero, which is a price.
+                  Both bases, with the one this business is compared on first: a price that is not
+                  knowable is left blank rather than written as a zero, which is a price. The
+                  headline already says its basis, so the line below repeats only the other one;
+                  with no known basis the headline carries no label and both lines show.
                 -->
                 @if (priceOf(offer.unitPrice); as unitPrice) {
                   <span class="font-semibold" [class.text-rr-ok-text]="offer.isCheapest">{{ unitPrice }} {{ basisOf(displayBasis) }}</span>
                 } @else {
                   <span class="text-rr-caption">—</span>
                 }
-                @if (priceOf(offer.unitPriceExGst); as exGst) {
+                @if (!headlineIs(exclusiveOfGst) && priceOf(offer.unitPriceExGst); as exGst) {
                   <span class="block text-xs text-rr-muted">{{ exGst }} ex GST</span>
                 }
-                @if (priceOf(offer.unitPriceIncGst); as incGst) {
+                @if (!headlineIs(inclusiveOfGst) && priceOf(offer.unitPriceIncGst); as incGst) {
                   <span class="block text-xs text-rr-muted">{{ incGst }} inc GST</span>
                 }
               </td>

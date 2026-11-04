@@ -116,9 +116,9 @@ public sealed class GetMachineRestockSyncReminder
         }
 
         var needingAttention = machines
-            .Select(machine => Evaluate(machine, connection.CredentialRevision, businessToday))
+            .Select(machine => Evaluate(machine, connection.CredentialRevision, businessToday, pendingFromUtc))
             .Where(machine => MachineRestockSyncReminderPolicy.NeedsAttention(
-                machine.IsFetchOverdue, machine.KnownPendingEventCount))
+                machine.IsFetchOverdue, machine.KnownPendingEventCount, machine.HasSalesSinceLastSync))
             .ToList();
 
         return new MachineRestockSyncReminderDto(
@@ -138,7 +138,10 @@ public sealed class GetMachineRestockSyncReminder
     /// one's freshness.
     /// </summary>
     private MachineRestockSyncReminderMachineDto Evaluate(
-        MachineRestockSyncCoverageRecord machine, int currentCredentialRevision, DateTime businessToday)
+        MachineRestockSyncCoverageRecord machine,
+        int currentCredentialRevision,
+        DateTime businessToday,
+        DateTime pendingFromUtc)
     {
         var lastSyncedAtUtc =
             MachineRestockSyncReminderPolicy.IsCoverageCurrent(machine.CredentialRevision, currentCredentialRevision)
@@ -164,7 +167,9 @@ public sealed class GetMachineRestockSyncReminder
             machine.OldestKnownPendingEventAtUtc,
             oldestPendingBusinessDate,
             MachineRestockSyncReminderPolicy.HasPendingWorkBeforeDefaultFrom(
-                oldestPendingBusinessDate, businessToday));
+                oldestPendingBusinessDate, businessToday),
+            MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(
+                machine.LatestSaleAtUtc, lastSyncedAtUtc, pendingFromUtc));
     }
 
     /// <summary>
