@@ -1013,6 +1013,86 @@ public class MachineRestockSyncCoverageTests
     }
 
     /// <summary>
+    /// Issue #1090 review: only a completed sale is a sale. A failed or cancelled transaction after
+    /// the last sync - with nothing completed - reports no latest sale, so it cannot make the
+    /// machine look as if it sold.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined26)]
+    [InlineData(NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined31)]
+    [InlineData(NayaxTransactionStatusIds.Refunded)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined250)]
+    public async Task A_failed_or_cancelled_transaction_alone_is_not_a_latest_sale(int failedStatus)
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+
+        await using (var seller = Scoped(options))
+        {
+            seller.NayaxSales.Add(Sale(1, NayaxMachineId, SyncStartedAt.AddHours(2), failedStatus));
+            await seller.SaveChangesAsync();
+            Assert.True(
+                await new EfMachineRestockSyncCoverageStore(seller)
+                    .TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, NayaxMachineId, AfterEveryEvent, default));
+        }
+
+        await using var db = Scoped(options);
+        var machine = Assert.Single(
+            await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
+
+        Assert.Null(machine.LatestSaleAtUtc);
+    }
+
+    /// <summary>
+    /// Issue #1090 review: with a completed sale before the sync and a newer failed transaction
+    /// after it, the latest sale is the completed one - before the sync - so the machine has not
+    /// sold since. A completed sale after the sync is reported as the latest.
+    /// </summary>
+    [Fact]
+    public async Task The_latest_sale_is_the_latest_completed_one_whatever_failed_after_it()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateDatabaseAsync(connection);
+        var completedBeforeSync = SyncStartedAt.AddHours(-1);
+
+        await using (var seller = Scoped(options))
+        {
+            seller.NayaxSales.AddRange(
+                Sale(1, NayaxMachineId, completedBeforeSync),
+                Sale(2, NayaxMachineId, SyncStartedAt.AddHours(3), NayaxTransactionStatusIds.CancelledOrDeclined26),
+                Sale(3, NayaxMachineId, SyncStartedAt.AddHours(4), NayaxTransactionStatusIds.PendingSettlementNotFinal));
+            await seller.SaveChangesAsync();
+            Assert.True(
+                await new EfMachineRestockSyncCoverageStore(seller)
+                    .TryRecordSuccessfulSyncAsync(LocalMachineId, SyncStartedAt, 1, NayaxMachineId, AfterEveryEvent, default));
+        }
+
+        await using (var db = Scoped(options))
+        {
+            var machine = Assert.Single(
+                await new EfMachineRestockSyncCoverageStore(db).GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
+            Assert.Equal(completedBeforeSync, machine.LatestSaleAtUtc);
+            Assert.False(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(
+                machine.LatestSaleAtUtc, machine.LastSuccessfulSyncStartedAtUtc, AllTime));
+        }
+
+        var completedAfterSync = SyncStartedAt.AddHours(2);
+        await using (var seller = Scoped(options))
+        {
+            seller.NayaxSales.Add(Sale(4, NayaxMachineId, completedAfterSync));
+            await seller.SaveChangesAsync();
+        }
+
+        await using var reread = Scoped(options);
+        var updated = Assert.Single(
+            await new EfMachineRestockSyncCoverageStore(reread).GetProviderMachineCoverageAsync(AllTime, CancellationToken.None));
+        Assert.Equal(completedAfterSync, updated.LatestSaleAtUtc);
+        Assert.True(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(
+            updated.LatestSaleAtUtc, updated.LastSuccessfulSyncStartedAtUtc, AllTime));
+    }
+
+    /// <summary>
     /// A caller whose business could not be resolved reads nothing and writes nothing: the central
     /// filter, not a predicate in this adapter, is what makes that true.
     /// </summary>
@@ -1111,8 +1191,12 @@ public class MachineRestockSyncCoverageTests
     private static AppDbContext Scoped(DbContextOptions<AppDbContext> options) =>
         TestAppDbContext.For(options, SellerBusinessId);
 
-    /// <summary>A completed Nayax sale of provider machine <paramref name="nayaxMachineId"/> (issue #1090).</summary>
-    private static NayaxSales Sale(long transactionId, long nayaxMachineId, DateTime authorizedAtUtc) =>
+    /// <summary>A Nayax transaction (completed unless stated) of provider machine <paramref name="nayaxMachineId"/> (issue #1090).</summary>
+    private static NayaxSales Sale(
+        long transactionId,
+        long nayaxMachineId,
+        DateTime authorizedAtUtc,
+        int transactionStatusId = NayaxTransactionStatusIds.Completed) =>
         new()
         {
             TransactionID = transactionId,
@@ -1120,7 +1204,7 @@ public class MachineRestockSyncCoverageTests
             SettlementValue = 3.50m,
             PaymentMethod = "Credit",
             MachineAuthorizationTime = authorizedAtUtc,
-            TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            TransactionStatusId = transactionStatusId,
         };
 
     /// <summary>

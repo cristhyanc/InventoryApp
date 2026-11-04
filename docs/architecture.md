@@ -16181,13 +16181,17 @@ two separate conditions.
 Any known pending event alone puts a machine on the banner, under **"Restock sync pending"**. An
 overdue fetch alone does not: `MachineRestockSyncReminderPolicy.NeedsAttention` lists a machine with
 no known pending event only when its fetch is overdue **and** `HasSalesSinceLastSync` holds — an
-imported Nayax sale of the machine is dated strictly after its last current fetch started, or, with
-no current fetch recorded, at or after the pending window's start. Such a machine is shown under
-**"Restock check due"**, whose wording says no restock events are waiting but refills since the last
-check have not been fetched from Nayax; it is never described as having refills waiting. An overdue
+imported **completed** Nayax sale of the machine (`EfNayaxSalesQueries.CompletedSalePredicate`; a
+failed, cancelled, refunded or pending transaction is not a sale) is dated strictly after its last
+current fetch started, or, with no current fetch recorded, at or after the pending window's start.
+Such a machine is shown under **"Restock check due"**, whose wording says no restock events are
+waiting, that each machine has sold since a sync that is three or more days old *or not recorded*
+(the group includes machines with no current recorded sync, superseded-credential coverage
+included), and that any refills made since have not been fetched from Nayax; it never claims a refill
+is known to exist, and each row still says "last synced N days ago" or "No recorded sync". An overdue
 machine that has sold nothing since its last fetch is not listed, because before #1090 every quiet
 machine reappeared every three days under "Restock sync pending" with nothing to do. The sales read is
-local: the same aggregate reads each machine's latest `NayaxSales.MachineAuthorizationTime` in one
+local: the same aggregate reads each machine's latest completed `NayaxSales.MachineAuthorizationTime` in one
 grouped statement keyed by the provider's machine number, bounded below by the earliest instant any
 row is compared against (the oldest recorded fetch start or the pending window's start). It can only
 see sales already imported, so a machine whose recent sales have not been imported reads as quiet —

@@ -171,7 +171,7 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
 
         var pendingByNayaxMachineId = pending.ToDictionary(group => group.NayaxMachineId);
 
-        // Issue #1090: the latest imported sale of each machine, so the use case can tell whether an
+        // Issue #1090: the latest imported completed sale of each machine, so the use case can tell whether an
         // overdue machine has sold anything since its last fetch. Bounded below by the earliest
         // instant any machine is compared against - the oldest recorded fetch start or the pending
         // window's start, whichever is earlier - so the read never has to look further back than an
@@ -183,8 +183,11 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
             .Append(pendingFromUtc)
             .Min();
 
+        // Completed sales only, through the one shared completed-sale filter: a failed, cancelled,
+        // refunded or still-pending transaction after the last sync is not evidence the machine sold.
         var latestSales = await _db.NayaxSales
             .AsNoTracking()
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
             .Where(sale => sale.MachineAuthorizationTime >= salesFromUtc)
             .GroupBy(sale => sale.MachineID)
             .Select(group => new

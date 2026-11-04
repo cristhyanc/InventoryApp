@@ -49,9 +49,9 @@
         <span class="block" [class.mt-3]="pendingMachines.length > 0" data-testid="restock-sync-reminder-check-due">
           <span class="block text-sm font-semibold text-rr-navy">Restock check due</span>
           <span class="block text-sm text-rr-muted">
-            No restock events are waiting for these machines, but they have had sales since their last
-            restock sync {{ reminder.overdueAfterDays }} or more days ago, so any refills since then
-            haven't been fetched from Nayax yet.
+            No restock events are waiting for these machines. Each has sold since its last restock
+            sync, and that sync is {{ reminder.overdueAfterDays }} or more days old or not recorded, so
+            any refills made since haven't been fetched from Nayax.
           </span>
           <ul class="m-0 mt-2 list-none p-0 text-sm text-rr-muted" data-testid="restock-sync-reminder-check-due-machines">
             @for (machine of checkDueMachines; track machine.localMachineId) {

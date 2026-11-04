@@ -32,7 +32,8 @@ namespace Inventory.Application.MachineStockSync;
 /// <see langword="null"/> when there is none.
 /// </param>
 /// <param name="LatestSaleAtUtc">
-/// The latest <c>MachineAuthorizationTime</c> of an imported Nayax sale of this machine, or
+/// The latest <c>MachineAuthorizationTime</c> of an imported, <em>completed</em> Nayax sale of this
+/// machine (a failed, cancelled, refunded or pending transaction is not a sale), or
 /// <see langword="null"/> when the read found none (issue #1090). The read may ignore sales older
 /// than every instant the reminder compares against (the oldest recorded sync start and the pending
 /// window's start), so <see langword="null"/> means "nothing recent enough to matter", not "never

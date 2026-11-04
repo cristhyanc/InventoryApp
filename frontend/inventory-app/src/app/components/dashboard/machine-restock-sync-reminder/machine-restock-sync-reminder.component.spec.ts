@@ -115,11 +115,60 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
     const checkDue = host.querySelector('[data-testid="restock-sync-reminder-check-due"]');
     expect(checkDue?.textContent).toContain('Restock check due');
     expect(checkDue?.textContent).toContain('No restock events are waiting for these machines');
-    expect(checkDue?.textContent).toContain('sales since their last restock sync 3 or more days ago');
+    expect(checkDue?.textContent).toContain(
+      'Each has sold since its last restock sync, and that sync is 3 or more days old or not recorded'
+    );
+    expect(checkDue?.textContent).toContain("any refills made since haven't been fetched from Nayax");
     expect(checkDue?.querySelector('[data-testid="restock-sync-reminder-machine-31"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="restock-sync-reminder-pending"]')).toBeNull();
     expect(banner(host)?.textContent).not.toContain('Restock sync pending');
     expect(banner(host)?.textContent).not.toContain("Recorded refills haven't been synced yet.");
+  });
+
+  /**
+   * Issue #1090 review: the check-due group also holds machines with no current recorded sync, so
+   * its wording never claims every listed machine was synced some days ago, and each row says which
+   * case it is.
+   */
+  it('words the check-due group accurately for a machine with no recorded sync', async () => {
+    const { host } = await render({
+      response: of(
+        reminder([machine({ lastSuccessfulSyncAtUtc: null, lastSuccessfulSyncBusinessDate: null, daysSinceLastSuccessfulSync: null })])
+      )
+    });
+
+    const checkDue = host.querySelector('[data-testid="restock-sync-reminder-check-due"]');
+    expect(checkDue?.textContent).toContain('Restock check due');
+    expect(checkDue?.textContent).toContain('or not recorded');
+    expect(checkDue?.textContent).not.toContain('days ago');
+    expect(checkDue?.textContent).toContain('No recorded sync');
+    expect(checkDue?.textContent).not.toContain('Recorded refills');
+  });
+
+  it('lists recorded-overdue and no-recorded-sync machines together under "Restock check due"', async () => {
+    const { host } = await render({
+      response: of(
+        reminder([
+          machine({ localMachineId: 31, machineName: 'Pavillion Left', daysSinceLastSuccessfulSync: 3 }),
+          machine({
+            localMachineId: 32,
+            machineName: 'Pavillion Right',
+            lastSuccessfulSyncAtUtc: null,
+            lastSuccessfulSyncBusinessDate: null,
+            daysSinceLastSuccessfulSync: null
+          })
+        ])
+      )
+    });
+
+    const checkDue = host.querySelector('[data-testid="restock-sync-reminder-check-due"]');
+    expect(host.querySelector('[data-testid="restock-sync-reminder-pending"]')).toBeNull();
+    expect(checkDue?.querySelector('[data-testid="restock-sync-reminder-machine-31"]')?.textContent).toContain(
+      'last synced 3 days ago'
+    );
+    expect(checkDue?.querySelector('[data-testid="restock-sync-reminder-machine-32"]')?.textContent).toContain(
+      'No recorded sync'
+    );
   });
 
   it('lists a machine with known pending events under "Restock sync pending"', async () => {
