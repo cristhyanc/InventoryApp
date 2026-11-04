@@ -16,6 +16,19 @@ export const OBSERVED_PRICES_NOTE =
   'Observed supplier prices, for purchasing guidance. They are not recorded costs and never change '
   + 'what this business has paid.';
 
+/**
+ * The note under every observed price (owner decision, 4 November 2026): every price in this column
+ * was read from a supplier's website, and a website's price (an online-only special, another
+ * state's online store) can differ from the shelf price in the store this business buys from. It
+ * is a label and nothing more: an online price is still compared and can still be the cheapest.
+ */
+export const ONLINE_PRICE_NOTE = 'Online price, may differ in store';
+
+/** The online-price note for one popup row: any row that shows a price, and none that shows no price. */
+export function offerOnlinePriceNote(offer: CheapestSupplierOffer): string | null {
+  return offer.unitPrice !== null || offer.packPrice !== null ? ONLINE_PRICE_NOTE : null;
+}
+
 /** What the popup says about a match the collector made that nobody has checked yet (#941). */
 export const AUTOMATIC_MATCH_NOTE = 'Matched automatically';
 

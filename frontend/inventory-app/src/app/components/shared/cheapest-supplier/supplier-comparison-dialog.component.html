@@ -113,6 +113,13 @@
                     <span>{{ stock }}</span>
                   }
                 </div>
+                <!--
+                  Every price here was read from a supplier's website (owner decision, 4 November
+                  2026): labelled on every row that shows a price, never excluded.
+                -->
+                @if (onlinePriceOf(offer); as onlineNote) {
+                  <span class="block" data-testid="cheapest-supplier-row-online-note">{{ onlineNote }}</span>
+                }
                 @if (statusOf(offer); as status) {
                   <span class="block">{{ status }}</span>
                 }

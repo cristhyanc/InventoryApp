@@ -90,7 +90,7 @@ export const PRODUCT_DEFAULT_PAGE_SIZE = 10;
  */
 export const PRODUCTS_CHEAPEST_SUPPLIER_HELP =
   'Cheapest supplier is the lowest price your own suppliers currently list per unit, on the GST basis shown '
-  + 'beside it - observed prices for purchasing guidance, not costs you have paid. Supplier stock may differ. '
+  + 'beside it - observed prices for purchasing guidance, not costs you have paid. These are online prices and may differ in store, and supplier stock may differ. '
   + 'Compare lists every supplier with its pack, prices and when it was last checked.';
 
 export const PRODUCTS_CHEAPEST_SUPPLIER_HELP_LABEL = 'About Cheapest supplier';

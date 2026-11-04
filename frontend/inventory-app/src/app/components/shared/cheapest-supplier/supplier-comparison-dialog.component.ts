@@ -7,6 +7,7 @@ import {
   OBSERVED_PRICES_NOTE,
   basisLabel,
   money,
+  offerOnlinePriceNote,
   offerStatus,
   stockLabel
 } from './cheapest-supplier-format';
@@ -124,6 +125,10 @@ export class SupplierComparisonDialogComponent implements OnDestroy {
   /** Whether the bold headline price is already on this basis, so its secondary line would repeat it. */
   headlineIs(basis: SupplierPriceBasis): boolean {
     return this.displayBasis === basis;
+  }
+
+  onlinePriceOf(offer: CheapestSupplierOffer): string | null {
+    return offerOnlinePriceNote(offer);
   }
 
   basisOf(basis: SupplierPriceBasis | null): string {

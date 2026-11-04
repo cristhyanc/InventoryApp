@@ -2,7 +2,7 @@ import { Component, ElementRef, Input, ViewChild } from '@angular/core';
 import { CheapestSupplierProduct, SupplierPriceBasis } from '../../../models/cheapest-supplier';
 import { ProductPriceTrackingStatus } from '../../../models/models';
 import { CheapestSuppliersState } from './cheapest-suppliers.component';
-import { basisLabel, money } from './cheapest-supplier-format';
+import { ONLINE_PRICE_NOTE, basisLabel, money } from './cheapest-supplier-format';
 import { SupplierComparisonDialogComponent } from './supplier-comparison-dialog.component';
 
 // The shared wording moved to `cheapest-supplier-format.ts` (issue #1093); re-exported here so
@@ -10,9 +10,11 @@ import { SupplierComparisonDialogComponent } from './supplier-comparison-dialog.
 export {
   AUTOMATIC_MATCH_NOTE,
   OBSERVED_PRICES_NOTE,
+  ONLINE_PRICE_NOTE,
   basisLabel,
   ineligibilityLabel,
   money,
+  offerOnlinePriceNote,
   offerStatus,
   stockLabel
 } from './cheapest-supplier-format';
@@ -60,6 +62,14 @@ export function cheapestSupplierDisplay(
 
 /** The note under a cheapest price: suppliers' stock answers are unreliable, so none is promised. */
 export const STOCK_MAY_DIFFER_NOTE = 'Stock may differ';
+
+/** The online-price note for the cell, shown exactly where the stock note is (a cheapest price). */
+export function cheapestOnlinePriceNote(
+  state: CheapestSuppliersState,
+  product: CheapestSupplierProduct | undefined
+): string | null {
+  return cheapestStockNote(state, product) === null ? null : ONLINE_PRICE_NOTE;
+}
 
 /**
  * The stock note for the cell, or `null` when the cell shows no price. Stock never removes a price
@@ -116,6 +126,11 @@ export class CheapestSupplierCellComponent {
   /** "Stock may differ" under a cheapest price, and nothing otherwise. */
   get stockNote(): string | null {
     return cheapestStockNote(this.state, this.product);
+  }
+
+  /** "Online price, may differ in store" under a cheapest price, and nothing otherwise. */
+  get onlinePriceNote(): string | null {
+    return cheapestOnlinePriceNote(this.state, this.product);
   }
 
   /**
