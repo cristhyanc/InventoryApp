@@ -192,9 +192,9 @@ export class SupplierComparisonDialogComponent implements OnDestroy {
       return;
     }
     const current = stops.indexOf(document.activeElement as HTMLElement);
-    const next = event.shiftKey
-      ? stops[current <= 0 ? stops.length - 1 : current - 1]
-      : stops[current === -1 || current === stops.length - 1 ? 0 : current + 1];
-    next.focus();
+    // Wraps at either end; with nothing focused yet, Tab lands on the first stop and Shift+Tab on the last.
+    const from = current === -1 && event.shiftKey ? 0 : current;
+    const step = event.shiftKey ? -1 : 1;
+    stops[(from + step + stops.length) % stops.length].focus();
   }
 }
