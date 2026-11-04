@@ -1,0 +1,172 @@
+<!--
+  A native modal `<dialog>`, not a `role="dialog"` div: `showModal()` moves it into the top layer and
+  makes the rest of the page inert, and the platform maps a modal `<dialog>` to the dialog role and
+  aria-modal itself, so neither is repeated here. Dismissal, the Tab cycle and the `closed` report
+  are bound in the component.
+-->
+<dialog
+  #dialogPanel
+  tabindex="-1"
+  [attr.aria-labelledby]="titleId"
+  class="m-auto flex max-h-[calc(100vh-2rem)] w-[calc(100%-1rem)] max-w-4xl flex-col overflow-hidden rounded-xl border border-rr-line-strong bg-white p-0 text-left font-rr text-rr-navy shadow-md-lg outline-none backdrop:bg-md-gray-800/50 sm:w-[calc(100%-2rem)]"
+  data-testid="cheapest-supplier-popup"
+>
+  <div class="flex items-start justify-between gap-4 border-b border-rr-line px-4 py-4 sm:px-6">
+    <div class="min-w-0">
+      <h2 [id]="titleId" class="m-0 break-words text-lg font-semibold text-rr-navy sm:text-xl">{{ dialogTitle }}</h2>
+      @if (productSku || categoryName) {
+        <p class="m-0 mt-1 text-xs font-medium text-rr-muted" data-testid="supplier-comparison-meta">
+          @if (productSku) {<span>SKU: {{ productSku }}</span>}
+          @if (productSku && categoryName) {<span aria-hidden="true"> · </span>}
+          @if (categoryName) {<span>Category: {{ categoryName }}</span>}
+        </p>
+      }
+      @if (isAutomaticMatch) {
+        <p class="m-0 mt-1 text-sm text-rr-muted" data-testid="cheapest-supplier-auto-match">{{ automaticMatchNote }}</p>
+      }
+    </div>
+    <button
+      type="button"
+      aria-label="Close supplier prices"
+      class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-rr-muted hover:bg-rr-canvas hover:text-rr-navy"
+      (click)="close()"
+    >✕</button>
+  </div>
+
+  <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+    <!--
+      Below `sm` each supplier row stacks into a small labelled grid (each cell names its column
+      through `data-label`), so the comparison reads without sideways scrolling on a phone; from `sm`
+      up it is the table, which scrolls inside the dialog if it must - the page behind never does.
+    -->
+    <div class="overflow-x-auto rounded-xl border border-rr-line">
+      <table class="w-full border-collapse text-sm max-sm:block sm:min-w-[640px]">
+        <thead class="bg-rr-surface text-xs font-semibold text-rr-muted max-sm:sr-only">
+          <tr>
+            <th scope="col" class="px-3 py-2 text-left">Supplier</th>
+            <th scope="col" class="px-3 py-2 text-left">Pack size</th>
+            <th scope="col" class="px-3 py-2 text-right">Pack price</th>
+            <th scope="col" class="px-3 py-2 text-right">Unit price</th>
+            <th scope="col" class="px-3 py-2 text-left">Status &amp; freshness</th>
+            <th scope="col" class="px-3 py-2 text-right">Link</th>
+          </tr>
+        </thead>
+        <tbody class="max-sm:block">
+          <!--
+            Cheapest first, in the server's own order. Re-ordering them here would be a second
+            opinion about which supplier to look at first.
+          -->
+          @for (offer of suppliers; track offer.supplierId + ':' + (offer.packQuantity ?? 0) + ':' + (offer.productUrl ?? '')) {
+            <tr
+              class="border-t border-rr-line align-top first:border-t-0 max-sm:grid max-sm:grid-cols-2 max-sm:gap-x-3 max-sm:px-1 max-sm:py-2"
+              [class.bg-rr-ok-bg]="offer.isCheapest"
+              data-testid="cheapest-supplier-row"
+            >
+              <td data-label="Supplier" class="max-sm:col-span-2 max-sm:block max-sm:py-1 px-3 py-3">
+                <span class="font-semibold">{{ offer.supplierName }}</span>
+                @if (offer.isCheapest) {
+                  <span class="ml-2 inline-flex rounded-md border border-rr-ok-text/20 bg-white px-1.5 py-0.5 text-xs font-semibold text-rr-ok-text">Cheapest</span>
+                }
+              </td>
+              <td data-label="Pack size" class="max-sm:block max-sm:py-1 max-sm:text-left max-sm:before:block max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-rr-caption max-sm:before:content-[attr(data-label)] px-3 py-3 whitespace-nowrap" data-testid="supplier-comparison-pack-size">
+                @if (offer.packQuantity !== null) {
+                  {{ offer.packQuantity }} pack
+                } @else {
+                  <span class="text-rr-caption">—</span>
+                }
+              </td>
+              <td data-label="Pack price" class="max-sm:block max-sm:py-1 max-sm:text-left max-sm:before:block max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-rr-caption max-sm:before:content-[attr(data-label)] px-3 py-3 text-right tabular-nums whitespace-nowrap" data-testid="supplier-comparison-pack-price">
+                @if (priceOf(offer.packPrice); as packPrice) {
+                  {{ packPrice }}
+                  @if (basisOf(offer.packPriceBasis)) {
+                    <span class="block text-xs text-rr-muted">{{ basisOf(offer.packPriceBasis) }}</span>
+                  }
+                } @else {
+                  <span class="text-rr-caption">—</span>
+                }
+              </td>
+              <td data-label="Unit price" class="max-sm:block max-sm:py-1 max-sm:text-left max-sm:before:block max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-rr-caption max-sm:before:content-[attr(data-label)] px-3 py-3 text-right tabular-nums whitespace-nowrap">
+                <!--
+                  Both bases, with the one this business is compared on first: a price that is not
+                  knowable is left blank rather than written as a zero, which is a price. The
+                  headline already says its basis, so the line below repeats only the other one;
+                  with no known basis the headline carries no label and both lines show.
+                -->
+                @if (priceOf(offer.unitPrice); as unitPrice) {
+                  <span class="font-semibold" [class.text-rr-ok-text]="offer.isCheapest">{{ unitPrice }} {{ basisOf(displayBasis) }}</span>
+                } @else {
+                  <span class="text-rr-caption">—</span>
+                }
+                @if (!headlineIs(exclusiveOfGst) && priceOf(offer.unitPriceExGst); as exGst) {
+                  <span class="block text-xs text-rr-muted">{{ exGst }} ex GST</span>
+                }
+                @if (!headlineIs(inclusiveOfGst) && priceOf(offer.unitPriceIncGst); as incGst) {
+                  <span class="block text-xs text-rr-muted">{{ incGst }} inc GST</span>
+                }
+              </td>
+              <td data-label="Status &amp; freshness" class="max-sm:block max-sm:py-1 max-sm:text-left max-sm:before:block max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-rr-caption max-sm:before:content-[attr(data-label)] max-sm:col-span-2 px-3 py-3 text-rr-muted">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  @if (offer.isSpecial) {
+                    <span class="inline-flex rounded-md bg-rr-warn-bg px-1.5 py-0.5 text-xs font-semibold text-rr-warn-text">Special</span>
+                  }
+                  @if (stockOf(offer); as stock) {
+                    <span>{{ stock }}</span>
+                  }
+                </div>
+                <!--
+                  Every price here was read from a supplier's website (owner decision, 4 November
+                  2026): labelled on every row that shows a price, never excluded.
+                -->
+                @if (onlinePriceOf(offer); as onlineNote) {
+                  <span class="block" data-testid="cheapest-supplier-row-online-note">{{ onlineNote }}</span>
+                }
+                @if (statusOf(offer); as status) {
+                  <span class="block">{{ status }}</span>
+                }
+                <span class="block">
+                  <!--
+                    A true instant, rendered in the business's own configured zone through the one
+                    pipe that does that; a zone not known yet renders nothing rather than a
+                    confidently wrong time. "Never" belongs only to a listing nobody has checked.
+                  -->
+                  @if (offer.lastCheckedAtUtc) {
+                    Checked <span data-testid="cheapest-supplier-last-checked">{{ offer.lastCheckedAtUtc | businessDateTime }}</span>
+                  } @else {
+                    <span data-testid="cheapest-supplier-last-checked">Never</span> checked
+                  }
+                </span>
+              </td>
+              <td data-label="Link" class="max-sm:block max-sm:py-1 max-sm:text-left max-sm:before:block max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-rr-caption max-sm:before:content-[attr(data-label)] px-3 py-3 text-right">
+                @if (offer.productUrl) {
+                  <a
+                    class="font-semibold text-rr-teal hover:underline"
+                    [href]="offer.productUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    [attr.aria-label]="'Open ' + offer.supplierName + ' product page for ' + productName"
+                  >View ↗</a>
+                } @else {
+                  <span class="text-rr-caption">—</span>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mt-4 flex items-start gap-2 rounded-xl bg-rr-surface px-4 py-3 text-sm text-rr-muted" data-testid="supplier-comparison-note">
+      <span aria-hidden="true">ⓘ</span>
+      <p class="m-0">
+        {{ observedPricesNote }}
+        @if (basisNote) {
+          <span class="block">{{ basisNote }}</span>
+        }
+      </p>
+    </div>
+  </div>
+
+  <div class="flex justify-end border-t border-rr-line px-4 py-4 sm:px-6">
+    <button type="button" class="rr-button-primary" (click)="close()">Close</button>
+  </div>
+</dialog>

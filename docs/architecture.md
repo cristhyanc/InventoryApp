@@ -8142,6 +8142,59 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **Export parity.** The reconciliation CSV/XLSX rows add `AdjustmentsSupported`, `AdjustmentsBasis` (the assumption above), the five status counts and `DataQualityNotes`. Each period row carries its own counts and its own notes; the `TOTAL` row carries the report's range-wide counts and notes rather than a sum of the period rows'. A clean period exports an empty `DataQualityNotes` cell and no boilerplate, and the export keeps every figure, filter and status it exported before.
 
+### The All Products page layout (issue #1093)
+
+**Products → All products** (`ProductListComponent`, routed inside `ProductsShellComponent`) was
+redesigned on the Dashboard and Pick List's `rr` scale. It is a presentation change: the page reads
+exactly what it read before - one `GET api/products` per filter change, and the two composed reads,
+`<app-product-purchase-costs>` (Last/Cheapest purchase, `Dashboard.ViewFinancials`) and
+`<app-cheapest-suppliers>` (observed supplier prices), each asked once for **every** listed product
+id - and no calculation, GST rule, threshold, permission or write moved or changed.
+
+**Page state is local and unpersisted.** The page owns its filters and sort as before, plus three
+pieces of view state: the optional history columns (`optionalColumns`, empty on every visit; a
+column is shown only while it is turned on *and* the role holds `Dashboard.ViewFinancials`), the
+page index and the page size (`PRODUCT_PAGE_SIZE_OPTIONS` = 5, 10, 20, 50, 100; default 10).
+Paging is client-side over the list already read, the strategy the Dashboard's Reorder priorities
+uses: `pagedProducts` is a window onto `sortedProducts` through the pure helpers in
+`components/shared/list-pagination/paging.ts`, so a page or size change, or turning a column on or
+off, issues no request. A size, filter or sort change returns to page 1; a refetch clamps the page
+to the last one that still exists. The desktop table and the narrow-screen cards (below `md`, both
+rendered and switched by CSS like the Dashboard's) iterate the same `pagedProducts`, so they cannot
+show different products or values.
+
+**Composition.** The page composes shared, presentation-only components and owns none of their
+behaviour:
+
+- `ActionMenuComponent` (`components/shared/action-menu`) - the menu button behind More actions and
+  each row's ⋮ menu (`kind="menu"`: `role="menu"`, Arrow/Home/End, an item closes it) and the
+  Columns disclosure (`kind="panel"`). Each panel is a manual `popover` positioned from its trigger
+  (so no table `overflow` clips it), closes on Escape (focus back to the trigger), outside click and
+  focus leaving it, and only one is open at a time. The items are the page's own buttons and links,
+  projected in, so every permission check (`sessionActive`, `canDelete`, `showImportProducts`) and
+  write handler stays where it was.
+- `ListPaginationComponent` (`components/shared/list-pagination`) - the range, the per-page selector
+  and Previous/Next; it only reports what was asked for.
+- `CheapestSupplierSummaryComponent` (`components/shared/cheapest-supplier`) - the Products layout of
+  the Cheapest supplier answer (unit price, server GST basis, supplier or tied suppliers, Special,
+  Stale with its last check, Compare (N)), from the pure `cheapestSupplierSummaryView`. It formats
+  the server's answer and decides nothing.
+- `SupplierComparisonDialogComponent` (`components/shared/cheapest-supplier`) - **the one supplier
+  comparison**, extracted from `CheapestSupplierCellComponent`'s popup so the Dashboard, Needs
+  Ordering and Products open the same native modal `<dialog>` with the same columns (Supplier, Pack
+  size, Pack price, Unit price, Status & freshness, Link), the same values and the same Tab cycle,
+  Escape/backdrop dismissal and `closed` report; each opener returns focus to its own trigger.
+  Unpublished pack or price data is shown as `—`. The shared wording (`money`, `basisLabel`,
+  `offerStatus`, the notes) lives in `cheapest-supplier-format.ts` and is re-exported by the cell.
+
+The general Cheapest supplier guidance (observed prices, stock may differ) is one
+`HelpToggletipComponent` on the column heading and on each card rather than a note in every cell.
+Deactivate/Reactivate and Delete moved from row buttons into the row menu with their existing
+confirmations; Adjust stock (the existing `/products/:id/stock` workflow) stays on the row. The
+page still authors no dialog markup itself (`page-composition.guard.ts`). Rendered evidence:
+`frontend/inventory-app/e2e/visual/products-redesign.visual.ts`, written to
+`docs/screenshots/issue-1093/`.
+
 ### A product carries no selling price (issue #792)
 
 **`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
@@ -14862,7 +14915,7 @@ SupplierListings (platform, #923)
 
 **The comparison is `Inventory.Domain.PriceCatalogue.CheapestUnitOfferPolicy`, and it is deliberately not the purchase one.** `Inventory.Domain.Purchases.SupplierPriceComparisonPolicy` (issue #63) compares the unit costs a business has actually **paid**, from its own immutable purchase history, and feeds the product page's lowest-versus-latest view; this one compares prices this application has **observed** on suppliers' shelves, for packs nobody has bought, and feeds purchasing guidance only. The names say which — a purchase price history against a cheapest unit offer — and neither reads the other. The new policy is pure: given the candidate offers, the fallback rate, the comparison basis and an instant, it returns each offer's unit price **ex-GST and inc-GST at full precision**, the reason an offer could not be compared, and the cheapest comparable offers with **every tie** in them. Both figures are always published so the UI never derives the other one; the **comparison basis follows `Business.GstRegistered`** (ex-GST for a registered business, inc-GST otherwise), which is also the displayed basis, because "cheapest" and "the smallest number on the page" have to be the same offer. There is no cheapest when nothing is comparable: the cheapest price is `null` and the list is empty, never `0`, which is a price and the cheapest one there is.
 
-**Five reasons an offer is ineligible, and an ineligible offer is still shown with its reason**: the pack size is unknown (so there is no per-unit price at all — never 1, which reads a carton as a single, and never 0, which divides); the listing's match is not confirmed (a proposed match may be another product, and pricing from it would present the matcher's guess as the cheapest supplier); the GST rate is unknown; its promotion has ended, which is true at the stated end instant and never true of a promotion with no stated end; or it is stale under that supplier's own freshness limit. **Stock is never a reason** (owner decision, 1 November 2026): suppliers' stock answers are unreliable, so an out-of-stock price is compared and can be the cheapest; its stock answer is published beside it, and the Cheapest supplier cell says "Stock may differ" under every cheapest price. `SupplierOfferIneligibility.OutOfStock` (4) is no longer produced and stays reserved. Exactly one reason is reported, in the order the issue states them, so a page shows the first thing that has to change rather than arguing with itself about which of two true statements to display. Candidacy itself is the caller's: only the business's own linked, not-hidden suppliers take part ([Supplier records by business state, and "Available to add"](#supplier-records-by-business-state-and-available-to-add-issue-935)), and the policy compares whatever it is handed.
+**Five reasons an offer is ineligible, and an ineligible offer is still shown with its reason**: the pack size is unknown (so there is no per-unit price at all — never 1, which reads a carton as a single, and never 0, which divides); the listing's match is not confirmed (a proposed match may be another product, and pricing from it would present the matcher's guess as the cheapest supplier); the GST rate is unknown; its promotion has ended, which is true at the stated end instant and never true of a promotion with no stated end; or it is stale under that supplier's own freshness limit. **Stock is never a reason** (owner decision, 1 November 2026): suppliers' stock answers are unreliable, so an out-of-stock price is compared and can be the cheapest; its stock answer is published beside it, and the Cheapest supplier cell says "Stock may differ" under every cheapest price. Every price in the column was read from a supplier's website, so the cell also says "Online price, may differ in store" under every cheapest price, the shared supplier comparison says it in the Status & freshness column of every row that shows a price, and the All Products page, which keeps per-row guidance out of its summary (issue #1093), says it once in the Cheapest supplier column help (owner decision, 4 November 2026: an online-only special or another state's online store can differ from the shelf price, yet an online price can be legitimate for a business, so it is labelled, never excluded, and no per-business store setting exists). `SupplierOfferIneligibility.OutOfStock` (4) is no longer produced and stays reserved. Exactly one reason is reported, in the order the issue states them, so a page shows the first thing that has to change rather than arguing with itself about which of two true statements to display. Candidacy itself is the caller's: only the business's own linked, not-hidden suppliers take part ([Supplier records by business state, and "Available to add"](#supplier-records-by-business-state-and-available-to-add-issue-935)), and the policy compares whatever it is handed.
 
 **The boundary: observed supplier prices never become money the business has recorded.** They never reach a purchase, a unit cost, an `AverageUnitCost`, an `InventoryValue`, a COGS figure, a GST accounting figure or a line of any report, and `SupplierPriceObservationBoundaryTests` pins that in two directions: no file in the named purchase, cost, inventory, GST and reporting areas may so much as name these tables or policies, and the only production files that name them at all are a declared list — the Domain policies, the entities, the supplier listing and master record that carry the new columns, `AppDbContext`, and the collector's own use cases, adapters and contracts. The next reader is a reviewed decision: #937 arrived at that list on purpose and writes them, and #930's summary port, use case, adapter, DTOs and controller arrived at that declared list on purpose. The rule is also an invariant in AGENTS.md § Observed supplier prices.
 

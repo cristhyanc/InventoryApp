@@ -2130,17 +2130,18 @@ does not manage.
   same way and its description stays editable. Every product and category response says which of
   its fields are managed, in `providerManagedFields`, so a screen can lock exactly those inputs.
 - **The Products and Categories screens use all of this** (issue #737, with the Products list
-  actions as issue #825 left them). **Products → New Product** sits in the All Products
-  search/filter toolbar, to the right of search, Category, Status and Reset, and **Categories → New
+  actions as issue #825 left them, laid out since issue #1093 as described in
+  [The All Products page](#the-all-products-page)). **Products → New product** sits in the All Products
+  search/filter toolbar, to the right of search, Category, Status, Columns and More actions, and **Categories → New
   Category** creates a record this business maintains itself. (New Product is on All Products only —
   it is not in the shared Products header, so Needs Ordering, which orders products that already
   exist, no longer offers it.) **Needs Ordering → Mark as ordered** sits the same way, in that
   page's own search/filter toolbar to the right of search, Category and Reset (issue #832) — it used
-  to sit in its own row below the toolbar. **Set GST rule in bulk** sits in that same All Products
-  toolbar beside New Product (issue #1076), and is left out while a support session is active, the
+  to sit in its own row below the toolbar. **Set GST rule in bulk** is in that same All Products
+  toolbar's **More actions** menu (issue #1076; moved into the menu by issue #1093), and is left out while a support session is active, the
   way New Product is; see
-  [Product and supplier GST rules](#product-and-supplier-gst-rules). **Import products** sits beside New Product on that same
-  toolbar (issue #875) for a member who holds `Imports.Run` while Nayax is usable and no support
+  [Product and supplier GST rules](#product-and-supplier-gst-rules). **Import products** is the other item in **More actions**
+  (issue #875) for a member who holds `Imports.Run` while Nayax is usable and no support
   session is active — it opens the catalogue import's own page, **Products → Import products**
   (`/products/import`, issue #888), rather than being a second entry point with its own behaviour.
   **A catalogue read Nayax has refused hides it even while the connection is usable.** A
@@ -2164,13 +2165,14 @@ does not manage.
   provider's ("This product is managed by Nayax and cannot be deleted…") or the history's ("…its
   history refers to it (2 stock movements, 1 sale)…"), or "This product cannot be deleted." when the
   response carries no wording. The notice is informational; it changes nothing on the form and is
-  shown for an active and a deactivated product alike. Every **active** product's row offers
-  **Deactivate** instead — beside Delete where a delete is possible, and alone where it is not —
+  shown for an active and a deactivated product alike. Every **active** product's row menu (the ⋮
+  button beside **Adjust stock**, issue #1093) offers
+  **Deactivate** instead — above Delete where a delete is possible, and alone where it is not —
   which asks you to confirm ("Deactivate 'Fanta 375ml'? It will be hidden from the working catalogue
   and the reorder alerts, keeps its history, stock and costs, and can be reactivated at any time.") and
   then writes the ordinary product update with `isActive: false`. The **Status** badge deactivates
   through that same confirmation; reactivating a deactivated product stays one click, and a
-  deactivated product's row offers **Reactivate** in that same slot instead of Deactivate (issue
+  deactivated product's row menu offers **Reactivate** in that same place instead of Deactivate (issue
   #900), reusing the Status badge's own one-click activation write rather than a new endpoint. A
   failed reactivation leaves the product deactivated and shows the server's own refusal, the same
   way a failed deactivation does - the two controls share the one write and its error reporting.
@@ -2390,8 +2392,45 @@ same column, cell and popup — everything below applies to all three.
 - **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
   the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
   disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the
-  purchase-cost columns, with one request for the page's products — the same batching, failure
-  message and Retry described above, and no sort of its own.
+  optional purchase-cost columns, with one request for every listed product (not per page) — the same batching, failure
+  message and Retry described above, and no sort of its own. All Products lays the same answer out
+  as a unit price with its GST basis, the supplier (or tied suppliers) beneath and a **Special**
+  badge, with **Compare (N)** opening the same supplier comparison every page shares (issue #1093).
+
+## The All Products page
+
+**Products → All products** (issue #1093) is one card: a toolbar, the product table (compact
+cards on a phone) and a pager. Everything on it uses data and permissions the page already had.
+
+- **Default columns** are Product (name, linking to Edit Product, with the SKU beneath), Category,
+  **Storage stock** (storage only, no unit; low and zero stock keep their colours), Average cost,
+  Cheapest supplier and Actions.
+- **Columns** adds **Last purchase** and **Cheapest purchase** - each your own recorded price, its
+  supplier and the purchase date - and **Reset to default** removes them again. They are off on every
+  visit, shown only to a role that may see purchase costs, and a product with no history shows
+  `—`, never `$0.00`. Turning them on or off requests nothing.
+- **Cheapest supplier** shows the comparable unit price with the GST basis the server put it on,
+  the supplier beneath (tied suppliers together, with a **Tied** badge) and **Special** when the
+  supplier says so. *Not tracked*, *No match found*, *Awaiting match*, *No current offers*, a
+  **Stale price** with when it was last checked, *Loading* and *Unavailable* (with the existing
+  Retry above the table) stay separate answers. What these prices are, and that a supplier's stock
+  may differ, is said once in the column heading's help button rather than on every row.
+  **Compare (N)** opens the supplier comparison: Supplier, Pack size, Pack price, Unit price,
+  Status & freshness and Link, with anything a supplier did not publish shown as `—`.
+- **Actions**: **Adjust stock** is on every row; the row's ⋮ menu holds Deactivate or Reactivate,
+  and Delete where the server allows it, with the same confirmations as before.
+- **Toolbar**: search by name or SKU (with a clear button), Category, Status, **Clear filters** (shown
+  only while a filter differs from its default), Columns, **More actions** (Import products and Set
+  GST rule in bulk, on their existing permissions) and **New product**.
+- **Pager**: 5, 10, 20, 50 or 100 per page, 10 by default; changing the size, a filter or the sort
+  returns to page 1, and a refresh that shortens the list stays on the last page that still exists.
+  Paging is over the list already loaded, so turning a page loads nothing.
+- **On a phone** each product is a card with its name, category, storage stock, average cost, any
+  history column you turned on, the cheapest supplier, Adjust stock and the same ⋮ menu.
+
+Every menu and dialog starts closed, opens one at a time, works from the keyboard and closes on
+Escape with focus returned to the button that opened it. Screenshots of the seven reviewed states
+are in `docs/screenshots/issue-1093/`.
 
 ## A supplier's website
 

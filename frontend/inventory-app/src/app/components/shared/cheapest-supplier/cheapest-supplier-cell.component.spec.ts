@@ -12,7 +12,9 @@ import {
   AUTOMATIC_MATCH_NOTE,
   CheapestSupplierCellComponent,
   OBSERVED_PRICES_NOTE,
+  ONLINE_PRICE_NOTE,
   STOCK_MAY_DIFFER_NOTE,
+  cheapestOnlinePriceNote,
   cheapestStockNote,
   cheapestSupplierDisplay
 } from './cheapest-supplier-cell.component';
@@ -394,6 +396,53 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
     expect(host.querySelector('[data-testid="cheapest-supplier-stock-note"]')).toBeNull();
     expect(cheapestStockNote('loading', product())).toBeNull();
     expect(cheapestStockNote('loaded', undefined)).toBeNull();
+  });
+
+  it('says under a cheapest price that it is an online price that may differ in store', async () => {
+    const { host } = await render({ suppliers: [offer({ isSpecial: true })] });
+
+    const note = host.querySelector('[data-testid="cheapest-supplier-online-note"]');
+    expect(note?.textContent?.trim()).toBe(ONLINE_PRICE_NOTE);
+    expect(note?.textContent?.trim()).toBe('Online price, may differ in store');
+    // The label never takes the price away: the cell still names the cheapest supplier and its price.
+    expect(host.querySelector('[data-testid="cheapest-supplier-cell"]')?.textContent).toContain('JB Metro $0.95/unit');
+  });
+
+  it('adds no online-price note where the cell shows no price', async () => {
+    const { host } = await render({ cheapestUnitPrice: null, suppliers: [offer({ isCheapest: false })] });
+
+    expect(host.querySelector('[data-testid="cheapest-supplier-online-note"]')).toBeNull();
+    expect(cheapestOnlinePriceNote('loading', product())).toBeNull();
+    expect(cheapestOnlinePriceNote('loaded', undefined)).toBeNull();
+  });
+
+  it('labels every priced row in the popup Stock column as an online price, and no row without a price', async () => {
+    const { host, open, rows } = await render({
+      suppliers: [
+        offer({ stockStatus: SupplierStockStatus.OutOfStock }),
+        offer({ supplierId: 2, supplierName: 'Coles', isCheapest: false, unitPrice: 1.2, packPrice: 1.2 }),
+        offer({
+          supplierId: 3,
+          supplierName: 'Woolworths',
+          hasPrice: false,
+          packPrice: null,
+          unitPrice: null,
+          unitPriceExGst: null,
+          unitPriceIncGst: null,
+          stockStatus: null,
+          lastCheckedAtUtc: null,
+          isCheapest: false
+        })
+      ]
+    });
+
+    open();
+
+    const notes = rows().map(
+      (row) => row.querySelector('[data-testid="cheapest-supplier-row-online-note"]')?.textContent?.trim() ?? null
+    );
+    expect(notes).toEqual([ONLINE_PRICE_NOTE, ONLINE_PRICE_NOTE, null]);
+    expect(host.querySelectorAll('[data-testid="cheapest-supplier-row-online-note"]').length).toBe(2);
   });
 
   it('offers nothing to open when there is nothing to list', async () => {
