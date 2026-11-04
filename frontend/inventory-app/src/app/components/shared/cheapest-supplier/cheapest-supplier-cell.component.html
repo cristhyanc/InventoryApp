@@ -94,7 +94,9 @@
                 <!--
                   Both bases, always, with the one this business is compared on first: a price
                   that is not knowable is left blank rather than written as a zero, which is a
-                  price (AGENTS.md § Frontend rules). Each figure stays on one line: wrapping
+                  price (AGENTS.md § Frontend rules). The headline already says its basis, so the
+                  line below repeats only the other one; with no known basis the headline carries
+                  no label and both lines show. Each figure stays on one line: wrapping
                   "$0.57 inc GST" a word per line made the column unreadable.
                 -->
                 @if (priceOf(offer.unitPrice); as unitPrice) {
@@ -102,10 +104,10 @@
                 } @else {
                   <span class="value-muted">—</span>
                 }
-                @if (priceOf(offer.unitPriceExGst); as exGst) {
+                @if (!headlineIs(exclusiveOfGst) && priceOf(offer.unitPriceExGst); as exGst) {
                   <span class="block text-md-body value-muted">{{ exGst }} ex GST</span>
                 }
-                @if (priceOf(offer.unitPriceIncGst); as incGst) {
+                @if (!headlineIs(inclusiveOfGst) && priceOf(offer.unitPriceIncGst); as incGst) {
                   <span class="block text-md-body value-muted">{{ incGst }} inc GST</span>
                 }
               </td>
