@@ -109,7 +109,8 @@ function reminder(): MachineRestockSyncReminder {
         knownPendingEventCount: 2,
         oldestKnownPendingEventAtUtc: '2026-10-16T08:00:00Z',
         oldestKnownPendingEventBusinessDate: '2026-10-16T00:00:00',
-        hasPendingWorkBeforeDefaultFrom: true
+        hasPendingWorkBeforeDefaultFrom: true,
+        hasSalesSinceLastSync: true
       }
     ]
   };

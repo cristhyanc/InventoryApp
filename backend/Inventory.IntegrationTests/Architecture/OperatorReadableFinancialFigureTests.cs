@@ -191,6 +191,14 @@ public class OperatorReadableFinancialFigureTests
                 + "machine dispensed something, and withholding the rows would make an unavailable "
                 + "provider and an unprivileged role look identical."),
 
+        new(
+            "MachineRestockSyncReminderMachineDto.HasSalesSinceLastSync",
+            FigureOutcome.NotAFinancialAmount,
+            "Issue #1090: a yes/no flag that the machine has an imported sale dated after its last "
+                + "restock sync. It carries no amount, count or value of any sale - only that the "
+                + "machine dispensed something - so an Operator who must reconcile restocks sees why "
+                + "the machine is listed, as the latest-sales list above already lets them."),
+
         // The catalogue product, on every endpoint that serves one (issue #698).
         new(
             "ProductResponse.InventoryValue",

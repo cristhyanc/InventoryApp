@@ -120,19 +120,54 @@ public class MachineRestockSyncReminderPolicyTests
     }
 
     /// <summary>
-    /// Either condition alone is a reminder: an overdue fetch, or any known pending event inside
-    /// the pending window (the count is bounded before it arrives here, issue #948).
+    /// Known pending work alone is a reminder; an overdue fetch is one only when the machine has
+    /// sold something since that fetch (issue #1090). The count is bounded before it arrives here
+    /// (issue #948).
     /// </summary>
     [Theory]
-    [InlineData(false, 0, false)]
-    [InlineData(true, 0, true)]
-    [InlineData(false, 1, true)]
-    [InlineData(true, 4, true)]
-    public void A_reminder_is_an_overdue_fetch_or_any_known_pending_event(
-        bool isFetchOverdue, int knownPendingEventCount, bool expected) =>
+    [InlineData(false, 0, false, false)]
+    [InlineData(false, 0, true, false)]
+    [InlineData(true, 0, false, false)]
+    [InlineData(true, 0, true, true)]
+    [InlineData(false, 1, false, true)]
+    [InlineData(true, 4, false, true)]
+    public void A_reminder_is_known_pending_work_or_an_overdue_fetch_with_sales_since(
+        bool isFetchOverdue, int knownPendingEventCount, bool hasSalesSinceLastSync, bool expected) =>
         Assert.Equal(
             expected,
-            MachineRestockSyncReminderPolicy.NeedsAttention(isFetchOverdue, knownPendingEventCount));
+            MachineRestockSyncReminderPolicy.NeedsAttention(
+                isFetchOverdue, knownPendingEventCount, hasSalesSinceLastSync));
+
+    /// <summary>
+    /// With a current fetch recorded, only a sale strictly after that fetch's start counts; at the
+    /// same instant or before, the fetch already covered it.
+    /// </summary>
+    [Fact]
+    public void A_sale_counts_only_after_the_last_fetch_started()
+    {
+        var lastSync = new DateTime(2026, 11, 1, 2, 0, 0, DateTimeKind.Utc);
+        var pendingFrom = new DateTime(2026, 10, 20, 13, 0, 0, DateTimeKind.Utc);
+
+        Assert.True(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(lastSync.AddSeconds(1), lastSync, pendingFrom));
+        Assert.False(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(lastSync, lastSync, pendingFrom));
+        Assert.False(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(lastSync.AddDays(-1), lastSync, pendingFrom));
+        Assert.False(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(null, lastSync, pendingFrom));
+    }
+
+    /// <summary>
+    /// With no current fetch recorded, a sale inside the pending window counts - from its first
+    /// instant - and an older one does not.
+    /// </summary>
+    [Fact]
+    public void With_no_recorded_fetch_a_sale_counts_from_the_start_of_the_pending_window()
+    {
+        var pendingFrom = new DateTime(2026, 10, 20, 13, 0, 0, DateTimeKind.Utc);
+
+        Assert.True(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(pendingFrom, null, pendingFrom));
+        Assert.True(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(pendingFrom.AddDays(3), null, pendingFrom));
+        Assert.False(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(pendingFrom.AddTicks(-1), null, pendingFrom));
+        Assert.False(MachineRestockSyncReminderPolicy.HasSalesSinceLastSync(null, null, pendingFrom));
+    }
 
     /// <summary>
     /// Coverage recorded against credentials that have since been replaced says nothing about the
