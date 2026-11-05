@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
@@ -69,10 +70,45 @@ public static class NayaxSqsTransactionParser
     /// </summary>
     public static NayaxSqsTransactionOutcome Parse(string? messageBody)
     {
-        if (string.IsNullOrWhiteSpace(messageBody))
+        if (!TryDeserialize(messageBody, out var message))
             return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.NotJson);
 
-        NayaxSqsTransactionMessage? message;
+        // Rule 1, in the order the issue states it. Each of these is a field a sale cannot be built
+        // without, so a message missing one is a permanent failure rather than something to retry.
+        if (!TryReadRequiredFields(message, out var fields, out var incompleteReason))
+            return NayaxSqsTransactionOutcome.Invalid(incompleteReason);
+
+        // Rule 2: a prepaid credit top-up (or its reward form) is not a product sale at all, and
+        // that is true however the rest of the message reads.
+        if (NayaxSqsJsonValues.IsTrue(fields.Data.IsRevalueTransaction)
+            || NayaxSqsJsonValues.IsTrue(fields.Data.IsRevalueRewardTransaction))
+            return NayaxSqsTransactionOutcome.Revalue();
+
+        // Rule 3: multivend, by the flag or by the array holding more than one item. The existing
+        // store keeps one product per transaction and does not guarantee multivend quantities, so
+        // parent #1100 leaves these to the hourly lastSales run rather than saving one of the items.
+        if (NayaxSqsJsonValues.IsTrue(fields.Data.IsMultivend) || fields.Products.GetArrayLength() > 1)
+            return NayaxSqsTransactionOutcome.Multivend();
+
+        // Rule 4: the transactions this application deliberately does not consume from the queue.
+        if (NayaxSqsJsonValues.IsTrue(message.IsVoid))
+            return NayaxSqsTransactionOutcome.Unsupported(NayaxSqsRejectionReason.VoidTransaction);
+
+        if (NayaxSqsJsonValues.IsTrue(fields.Data.SettlementFailed))
+            return NayaxSqsTransactionOutcome.Unsupported(NayaxSqsRejectionReason.SettlementFailed);
+
+        return ClassifyApprovableOutcome(fields);
+    }
+
+    /// <summary>Rule 0: a body that is not JSON, or whose root is not the documented object.</summary>
+    private static bool TryDeserialize(
+        string? messageBody, [NotNullWhen(true)] out NayaxSqsTransactionMessage? message)
+    {
+        message = null;
+
+        if (string.IsNullOrWhiteSpace(messageBody))
+            return false;
+
         try
         {
             message = JsonSerializer.Deserialize<NayaxSqsTransactionMessage>(messageBody);
@@ -81,22 +117,47 @@ public static class NayaxSqsTransactionParser
         {
             // Deliberately not rethrown and deliberately not logged here: the exception's message
             // carries the position inside the body, and the body is a consumer's card transaction.
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.NotJson);
+            return false;
         }
 
-        if (message is null)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.NotJson);
+        return message is not null;
+    }
 
-        // Rule 1, in the order the issue states it. Each of these is a field a sale cannot be built
-        // without, so a message missing one is a permanent failure rather than something to retry.
+    /// <summary>
+    /// The fields rule 1 requires. Holding them together lets the rest of <see cref="Parse"/> read
+    /// as the ordered rule table the issue describes, instead of a wall of local variables.
+    /// </summary>
+    private readonly record struct RequiredFields(
+        long TransactionId,
+        long MachineId,
+        NayaxSqsTransactionData Data,
+        decimal SettlementValue,
+        int TransactionStatusId,
+        DateTimeOffset AuthorizedAtGmt,
+        JsonElement Products);
+
+    private static bool TryReadRequiredFields(
+        NayaxSqsTransactionMessage message, out RequiredFields fields, out NayaxSqsRejectionReason reason)
+    {
+        fields = default;
+
         if (NayaxSqsJsonValues.AsInt64(message.TransactionId) is not { } transactionId)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.TransactionIdUnreadable);
+        {
+            reason = NayaxSqsRejectionReason.TransactionIdUnreadable;
+            return false;
+        }
 
         if (NayaxSqsJsonValues.AsInt64(message.MachineId) is not { } machineId)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.MachineIdUnreadable);
+        {
+            reason = NayaxSqsRejectionReason.MachineIdUnreadable;
+            return false;
+        }
 
         if (NayaxSqsJsonValues.AsObject(message.Data) is not { } dataElement)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.DataMissing);
+        {
+            reason = NayaxSqsRejectionReason.DataMissing;
+            return false;
+        }
 
         var data = JsonSerializer.Deserialize<NayaxSqsTransactionData>(dataElement)!;
 
@@ -104,41 +165,46 @@ public static class NayaxSqsTransactionParser
         // SeValue makes the message invalid; it never becomes a sale of 0, which the amount-derived
         // lastSales rule would then import as cancelled.
         if (NayaxSqsJsonValues.AsDecimal(data.SettlementValue) is not { } settlementValue)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.SettlementValueUnreadable);
+        {
+            reason = NayaxSqsRejectionReason.SettlementValueUnreadable;
+            return false;
+        }
 
         if (NayaxSqsJsonValues.AsInt32(data.TransactionStatusId) is not { } transactionStatusId)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.TransactionStatusIdUnreadable);
+        {
+            reason = NayaxSqsRejectionReason.TransactionStatusIdUnreadable;
+            return false;
+        }
 
         // Read through the one GMT rule (issue #471): the field is documented as GMT, so an
         // offset-free value is UTC because of that contract and never because of the host's time
         // zone. A value that is absent or is not a documented date-time shape has no instant at all.
         if (NayaxGmtTimestamp.Parse(NayaxSqsJsonValues.AsString(data.AuthorizationTime))
             is not { } authorizedAtGmt)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.AuthorizationTimeUnreadable);
+        {
+            reason = NayaxSqsRejectionReason.AuthorizationTimeUnreadable;
+            return false;
+        }
 
         if (NayaxSqsJsonValues.AsNonEmptyArray(data.Products) is not { } products)
-            return NayaxSqsTransactionOutcome.Invalid(NayaxSqsRejectionReason.ProductsMissing);
+        {
+            reason = NayaxSqsRejectionReason.ProductsMissing;
+            return false;
+        }
 
-        // Rule 2: a prepaid credit top-up (or its reward form) is not a product sale at all, and
-        // that is true however the rest of the message reads.
-        if (NayaxSqsJsonValues.IsTrue(data.IsRevalueTransaction)
-            || NayaxSqsJsonValues.IsTrue(data.IsRevalueRewardTransaction))
-            return NayaxSqsTransactionOutcome.Revalue();
+        fields = new RequiredFields(
+            transactionId, machineId, data, settlementValue, transactionStatusId, authorizedAtGmt, products);
+        reason = NayaxSqsRejectionReason.None;
+        return true;
+    }
 
-        // Rule 3: multivend, by the flag or by the array holding more than one item. The existing
-        // store keeps one product per transaction and does not guarantee multivend quantities, so
-        // parent #1100 leaves these to the hourly lastSales run rather than saving one of the items.
-        if (NayaxSqsJsonValues.IsTrue(data.IsMultivend) || products.GetArrayLength() > 1)
-            return NayaxSqsTransactionOutcome.Multivend();
-
-        // Rule 4: the transactions this application deliberately does not consume from the queue.
-        if (NayaxSqsJsonValues.IsTrue(message.IsVoid))
-            return NayaxSqsTransactionOutcome.Unsupported(NayaxSqsRejectionReason.VoidTransaction);
-
-        if (NayaxSqsJsonValues.IsTrue(data.SettlementFailed))
-            return NayaxSqsTransactionOutcome.Unsupported(NayaxSqsRejectionReason.SettlementFailed);
-
-        var status = NayaxTransactionStatusClassifier.Classify(transactionStatusId);
+    /// <summary>
+    /// Rules 4 through 8: what an approved or cancelled/declined status (rule 4 has already refused
+    /// every other classification) ends up meaning once the message is known to carry a sale.
+    /// </summary>
+    private static NayaxSqsTransactionOutcome ClassifyApprovableOutcome(RequiredFields fields)
+    {
+        var status = NayaxTransactionStatusClassifier.Classify(fields.TransactionStatusId);
         var statusReason = status switch
         {
             NayaxTransactionStatus.Refunded => NayaxSqsRejectionReason.Refunded,
@@ -149,13 +215,19 @@ public static class NayaxSqsTransactionParser
         if (statusReason != NayaxSqsRejectionReason.None)
             return NayaxSqsTransactionOutcome.Unsupported(statusReason);
 
-        if (settlementValue < 0)
+        if (fields.SettlementValue < 0)
             return NayaxSqsTransactionOutcome.Unsupported(NayaxSqsRejectionReason.NegativeSettlementValue);
 
-        var product = NayaxSqsJsonValues.FirstProduct(products);
+        var product = NayaxSqsJsonValues.FirstProduct(fields.Products);
         var productSlot = NayaxSqsJsonValues.AsInt32(product?.ProductCodeInMap);
         var report = MapReport(
-            transactionId, machineId, transactionStatusId, settlementValue, authorizedAtGmt, data, product);
+            fields.TransactionId,
+            fields.MachineId,
+            fields.TransactionStatusId,
+            fields.SettlementValue,
+            fields.AuthorizedAtGmt,
+            fields.Data,
+            product);
 
         // Rule 5: cancelled and declined rows are saved too, carrying the status the message
         // reported, so they stay visible in status reporting instead of being discarded.
@@ -167,14 +239,14 @@ public static class NayaxSqsTransactionParser
 
         // Rule 6: approved and charging exactly nothing. Neither the reference nor the delivery
         // setup page says how a free vend is marked, so it waits for a real sample.
-        if (settlementValue == 0)
+        if (fields.SettlementValue == 0)
             return NayaxSqsTransactionOutcome.FreeVend();
 
         // Rules 7 and 8: a cancel reason other than "settled successfully" contradicts an approved
         // status, and neither of the two is believed over the other. A present but unreadable value
         // counts as a contradiction rather than as an absent one, which is the fail-closed answer.
-        var cancelTypeAbsent = NayaxSqsJsonValues.IsAbsent(data.CancelType);
-        var cancelType = NayaxSqsJsonValues.AsInt32(data.CancelType);
+        var cancelTypeAbsent = NayaxSqsJsonValues.IsAbsent(fields.Data.CancelType);
+        var cancelType = NayaxSqsJsonValues.AsInt32(fields.Data.CancelType);
 
         return cancelTypeAbsent || cancelType == SettledCancelType
             ? NayaxSqsTransactionOutcome.CompletedSale(report, productSlot)
