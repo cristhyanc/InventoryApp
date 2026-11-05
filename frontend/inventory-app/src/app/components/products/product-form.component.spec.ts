@@ -1,8 +1,14 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
-import { ProductFormComponent } from './product-form.component';
+import { Observable, of, Subject, throwError } from 'rxjs';
+import {
+  PRODUCT_GST_OUTSTANDING_LEAVE_WARNING,
+  PRODUCT_SAVE_IN_FLIGHT_LEAVE_WARNING,
+  PRODUCT_UNSAVED_LEAVE_WARNING,
+  ProductFormComponent
+} from './product-form.component';
+import { confirmProductFormLeave } from './product-form-leave.guard';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { Category, GstClassification, MasterProductSuggestion, Product } from '../../models/models';
@@ -101,6 +107,7 @@ async function render(
     getCategories?: jest.Mock;
     createCategory?: jest.Mock;
     getPriceTracking?: jest.Mock;
+    setPriceTracking?: jest.Mock;
     getMasterProductSuggestions?: jest.Mock;
   } = {}
 ) {
@@ -128,6 +135,7 @@ async function render(
   // The Name suggestions on New Product (issue #1052). Their own behaviour - the debounce, the
   // superseded response, the list states and the keyboard - is
   // `product-master-product-picker.component.spec.ts`; here the lookup only has to answer.
+  const setPriceTracking = overrides.setPriceTracking ?? jest.fn(() => of(undefined));
   const getMasterProductSuggestions =
     overrides.getMasterProductSuggestions ??
     jest.fn(() => of({ products: [masterProductSuggestion()], page: 1, pageSize: 10, hasMore: false }));
@@ -144,11 +152,12 @@ async function render(
           create,
           getGstRule,
           setGstRule,
-          getPriceComparison: jest.fn(() => of({ productId: 7, entries: [] })),
+          // No `getPriceComparison` (issue #1111): the supplier price comparison is gone from Edit
+          // Product, so a render that still asked for it would fail here.
           // The "Track supplier prices" panel (issue #938) reads this; its own behaviour is
-          // ProductPriceTrackingComponent's spec, and here it only has to render.
+          // ProductPriceTrackingComponent's spec.
           getPriceTracking: getPriceTracking,
-          setPriceTracking: jest.fn(() => of(undefined)),
+          setPriceTracking,
           getMasterProductSuggestions
         }
       },
@@ -185,9 +194,14 @@ async function render(
     fixture.detectChanges();
   };
 
-  /** The retry offered by the create-GST-rule panel after its own write failed (issue #829). */
-  const gstRuleRetry = () =>
-    host.querySelector<HTMLButtonElement>('app-product-create-gst-rule button');
+  /**
+   * The retry of a created product's rule after its write failed (issue #829): since issue #1111
+   * it is the page's one primary action, relabelled, never a button of the GST card's own.
+   */
+  const gstRuleRetry = () => {
+    const button = host.querySelector<HTMLButtonElement>('[data-testid="product-form-submit"]');
+    return button?.textContent?.trim() === 'Retry GST rule' ? button : null;
+  };
 
   /** Types into the composed category combobox the way a person does (issue #830). */
   const typeCategory = (text: string) => {
@@ -294,6 +308,7 @@ async function render(
     getGstRule,
     setGstRule,
     getPriceTracking,
+    setPriceTracking,
     getCategories,
     createCategory,
     chooseGstRule,
@@ -320,22 +335,21 @@ async function render(
 
 afterEach(() => TestBed.resetTestingModule());
 
-describe('ProductFormComponent content width (issue #478)', () => {
+describe('ProductFormComponent content width (issue #1111)', () => {
   /**
-   * The page's own card must not cap or centre itself: the application content area already
-   * supplies the sidebar space and the page gutters (issue #454), so a narrower card here is the
-   * unused width this issue removes. Asserting the absence of a cap is the regression contract -
-   * a future `max-w-*` would silently restore the narrow centred card.
+   * Issue #478 let the old single card fill the content area. The approved layout of issue #1111
+   * replaces it with a centred content area about 1,100px wide, holding a two-thirds main column
+   * and a one-third settings column from `lg`, one column below it.
    */
-  it('lets the form card use the whole available content width', async () => {
+  it('centres a content area about 1,100px wide with a two-thirds / one-third grid', async () => {
     const { host } = await render();
 
-    const card = host.querySelector('.page > .card');
-    expect(card).not.toBeNull();
+    const area = host.querySelector('.page > div');
+    expect(Array.from(area?.classList ?? [])).toEqual(expect.arrayContaining(['mx-auto', 'max-w-[1100px]']));
 
-    const classes = Array.from(card?.classList ?? []);
-    expect(classes).not.toContain('mx-auto');
-    expect(classes.filter((className) => /(^|:)max-w-/.test(className))).toEqual([]);
+    const grid = host.querySelector('[data-testid="product-form-grid"]')!;
+    expect(Array.from(grid.classList)).toEqual(expect.arrayContaining(['grid-cols-1', 'lg:grid-cols-3']));
+    expect(host.querySelector('[data-testid="product-form-main"]')?.classList).toContain('lg:col-span-2');
   });
 });
 
@@ -441,19 +455,31 @@ describe('ProductFormComponent editing a product this business maintains itself 
 
   it('shows the server\'s refusal message and does not navigate when the update is refused', async () => {
     const update = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 400, error: 'The selected category does not exist.' })));
-    const { component, navigate } = await render({ update });
+    const { fixture, component, host, navigate } = await render({ update });
 
+    component.form.categoryId = 1;
     component.save();
+    fixture.detectChanges();
 
-    expect(component.error).toBe('The selected category does not exist.');
+    expect(component.saveProblem).toEqual({
+      failed: 'Product details',
+      reason: 'The selected category does not exist.',
+      saved: [],
+      notAttempted: []
+    });
+    expect(host.querySelector('[data-testid="product-form-save-problem"]')?.textContent).toContain(
+      'The selected category does not exist.'
+    );
     expect(component.saving).toBe(false);
+    expect(component.form.categoryId).toBe(1);
+    expect(component.hasUnsavedChanges).toBe(true);
     expect(navigate).not.toHaveBeenCalled();
   });
 
   it('cancels back to the product list without saving', async () => {
     const { host, update } = await render();
 
-    const cancel = host.querySelector('a.btn-secondary') as HTMLAnchorElement;
+    const cancel = host.querySelector('[data-testid="product-form-cancel"]') as HTMLAnchorElement;
     expect(cancel.getAttribute('href')).toBe('/products');
     expect(update).not.toHaveBeenCalled();
   });
@@ -468,13 +494,28 @@ describe('ProductFormComponent editing a provider-linked product (issue #737)', 
     const { host } = await render({ product: providerManagedProduct() });
 
     expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(true);
-    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(true);
+    // A provider-managed category is shown read-only (issue #1111) rather than as a disabled
+    // dropdown: there is no category control to change at all.
+    expect(host.querySelector('[name="categoryId"]')).toBeNull();
+    const category = host.querySelector('[name="categoryName"]') as HTMLInputElement;
+    expect(category.readOnly).toBe(true);
+    expect(category.value).toBe('Snacks');
     expect((host.querySelector('[name="unit"]') as HTMLInputElement).readOnly).toBe(false);
     expect((host.querySelector('[name="restockTo"]') as HTMLInputElement).disabled).toBe(false);
 
-    expect(host.querySelector('.alert-info .alert-title')?.textContent).toContain(
-      'Name and category are managed by Nayax and cannot be edited here.'
+    expect(host.querySelector('[data-testid="product-provider-note"]')?.textContent).toContain(
+      'Name and category are synced from Nayax.'
     );
+  });
+
+  it('shows one Managed by Nayax badge and no per-field ownership badges (issue #1111)', async () => {
+    const { host } = await render({ product: providerManagedProduct() });
+
+    expect(host.querySelector('h1')?.textContent?.trim()).toBe('E2E Chips');
+    expect(host.querySelectorAll('[data-testid="product-form-provider-badge"]').length).toBe(1);
+    expect(host.textContent?.match(/Managed by Nayax/g)?.length).toBe(1);
+    expect(host.textContent).not.toMatch(/\bSynced\b/);
+    expect(host.querySelector('[data-testid="product-form-status-badge"]')?.textContent?.trim()).toBe('Active');
   });
 
   it('still saves the editable fields for a provider-linked product', async () => {
@@ -495,7 +536,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
   it('renders an empty, fully editable form titled "New Product"', async () => {
     const { host } = await render({ routeParams: {} });
 
-    expect(host.querySelector('h1')?.textContent).toContain('New Product');
+    expect(host.querySelector('h1')?.textContent).toContain('New product');
     // Name is the suggesting combobox here since issue #1052, not a plain textbox; it is still free
     // text and still empty, and its own describe below covers what the suggestions do.
     const name = host.querySelector('app-product-master-product-picker input[role="combobox"]') as HTMLInputElement;
@@ -507,7 +548,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
       (host.querySelector('app-product-category-picker input[role="combobox"]') as HTMLInputElement).value
     ).toBe('');
     expect(host.querySelector('.alert-info')).toBeNull();
-    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).textContent).toContain('Create Product');
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).textContent).toContain('Create product');
     expect(host.querySelector('[name="quantityInStock"]')).not.toBeNull();
     expect(host.querySelector('[name="initialUnitCost"]')).not.toBeNull();
 
@@ -600,11 +641,17 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     expect(getCategories).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves the edit page on its dropdown, so the provider-managed category restriction is unchanged', async () => {
-    const { host } = await render({ product: product({ providerManagedFields: ['name', 'categoryId'] }) });
+  it('leaves the edit page on its dropdown, and a provider-managed category read-only', async () => {
+    const managed = await render({ product: product({ providerManagedFields: ['name', 'categoryId'] }) });
 
+    expect(managed.host.querySelector('app-product-category-picker')).toBeNull();
+    expect(managed.host.querySelector('[name="categoryId"]')).toBeNull();
+    expect((managed.host.querySelector('[name="categoryName"]') as HTMLInputElement).readOnly).toBe(true);
+    TestBed.resetTestingModule();
+
+    const { host } = await render();
     expect(host.querySelector('app-product-category-picker')).toBeNull();
-    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(true);
+    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(false);
   });
 
   it('creates the product with the id of the category selected in the picker', async () => {
@@ -673,7 +720,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     // write.
     expect(navigate).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
-    expect(host.querySelector('h1')?.textContent).toContain('New Product');
+    expect(host.querySelector('h1')?.textContent).toContain('New product');
 
     submit();
 
@@ -773,7 +820,8 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
       'GST-free'
     ]);
     expect(panel!.textContent).toContain('takes precedence over any supplier default');
-    expect(panel!.textContent).toContain('does not change the GST classification of any');
+    expect(panel!.textContent).toContain('Applies to future purchases. Existing purchases keep their recorded GST treatment.');
+    expect(panel!.textContent).toContain('"No rule" means unclassified, not GST-free.');
 
     // Nothing is read for a product that does not exist, and no Save is offered before there is a
     // product: the rule is written with the product the page's own control creates.
@@ -863,6 +911,11 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
     expect(host.querySelector('app-product-create-gst-rule')?.textContent).toContain(
       'The product was created, but its GST rule was not saved.'
     );
+    // The action bar says so too, and leaving now asks first.
+    expect(host.querySelector('[data-testid="product-form-save-state"]')?.textContent).toContain(
+      'Product created; GST rule not saved'
+    );
+    expect(component.hasUnsavedChanges).toBe(true);
   });
 
   it('retries the rule alone, so a retry never creates a second product', async () => {
@@ -871,7 +924,7 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
       .fn()
       .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
       .mockReturnValueOnce(of(undefined));
-    const { component, chooseGstRule, submit, gstRuleRetry, navigate } = await render({
+    const { component, fixture, chooseGstRule, submit, gstRuleRetry, navigate } = await render({
       routeParams: {},
       create,
       setGstRule
@@ -882,6 +935,7 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
     submit();
     expect(navigate).not.toHaveBeenCalled();
 
+    fixture.detectChanges();
     gstRuleRetry()!.click();
 
     expect(create).toHaveBeenCalledTimes(1);
@@ -895,7 +949,7 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
       .fn()
       .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
       .mockReturnValueOnce(of(undefined));
-    const { component, chooseGstRule, submit, gstRuleRetry } = await render({
+    const { component, fixture, chooseGstRule, submit, gstRuleRetry } = await render({
       routeParams: {},
       create: createdProduct(),
       setGstRule
@@ -906,17 +960,19 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
     submit();
 
     chooseGstRule('GST-free');
+    fixture.detectChanges();
     gstRuleRetry()!.click();
 
     expect(setGstRule).toHaveBeenLastCalledWith(55, GstClassification.GstFree);
   });
 
   /**
-   * The create has happened, so the page must offer no create control at all - the retry of the one
-   * outstanding write lives with the component that owns it, next to the choice it would store.
+   * The create has happened, so the page must offer no create control at all: its one primary
+   * action now retries the outstanding rule write alone (issue #1111), and the GST card offers no
+   * button of its own.
    */
   it('offers the rule retry and no create control once the product exists', async () => {
-    const { component, host, chooseGstRule, submit, gstRuleRetry } = await render({
+    const { component, fixture, host, chooseGstRule, submit, gstRuleRetry } = await render({
       routeParams: {},
       create: createdProduct(),
       setGstRule: refusedRule()
@@ -926,9 +982,13 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
     named(component);
     submit();
 
-    expect(host.querySelector('button[type="submit"]')).toBeNull();
+    fixture.detectChanges();
+    expect(
+      Array.from(host.querySelectorAll('button')).map((button) => button.textContent?.trim())
+    ).not.toContain('Create product');
+    expect(host.querySelectorAll('app-product-create-gst-rule button')).toHaveLength(0);
     const retry = gstRuleRetry();
-    expect(retry?.textContent).toContain('Save GST rule');
+    expect(retry).not.toBeNull();
     expect(retry?.disabled).toBe(false);
   });
 
@@ -985,39 +1045,29 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
     expect(component.createdProductId).toBeNull();
   });
 
-  it('leaves the edit page saving its rule in the panel rather than with the product', async () => {
-    const { component, host, update, setGstRule, navigate } = await render();
+  it('offers no Save GST rule button anywhere on the edit page (issue #1111)', async () => {
+    const { host } = await render();
 
-    component.save();
-
-    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ name: 'E2E Chips' }));
-    expect(setGstRule).not.toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith(['/products']);
     expect(host.querySelector('app-product-create-gst-rule')).toBeNull();
+    expect(host.querySelectorAll('app-product-gst-rule button')).toHaveLength(0);
     expect(
-      Array.from(host.querySelectorAll('app-product-gst-rule button')).map((button) => button.textContent?.trim())
-    ).toContain('Save GST rule');
+      Array.from(host.querySelectorAll('button')).map((button) => button.textContent?.trim())
+    ).not.toContain('Save GST rule');
   });
 });
 
 /**
- * How New Product is laid out (issue #892).
+ * How New and Edit Product are laid out (issue #1111's approved design, replacing issue #892's single
+ * card).
  *
- * The fields used to flow through one `md:grid-cols-2 xl:grid-cols-3` grid, which put Opening Stock
- * and Initial Unit Cost on different rows, isolated Unit Label, bottom-aligned the Active checkbox
- * against the Category helper text, and left Create Product *above* the GST choice. These tests pin
- * the grouping, the field order inside each group, and that the one action row comes after the GST
- * rule - in the DOM, which is also the keyboard order.
- *
- * None of the create behaviour moves: the GST panel stays the same single
- * `ProductCreateGstRuleComponent` with the same inputs and outputs (issue #829), and the footer
- * submits the form it names through the native `form` attribute rather than a second handler, so
- * there is still exactly one `save()`.
+ * A main column - Product details, Opening inventory (New only), Reordering - and a settings column
+ * - Product status, GST rule, Supplier price tracking - in that DOM order, which is also the reading,
+ * Tab and narrow-screen stacking order. One sticky action bar holds Cancel and the one primary
+ * action, which submits the product form by naming it, so there is still exactly one submit path.
  */
-describe('ProductFormComponent New Product layout (issue #892)', () => {
-  /** The section headings a person reads down the card, including the composed GST panel's own. */
+describe('ProductFormComponent layout (issue #1111)', () => {
   const headings = (host: HTMLElement) =>
-    Array.from(host.querySelectorAll('.card-body h2')).map((heading) => heading.textContent?.trim());
+    Array.from(host.querySelectorAll('h2')).map((heading) => heading.textContent?.trim());
 
   const section = (host: HTMLElement, name: string) =>
     host.querySelector<HTMLElement>(`[data-testid="product-section-${name}"]`)!;
@@ -1025,121 +1075,127 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
   /** The field grid of one section, which is the only grid a section has. */
   const grid = (host: HTMLElement, name: string) => section(host, name).querySelector<HTMLElement>('.grid')!;
 
-  /**
-   * The grid's own cells, in the order they are reached by reading and by Tab. Each cell is a
-   * direct child of the grid - a field label, or one of the two composed pickers (the category's
-   * since issue #830 and the Name's since issue #1052), whose own inner combobox belongs to that
-   * component rather than to this layout.
-   */
+  /** The controls of a container in DOM order, named by `name` or by composed picker. */
   const controlNames = (container: HTMLElement) =>
-    Array.from(container.children).map((cell) => {
-      if (cell.tagName === 'APP-PRODUCT-CATEGORY-PICKER' || cell.tagName === 'APP-PRODUCT-MASTER-PRODUCT-PICKER') {
-        return cell.tagName.toLowerCase();
-      }
-      const control = cell.querySelector('input, select, textarea');
-      return control?.getAttribute('name') ?? cell.tagName.toLowerCase();
-    });
+    Array.from(
+      container.querySelectorAll('app-product-category-picker, app-product-master-product-picker, [name]')
+    )
+      .filter((element) => !element.closest('app-product-category-picker, app-product-master-product-picker') || element.tagName.startsWith('APP-'))
+      .map((element) => element.getAttribute('name') ?? element.tagName.toLowerCase());
 
-  it('groups the fields into titled sections, with the GST rule before the single action row', async () => {
+  it('orders New Product as the main column, then the settings column', async () => {
     const { host } = await render({ routeParams: {} });
 
-    expect(headings(host)).toEqual(['Product details', 'Opening inventory', 'Reordering', 'GST rule']);
-
-    // One GST choice, mounted once, and one action row - after it.
+    expect(headings(host)).toEqual([
+      'Product details',
+      'Opening inventory',
+      'Reordering',
+      'Product status',
+      'GST rule',
+      'Supplier price tracking'
+    ]);
     expect(host.querySelectorAll('app-product-create-gst-rule')).toHaveLength(1);
     expect(host.querySelectorAll('app-product-gst-rule')).toHaveLength(1);
-
-    const actions = host.querySelectorAll('[data-testid="product-form-actions"]');
-    expect(actions).toHaveLength(1);
-    const gstPanel = host.querySelector('app-product-create-gst-rule')!;
-    expect(gstPanel.compareDocumentPosition(actions[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(Array.from(actions[0].querySelectorAll('button, a')).map((control) => control.textContent?.trim())).toEqual([
-      'Create Product',
-      'Cancel'
-    ]);
   });
 
-  it('pairs Name with SKU and Category with Unit Label, with Description spanning the row below them', async () => {
-    const { host } = await render({ routeParams: {} });
+  it('orders Edit Product the same way, with no Opening inventory and no price comparison', async () => {
+    const { host } = await render();
 
-    const details = grid(host, 'product-details');
-    expect(controlNames(details)).toEqual([
+    expect(headings(host)).toEqual(['Product details', 'Reordering', 'Product status', 'GST rule', 'Supplier price tracking']);
+    expect(host.querySelector('[data-testid="product-section-opening-inventory"]')).toBeNull();
+    expect(host.querySelector('[name="quantityInStock"]')).toBeNull();
+    expect(host.querySelector('[name="initialUnitCost"]')).toBeNull();
+  });
+
+  it('keeps Name first and full width, then Category, SKU, Unit Label and Description', async () => {
+    const created = await render({ routeParams: {} });
+    expect(controlNames(grid(created.host, 'product-details'))).toEqual([
       'app-product-master-product-picker',
-      'sku',
       'app-product-category-picker',
+      'sku',
       'unit',
       'description'
     ]);
+    TestBed.resetTestingModule();
 
-    const classes = Array.from(details.classList);
-    expect(classes).toContain('md:grid-cols-2');
-    expect(classes).toContain('items-start');
-    // The three-column auto-flow is what split the pairs up; it must not come back here.
-    expect(classes).not.toContain('xl:grid-cols-3');
-
-    const description = host.querySelector('[name="description"]')!.closest('label')!;
-    expect(Array.from(description.classList)).toContain('md:col-span-2');
+    const { host } = await render();
+    expect(controlNames(grid(host, 'product-details'))).toEqual(['name', 'categoryId', 'sku', 'unit', 'description']);
+    expect(host.querySelector('[name="name"]')!.closest('.sm\\:col-span-2')).not.toBeNull();
+    expect(host.querySelector('[name="description"]')!.closest('label')!.classList).toContain('sm:col-span-2');
   });
 
-  it('puts the Active product checkbox outside the field grid, compact and left aligned', async () => {
-    const { host } = await render({ routeParams: {} });
-
-    const active = host.querySelector('[name="isActive"]')!.closest('label')!;
-    const details = grid(host, 'product-details');
-
-    expect(details.contains(active)).toBe(false);
-    expect(section(host, 'product-details').contains(active)).toBe(true);
-    // Neither stretched across a grid cell nor bottom-aligned against the Category helper text.
-    expect(Array.from(active.classList)).toContain('inline-flex');
-    expect(Array.from(active.classList)).not.toContain('self-end');
-  });
-
-  it('puts Opening Stock beside Initial Unit Cost, in their own section', async () => {
+  it('puts Opening Stock beside Initial Unit Cost, keeping their defaults', async () => {
     const { host } = await render({ routeParams: {} });
 
     const opening = grid(host, 'opening-inventory');
     expect(controlNames(opening)).toEqual(['quantityInStock', 'initialUnitCost']);
-    expect(Array.from(opening.classList)).toEqual(expect.arrayContaining(['md:grid-cols-2', 'items-start']));
+    expect(Array.from(opening.classList)).toEqual(expect.arrayContaining(['sm:grid-cols-2', 'items-start']));
+    await Promise.resolve();
+    expect((host.querySelector('[name="quantityInStock"]') as HTMLInputElement).value).toBe('0');
+    expect((host.querySelector('[name="initialUnitCost"]') as HTMLInputElement).value).toBe('');
   });
 
-  it('puts Low Stock Threshold beside Restock To, keeping their hints and their validation message', async () => {
+  it('puts Low Stock Threshold beside Restock To, with guidance worded from the reorder rule', async () => {
     const { fixture, component, host } = await render({ routeParams: {} });
 
     const reordering = grid(host, 'reordering');
     expect(controlNames(reordering)).toEqual(['lowStockThreshold', 'restockTo']);
-    expect(Array.from(reordering.classList)).toEqual(expect.arrayContaining(['md:grid-cols-2', 'items-start']));
     expect(Array.from(reordering.querySelectorAll('.field-hint')).map((hint) => hint.textContent?.trim())).toEqual([
-      'Minimum home stock before a new order is needed.',
-      'Target home stock after machines are replenished and the order is received.'
+      'A reorder is suggested at or below this projected warehouse stock.',
+      'Target warehouse stock after machines are refilled and the order is received.'
     ]);
+
+    component.form.lowStockThreshold = 4;
+    component.form.restockTo = 12;
+    fixture.detectChanges();
+    const guidance = host.querySelector('[data-testid="product-reorder-guidance"]')!.textContent!;
+    expect(guidance).toContain('at or below 4 units');
+    expect(guidance).toContain('back to 12 units');
 
     component.form.lowStockThreshold = 10;
     component.form.restockTo = 4;
     fixture.detectChanges();
 
+    expect(host.querySelector('[data-testid="product-reorder-guidance"]')).toBeNull();
     const message = section(host, 'reordering').querySelector('.field-error');
     expect(message?.textContent).toContain('Restock To must be greater than or equal to the Low Stock Threshold');
   });
 
+  it('puts the Active product switch in the Product status card with its history sentence', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    const status = section(host, 'status');
+    const active = status.querySelector<HTMLInputElement>('[name="isActive"]')!;
+    expect(active.getAttribute('role')).toBe('switch');
+    expect(active.checked).toBe(true);
+    expect(active.closest('label')?.textContent).toContain('Active product');
+    expect(status.textContent).toContain('Inactive products keep their history and are excluded from reorder alerts.');
+  });
+
   /**
-   * The footer is outside the form because the GST panel above it owns form controls of its own, and
-   * nesting one form in another is not markup a browser keeps. It submits the product form by naming
-   * it, so there is still exactly one submit path and one `save()`.
+   * The action bar is outside the form because the settings cards own form controls of their own,
+   * and nesting one form in another is not markup a browser keeps. It submits the product form by
+   * naming it, so there is still exactly one submit path.
    */
-  it('creates the product from the footer below the GST rule, through the form that footer names', async () => {
+  it('creates the product from the sticky action bar, through the form that bar names', async () => {
     const { fixture, component, host, create, setGstRule, navigate } = await render({
       routeParams: {},
       create: jest.fn(() => of(product({ id: 55 })))
     });
 
     const form = host.querySelector('form')!;
-    const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    expect(form.id).toBeTruthy();
+    const actions = host.querySelector('[data-testid="product-form-actions"]')!;
+    const submit = actions.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(Array.from(actions.classList)).toContain('sticky');
+    expect(submit.textContent?.trim()).toBe('Create product');
     expect(submit.getAttribute('form')).toBe(form.id);
     expect(form.contains(submit)).toBe(false);
-    // The GST choice owns controls, so it stays out of the product form rather than nesting one.
     expect(form.querySelector('app-product-create-gst-rule')).toBeNull();
     expect(host.querySelectorAll('form')).toHaveLength(1);
+    expect(Array.from(actions.querySelectorAll('button, a')).map((control) => control.textContent?.trim())).toEqual([
+      'Cancel',
+      'Create product'
+    ]);
 
     component.form.name = 'New Snack';
     component.form.unit = 'bag';
@@ -1151,6 +1207,18 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Snack' }));
     expect(setGstRule).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('names the edit page’s primary action Save changes, with Cancel back to the list', async () => {
+    const { host } = await render();
+
+    const actions = host.querySelector('[data-testid="product-form-actions"]')!;
+    expect(Array.from(actions.querySelectorAll('button, a')).map((control) => control.textContent?.trim())).toEqual([
+      'Cancel',
+      'Save changes'
+    ]);
+    expect(actions.querySelector('a')?.getAttribute('href')).toBe('/products');
+    expect(host.querySelector('[data-testid="product-form-back"]')?.getAttribute('href')).toBe('/products');
   });
 
   it('leaves the category picker’s own buttons unable to submit the product', async () => {
@@ -1166,46 +1234,34 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
     clickCategoryOption(categoryOption('Snacks')!);
 
     expect(create).not.toHaveBeenCalled();
-    expect(host.querySelector('h1')?.textContent).toContain('New Product');
+    expect(host.querySelector('h1')?.textContent).toContain('New product');
   });
 
-  it('keeps the footer’s Cancel on the product list and withdraws Create once the product exists', async () => {
-    const { host, component, chooseGstRule, submit, gstRuleRetry } = await render({
+  it('keeps Cancel on the product list and turns Create into the rule retry once the product exists', async () => {
+    const { fixture, host, component, chooseGstRule, submit, gstRuleRetry } = await render({
       routeParams: {},
       create: jest.fn(() => of(product({ id: 55 }))),
       setGstRule: jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })))
     });
 
     const actions = host.querySelector('[data-testid="product-form-actions"]')!;
-    expect(actions.querySelector<HTMLAnchorElement>('a.btn-secondary')?.getAttribute('href')).toBe('/products');
+    expect(actions.querySelector<HTMLAnchorElement>('a')?.getAttribute('href')).toBe('/products');
 
     chooseGstRule('Taxable');
     component.form.name = 'New Snack';
     component.form.unit = 'bag';
     submit();
+    fixture.detectChanges();
 
-    // The one outstanding write is the rule, and its retry is the only control left offered.
-    expect(actions.querySelector('button[type="submit"]')).toBeNull();
-    expect(host.querySelector('button[type="submit"]')).toBeNull();
-    expect(gstRuleRetry()?.textContent).toContain('Save GST rule');
-    expect(actions.querySelector<HTMLAnchorElement>('a.btn-secondary')?.getAttribute('href')).toBe('/products');
+    expect(gstRuleRetry()).not.toBeNull();
+    expect(actions.querySelectorAll('button[type="submit"]')).toHaveLength(1);
+    expect(actions.querySelector<HTMLAnchorElement>('a')?.getAttribute('href')).toBe('/products');
   });
 
-  it('leaves Edit Product on its existing layout, with its own action row inside the form', async () => {
+  it('keeps fields clear of the sticky action bar when they are focused', async () => {
     const { host } = await render();
 
-    expect(host.querySelector('[data-testid="product-section-product-details"]')).toBeNull();
-    expect(host.querySelector('[data-testid="product-section-opening-inventory"]')).toBeNull();
-    // "Track supplier prices" joined the composed panels in issue #938, between the GST rule and
-    // the price comparison - the order the template mounts them in.
-    expect(headings(host)).toEqual(['GST rule', 'Track supplier prices', 'Supplier price comparison']);
-
-    const form = host.querySelector('form')!;
-    expect(Array.from(form.querySelector('.grid')!.classList)).toEqual(
-      expect.arrayContaining(['md:grid-cols-2', 'xl:grid-cols-3'])
-    );
-    expect(form.contains(host.querySelector('button[type="submit"]'))).toBe(true);
-    expect(host.querySelector('button[type="submit"]')?.getAttribute('form')).toBeNull();
+    expect(host.querySelector('[data-testid="product-form-grid"]')?.className).toContain('[&_input]:scroll-mb-40');
   });
 });
 
@@ -1237,79 +1293,34 @@ describe('ProductFormComponent write control during a support session (issue #55
 });
 
 /**
- * Why this product cannot be deleted, said once, here (issue #825). The Products list used to carry
- * the server's refusal as a paragraph on every ineligible row; it is a per-product explanation, so
- * it belongs on the product's own page. `GET api/products/{id}` already answers `canDelete` and the
- * `deletionRefusal` behind it (issue #737), and this notice shows that refusal **verbatim** - the
- * page never words the deletion rule a second time. It is informational: it gates no field, no Save
- * and no other control.
+ * Issue #825 put the server's deletion refusal under the Edit Product header. Issue #1111's approved
+ * design removes it: Edit Product shows no permanent deletion warning, and the Product status card's
+ * own sentence is what explains deactivation. Deleting is still decided by the server, on the
+ * Products list, exactly as before.
  */
-describe('ProductFormComponent deletion notice (issue #825)', () => {
+describe('ProductFormComponent without a deletion notice (issue #1111)', () => {
   const historyRefusal =
     'This product cannot be deleted because its history refers to it (2 stock movements, 1 sale). ' +
     'Deactivate it instead - a deactivated product keeps its history, stays out of the reorder ' +
     'alerts and can be reactivated. Nothing was deleted.';
 
-  function notice(host: HTMLElement): HTMLElement | null {
-    return host.querySelector('.alert-warning');
-  }
-
-  it('shows the server’s refusal verbatim, in an amber warning alert directly under the Edit Product header', async () => {
+  it('shows no deletion warning for a product the server would refuse to delete', async () => {
     const { host } = await render({ product: product({ canDelete: false, deletionRefusal: historyRefusal }) });
 
-    const shown = notice(host);
-    expect(shown).not.toBeNull();
-    expect(Array.from(shown!.classList)).toEqual(expect.arrayContaining(['alert', 'alert-warning']));
-    expect(shown!.textContent?.trim()).toBe(historyRefusal);
-    // Directly under the page header, before the form card.
-    expect(host.querySelector('.page > header.page-header')?.nextElementSibling).toBe(shown);
+    expect(host.querySelector('.alert-warning')).toBeNull();
+    expect(host.textContent).not.toContain('cannot be deleted');
+    expect(host.textContent).toContain('Inactive products keep their history and are excluded from reorder alerts.');
   });
 
-  it('falls back to its own sentence when the response carries no refusal text', async () => {
-    const { host } = await render({ product: product({ canDelete: false, deletionRefusal: null }) });
-
-    expect(notice(host)?.textContent?.trim()).toBe('This product cannot be deleted.');
-  });
-
-  it('falls back to its own sentence when the refusal text is blank', async () => {
-    const { host } = await render({ product: product({ canDelete: false, deletionRefusal: '   ' }) });
-
-    expect(notice(host)?.textContent?.trim()).toBe('This product cannot be deleted.');
-  });
-
-  it('shows no notice for a product the server would delete', async () => {
-    const { host } = await render({ product: product({ canDelete: true, deletionRefusal: null }) });
-
-    expect(notice(host)).toBeNull();
-  });
-
-  it('shows no notice on New Product, where there is no product to answer for', async () => {
-    const { host } = await render({ routeParams: {} });
-
-    expect(notice(host)).toBeNull();
-  });
-
-  it('shows the notice for an inactive product and during a support session, and changes nothing on the form', async () => {
-    const { host } = await render({
-      product: product({ isActive: false, canDelete: false, deletionRefusal: historyRefusal }),
-      sessionActive: of(true)
-    });
-
-    expect(notice(host)?.textContent?.trim()).toBe(historyRefusal);
-    expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
-    expect((host.querySelector('[name="isActive"]') as HTMLInputElement).checked).toBe(false);
-    // Save stays disabled only for the reason it already was - the session, not this notice.
-    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it('still saves an undeletable product, so the notice gates nothing', async () => {
+  it('still saves an undeletable product', async () => {
     const { component, update, navigate } = await render({
       product: product({ canDelete: false, deletionRefusal: historyRefusal })
     });
 
+    component.form.sku = 'SNK-009';
     component.save();
 
-    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ name: 'E2E Chips' }));
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ name: 'E2E Chips', sku: 'SNK-009' }));
     expect(navigate).toHaveBeenCalledWith(['/products']);
   });
 });
@@ -1386,7 +1397,7 @@ describe('ProductFormComponent requiring a Unit Label (issue #895)', () => {
 
     expect(component.form.unit).toBe('');
     expect(unitInput(host).value).toBe('');
-    expect(unitInput(host).placeholder).toBe('e.g. bag, can, bottle');
+    expect(unitInput(host).placeholder).toBe('e.g. 375 mL, 45 g, pouch, can');
     expect(unitInput(host).required).toBe(true);
     expect(unitLabelText(host)).toBe('Unit Label *');
 
@@ -1450,7 +1461,7 @@ describe('ProductFormComponent supplier price tracking (issue #938)', () => {
     expect(getPriceTracking).not.toHaveBeenCalled();
     expect(
       host.querySelector('[data-testid="product-price-tracking-after-create"]')?.textContent
-    ).toContain("Supplier price tracking can be switched on from this product's Edit page");
+    ).toContain("switch tracking on from this product's Edit page once it has been created");
   });
 
   /**
@@ -1460,6 +1471,7 @@ describe('ProductFormComponent supplier price tracking (issue #938)', () => {
   it('leaves the product update carrying no tracking value', async () => {
     const { component, update } = await render();
 
+    component.form.sku = 'SNK-002';
     component.save();
 
     expect(update).toHaveBeenCalledWith(7, expect.not.objectContaining({ tracked: expect.anything() }));
@@ -1524,7 +1536,10 @@ describe('ProductFormComponent master product suggestions on New Product (issue 
 
     // The note is the operator's warning that this does something beyond naming the product, and
     // its checkbox is the opt-out, on by default.
-    expect(selectionNote()?.textContent).toContain('supplier prices');
+    expect(selectionNote()?.textContent).toContain('Selected match');
+    expect(host.querySelector('[data-testid="product-new-tracking-match"]')?.textContent).toContain(
+      'supplier prices are tracked from the moment the product is created'
+    );
     expect(trackSupplierPricesCheckbox()?.checked).toBe(true);
 
     submit();
@@ -1783,7 +1798,8 @@ describe('ProductFormComponent master product suggestions on New Product (issue 
       initialUnitCost: null
     });
     expect(conflictPanel()).toBeNull();
-    expect(component.createdProductId).toBe(55);
+    // Created and finished: the rule needed no write, so nothing is outstanding.
+    expect(component.createdProductId).toBeNull();
     expect(navigate).toHaveBeenCalledWith(['/products']);
   });
 
@@ -1823,5 +1839,306 @@ describe('ProductFormComponent master product suggestions on New Product (issue 
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Hand typed snack', unit: 'bag' }));
     expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+});
+
+/**
+ * One primary action for every editable section (issue #1111). Edit Product's Save changes writes
+ * the product, then its GST rule, then its supplier price tracking - only what changed, in that
+ * order, stopping at the first failure - and says exactly what was and was not saved.
+ */
+describe('ProductFormComponent single save orchestration (issue #1111)', () => {
+  const trackingState = (tracked: boolean) =>
+    jest.fn(() =>
+      of({
+        productId: 7,
+        tracked,
+        status: null,
+        searchName: null,
+        unitLabel: null,
+        masterProduct: null,
+        canTrack: true,
+        trackRefusal: null
+      })
+    );
+
+  /** Turns the tracking switch the way a person does. */
+  const toggleTracking = (host: HTMLElement) => {
+    const toggle = host.querySelector<HTMLInputElement>('[data-testid="price-tracking-switch"]')!;
+    toggle.checked = !toggle.checked;
+    toggle.dispatchEvent(new Event('change'));
+  };
+
+  it('writes nothing and returns to the list when nothing changed', async () => {
+    const { component, update, setGstRule, setPriceTracking, navigate } = await render();
+
+    expect(component.hasUnsavedChanges).toBe(false);
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(setGstRule).not.toHaveBeenCalled();
+    expect(setPriceTracking).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('saves only a changed GST rule, with no product update and no Save GST rule button', async () => {
+    const { fixture, component, chooseGstRule, update, setGstRule, navigate } = await render();
+
+    chooseGstRule('GST-free');
+    expect(component.hasUnsavedChanges).toBe(true);
+    component.save();
+    fixture.detectChanges();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(setGstRule).toHaveBeenCalledWith(7, GstClassification.GstFree);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('writes the product, then the rule, then tracking, when all three changed', async () => {
+    const calls: string[] = [];
+    const update = jest.fn(() => {
+      calls.push('product');
+      return of(undefined);
+    });
+    const setGstRule = jest.fn(() => {
+      calls.push('gst');
+      return of(undefined);
+    });
+    const setPriceTracking = jest.fn(() => {
+      calls.push('tracking');
+      return of(undefined);
+    });
+    const { fixture, component, host, chooseGstRule, navigate } = await render({
+      update,
+      setGstRule,
+      setPriceTracking,
+      getPriceTracking: trackingState(false)
+    });
+
+    component.form.restockTo = 30;
+    chooseGstRule('Taxable');
+    toggleTracking(host);
+    fixture.detectChanges();
+    expect(host.querySelector('[data-testid="product-form-save-state"]')?.textContent).toContain('Unsaved changes');
+
+    component.save();
+    fixture.detectChanges();
+
+    expect(calls).toEqual(['product', 'gst', 'tracking']);
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ restockTo: 30 }));
+    expect(setGstRule).toHaveBeenCalledWith(7, GstClassification.Taxable);
+    expect(setPriceTracking).toHaveBeenCalledWith(7, true);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('reports a partial save truthfully, keeps the values, and retries only what is still unsaved', async () => {
+    const setGstRule = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
+      .mockReturnValue(of(undefined));
+    const { fixture, component, host, chooseGstRule, update, setPriceTracking, navigate } = await render({
+      setGstRule,
+      getPriceTracking: trackingState(false)
+    });
+
+    component.form.sku = 'SNK-777';
+    chooseGstRule('Taxable');
+    toggleTracking(host);
+    fixture.detectChanges();
+
+    component.save();
+    fixture.detectChanges();
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(setPriceTracking).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.saving).toBe(false);
+    expect(component.saveProblem).toEqual({
+      failed: 'GST rule',
+      reason: 'Failed to save the GST rule.',
+      saved: ['Product details'],
+      notAttempted: ['Supplier price tracking']
+    });
+    const banner = host.querySelector('[data-testid="product-form-save-problem"]')!.textContent!;
+    expect(banner).toContain('Some changes were not saved.');
+    expect(banner).toContain('Saved: Product details.');
+    expect(banner).toContain('Not saved: GST rule, Supplier price tracking.');
+    // Nothing on screen is lost, and the saved section is no longer counted as unsaved.
+    expect(component.form.sku).toBe('SNK-777');
+    expect(component.productFieldsDirty).toBe(false);
+    expect(component.hasUnsavedChanges).toBe(true);
+
+    component.save();
+    fixture.detectChanges();
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(setGstRule).toHaveBeenCalledTimes(2);
+    expect(setPriceTracking).toHaveBeenCalledWith(7, true);
+    expect(component.saveProblem).toBeNull();
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('stops at a failed product update and attempts neither the rule nor tracking', async () => {
+    const update = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 400, error: 'Unit label is required.' })));
+    const { fixture, component, chooseGstRule, setGstRule } = await render({ update });
+
+    component.form.description = 'Changed';
+    chooseGstRule('Taxable');
+    component.save();
+    fixture.detectChanges();
+
+    expect(setGstRule).not.toHaveBeenCalled();
+    expect(component.saveProblem).toEqual({
+      failed: 'Product details',
+      reason: 'Unit label is required.',
+      saved: [],
+      notAttempted: ['GST rule']
+    });
+  });
+
+  it('protects against a duplicate submit while a save is in flight', async () => {
+    const pending = new Subject<void>();
+    const update = jest.fn(() => pending.asObservable());
+    const { fixture, component, host, navigate } = await render({ update });
+
+    component.form.sku = 'SNK-100';
+    component.save();
+    fixture.detectChanges();
+    component.save();
+
+    const submit = host.querySelector<HTMLButtonElement>('[data-testid="product-form-submit"]')!;
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(submit.disabled).toBe(true);
+    expect(submit.textContent?.trim()).toBe('Saving...');
+    expect(component.leaveWarning()).toBe(PRODUCT_SAVE_IN_FLIGHT_LEAVE_WARNING);
+
+    pending.next();
+    pending.complete();
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('removes the supplier price comparison from Edit Product entirely', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('app-product-price-history')).toBeNull();
+    expect(host.textContent).not.toMatch(/price comparison|price history|Lowest|Latest purchase/i);
+    // The tracking settings stay.
+    expect(host.querySelector('[data-testid="product-price-tracking"]')).not.toBeNull();
+  });
+
+  it('shows no Managed by Nayax badge or synced note for a product the business maintains', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="product-form-provider-badge"]')).toBeNull();
+    expect(host.querySelector('[data-testid="product-provider-note"]')).toBeNull();
+    expect(host.textContent).not.toContain('Nayax');
+  });
+});
+
+/**
+ * Unsaved changes (issue #1111): only actual modifications count, every departure asks before they
+ * are lost, and the state clears only after the write that stored them succeeded.
+ */
+describe('ProductFormComponent unsaved changes (issue #1111)', () => {
+  let confirmSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+  });
+
+  afterEach(() => confirmSpy.mockRestore());
+
+  it('lets an untouched edit page go without asking', async () => {
+    const { component, host } = await render();
+
+    expect(component.hasUnsavedChanges).toBe(false);
+    expect(component.confirmLeave()).toBe(true);
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="product-form-save-state"]')?.textContent).not.toContain('Unsaved changes');
+  });
+
+  it('asks before leaving a changed edit page, and stays when the operator declines', async () => {
+    const { fixture, component, host } = await render();
+
+    component.form.restockTo = 25;
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="product-form-save-state"]')?.textContent).toContain('Unsaved changes');
+    expect(component.confirmLeave()).toBe(false);
+    expect(confirmSpy).toHaveBeenCalledWith(PRODUCT_UNSAVED_LEAVE_WARNING);
+    expect(component.form.restockTo).toBe(25);
+  });
+
+  it('treats a value changed back to what is stored as unchanged', async () => {
+    const { component } = await render();
+
+    component.form.sku = 'OTHER';
+    component.form.sku = 'SNK-001';
+
+    expect(component.hasUnsavedChanges).toBe(false);
+  });
+
+  it('asks the browser to confirm a reload only while there is something to lose', async () => {
+    const { component } = await render();
+
+    const clean = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    component.onBeforeUnload(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    component.form.name = 'Renamed';
+    const dirty = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    component.onBeforeUnload(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+  });
+
+  it('counts a chosen GST rule on New Product as a change, and nothing before it', async () => {
+    const { component, chooseGstRule } = await render({ routeParams: {} });
+
+    expect(component.hasUnsavedChanges).toBe(false);
+    chooseGstRule('Taxable');
+    expect(component.hasUnsavedChanges).toBe(true);
+  });
+
+  it('asks nothing on the way back to the list after a successful save', async () => {
+    const { component } = await render();
+
+    component.form.sku = 'SNK-200';
+    component.save();
+
+    expect(component.leaveWarning()).toBeNull();
+    expect(component.confirmLeave()).toBe(true);
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps asking after a failed save, because nothing was stored', async () => {
+    const update = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })));
+    const { component } = await render({ update });
+
+    component.form.sku = 'SNK-300';
+    component.save();
+
+    expect(component.leaveWarning()).toBe(PRODUCT_UNSAVED_LEAVE_WARNING);
+  });
+
+  it('warns that a created product’s rule is unsaved when leaving after a partial create', async () => {
+    const { component, chooseGstRule, submit } = await render({
+      routeParams: {},
+      create: jest.fn(() => of(product({ id: 55 }))),
+      setGstRule: jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })))
+    });
+
+    chooseGstRule('Taxable');
+    component.form.name = 'New Snack';
+    component.form.unit = 'bag';
+    submit();
+
+    expect(component.leaveWarning()).toBe(PRODUCT_GST_OUTSTANDING_LEAVE_WARNING);
+  });
+
+  it('is wired as the canDeactivate guard of both product form routes', () => {
+    const guarded = { confirmLeave: jest.fn(() => false) };
+
+    expect(TestBed.runInInjectionContext(() => confirmProductFormLeave(guarded, null!, null!, null!))).toBe(false);
+    expect(guarded.confirmLeave).toHaveBeenCalled();
   });
 });
