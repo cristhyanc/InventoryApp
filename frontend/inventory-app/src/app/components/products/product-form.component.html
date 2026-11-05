@@ -1,135 +1,150 @@
-<div class="page">
-  <header class="page-header">
-    <h1 class="page-title">{{ productId ? 'Edit Product' : 'New Product' }}</h1>
+<!--
+  New Product and Edit Product (issue #1111's approved Restockroo layout, on the `rr` scale): one
+  centred content area about 1,100px wide, a main column of Product details, Opening inventory (New
+  only) and Reordering, a settings column of Product status, GST rule and Supplier price tracking, and
+  a sticky action bar with the page's one primary action. Below `lg` the two columns stack in that
+  same order.
+
+  The form carries an id so the action bar's submit button can name it, and so the settings cards -
+  whose GST and tracking controls are their own components' - sit beside its fields rather than in a
+  form inside a form. Every control of those components is `type="button"` or standalone, so there
+  is exactly one submit path and one `submit()`.
+-->
+<div class="page font-rr text-rr-navy">
+<div class="mx-auto w-full max-w-[1100px]">
+  <header class="mb-6" data-testid="product-form-header">
+    <a
+      routerLink="/products"
+      class="mb-2 inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-rr-teal no-underline hover:text-rr-teal-hover"
+      data-testid="product-form-back"
+    >
+      <span aria-hidden="true">‹</span> Back to Products
+    </a>
+
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <h1 class="page-title m-0 break-words text-2xl font-bold tracking-tight text-rr-navy">
+        @if (productId) {
+          {{ storedName || 'Edit product' }}
+        } @else {
+          New product
+        }
+      </h1>
+
+      @if (productId && storedName) {
+        <div class="flex flex-wrap items-center gap-2" data-testid="product-form-badges">
+          <span
+            class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold"
+            [ngClass]="storedIsActive ? 'bg-rr-ok-bg text-rr-ok-text' : 'bg-rr-surface text-rr-muted'"
+            data-testid="product-form-status-badge"
+          >
+            <span aria-hidden="true" class="h-1.5 w-1.5 rounded-full bg-current"></span>
+            {{ storedIsActive ? 'Active' : 'Inactive' }}
+          </span>
+          <!-- The one ownership badge (issue #1111): the fields themselves carry no repeated badge. -->
+          @if (providerManaged) {
+            <span class="inline-flex items-center gap-1 rounded-full bg-rr-teal-tint px-2.5 py-0.5 text-xs font-semibold text-rr-teal" data-testid="product-form-provider-badge">
+              <app-icon name="sync_alt" [size]="14" />
+              Managed by Nayax
+            </span>
+          }
+        </div>
+      }
+    </div>
+
+    <p class="m-0 mt-1 text-sm text-rr-muted">
+      @if (productId) {
+        Update product settings, reorder levels and supplier price tracking.
+      } @else {
+        Create a product record to track warehouse stock, reorder levels and supplier pricing.
+      }
+    </p>
   </header>
 
-  <!-- Why this product may not be deleted, in the server's own words (issue #825). Informational
-       only: it explains the product and changes nothing about the form below it. -->
-  @if (deletionNotice) {
-    <div class="alert alert-warning">
-      <p class="alert-title">{{ deletionNotice }}</p>
+  <!-- Page-level outcomes sit above the cards, so the action bar can never cover them. -->
+  @if (error) {
+    <div class="alert alert-danger mb-4" role="alert" data-testid="product-form-error">
+      <p class="alert-title">{{ error }}</p>
     </div>
   }
 
-  <div class="card w-full">
-    <div class="card-body">
-      @if (error) {
-        <p class="field-error mb-4">{{ error }}</p>
+  @if (saveProblem) {
+    <div class="alert alert-danger mb-4" role="alert" data-testid="product-form-save-problem">
+      <p class="alert-title">{{ saveProblem.saved.length ? 'Some changes were not saved.' : 'Your changes were not saved.' }}</p>
+      <p>{{ saveProblem.failed }}: {{ saveProblem.reason }}</p>
+      @if (saveProblem.saved.length) {
+        <p data-testid="product-form-saved-sections">Saved: {{ saveProblem.saved.join(', ') }}.</p>
       }
+      <p data-testid="product-form-unsaved-sections">
+        Not saved: {{ [saveProblem.failed].concat(saveProblem.notAttempted).join(', ') }}. Your entries are kept;
+        press Save changes to try again.
+      </p>
+    </div>
+  }
 
-      @if (providerManagedNote) {
-        <div class="alert alert-info mb-4">
-          <p class="alert-title">{{ providerManagedNote }}</p>
-        </div>
-      }
+  <!-- The create was refused because the selected master product no longer stands (issue #1051's
+       `409`), and nothing at all was created. The sentence is the server's own - this page words
+       none of the three refusals - and the two controls are the only two ways on it names: choose the
+       product again, which refills both values afresh, or create this product with no link, which is
+       the create every client made before that issue. -->
+  @if (masterProductConflict) {
+    <div class="alert alert-warning mb-4" role="alert" data-testid="product-master-product-conflict">
+      <p class="alert-title">{{ masterProductConflict }}</p>
+      <div class="mt-3 flex flex-wrap gap-3">
+        <button type="button" class="rr-button-secondary" (click)="chooseMasterProductAgain()">Choose again</button>
+        <button type="button" class="rr-button-secondary" [disabled]="submitDisabled" (click)="createWithoutMasterProduct()">
+          Create without link
+        </button>
+      </div>
+    </div>
+  }
 
-      @if (productId) {
-        <form class="space-y-4" (ngSubmit)="save()">
-          <!--
-            The edit page keeps the layout issue #478 gave it: the card fills the content area, so
-            the fields are laid out in columns rather than stretched - one column on a narrow
-            screen, two from `md` and three from `xl`. Issue #892 reorganized New Product only,
-            because a provider-managed name and category are locked here and preserving those
-            restrictions exactly is worth more than one shared layout.
-          -->
-          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <label class="field">
-              <span class="field-label">Name *</span>
-              <input [(ngModel)]="form.name" name="name" [readOnly]="nameLocked" />
-            </label>
+  <div
+    class="grid grid-cols-1 gap-6 lg:grid-cols-3 [&_input]:scroll-mb-40 [&_select]:scroll-mb-40 [&_textarea]:scroll-mb-40"
+    data-testid="product-form-grid"
+  >
+    <form
+      id="product-form"
+      class="min-w-0 space-y-6 lg:col-span-2"
+      novalidate
+      data-testid="product-form-main"
+      (ngSubmit)="submit()"
+    >
+      <!-- Every product field, picker and button is held still while a save is in flight (issue
+           #1111 review): a save writes the values captured when it was pressed and then leaves the
+           page, so a later edit would otherwise be dropped without a warning. A native disabled
+           fieldset disables every descendant control, the composed pickers' included. -->
+      <fieldset class="m-0 min-w-0 space-y-6 border-0 p-0" [disabled]="saving" data-testid="product-form-fields">
+      <!-- Product details -->
+      <section
+        class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
+        aria-labelledby="product-details-heading"
+        data-testid="product-section-product-details"
+      >
+        <h2 id="product-details-heading" class="m-0 mb-4 border-b border-rr-line pb-2 text-base font-semibold text-rr-navy">Product details</h2>
 
-            <label class="field">
-              <span class="field-label">SKU</span>
-              <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
-            </label>
+        @if (providerManagedNote) {
+          <p class="mb-4 flex items-center gap-2 rounded-lg border border-rr-teal-border bg-rr-teal-tint p-3 text-sm font-medium text-rr-navy" data-testid="product-provider-note">
+            <span class="text-rr-teal"><app-icon name="info" [size]="18" /></span>
+            {{ providerManagedNote }}
+          </p>
+        }
 
-            <label class="field md:col-span-2 xl:col-span-1">
-              <span class="field-label">Description</span>
-              <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
-            </label>
-
-            <!-- The edit page keeps its dropdown unchanged (issue #830): a provider-managed category
-                 is locked here, and that restriction is exactly what this enhancement must not
-                 touch. -->
-            <label class="field">
-              <span class="field-label">Category</span>
-              <select [(ngModel)]="form.categoryId" name="categoryId" [disabled]="categoryLocked">
-                <option value="">None</option>
-                @for (c of categories; track c.id) {
-                  <option [ngValue]="c.id">{{ c.name }}</option>
-                }
-              </select>
-            </label>
-
-            <!-- `self-end` keeps this label-less control's box on the same baseline as the inputs beside it. -->
-            <label class="flex items-center gap-2 self-end rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
-              <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
-              <span class="field-label">Active product</span>
-            </label>
-
-            <label class="field">
-              <span class="field-label">Low Stock Threshold *</span>
-              <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
-              <span class="field-hint">Minimum home stock before a new order is needed.</span>
-            </label>
-
-            <label class="field">
-              <span class="field-label">Restock To *</span>
-              <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
-              <span class="field-hint">Target home stock after machines are replenished and the order is received.</span>
-            </label>
-
-            @if (form.restockTo < form.lowStockThreshold) {
-              <p class="field-error md:col-span-2 xl:col-span-3">Restock To must be greater than or equal to the Low Stock Threshold.</p>
-            }
-
-            <!-- Required since issue #895. A product whose stored label was missing opens this
-                 field empty, so the message below is what asks the operator to choose one. -->
-            <label class="field">
-              <span class="field-label">Unit Label *</span>
-              <input [(ngModel)]="form.unit" name="unit" required placeholder="e.g. bag, can, bottle" />
-              @if (unitMissing) {
-                <span class="field-error">Unit label is required.</span>
-              }
-            </label>
-          </div>
-
-          <div class="flex flex-wrap gap-3 pt-2">
-            <!-- The guard issue #829 added is kept here unchanged; on the edit page it never
-                 triggers, because only the create path ever sets `createdProductId`. -->
-            @if (createdProductId === null) {
-              <button type="submit" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
-            }
-            <a routerLink="/products" class="btn btn-secondary">Cancel</a>
-          </div>
-        </form>
-
-        <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
-        <!-- The "Track supplier prices" switch (issue #938). A workflow of its own - its own read of
-             the product's price-tracking resource, its own write, its own refusal and error states -
-             so a dedicated feature component owns it (the page composition boundary). This page only
-             says which product it is about, and the switch saves separately from the form because
-             tracking is its own API resource, like the GST rule above it. -->
-        <app-product-price-tracking [productId]="productId"></app-product-price-tracking>
-        <app-product-price-history [productId]="productId"></app-product-price-history>
-      } @else {
-        <!--
-          New Product is read down titled sections rather than across one auto-flowing grid
-          (issue #892): related fields sit on the same row, each section is one column on a narrow
-          screen and two from `md`, and `items-start` keeps a control on its row's top edge instead
-          of letting a neighbouring field's help text push it down. The one action row is below the
-          GST choice, which is the last decision the page asks for.
-
-          The form carries an id so that row can sit outside it: the GST panel between them owns
-          form controls of its own, and a form inside a form is not markup a browser keeps. The
-          submit button names this form instead, so there is still exactly one submit path and one
-          `save()`.
-        -->
-        <form id="new-product-form" (ngSubmit)="save()">
-          <section data-testid="product-section-product-details">
-            <h2 class="mb-3 text-lg font-semibold text-md-gray-800">Product details</h2>
-
-            <div class="grid items-start gap-4 md:grid-cols-2">
+        <div class="grid items-start gap-4 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            @if (productId) {
+              <label class="field">
+                <span class="field-label">Name *</span>
+                <input
+                  class="min-h-11"
+                  [class.bg-rr-canvas]="nameLocked"
+                  [(ngModel)]="form.name"
+                  name="name"
+                  [readOnly]="nameLocked"
+                  [attr.aria-readonly]="nameLocked"
+                  required
+                />
+              </label>
+            } @else {
               <!-- New Product (issue #1052): naming a product by picking it out of the shared
                    supplier price catalogue is a workflow of its own - its own debounced read of the
                    master product lookup (issue #1049), its own list, loading, empty and failure
@@ -143,175 +158,303 @@
                 (suggestionSelected)="onMasterProductSelected($event)"
               ></app-product-master-product-picker>
 
-              <label class="field">
-                <span class="field-label">SKU</span>
-                <input [(ngModel)]="form.sku" name="sku" placeholder="Optional, e.g. SNK-001" />
-              </label>
-
-              <!-- New Product (issue #830): searching the existing categories and creating a missing
-                   one is a workflow of its own - its own option read, its own `POST api/categories`
-                   and that write's pending, refusal and retry states - so a dedicated feature
-                   component owns it (the page composition boundary). The page keeps only the id to
-                   submit, which is why neither a pending nor a refused category create can touch a
-                   field on this form, and why its own buttons stay `type="button"` and submit
-                   nothing. -->
-              <app-product-category-picker
-                [categoryId]="selectedCategoryId"
-                (categoryIdChange)="onCategorySelected($event)"
-              ></app-product-category-picker>
-
-              <!-- Required since issue #895, and empty on a new product: the operator chooses the
-                   label. Bound one way with its own handler since issue #1052, because editing this
-                   value away from a selected master product's own label drops that selection - the
-                   label is half of what the server recognises the chosen product by. -->
-              <label class="field">
-                <span class="field-label">Unit Label *</span>
-                <input
-                  [ngModel]="form.unit"
-                  (ngModelChange)="onUnitLabelInput($event)"
-                  name="unit"
-                  required
-                  placeholder="e.g. bag, can, bottle"
-                />
-                @if (unitMissing) {
-                  <span class="field-error">Unit label is required.</span>
-                }
-              </label>
-
-              <label class="field md:col-span-2">
-                <span class="field-label">Description</span>
-                <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
-              </label>
-
-              <!-- What the selection does beyond filling the two fields in (issue #1052): the link
-                   *is* the supplier price tracking request, so it is said plainly here, and the
-                   checkbox is the opt-out. Unticking it sends `trackSupplierPrices=false`, which the
-                   server answers by ignoring the selection and creating the ordinary unlinked,
-                   untracked product. The cell is here only while a selection stands; editing either
-                   value away from it takes the selection, and this note, with it. -->
+              <!-- The catalogue product the Name was taken from (issue #1052), while that selection
+                   stands. Editing the Name or the unit label away from it takes the selection, and
+                   this line, with it. What tracking it asks for is the settings card's. -->
               @if (masterProductSelection) {
-                <div class="field md:col-span-2" data-testid="product-master-product-selection">
-                  <p class="text-sm text-md-gray-600">
-                    “{{ masterProductSelection.productName }}” ({{ masterProductSelection.unitLabel }}) was taken
-                    from the shared supplier catalogue, so this product's supplier prices will be tracked from the
-                    moment it is created.
-                  </p>
-                  <label class="mt-2 inline-flex items-center gap-2 rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
-                    <input
-                      [(ngModel)]="trackSupplierPrices"
-                      name="trackSupplierPrices"
-                      type="checkbox"
-                      class="h-4 w-4 border-md-gray-300 text-md-dark"
-                    />
-                    <span class="field-label">Track supplier prices for this product</span>
-                  </label>
-                </div>
+                <p
+                  class="mt-2 mb-0 inline-flex max-w-full items-start gap-1.5 rounded-lg border border-rr-teal-border bg-rr-teal-tint px-2.5 py-1.5 text-xs text-rr-navy"
+                  data-testid="product-master-product-selection"
+                >
+                  <span class="mt-px shrink-0 text-rr-teal"><app-icon name="check_circle" [size]="14" /></span>
+                  <span class="min-w-0 break-words">
+                    Selected match:
+                    <strong class="font-semibold">“{{ masterProductSelection.productName }}” ({{ masterProductSelection.unitLabel }})</strong>
+                    from the shared supplier catalogue.
+                  </span>
+                </p>
               }
-            </div>
-
-            <!-- Outside the field grid on purpose: a label-less checkbox stretched across a grid
-                 cell, or bottom-aligned against the Category helper text, is what issue #892
-                 removed. It stays as wide as it reads. -->
-            <label class="mt-4 inline-flex items-center gap-2 rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
-              <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
-              <span class="field-label">Active product</span>
-            </label>
-          </section>
-
-          <section data-testid="product-section-opening-inventory" class="mt-6 border-t border-md-gray-200 pt-6">
-            <h2 class="mb-3 text-lg font-semibold text-md-gray-800">Opening inventory</h2>
-
-            <div class="grid items-start gap-4 md:grid-cols-2">
-              <label class="field">
-                <span class="field-label">Opening Stock</span>
-                <input [(ngModel)]="form.quantityInStock" name="quantityInStock" type="number" min="0" step="1" />
-              </label>
-
-              <label class="field">
-                <span class="field-label">Initial Unit Cost ($)</span>
-                <input [(ngModel)]="form.initialUnitCost" name="initialUnitCost" type="number" min="0" step="0.01" placeholder="Optional" />
-              </label>
-            </div>
-          </section>
-
-          <section data-testid="product-section-reordering" class="mt-6 border-t border-md-gray-200 pt-6">
-            <h2 class="mb-3 text-lg font-semibold text-md-gray-800">Reordering</h2>
-
-            <div class="grid items-start gap-4 md:grid-cols-2">
-              <label class="field">
-                <span class="field-label">Low Stock Threshold *</span>
-                <input [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
-                <span class="field-hint">Minimum home stock before a new order is needed.</span>
-              </label>
-
-              <label class="field">
-                <span class="field-label">Restock To *</span>
-                <input [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
-                <span class="field-hint">Target home stock after machines are replenished and the order is received.</span>
-              </label>
-            </div>
-
-            @if (form.restockTo < form.lowStockThreshold) {
-              <p class="field-error mt-2">Restock To must be greater than or equal to the Low Stock Threshold.</p>
             }
-          </section>
-        </form>
+          </div>
 
+          @if (productId) {
+            <!-- The edit page keeps its dropdown (issue #830); a provider-managed category is shown
+                 read-only instead, because that restriction is what this page must not touch. -->
+            @if (categoryLocked) {
+              <label class="field">
+                <span class="field-label">Category</span>
+                <input class="min-h-11 bg-rr-canvas" name="categoryName" [value]="categoryName" readonly aria-readonly="true" />
+              </label>
+            } @else {
+              <label class="field">
+                <span class="field-label">Category</span>
+                <select class="min-h-11 bg-white" [(ngModel)]="form.categoryId" name="categoryId">
+                  <option value="">None</option>
+                  @for (c of categories; track c.id) {
+                    <option [ngValue]="c.id">{{ c.name }}</option>
+                  }
+                </select>
+              </label>
+            }
+          } @else {
+            <!-- New Product (issue #830): searching the existing categories and creating a missing
+                 one is a workflow of its own - its own option read, its own `POST api/categories`
+                 and that write's pending, refusal and retry states - so a dedicated feature
+                 component owns it (the page composition boundary). The page keeps only the id to
+                 submit, which is why neither a pending nor a refused category create can touch a
+                 field on this form, and why its own buttons stay `type="button"` and submit
+                 nothing. -->
+            <app-product-category-picker
+              [categoryId]="selectedCategoryId"
+              (categoryIdChange)="onCategorySelected($event)"
+            ></app-product-category-picker>
+          }
+
+          <label class="field">
+            <span class="field-label">SKU <span class="font-normal text-rr-caption">(optional)</span></span>
+            <input class="min-h-11" [(ngModel)]="form.sku" name="sku" placeholder="e.g. SNK-001" />
+          </label>
+
+          <!-- Required since issue #895, and empty on a new product: the operator chooses the
+               label. Bound one way with its own handler since issue #1052, because editing this
+               value away from a selected master product's own label drops that selection - the
+               label is half of what the server recognises the chosen product by. -->
+          <label class="field">
+            <span class="field-label">Unit Label *</span>
+            <input
+              class="min-h-11"
+              [ngModel]="form.unit"
+              (ngModelChange)="onUnitLabelInput($event)"
+              name="unit"
+              required
+              placeholder="e.g. 375 mL, 45 g, pouch, can"
+              [attr.aria-invalid]="unitMissing"
+              aria-describedby="product-unit-hint"
+            />
+            <span id="product-unit-hint" class="text-xs text-rr-muted">e.g. 375 mL, 45 g, pouch, can</span>
+            @if (unitMissing) {
+              <span class="field-error">Unit label is required.</span>
+            }
+          </label>
+
+          <label class="field sm:col-span-2">
+            <span class="field-label">Description <span class="font-normal text-rr-caption">(optional)</span></span>
+            <textarea [(ngModel)]="form.description" name="description" rows="3"></textarea>
+          </label>
+        </div>
+      </section>
+
+      @if (!productId) {
+        <!-- Opening inventory: New Product only. Its semantics and defaults are unchanged. -->
+        <section
+          class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
+          aria-labelledby="opening-inventory-heading"
+          data-testid="product-section-opening-inventory"
+        >
+          <div class="mb-4 border-b border-rr-line pb-2">
+            <h2 id="opening-inventory-heading" class="m-0 text-base font-semibold text-rr-navy">Opening inventory</h2>
+            <p class="m-0 mt-0.5 text-xs text-rr-muted">Record your starting warehouse stock. Machine stock is counted separately.</p>
+          </div>
+
+          <div class="grid items-start gap-4 sm:grid-cols-2">
+            <label class="field">
+              <span class="field-label">Opening Stock</span>
+              <input class="min-h-11" [(ngModel)]="form.quantityInStock" name="quantityInStock" type="number" min="0" step="1" />
+              <span class="text-xs text-rr-muted">Units on hand in the warehouse now.</span>
+            </label>
+
+            <label class="field">
+              <span class="field-label">Initial Unit Cost ($) <span class="font-normal text-rr-caption">(optional)</span></span>
+              <input
+                class="min-h-11"
+                [(ngModel)]="form.initialUnitCost"
+                name="initialUnitCost"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Optional"
+              />
+              <span class="text-xs text-rr-muted">In AUD. Sets the starting average cost of the opening stock.</span>
+            </label>
+          </div>
+        </section>
+      }
+
+      <!-- Reordering -->
+      <section
+        class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
+        aria-labelledby="reordering-heading"
+        data-testid="product-section-reordering"
+      >
+        <div class="mb-4 border-b border-rr-line pb-2">
+          <h2 id="reordering-heading" class="m-0 text-base font-semibold text-rr-navy">Reordering</h2>
+          <p class="m-0 mt-0.5 text-xs text-rr-muted">These settings decide when a reorder is suggested and the target warehouse stock.</p>
+        </div>
+
+        <div class="grid items-start gap-4 sm:grid-cols-2">
+          <label class="field">
+            <span class="field-label">Low Stock Threshold *</span>
+            <input class="min-h-11" [(ngModel)]="form.lowStockThreshold" name="lowStockThreshold" type="number" min="0" step="1" required />
+            <span class="field-hint text-xs">A reorder is suggested at or below this projected warehouse stock.</span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Restock To *</span>
+            <input class="min-h-11" [(ngModel)]="form.restockTo" name="restockTo" type="number" min="0" step="1" required />
+            <span class="field-hint text-xs">Target warehouse stock after machines are refilled and the order is received.</span>
+          </label>
+        </div>
+
+        @if (restockBelowThreshold) {
+          <p class="field-error mt-2" role="alert">Restock To must be greater than or equal to the Low Stock Threshold.</p>
+        } @else if (reorderGuidance) {
+          <p class="m-0 mt-4 rounded-lg border border-rr-teal-border bg-rr-teal-tint p-3 text-xs leading-relaxed text-rr-navy" data-testid="product-reorder-guidance">
+            {{ reorderGuidance }}
+          </p>
+        }
+      </section>
+      </fieldset>
+    </form>
+
+    <!-- Settings column -->
+    <div class="min-w-0 space-y-6" data-testid="product-form-settings">
+      <!-- Product status -->
+      <section
+        class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card"
+        aria-labelledby="product-status-heading"
+        data-testid="product-section-status"
+      >
+        <h2 id="product-status-heading" class="m-0 mb-4 border-b border-rr-line pb-2 text-base font-semibold text-rr-navy">Product status</h2>
+        <label class="flex min-h-11 cursor-pointer items-start justify-between gap-3">
+          <span class="min-w-0">
+            <span class="block text-sm font-semibold text-rr-navy">Active product</span>
+            <span class="mt-0.5 block text-xs leading-relaxed text-rr-muted">
+              Inactive products keep their history and are excluded from reorder alerts.
+            </span>
+          </span>
+          <span class="relative mt-0.5 inline-flex shrink-0 items-center">
+            <input
+              [(ngModel)]="form.isActive"
+              [ngModelOptions]="{ standalone: true }"
+              name="isActive"
+              [disabled]="saving"
+              type="checkbox"
+              role="switch"
+              class="peer sr-only"
+              [attr.aria-checked]="form.isActive"
+            />
+            <span
+              aria-hidden="true"
+              class="block h-6 w-11 rounded-full bg-rr-line-strong transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-rr-teal peer-checked:after:translate-x-5 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-md-info"
+            ></span>
+          </span>
+        </label>
+      </section>
+
+      @if (productId) {
+        <!-- The GST rule (issue #430) and the "Track supplier prices" switch (issue #938) are
+             workflows of their own - their own reads, refusals and load errors - so dedicated
+             feature components own them (the page composition boundary). Since issue #1111 neither
+             writes on its own: Save changes asks each whether it changed and writes it. -->
+        <app-product-gst-rule class="block" [productId]="productId" [disabled]="saving"></app-product-gst-rule>
+        <app-product-price-tracking class="block" [productId]="productId" [disabled]="saving"></app-product-price-tracking>
+      } @else {
         <!-- New Product (issue #829): a dedicated feature component owns the rule of the product
              being created - the choice, the write to the product's own GST resource once the create
-             has answered an id, its failure and its retry (the page composition boundary). This page
-             only says which product now exists and finishes on what that component reports. There
-             is no price history to show for a product that does not exist yet. It is mounted once,
-             above the action row, so the GST choice is made before Create Product is reached by
-             reading and by Tab (issue #892). -->
+             has answered an id, and its failure. The page only says which product now exists,
+             finishes on what that component reports, and retries through it. -->
         <app-product-create-gst-rule
-          [createdProductId]="createdProductId"
+          class="block"
+          [disabled]="saving"
+          (ruleChange)="newProductGstRule = $event"
           (persisted)="onGstRulePersisted()"
           (failed)="onGstRuleFailed()"
         ></app-product-create-gst-rule>
 
-        <!-- New Product has no "Track supplier prices" switch (issue #938): there is no product yet
-             to track, and the search text is read from the stored product rather than from this
-             form - so offering the switch here would either write nothing or capture a name that is
-             not stored yet. The note says where to find it instead. Turning tracking on for many
-             products at once is explicitly out of that issue's scope. -->
-        <p class="mt-6 border-t border-md-gray-200 pt-6 text-sm text-md-gray-600" data-testid="product-price-tracking-after-create">
-          Supplier price tracking can be switched on from this product's Edit page once it has been
-          created.
-        </p>
-
-        <!-- The create was refused because the selected master product no longer stands (issue
-             #1051's `409`), and nothing at all was created. The sentence is the server's own - this
-             page words none of the three refusals - and the two controls are the only two ways on it
-             names: choose the product again, which refills both values afresh, or create this
-             product with no link, which is the create every client made before that issue. -->
-        @if (masterProductConflict) {
-          <div class="alert alert-warning mt-6" role="alert" data-testid="product-master-product-conflict">
-            <p class="alert-title">{{ masterProductConflict }}</p>
-            <div class="mt-3 flex flex-wrap gap-3">
-              <button type="button" class="btn btn-secondary" (click)="chooseMasterProductAgain()">Choose again</button>
-              <button
-                type="button"
-                class="btn btn-secondary"
-                [disabled]="submitDisabled"
-                (click)="createWithoutMasterProduct()"
-              >
-                Create without link
-              </button>
-            </div>
-          </div>
-        }
-
-        <div data-testid="product-form-actions" class="mt-6 flex flex-wrap gap-3 border-t border-md-gray-200 pt-6">
-          <!-- Gone once this page has created its product (issue #829): the product exists, these
-               fields are no longer being sent, and the only outstanding write is the GST rule,
-               which the panel above owns and retries. No create control, no second product. -->
-          @if (createdProductId === null) {
-            <button type="submit" form="new-product-form" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
+        <!-- Supplier price tracking on New Product. There is no product yet to read a tracking state
+             for, so the only tracking a create can ask for is the one a shared-catalogue selection
+             carries (issue #1052): while one stands this switch is its opt-out, sent with the create
+             as `trackSupplierPrices`. Without one, the switch is on the product's Edit page once it
+             exists (issue #938). -->
+        <section
+          class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card"
+          aria-labelledby="new-product-tracking-heading"
+          data-testid="product-section-price-tracking"
+        >
+          <h2 id="new-product-tracking-heading" class="m-0 mb-4 border-b border-rr-line pb-2 text-base font-semibold text-rr-navy">
+            Supplier price tracking
+          </h2>
+          @if (masterProductSelection) {
+            <label class="flex min-h-11 cursor-pointer items-start justify-between gap-3">
+              <span class="min-w-0">
+                <span class="block text-sm font-semibold text-rr-navy">Track supplier prices</span>
+                <span class="mt-0.5 block text-xs leading-relaxed text-rr-muted">Track catalogue prices to help find cheaper suppliers.</span>
+              </span>
+              <span class="relative mt-0.5 inline-flex shrink-0 items-center">
+                <input
+                  [(ngModel)]="trackSupplierPrices"
+                  [ngModelOptions]="{ standalone: true }"
+                  name="trackSupplierPrices"
+                  [disabled]="saving"
+                  type="checkbox"
+                  role="switch"
+                  class="peer sr-only"
+                  [attr.aria-checked]="trackSupplierPrices"
+                />
+                <span
+                  aria-hidden="true"
+                  class="block h-6 w-11 rounded-full bg-rr-line-strong transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-rr-teal peer-checked:after:translate-x-5 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-md-info"
+                ></span>
+              </span>
+            </label>
+            <p class="m-0 mt-3 break-words text-xs leading-relaxed text-rr-muted" data-testid="product-new-tracking-match">
+              @if (trackSupplierPrices) {
+                Linked to “{{ masterProductSelection.productName }}” ({{ masterProductSelection.unitLabel }}) in the shared
+                catalogue. Its supplier prices are tracked from the moment the product is created.
+              } @else {
+                The product will be created without a catalogue link and its supplier prices will not be tracked.
+              }
+            </p>
+          } @else {
+            <p class="m-0 text-xs leading-relaxed text-rr-muted" data-testid="product-price-tracking-after-create">
+              Track catalogue prices to help find cheaper suppliers. Choose the product from the shared catalogue
+              suggestions under Name to track it from the start, or switch tracking on from this product's Edit page
+              once it has been created.
+            </p>
           }
-          <a routerLink="/products" class="btn btn-secondary">Cancel</a>
-        </div>
+        </section>
       }
     </div>
   </div>
+
+  <!--
+    The action bar sticks to the bottom of the window while the form is on screen. Below the wide
+    layout the shell's bottom navigation is fixed there, so the bar sits just above it; fields keep a
+    bottom scroll margin, so focusing one never leaves it underneath the bar.
+  -->
+  <div
+    class="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 -mx-4 mt-6 flex items-center justify-between gap-3 border-t border-rr-line bg-white px-4 py-3 sm:-mx-6 sm:px-6 lg:bottom-0"
+    data-testid="product-form-actions"
+  >
+    <output class="m-0 flex min-w-0 items-center gap-2 text-xs font-medium text-rr-muted" data-testid="product-form-save-state">
+      @if (saving) {
+        Saving...
+      } @else if (createdProductId !== null) {
+        <span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full bg-rr-warn-text"></span>
+        <span class="text-rr-warn-text">Product created; GST rule not saved</span>
+      } @else if (hasUnsavedChanges) {
+        <span aria-hidden="true" class="h-2 w-2 shrink-0 rounded-full bg-rr-warn-text"></span>
+        <span class="text-rr-warn-text">Unsaved changes</span>
+      } @else if (!productId) {
+        <span class="hidden sm:inline">New product</span>
+      }
+    </output>
+    <div class="flex shrink-0 items-center gap-3">
+      <a routerLink="/products" class="rr-button-secondary" data-testid="product-form-cancel">Cancel</a>
+      <button type="submit" form="product-form" class="rr-button-primary" data-testid="product-form-submit" [disabled]="submitDisabled">
+        {{ submitLabel }}
+      </button>
+    </div>
+  </div>
+</div>
 </div>

@@ -105,7 +105,7 @@ async function open(page: Page, width: number): Promise<void> {
     content:
       '*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }'
   });
-  await expect(page.getByRole('heading', { name: 'New Product', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'New product', level: 1 })).toBeVisible();
 }
 
 /**

@@ -28,6 +28,7 @@ import { PUBLIC_HOME_ROUTE } from './public/landing/landing-routes';
 import { PUBLIC_LAYOUT_DATA } from './public/public-layout';
 import { signedOutVisitorGuard } from './public/signed-out-visitor.guard';
 import { confirmPickListLeave } from './components/pick-list/pick-list-leave.guard';
+import { confirmProductFormLeave } from './components/products/product-form-leave.guard';
 
 /**
  * Every authenticated route carries `MsalGuard`, then, since issue #529, `accountStateGuard`, then
@@ -180,11 +181,15 @@ export const routes: Routes = [
     // business with no sales provider can start a catalogue instead of only ever importing one.
     path: 'products/new',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
+    // Unsaved product changes ask before they are lost (issue #1111).
+    canDeactivate: [confirmProductFormLeave],
     loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
   },
   {
     path: 'products/:id/edit',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
+    // Unsaved product changes ask before they are lost (issue #1111).
+    canDeactivate: [confirmProductFormLeave],
     loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
   },
   {

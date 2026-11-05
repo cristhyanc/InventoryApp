@@ -11,7 +11,6 @@ import {
   Product,
   ProductCreateDto,
   ProductGstRule,
-  ProductPriceComparison,
   ProductPriceTracking,
   ProductUpdateDto,
   ReorderAlertListing,
@@ -104,10 +103,6 @@ export class ProductService {
 
   getInventoryValuationSummary(): Observable<InventoryValuationSummary> {
     return this.http.get<InventoryValuationSummary>(`${this.baseUrl}/inventory-value-summary`);
-  }
-
-  getPriceComparison(id: number): Observable<ProductPriceComparison> {
-    return this.http.get<ProductPriceComparison>(`${this.baseUrl}/${id}/price-history`);
   }
 
   update(id: number, payload: ProductUpdateDto): Observable<void> {

@@ -1,12 +1,12 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
-import { Subscription } from 'rxjs';
+import { Observable, Subscription } from 'rxjs';
+import { tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { Category, MasterProductSuggestion } from '../../models/models';
-import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
+import { Category, GstClassification, MasterProductSuggestion } from '../../models/models';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
 import { ProductCreateGstRuleComponent } from './product-create-gst-rule/product-create-gst-rule.component';
 import { ProductCategoryPickerComponent } from './product-category-picker/product-category-picker.component';
@@ -15,7 +15,68 @@ import { ProductMasterProductPickerComponent } from './product-master-product-pi
 import { MasterProductSelection, isSamePrefillValue, masterProductConflictOf } from './master-product-selection';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
+import { IconComponent } from '../shared/icon.component';
+import { PendingWorkGuarded } from '../pick-list/pick-list-leave.guard';
+import { reorderGuidance } from './product-reorder-guidance';
 
+/** The one sentence a departure asks while there is unsaved work (issue #1111). */
+export const PRODUCT_UNSAVED_LEAVE_WARNING = 'You have unsaved changes to this product. Leave this page and discard them?';
+
+/** The departure question while a save has been sent and not answered yet (issue #1111). */
+export const PRODUCT_SAVE_IN_FLIGHT_LEAVE_WARNING =
+  'Your changes are still being saved. If you leave now you will not see whether they were saved. Leave anyway?';
+
+/** The departure question once a product exists but its GST rule was not stored (issue #829/#1111). */
+export const PRODUCT_GST_OUTSTANDING_LEAVE_WARNING =
+  'The product was created, but its GST rule was not saved. Leave this page without saving the rule?';
+
+/**
+ * What a partly or wholly failed Save changes did (issue #1111): the sections that were stored, the
+ * one that failed with the reason, and the ones that were not attempted after it. The page shows it
+ * as it is, so a partial save is never reported as a full one.
+ */
+export interface ProductSaveProblem {
+  failed: string;
+  reason: string;
+  saved: string[];
+  notAttempted: string[];
+}
+
+/** One write of Edit Product's Save changes, in the order they are made. */
+interface ProductSaveStep {
+  section: string;
+  fallback: string;
+  write: () => Observable<void>;
+}
+
+/** The editable values a product's own `PUT`/`POST` carries, as compared for unsaved changes. */
+type ProductFormFields = ProductFormComponent['form'];
+
+/**
+ * New Product and Edit Product (issues #737, #892, #1111): one routed page, one layout, and one
+ * primary action.
+ *
+ * The layout is the approved Restockroo design of issue #1111: a content area about 1,100px wide with
+ * a main column (Product details, Opening inventory on New only, Reordering) and a settings column
+ * (Product status, GST rule, Supplier price tracking), stacked in that order on a narrow screen, and
+ * a sticky action bar with Cancel and the one primary action.
+ *
+ * **One primary action saves every editable section.** The product's fields, its GST rule and its
+ * supplier price tracking are three API resources, so Save changes makes up to three writes in a
+ * fixed order - the product, then the rule, then tracking (tracking last, because turning it on
+ * copies the *stored* name and unit label as the search text) - and only the sections that changed.
+ * The first failure stops the sequence; the page then says what was saved, what failed and why, and
+ * what was not attempted, keeps every value on screen, and a second press retries only what is still
+ * unsaved. New Product keeps issue #829's create-then-rule flow: the primary action creates the
+ * product (with the supplier-tracking choice carried by the create itself), then the rule is written,
+ * and a failed rule write turns the primary action into "Retry GST rule", which never creates a
+ * second product.
+ *
+ * **Unsaved changes are real modifications only.** Each section compares what is on screen with
+ * what is stored; the dirty state clears only when the write that stored it succeeded. Cancel, the
+ * back link and any other in-app departure ask first ({@link confirmLeave}, the route's
+ * `canDeactivate`), and a reload or closed tab raises the browser's own prompt.
+ */
 @Component({
   selector: 'app-product-form',
   standalone: true,
@@ -23,20 +84,23 @@ import { apiErrorMessage } from '../shared/api-error-message';
     CommonModule,
     FormsModule,
     RouterLink,
-    ProductPriceHistoryComponent,
     ProductGstRuleComponent,
     ProductCreateGstRuleComponent,
     ProductCategoryPickerComponent,
     ProductPriceTrackingComponent,
-    ProductMasterProductPickerComponent
+    ProductMasterProductPickerComponent,
+    IconComponent
   ],
   templateUrl: './product-form.component.html'
 })
-export class ProductFormComponent implements OnInit, OnDestroy {
+export class ProductFormComponent implements OnInit, OnDestroy, PendingWorkGuarded {
   productId: number | null = null;
   categories: Category[] = [];
   saving = false;
   error = '';
+
+  /** The last Save changes that did not store everything (issue #1111), or `null`. */
+  saveProblem: ProductSaveProblem | null = null;
 
   /**
    * Whether a support session is active (issue #554): Save is disabled while it is, because a
@@ -53,17 +117,9 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    */
   providerManagedFields: string[] = [];
 
-  /**
-   * Why this product may not be deleted, for the notice under the page header (issue #825), or
-   * `null` when the loaded product may be deleted and on New Product.
-   *
-   * It is the server's own refusal, verbatim - `GET api/products/{id}`'s `deletionRefusal`, decided
-   * by the one `Inventory.Domain.Products.ProductDeletionPolicy` (issue #737) - so this page never
-   * words the deletion rule a second time. It is informational: it gates no field, no Save and no
-   * other control, and it is shown for an active and an inactive product alike and during a
-   * support session, because it explains the product rather than offering an action.
-   */
-  deletionNotice: string | null = null;
+  /** The stored name and active state of the loaded product, for the header (issue #1111). */
+  storedName = '';
+  storedIsActive = true;
 
   /**
    * The id of the product this page created, while the rule chosen for it is still being stored
@@ -73,11 +129,16 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    * `PUT api/products/{id}/gst-rule` on the id it answered - because the rule is its own resource
    * and the product payload is a pinned API contract (docs/architecture.md § Product and supplier
    * GST rules). This page makes the first one and hands the id to
-   * `app-product-create-gst-rule`, which owns the second one, its failure and its retry. The id
+   * `app-product-create-gst-rule` (its `storeFor`), which owns the second one, its failure and its
+   * retry. The id
    * stays here because this page created the product: once it is set, the page offers no create
-   * control at all, which is what makes a duplicate product impossible.
+   * at all - its primary action retries the rule alone - which is what makes a duplicate product
+   * impossible.
    */
   createdProductId: number | null = null;
+
+  /** The GST rule chosen on New Product (issue #1111), so choosing one counts as a change. */
+  newProductGstRule: GstClassification = GstClassification.Unknown;
 
   /**
    * The master product the Name was filled in from on New Product (issue #1052), or `null` while the
@@ -106,7 +167,14 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    */
   masterProductConflict: string | null = null;
 
+  @ViewChild(ProductGstRuleComponent) private readonly gstRulePanel?: ProductGstRuleComponent;
+  @ViewChild(ProductPriceTrackingComponent) private readonly priceTrackingPanel?: ProductPriceTrackingComponent;
+  @ViewChild(ProductCreateGstRuleComponent) private readonly createGstRulePanel?: ProductCreateGstRuleComponent;
+
   private readonly sessionActiveSubscription: Subscription;
+
+  /** Set once everything is stored, so the navigation back to the list asks nothing. */
+  private leaving = false;
 
   form = {
     name: '',
@@ -122,6 +190,12 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     categoryId: '' as number | '',
     isActive: true
   };
+
+  /**
+   * The product's fields as last stored - the defaults on New Product, the loaded product on Edit,
+   * then what each successful write sent - so {@link productFieldsDirty} is a real comparison.
+   */
+  private storedFields: string = this.serialise(this.form);
 
   constructor(
     private readonly productService: ProductService,
@@ -142,21 +216,15 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     if (idParam) {
       // The category list feeds the edit page's dropdown only: on New Product the searchable picker
       // reads the options itself (issue #830), so the page makes no second read of the same list.
-      // No supplier list is loaded either (issue #787, A1 of #786): nothing on this page needs one
-      // now that a product carries no supplier.
+      // No supplier list is loaded either (issue #787, A1 of #786), and no supplier price comparison
+      // (issue #1111 removed it from this page): nothing here needs either.
       this.categoryService.getAll().subscribe((c) => (this.categories = c));
 
       this.productId = Number(idParam);
       this.productService.get(this.productId).subscribe((p) => {
         this.providerManagedFields = p.providerManagedFields ?? [];
-        // Anything but a plain `true` means a delete would be refused: `false` says so, and a
-        // response that did not resolve the question is not permission either (issue #737).
-        const refusal = p.deletionRefusal?.trim();
-        if (p.canDelete === true) {
-          this.deletionNotice = null;
-        } else {
-          this.deletionNotice = refusal || 'This product cannot be deleted.';
-        }
+        this.storedName = p.name;
+        this.storedIsActive = p.isActive;
         this.form = {
           name: p.name,
           sku: p.sku ?? '',
@@ -172,6 +240,7 @@ export class ProductFormComponent implements OnInit, OnDestroy {
           categoryId: p.categoryId ?? '',
           isActive: p.isActive
         };
+        this.storedFields = this.serialise(this.form);
       });
     }
   }
@@ -283,18 +352,31 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     return this.providerManagedFields.includes('categoryId');
   }
 
+  /** Whether any field of this product is managed by Nayax, which earns the one header badge. */
+  get providerManaged(): boolean {
+    return this.nameLocked || this.categoryLocked;
+  }
+
   /** The note explaining which fields are locked, or `null` while nothing here is provider-managed. */
   get providerManagedNote(): string | null {
     if (this.nameLocked && this.categoryLocked) {
-      return 'Name and category are managed by Nayax and cannot be edited here.';
+      return 'Name and category are synced from Nayax.';
     }
     if (this.nameLocked) {
-      return 'Name is managed by Nayax and cannot be edited here.';
+      return 'Name is synced from Nayax.';
     }
     if (this.categoryLocked) {
-      return 'Category is managed by Nayax and cannot be edited here.';
+      return 'Category is synced from Nayax.';
     }
     return null;
+  }
+
+  /** The locked category's name, shown read-only (issue #1111), or "None". */
+  get categoryName(): string {
+    if (this.form.categoryId === '') {
+      return 'None';
+    }
+    return this.categories.find((c) => c.id === this.form.categoryId)?.name ?? '';
   }
 
   /**
@@ -309,118 +391,99 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     return !this.form.unit.trim();
   }
 
-  /** The label of the page's one submit control, which names the write it would actually make. */
-  get submitLabel(): string {
-    return this.productId ? 'Update Product' : 'Create Product';
+  /** Whether Restock To is below the Low Stock Threshold, the one cross-field rule of the form. */
+  get restockBelowThreshold(): boolean {
+    return this.form.restockTo < this.form.lowStockThreshold;
   }
 
-  /** Whether the page's one submit control is unavailable. */
+  /** The Reordering guidance for the values on screen, worded from the authoritative rule. */
+  get reorderGuidance(): string | null {
+    return reorderGuidance(this.form.lowStockThreshold, this.form.restockTo);
+  }
+
+  /** Whether the product's own fields differ from what is stored. */
+  get productFieldsDirty(): boolean {
+    return this.serialise(this.form) !== this.storedFields;
+  }
+
+  /**
+   * Whether leaving now would lose something (issue #1111): a changed field, a changed GST rule or
+   * tracking switch on Edit, a chosen rule or catalogue selection on New, or a created product whose
+   * rule is still unsaved.
+   */
+  get hasUnsavedChanges(): boolean {
+    if (this.productId) {
+      return this.productFieldsDirty || !!this.gstRulePanel?.dirty || !!this.priceTrackingPanel?.dirty;
+    }
+    if (this.createdProductId !== null) {
+      return true;
+    }
+    return (
+      this.productFieldsDirty ||
+      this.newProductGstRule !== GstClassification.Unknown ||
+      this.masterProductSelection !== null
+    );
+  }
+
+  /** The label of the page's one primary action, which names the write it would actually make. */
+  get submitLabel(): string {
+    if (this.saving) {
+      return 'Saving...';
+    }
+    if (this.createdProductId !== null) {
+      return 'Retry GST rule';
+    }
+    return this.productId ? 'Save changes' : 'Create product';
+  }
+
+  /** Whether the page's one primary action is unavailable. */
   get submitDisabled(): boolean {
     if (this.saving || this.sessionActive) {
       return true;
     }
+    // Once the product exists the only write left is its rule, whatever the fields now say.
+    if (this.createdProductId !== null) {
+      return false;
+    }
 
-    return this.unitMissing || this.form.restockTo < this.form.lowStockThreshold;
+    return this.unitMissing || this.restockBelowThreshold;
+  }
+
+  /** The primary action's handler: create or save, or - once a product exists - retry its rule. */
+  submit(): void {
+    if (this.createdProductId !== null) {
+      this.retryGstRule();
+      return;
+    }
+    this.save();
   }
 
   save(): void {
     // Checked here as well as disabled in the template, so the write is actually unavailable
     // rather than merely inert - the endpoint refuses it either way.
-    if (this.sessionActive) {
+    if (this.sessionActive || this.saving) {
       return;
     }
-    // This page has already created its product (issue #829), so it has no write left to make:
+    // This page has already created its product (issue #829), so it has no create left to make:
     // what is outstanding is the GST rule, which `app-product-create-gst-rule` owns and retries.
     // Creating the product a second time is exactly the duplicate this guard prevents.
     if (this.createdProductId !== null) {
       return;
     }
-    if (!this.form.name.trim()) {
-      this.error = 'Product name is required.';
-      return;
-    }
-    // Checked here as well as shown beside the field and disabled on the button, so a blank label is
-    // never sent (issue #895). The API refuses it too - outright on a create, and on an update
-    // whenever the stored label is nonblank - and words it the same way.
-    if (this.unitMissing) {
-      this.error = 'Unit label is required.';
-      return;
-    }
-    if (!this.productId && this.form.initialUnitCost !== null && this.form.initialUnitCost < 0) {
-      this.error = 'Initial unit cost cannot be negative.';
-      return;
-    }
-    if (this.form.lowStockThreshold < 0) {
-      this.error = 'Low Stock Threshold cannot be negative.';
-      return;
-    }
-    if (this.form.restockTo < 0) {
-      this.error = 'Restock To cannot be negative.';
-      return;
-    }
-    if (this.form.restockTo < this.form.lowStockThreshold) {
-      this.error = 'Restock To must be greater than or equal to the Low Stock Threshold.';
+    const problem = this.validationProblem();
+    if (problem) {
+      this.error = problem;
       return;
     }
     this.error = '';
+    this.saveProblem = null;
     // A refusal belongs to the submission that was refused: this one is being made now.
     this.masterProductConflict = null;
-    this.saving = true;
-
-    const base = {
-      name: this.form.name.trim(),
-      sku: this.form.sku || null,
-      description: this.form.description || null,
-      lowStockThreshold: this.form.lowStockThreshold,
-      restockTo: this.form.restockTo,
-      unit: this.form.unit.trim(),
-      categoryId: this.form.categoryId === '' ? null : this.form.categoryId,
-      isActive: this.form.isActive
-    };
 
     if (this.productId) {
-      this.productService.update(this.productId, base).subscribe({
-        next: () => this.router.navigate(['/products']),
-        error: (error: unknown) => {
-          this.error = apiErrorMessage(error, 'Failed to update product.');
-          this.saving = false;
-        }
-      });
+      this.saveEdit(this.productId);
     } else {
-      // The selection is sent only while it stands (issue #1052): a create carrying neither field
-      // is byte for byte the create this page has always made, which is what keeps a product nobody
-      // picked from the catalogue completely unaffected by this feature.
-      const selection = this.masterProductSelection;
-      this.productService.create({
-        ...base,
-        quantityInStock: this.form.quantityInStock,
-        initialUnitCost: this.form.initialUnitCost,
-        ...(selection
-          ? {
-              selectedMasterProductId: selection.masterProductId,
-              trackSupplierPrices: this.trackSupplierPrices
-            }
-          : {})
-      }).subscribe({
-        next: (created) => {
-          // The product exists from here on. Its GST rule is `app-product-create-gst-rule`'s to
-          // store (issue #829), so the page stays in its saving state and finishes on that
-          // component's report rather than treating the create alone as the whole outcome.
-          this.createdProductId = created.id;
-        },
-        error: (error: unknown) => {
-          // A refused selection (issue #1051) created nothing at all, and it is the one failure with
-          // two actions beside it rather than a message to read - so it is shown as itself, in the
-          // server's own words, instead of as the page's generic create failure.
-          const conflict = masterProductConflictOf(error);
-          if (conflict) {
-            this.masterProductConflict = conflict.message;
-          } else {
-            this.error = apiErrorMessage(error, 'Failed to create product.');
-          }
-          this.saving = false;
-        }
-      });
+      this.saveNew();
     }
   }
 
@@ -430,15 +493,230 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    */
   onGstRulePersisted(): void {
     this.saving = false;
-    this.router.navigate(['/products']);
+    this.createdProductId = null;
+    this.leave();
   }
 
   /**
    * The product was created and its GST rule was not stored (issue #829). The page stays open and
-   * does not navigate - a create whose rule was not stored is not a finished create - and says
-   * nothing further itself: the component that owns that write reports it and offers the retry.
+   * does not navigate - a create whose rule was not stored is not a finished create - and the
+   * component that owns that write says so beside the rule; the primary action now retries it.
    */
   onGstRuleFailed(): void {
     this.saving = false;
+  }
+
+  /** The departure warning that applies right now, or `null` when leaving loses nothing. */
+  leaveWarning(): string | null {
+    if (this.leaving) {
+      return null;
+    }
+    if (this.saving) {
+      return PRODUCT_SAVE_IN_FLIGHT_LEAVE_WARNING;
+    }
+    if (this.createdProductId !== null) {
+      return PRODUCT_GST_OUTSTANDING_LEAVE_WARNING;
+    }
+    return this.hasUnsavedChanges ? PRODUCT_UNSAVED_LEAVE_WARNING : null;
+  }
+
+  /** The route's `canDeactivate` answer: leave freely, or only once the operator confirms. */
+  confirmLeave(): boolean {
+    const warning = this.leaveWarning();
+    return warning === null || window.confirm(warning);
+  }
+
+  /** Asks the browser to confirm a reload or a closed tab while there is work to lose. */
+  @HostListener('window:beforeunload', ['$event'])
+  onBeforeUnload(event: BeforeUnloadEvent): void {
+    if (this.leaveWarning() !== null) {
+      event.preventDefault();
+    }
+  }
+
+  private leave(): void {
+    this.leaving = true;
+    this.router.navigate(['/products']);
+  }
+
+  /** The first problem with the values on screen, worded as the API words it, or `null`. */
+  private validationProblem(): string | null {
+    if (!this.form.name.trim()) {
+      return 'Product name is required.';
+    }
+    // Checked here as well as shown beside the field and disabled on the button, so a blank label is
+    // never sent (issue #895). The API refuses it too - outright on a create, and on an update
+    // whenever the stored label is nonblank - and words it the same way.
+    if (this.unitMissing) {
+      return 'Unit label is required.';
+    }
+    if (!this.productId && this.form.initialUnitCost !== null && this.form.initialUnitCost < 0) {
+      return 'Initial unit cost cannot be negative.';
+    }
+    if (this.form.lowStockThreshold === null || this.form.restockTo === null) {
+      return 'Low Stock Threshold and Restock To are required.';
+    }
+    if (this.form.lowStockThreshold < 0) {
+      return 'Low Stock Threshold cannot be negative.';
+    }
+    if (this.form.restockTo < 0) {
+      return 'Restock To cannot be negative.';
+    }
+    if (this.restockBelowThreshold) {
+      return 'Restock To must be greater than or equal to the Low Stock Threshold.';
+    }
+    return null;
+  }
+
+  /** The fields `PUT api/products/{id}` and `POST api/products` share, from the form on screen. */
+  private productPayload() {
+    return {
+      name: this.form.name.trim(),
+      sku: this.form.sku || null,
+      description: this.form.description || null,
+      lowStockThreshold: this.form.lowStockThreshold,
+      restockTo: this.form.restockTo,
+      unit: this.form.unit.trim(),
+      categoryId: this.form.categoryId === '' ? null : this.form.categoryId,
+      isActive: this.form.isActive
+    };
+  }
+
+  /**
+   * Edit Product's Save changes (issue #1111): the product, then the GST rule, then supplier price
+   * tracking, each only when it changed, each only after the one before it succeeded.
+   */
+  private saveEdit(id: number): void {
+    const steps: ProductSaveStep[] = [];
+    if (this.productFieldsDirty) {
+      const sent = this.serialise(this.form);
+      const payload = this.productPayload();
+      steps.push({
+        section: 'Product details',
+        fallback: 'Failed to update product.',
+        write: () =>
+          this.productService.update(id, payload).pipe(
+            tap(() => {
+              this.storedFields = sent;
+              this.storedName = payload.name;
+              this.storedIsActive = payload.isActive;
+            })
+          )
+      });
+    }
+    const gstRule = this.gstRulePanel;
+    if (gstRule?.dirty) {
+      steps.push({ section: 'GST rule', fallback: 'Failed to save the GST rule.', write: () => gstRule.persist() });
+    }
+    const tracking = this.priceTrackingPanel;
+    if (tracking?.dirty) {
+      steps.push({
+        section: 'Supplier price tracking',
+        fallback: tracking.requested
+          ? 'Failed to turn supplier price tracking on.'
+          : 'Failed to turn supplier price tracking off.',
+        write: () => tracking.persist()
+      });
+    }
+
+    // Nothing changed: there is nothing to write, and the edit is finished as it stands.
+    if (steps.length === 0) {
+      this.leave();
+      return;
+    }
+
+    this.saving = true;
+    this.runSteps(steps, 0);
+  }
+
+  private runSteps(steps: ProductSaveStep[], index: number): void {
+    if (index >= steps.length) {
+      this.saving = false;
+      this.leave();
+      return;
+    }
+
+    const step = steps[index];
+    step.write().subscribe({
+      next: () => undefined,
+      complete: () => this.runSteps(steps, index + 1),
+      error: (error: unknown) => {
+        this.saving = false;
+        this.saveProblem = {
+          failed: step.section,
+          reason: apiErrorMessage(error, step.fallback),
+          saved: steps.slice(0, index).map((s) => s.section),
+          notAttempted: steps.slice(index + 1).map((s) => s.section)
+        };
+      }
+    });
+  }
+
+  /** New Product's Create product: the create, then (by the composed component) its GST rule. */
+  private saveNew(): void {
+    this.saving = true;
+    // The selection is sent only while it stands (issue #1052): a create carrying neither field
+    // is byte for byte the create this page has always made, which is what keeps a product nobody
+    // picked from the catalogue completely unaffected by this feature.
+    const selection = this.masterProductSelection;
+    this.productService.create({
+      ...this.productPayload(),
+      quantityInStock: this.form.quantityInStock,
+      initialUnitCost: this.form.initialUnitCost,
+      ...(selection
+        ? {
+            selectedMasterProductId: selection.masterProductId,
+            trackSupplierPrices: this.trackSupplierPrices
+          }
+        : {})
+    }).subscribe({
+      next: (created) => {
+        // The product exists from here on. Its GST rule is `app-product-create-gst-rule`'s to
+        // store (issue #829), so the page stays in its saving state and finishes on that
+        // component's report rather than treating the create alone as the whole outcome.
+        this.createdProductId = created.id;
+        if (!this.createGstRulePanel?.storeFor(created.id)) {
+          this.saving = false;
+        }
+      },
+      error: (error: unknown) => {
+        // A refused selection (issue #1051) created nothing at all, and it is the one failure with
+        // two actions beside it rather than a message to read - so it is shown as itself, in the
+        // server's own words, instead of as the page's generic create failure.
+        const conflict = masterProductConflictOf(error);
+        if (conflict) {
+          this.masterProductConflict = conflict.message;
+        } else {
+          this.error = apiErrorMessage(error, 'Failed to create product.');
+        }
+        this.saving = false;
+      }
+    });
+  }
+
+  /** The primary action once the product exists and its rule did not save: the rule alone. */
+  private retryGstRule(): void {
+    if (this.saving || this.sessionActive) {
+      return;
+    }
+    this.saving = true;
+    if (!this.createGstRulePanel?.save()) {
+      this.saving = false;
+    }
+  }
+
+  private serialise(fields: ProductFormFields): string {
+    return JSON.stringify([
+      fields.name,
+      fields.sku,
+      fields.description,
+      fields.quantityInStock,
+      fields.initialUnitCost,
+      fields.lowStockThreshold,
+      fields.restockTo,
+      fields.unit,
+      fields.categoryId,
+      fields.isActive
+    ]);
   }
 }

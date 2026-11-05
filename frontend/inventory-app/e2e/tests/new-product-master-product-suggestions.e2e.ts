@@ -131,7 +131,7 @@ async function openNewProduct(page: Page, viewport: { width: number; height: num
   await stubCatalogueLookup(page);
   await page.setViewportSize(viewport);
   await page.goto('/products/new');
-  await expect(page.getByRole('heading', { name: 'New Product', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'New product', level: 1 })).toBeVisible();
 }
 
 /** Types a term into Name and waits for the list the debounced lookup answers with. */

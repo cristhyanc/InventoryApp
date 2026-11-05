@@ -2,25 +2,20 @@ import type { Locator, Page } from '@playwright/test';
 import { actors, expect, test } from '../fixtures/harness';
 
 /**
- * The rendered geometry of the New Product form's sections (issue #892): paired fields sit beside
- * each other with their inputs on the row's top edge, the Active checkbox stays as wide as it
- * reads, the GST choice is laid out above the single Create Product / Cancel row, and nothing
- * overflows sideways at either width the issue names - 1440px and 375px.
+ * The rendered geometry of the New Product form (issue #892, re-laid-out by issue #1111): paired
+ * fields sit beside each other with their inputs on the row's top edge, the settings column sits
+ * beside the main column on a wide screen and below it on a narrow one, the sticky action bar is the
+ * last thing reached by Tab, and nothing overflows sideways at 1440px or 375px.
  *
  * These are browser tests because jsdom computes no layout. The Jest spec beside the component
- * (`product-form.component.spec.ts`) asserts the section order, the cell order, the external
- * submit wiring and the grid classes - that `items-start` and `md:grid-cols-2` are present and
- * `xl:grid-cols-3` is gone - but a class is not a measurement: jsdom resolves no grid tracks, no
- * `items-start`, no `scrollWidth` and no `clientWidth`, so "the two inputs start at the same
- * height", "the checkbox is compact" and "the page does not scroll sideways at 375px" are only
- * answerable against real laid-out boxes with the application's compiled Tailwind CSS. That is
- * what the issue's "render/check at 375px and 1440px: aligned input tops, compact Active checkbox,
- * adjacent opening-stock/cost fields, no overflow" criterion asks for.
+ * (`product-form.component.spec.ts`) asserts the section order, the field order, the external
+ * submit wiring and the grid classes; a class is not a measurement, so "the two inputs start at the
+ * same height" and "the page does not scroll sideways at 375px" are only answerable against real
+ * laid-out boxes with the application's compiled Tailwind CSS.
  *
- * It **writes nothing**: it only opens `/products/new`, measures boxes, and focuses the GST select
- * to read Tab order. It never submits the form, never chooses a category and never creates a
- * product or a GST rule, so it needs no seeded row and is independent of every other file's
- * ordering.
+ * It **writes nothing**: it only opens `/products/new`, measures boxes, and moves focus. It never
+ * submits the form, never chooses a category and never creates a product or a GST rule, so it needs
+ * no seeded row and is independent of every other file's ordering.
  */
 const desktopViewport = { width: 1440, height: 900 };
 const narrowViewport = { width: 375, height: 667 };
@@ -76,26 +71,18 @@ async function expectNoHorizontalOverflow(page: Page, label: string) {
 async function openNewProduct(page: Page, viewport: { width: number; height: number }) {
   await page.setViewportSize(viewport);
   await page.goto('/products/new');
-  await expect(page.getByRole('heading', { name: 'New Product', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'New product', level: 1 })).toBeVisible();
 }
 
 /** The two controls of one row, in the order the issue requires them to be read in. */
 const pairedRows = [
-  // Name is the suggesting combobox of issue #1052 rather than a plain textbox, and both pickers on
-  // this row carry one, so each is addressed through its own component's element.
+  // Name is alone on the first row since issue #1111; the Category picker carries a help line under
+  // its box, and SKU's input must still start at the same height rather than at that line's bottom.
   {
-    label: 'Name / SKU',
-    section: 'product-details',
-    first: 'app-product-master-product-picker input[role="combobox"]',
-    second: 'input[name="sku"]'
-  },
-  // The row the issue was raised about: the Category picker carries a help line under its box, and
-  // Unit Label's input must still start at the same height rather than at that line's bottom.
-  {
-    label: 'Category / Unit Label',
+    label: 'Category / SKU',
     section: 'product-details',
     first: 'app-product-category-picker input[role="combobox"]',
-    second: 'input[name="unit"]'
+    second: 'input[name="sku"]'
   },
   {
     label: 'Opening Stock / Initial Unit Cost',
@@ -115,12 +102,7 @@ function sectionOf(page: Page, name: string): Locator {
   return page.locator(`[data-testid="product-section-${name}"]`);
 }
 
-/** The one card this page renders, which holds the form, the GST panel and the action row. */
-function formCard(page: Page): Locator {
-  return page.locator('.card');
-}
-
-test('on a desktop screen each paired row sits side by side with its inputs aligned', async ({ pageAs }) => {
+test('on a desktop screen each paired row sits side by side, beside the settings column', async ({ pageAs }) => {
   const page = await pageAs(actors.businessAOwner);
   await openNewProduct(page, desktopViewport);
 
@@ -134,110 +116,55 @@ test('on a desktop screen each paired row sits side by side with its inputs alig
     expectBesideAndAligned(await boxOf(first), await boxOf(second), `${row.label} at ${desktopViewport.width}`);
   }
 
-  // Description is the full-width field below those two rows, not a third column beside them.
+  // Name and Description span the whole Product details grid.
   const details = sectionOf(page, 'product-details');
-  const grid = details.locator('div.grid');
-  const gridBox = await boxOf(grid);
+  const gridBox = await boxOf(details.locator('div.grid').first());
+  const nameBox = await boxOf(details.locator('app-product-master-product-picker input[role="combobox"]'));
   const descriptionBox = await boxOf(details.locator('textarea[name="description"]'));
-  const unitBox = await boxOf(details.locator('input[name="unit"]'));
-
-  expect(descriptionBox.y, 'Description is below the Category / Unit Label row').toBeGreaterThan(
-    unitBox.y + unitBox.height
-  );
-  expect(descriptionBox.width, 'Description spans the whole section width').toBeGreaterThanOrEqual(
+  expect(nameBox.width, 'Name spans the section').toBeGreaterThanOrEqual(gridBox.width - 2 * alignmentTolerance);
+  expect(descriptionBox.width, 'Description spans the section').toBeGreaterThanOrEqual(
     gridBox.width - 2 * alignmentTolerance
   );
+
+  // The settings column is to the right of the main column, and narrower.
+  const main = await boxOf(page.locator('[data-testid="product-form-main"]'));
+  const settings = await boxOf(page.locator('[data-testid="product-form-settings"]'));
+  expect(settings.x, 'settings beside main').toBeGreaterThanOrEqual(main.x + main.width - tolerance);
+  expect(settings.width, 'settings narrower than main').toBeLessThan(main.width);
 
   await expectNoHorizontalOverflow(page, `products/new at ${desktopViewport.width}`);
 });
 
-test('the Active checkbox stays compact and left-aligned under the field grid at both widths', async ({
-  pageAs
-}) => {
-  const page = await pageAs(actors.businessAOwner);
-
-  for (const viewport of [desktopViewport, narrowViewport]) {
-    await openNewProduct(page, viewport);
-    const where = `Active product at ${viewport.width}x${viewport.height}`;
-
-    const details = sectionOf(page, 'product-details');
-    const checkbox = details.locator('input[name="isActive"]');
-    await expect(checkbox).toBeVisible();
-    await expect(checkbox, 'the default is an active product, and this test changes nothing').toBeChecked();
-
-    // The native box, not one the global input rule stretched (issues #872/#874).
-    const checkboxBox = await boxOf(checkbox);
-    expect(checkboxBox.width, `${where}: checkbox width`).toBeGreaterThanOrEqual(10);
-    expect(checkboxBox.width, `${where}: checkbox width`).toBeLessThanOrEqual(24);
-
-    // Compact: the label's own box is as wide as it reads, not as wide as the field beside it used
-    // to make it. A stretched box is a grid column wide - the whole section at 375px, half of it
-    // from `md` - so both bounds below fail on the layout this issue removed, and the text-beside
-    // check is what says the box did not collapse instead.
-    const label = details.locator('label').filter({ has: checkbox });
-    const labelBox = await boxOf(label);
-    const gridBox = await boxOf(details.locator('div.grid'));
-    expect(labelBox.width, `${where}: the label is as wide as it reads`).toBeLessThanOrEqual(260);
-    expect(labelBox.width, `${where}: the label is narrower than the grid above it`).toBeLessThanOrEqual(
-      gridBox.width - 40
-    );
-
-    const textBox = await boxOf(label.getByText('Active product'));
-    expect(textBox.x, `${where}: the label text starts beside the checkbox`).toBeGreaterThanOrEqual(
-      checkboxBox.x + checkboxBox.width - tolerance
-    );
-    expect(checkboxBox.y, `${where}: the checkbox is on the label's line`).toBeLessThan(textBox.y + textBox.height);
-    expect(textBox.y, `${where}: the checkbox is on the label's line`).toBeLessThan(
-      checkboxBox.y + checkboxBox.height
-    );
-
-    // Left-aligned with the fields above it, and below the whole grid rather than inside a cell of
-    // it - which is what bottom-aligning it against the Category help text used to look like.
-    expect(Math.abs(labelBox.x - gridBox.x), `${where}: left-aligned with the grid`).toBeLessThanOrEqual(
-      alignmentTolerance
-    );
-    expect(labelBox.y, `${where}: below the field grid`).toBeGreaterThanOrEqual(
-      gridBox.y + gridBox.height - tolerance
-    );
-
-    await expectNoHorizontalOverflow(page, `products/new at ${viewport.width}`);
-  }
-});
-
-test('GST rule is laid out and tab-ordered above the single Create Product / Cancel row', async ({ pageAs }) => {
+test('the action bar follows the settings column by Tab, with Cancel before Create product', async ({ pageAs }) => {
   const page = await pageAs(actors.businessAOwner);
   await openNewProduct(page, desktopViewport);
 
-  // The sections are read in the issue's order, with the GST panel's own heading last. Scoped to
-  // the form's card: the sidebar carries level-2 headings of its own for its navigation groups.
-  await expect(formCard(page).getByRole('heading', { level: 2 })).toHaveText([
+  await expect(page.locator('main h2, .page h2')).toHaveText([
     'Product details',
     'Opening inventory',
     'Reordering',
-    'GST rule'
+    'Product status',
+    'GST rule',
+    'Supplier price tracking'
   ]);
 
   const gstRule = page.locator('#product-gst-rule');
   const actions = page.locator('[data-testid="product-form-actions"]');
-  const create = actions.getByRole('button', { name: 'Create Product' });
+  const create = actions.getByRole('button', { name: 'Create product' });
   const cancel = actions.getByRole('link', { name: 'Cancel' });
-  await expect(gstRule).toBeVisible();
   await expect(create).toBeVisible();
   await expect(cancel).toBeVisible();
+  expectBesideAndAligned(await boxOf(cancel), await boxOf(create), `Cancel / Create at ${desktopViewport.width}`);
 
-  // Visually above: the whole action row starts below the GST select.
-  const gstBox = await boxOf(gstRule);
-  const actionsBox = await boxOf(actions);
-  expect(actionsBox.y, 'the action row is below the GST choice').toBeGreaterThan(gstBox.y + gstBox.height);
-
-  // One row, with Create before Cancel on it.
-  const createBox = await boxOf(create);
-  const cancelBox = await boxOf(cancel);
-  expectBesideAndAligned(createBox, cancelBox, `Create / Cancel at ${desktopViewport.width}`);
-
-  // And by keyboard: Tab off the GST select reaches Create Product, even though the button is
-  // outside the form it submits (the external footer wired by `form="new-product-form"`).
+  // By keyboard: Tab off the GST select reaches Cancel, then Create product, even though the button
+  // is outside the form it submits (wired by `form="product-form"`). With no catalogue selection the
+  // tracking card offers no control in between. Unit Label is required (issue #895), so it is filled
+  // first: an untouched form keeps Create product disabled, and Tab steps past a disabled button.
+  await page.locator('input[name="unit"]').fill('375 mL');
+  await expect(create).toBeEnabled();
   await gstRule.focus();
+  await page.keyboard.press('Tab');
+  await expect(cancel).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(create).toBeFocused();
 });
@@ -258,14 +185,12 @@ test('at 375px every section stacks into one column and nothing scrolls sideways
     );
   }
 
-  // Neither the card nor any section scrolls sideways at this width, and neither does the page.
-  const cardOverflow = await formCard(page).evaluate((element) => element.scrollWidth - element.clientWidth);
-  expect(cardOverflow, 'card overflow').toBeLessThanOrEqual(tolerance);
+  const main = await boxOf(page.locator('[data-testid="product-form-main"]'));
+  const settings = await boxOf(page.locator('[data-testid="product-form-settings"]'));
+  expect(settings.y, 'settings below main').toBeGreaterThanOrEqual(main.y + main.height - tolerance);
 
-  for (const name of ['product-details', 'opening-inventory', 'reordering']) {
-    const overflow = await sectionOf(page, name).evaluate(
-      (element) => element.scrollWidth - element.clientWidth
-    );
+  for (const name of ['product-details', 'opening-inventory', 'reordering', 'status', 'price-tracking']) {
+    const overflow = await sectionOf(page, name).evaluate((element) => element.scrollWidth - element.clientWidth);
     expect(overflow, `${name}: section overflow`).toBeLessThanOrEqual(tolerance);
   }
 
