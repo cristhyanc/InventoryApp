@@ -773,14 +773,18 @@ public class PriceCollectorWorkListTests
         PriceCatalogueFixture fixture,
         FakeClock? clock = null,
         int runExpiryHours = PriceCollectorRunPolicy.DefaultExpiryHours,
-        int? budget = null) =>
+        int? budget = null,
+        PriceCollectorWorkSchedule schedule = PriceCollectorWorkSchedule.All,
+        DateOnly? today = null) =>
         new IssuePriceCollectorWorkList(
                 fixture.DeniedWorkListStore(),
                 fixture.DeniedRunStore(),
                 new FixedRunSettings(runExpiryHours),
                 clock ?? new FakeClock(IssuedAt),
+                new FakeSupplierSearchScheduleCalendar(
+                    today ?? DateOnly.FromDateTime(clock?.UtcNow ?? IssuedAt)),
                 budget ?? PriceCollectorWorkListPolicy.MaxWorkItemsPerRun)
-            .Handle(CancellationToken.None);
+            .Handle(schedule, cancellationToken: CancellationToken.None);
 
     private sealed class FixedRunSettings(int runExpiryHours) : IPriceCollectorRunSettings
     {

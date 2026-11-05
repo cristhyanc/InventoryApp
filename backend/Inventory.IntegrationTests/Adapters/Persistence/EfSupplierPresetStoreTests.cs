@@ -2,6 +2,7 @@ using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
@@ -123,6 +124,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
                 PricesIncludeGst: true,
                 PriceConnector: null,
                 PriceConnectorKey: null,
+                Schedule: null,
                 Now),
             CancellationToken.None);
 
@@ -200,6 +202,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
                 PricesIncludeGst: true,
                 PriceConnector: null,
                 PriceConnectorKey: null,
+                Schedule: null,
                 Now),
             CancellationToken.None);
 
@@ -380,6 +383,7 @@ public class EfSupplierPresetStoreTests : IAsyncLifetime
             pricesIncludeGst,
             connector,
             connectorKey,
+            SupplierSearchSchedulePolicy.Daily,
             Now);
 
     /// <summary>

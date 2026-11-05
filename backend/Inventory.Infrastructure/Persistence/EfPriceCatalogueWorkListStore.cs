@@ -441,6 +441,10 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
                 preset.Url,
                 preset.PricesIncludeGst,
                 preset.PriceCheckFreshnessHours,
+                preset.SearchFrequency,
+                preset.SearchDaysOfWeek,
+                preset.FortnightStartDate,
+                preset.ScheduleEffectiveFromUtc,
             })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -473,6 +477,13 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
             preset.Url,
             preset.PricesIncludeGst,
             preset.PriceCheckFreshnessHours,
+            // The schedule is reassembled with the Domain's own rule rather than here, exactly as the
+            // Super Admin read does: the three columns and the schedule are one fact with one owner.
+            SupplierSearchSchedulePolicy.Read(
+                preset.SearchFrequency,
+                preset.SearchDaysOfWeek,
+                preset.FortnightStartDate),
+            preset.ScheduleEffectiveFromUtc,
             lastCheckedBySupplier.TryGetValue(preset.Id, out var lastChecked) ? lastChecked : null));
     }
 

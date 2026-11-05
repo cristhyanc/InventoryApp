@@ -1,0 +1,81 @@
+{
+  "issue": 1108,
+  "description": "The freshness limit each supplier search schedule derives, in hours: the longest gap in days between two consecutive occurrences over one cycle (7 days for Weekly, 14 for Fortnightly, wrapping round), times 24, plus SupplierPriceFreshnessPolicy.MarginHours. Stored once here so the backend tests (Inventory.UnitTests/Domain/PriceCatalogue/SupplierSearchSchedulePolicyTests) and the Super Admin page's tests (issue #1109) cannot disagree about a case. Add a case here rather than in either suite.",
+  "marginHours": 6,
+  "frequencies": ["Daily", "Weekly", "Fortnightly"],
+  "daysOfWeek": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+  "cases": [
+    {
+      "name": "Daily is searched every day, so the longest gap is one day",
+      "frequency": "Daily",
+      "daysOfWeek": [],
+      "fortnightStartDate": null,
+      "longestGapDays": 1,
+      "freshnessHours": 30
+    },
+    {
+      "name": "Weekly on one day waits the whole week between occurrences",
+      "frequency": "Weekly",
+      "daysOfWeek": ["THU"],
+      "fortnightStartDate": null,
+      "longestGapDays": 7,
+      "freshnessHours": 174
+    },
+    {
+      "name": "Weekly on Wednesday and Saturday: Saturday to Wednesday is four days, which is the longer of the two gaps",
+      "frequency": "Weekly",
+      "daysOfWeek": ["WED", "SAT"],
+      "fortnightStartDate": null,
+      "longestGapDays": 4,
+      "freshnessHours": 102
+    },
+    {
+      "name": "Weekly on Thursday and Sunday: Sunday to Thursday is four days",
+      "frequency": "Weekly",
+      "daysOfWeek": ["THU", "SUN"],
+      "fortnightStartDate": null,
+      "longestGapDays": 4,
+      "freshnessHours": 102
+    },
+    {
+      "name": "Fortnightly on one day waits the whole fortnight between occurrences",
+      "frequency": "Fortnightly",
+      "daysOfWeek": ["THU"],
+      "fortnightStartDate": "2026-11-09",
+      "longestGapDays": 14,
+      "freshnessHours": 342
+    },
+    {
+      "name": "Fortnightly on Monday and Friday: Friday to the next on week's Monday is ten days",
+      "frequency": "Fortnightly",
+      "daysOfWeek": ["MON", "FRI"],
+      "fortnightStartDate": "2026-11-09",
+      "longestGapDays": 10,
+      "freshnessHours": 246
+    },
+    {
+      "name": "Weekly on every day is the same cadence as Daily, and derives the same limit",
+      "frequency": "Weekly",
+      "daysOfWeek": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+      "fortnightStartDate": null,
+      "longestGapDays": 1,
+      "freshnessHours": 30
+    },
+    {
+      "name": "Fortnightly on every day of its on week: Sunday to the next on week's Monday is eight days",
+      "frequency": "Fortnightly",
+      "daysOfWeek": ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+      "fortnightStartDate": "2026-11-09",
+      "longestGapDays": 8,
+      "freshnessHours": 198
+    },
+    {
+      "name": "Weekly on Monday and Sunday: Monday to Sunday is six days, which is longer than Sunday to Monday",
+      "frequency": "Weekly",
+      "daysOfWeek": ["MON", "SUN"],
+      "fortnightStartDate": null,
+      "longestGapDays": 6,
+      "freshnessHours": 150
+    }
+  ]
+}

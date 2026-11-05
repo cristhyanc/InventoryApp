@@ -30,6 +30,14 @@ namespace InventoryApi.Adapters.PlatformAdmin;
 /// vocabulary's value, and the connector key names which retailer a shared route is for; none is
 /// anybody's name, address or business data.</para>
 ///
+/// <para><strong>And the search schedule of issue #1108</strong> - the frequency, the days, the
+/// fortnight start date, the instant the schedule became effective and the freshness limit it derives
+/// - for the same reason and more sharply: on the paid routes a cadence <em>is</em> money, so "who
+/// moved this supplier from fortnightly to daily, and when" is exactly what this trail is read for.
+/// The effective-from instant is recorded beside them because it is what decides whether answers
+/// already given still count, so a trail without it could not say why every pair of a supplier
+/// became due again.</para>
+///
 /// <para>Emitted at <c>Information</c>, once, after the write is committed. A refused create or edit
 /// is not audited, because nothing happened. Destination and retention are the host's logging
 /// pipeline, which is platform configuration a human must verify rather than something this
@@ -58,7 +66,11 @@ public sealed class LoggingSupplierPresetAudit : ISupplierPresetAudit
                 + "{SearchPrices}; nationwide "
                 + "{ServesNationwide}; states {ServedStates}; prices include GST "
                 + "{PricesIncludeGst}; connector {PriceConnector}; connector key "
-                + "{PriceConnectorKey}; occurred {OccurredAtUtc:O}; correlation {CorrelationId}.",
+                + "{PriceConnectorKey}; search frequency {SearchFrequency}; search days "
+                + "{SearchDaysOfWeek}; fortnight start {FortnightStartDate:yyyy-MM-dd}; "
+                + "schedule effective "
+                + "{ScheduleEffectiveFromUtc:O}; freshness hours {PriceCheckFreshnessHours}; "
+                + "occurred {OccurredAtUtc:O}; correlation {CorrelationId}.",
             entry.ActorDirectoryTenantId,
             entry.ActorObjectId,
             entry.PresetId,
@@ -70,6 +82,11 @@ public sealed class LoggingSupplierPresetAudit : ISupplierPresetAudit
             entry.PricesIncludeGst,
             entry.PriceConnector,
             entry.PriceConnectorKey,
+            entry.SearchFrequency,
+            entry.SearchDaysOfWeek,
+            entry.FortnightStartDate,
+            entry.ScheduleEffectiveFromUtc,
+            entry.PriceCheckFreshnessHours,
             entry.OccurredAtUtc,
             CorrelationId());
     }

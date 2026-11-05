@@ -3,6 +3,31 @@ using Inventory.Domain.Exceptions;
 namespace Inventory.Domain.PriceCatalogue;
 
 /// <summary>
+/// Which work one call of <c>GET /api/price-collector/work</c> asks for (issue #1108).
+///
+/// <para>Numbered from 1, so a stored or bound <c>0</c> is never read as the first declared value.</para>
+/// </summary>
+public enum PriceCollectorWorkSchedule
+{
+    /// <summary>
+    /// Every searchable supplier paired with every tracked product the rotation reaches, exactly as
+    /// the work list behaved before issue #1108 - and the default, so a manual run is unchanged.
+    ///
+    /// <para><strong>It deliberately bypasses the whole due rule</strong>, the in-flight protection
+    /// included: a manual full run may issue, and pay for, a pair that is already covered or already
+    /// being searched. That is the point of it - somebody asking for a full run has decided to
+    /// re-search everything - and it is kept on purpose rather than left over.</para>
+    /// </summary>
+    All = 1,
+
+    /// <summary>
+    /// Only the product-and-supplier pairs <see cref="SupplierSearchDuePolicy"/> says are owed a
+    /// search. The scheduled workflow of #1110 is what asks for this.
+    /// </summary>
+    Due = 2,
+}
+
+/// <summary>
 /// What one collector run is asked to do (issue #924, parent #817): which suppliers are
 /// searched, and how much work one run may be handed.
 ///
@@ -100,6 +125,45 @@ public static class PriceCollectorWorkListPolicy
     /// <summary>What a caller whose configured work-item budget is not positive is told.</summary>
     public const string NonPositiveBudgetMessage =
         "A price collector run must be allowed at least one work item.";
+
+    /// <summary>
+    /// The query value that selects <see cref="PriceCollectorWorkSchedule.All"/>, and the value an
+    /// absent one means.
+    /// </summary>
+    public const string AllScheduleValue = "all";
+
+    /// <summary>The query value that selects <see cref="PriceCollectorWorkSchedule.Due"/>.</summary>
+    public const string DueScheduleValue = "due";
+
+    /// <summary>What a caller who asked for a schedule that is neither of those two is told.</summary>
+    public static readonly string UnknownScheduleMessage =
+        $"A price collector work list's schedule must be '{AllScheduleValue}' or "
+            + $"'{DueScheduleValue}'.";
+
+    /// <summary>
+    /// Which work a submitted <c>schedule</c> query value asks for: <c>all</c> or nothing at all for
+    /// every searchable pair, <c>due</c> for only the pairs that are owed a search.
+    ///
+    /// <para>An unrecognised value is refused rather than resolved to either one. Reading it as
+    /// <c>all</c> would make a typo in the scheduled workflow re-search and re-pay for the whole
+    /// catalogue; reading it as <c>due</c> would make a typo in a manual run look like a run that had
+    /// nothing to do.</para>
+    /// </summary>
+    /// <exception cref="DomainValidationException">The value is neither of the two.</exception>
+    public static PriceCollectorWorkSchedule RequireSchedule(string? schedule)
+    {
+        var trimmed = schedule?.Trim();
+
+        if (string.IsNullOrEmpty(trimmed)
+            || string.Equals(trimmed, AllScheduleValue, StringComparison.OrdinalIgnoreCase))
+        {
+            return PriceCollectorWorkSchedule.All;
+        }
+
+        return string.Equals(trimmed, DueScheduleValue, StringComparison.OrdinalIgnoreCase)
+            ? PriceCollectorWorkSchedule.Due
+            : throw new DomainValidationException(UnknownScheduleMessage);
+    }
 
     /// <summary>
     /// Whether a supplier is searched on a run: every supplier whose <em>Search prices</em> switch is

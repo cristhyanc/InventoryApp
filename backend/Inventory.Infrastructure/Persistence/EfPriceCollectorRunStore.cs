@@ -37,8 +37,9 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
     }
 
     /// <inheritdoc />
-    public async Task<IssuedPriceCollectorRun> IssueAsync(
+    public async Task<IssuedPriceCollectorRun?> IssueAsync(
         NewPriceCollectorRun run,
+        PriceCollectorDueWork? onlyDue,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(run);
@@ -61,9 +62,28 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
             observationsRecordedCount: 0,
             failureCount: 0);
 
-        await using var transaction = await _db.Database
-            .BeginTransactionAsync(cancellationToken)
+        // BEGIN IMMEDIATE when the provider is SQLite (issue #1108), for the reason the pick-list
+        // refill and the platform plan grant take it: the due check below reads the pairs' latest
+        // answer and their in-flight state and then writes work items from that answer, so the write
+        // lock has to be held before the read rather than acquired on the first INSERT - otherwise
+        // two concurrent `due` calls can both read "nothing pending" and both issue the same pair.
+        // With no filter the transaction is the one issue #924 shipped and does the same work.
+        await using var writeLock = await SqliteWriteLockTransaction
+            .BeginAsync(_db, cancellationToken)
             .ConfigureAwait(false);
+
+        var workItems = onlyDue is null
+            ? run.WorkItems
+            : await DueWorkItemsAsync(run, onlyDue, cancellationToken).ConfigureAwait(false);
+
+        if (onlyDue is not null && workItems.Count == 0)
+        {
+            // Nothing is due, so nothing at all is written - not even the expiry of the run that was
+            // open. An empty run would be a run left to expire into a page of NotSearched rows that
+            // claimed a search had been declined, and #1110 relies on a `due` call with nothing to do
+            // leaving nothing to finalise.
+            return null;
+        }
 
         var stillOpen = await _db.PriceCollectorRuns
             .Where(existing => existing.Status == PriceCollectorRunStatus.Running)
@@ -99,7 +119,7 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
         // the one transaction, so a failure between them stores neither.
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        var workItems = run.WorkItems
+        var stored = workItems
             .Select(item => new Models.PriceCollectorWorkItem
             {
                 PriceCollectorRunId = issued.Id,
@@ -112,20 +132,146 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
             })
             .ToList();
 
-        _db.PriceCollectorWorkItems.AddRange(workItems);
+        _db.PriceCollectorWorkItems.AddRange(stored);
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await writeLock.CommitAsync(cancellationToken).ConfigureAwait(false);
 
         return new IssuedPriceCollectorRun(
             issued.Id,
             issued.StartedAtUtc,
             run.ExpiresAtUtc,
-            workItems.ConvertAll(item => new IssuedPriceCollectorWorkItem(
+            stored.ConvertAll(item => new IssuedPriceCollectorWorkItem(
                 item.Id,
                 item.SupplierPresetId,
                 item.MasterProductId,
                 item.WaitingKey)));
+    }
+
+    /// <summary>
+    /// The candidate work items that are actually due, decided inside the write transaction and
+    /// before the open run is expired (issue #1108).
+    ///
+    /// <para><strong>Two bounded reads, and the rule is the Domain's.</strong> The first is the pairs
+    /// pending in a run that is still open and unexpired - at most one such run exists, and a run
+    /// carries at most <c>PriceCollectorWorkListPolicy.MaxWorkItemsPerRun</c> items, so the read is
+    /// bounded by a run rather than by history. The second is the answers recorded at or after the
+    /// <em>earliest</em> of the candidate suppliers' boundaries, which is what bounds it: an answer
+    /// older than every boundary cannot cover anything, so there is no reason to read it. Each pair is
+    /// then judged against <em>its own</em> supplier's boundary in memory, because the boundaries
+    /// differ per supplier and a single SQL comparison could only use one of them.</para>
+    ///
+    /// <para>A pair finalised as <c>NotSearched</c> appears in neither read, which is exactly its
+    /// meaning: nothing looked, so it neither covers the pair nor blocks it, and the pair may be
+    /// retried at once even while that run is still open.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<NewPriceCollectorWorkItem>> DueWorkItemsAsync(
+        NewPriceCollectorRun run,
+        PriceCollectorDueWork onlyDue,
+        CancellationToken cancellationToken)
+    {
+        var boundaries = onlyDue.CoverageBoundaryBySupplier;
+
+        var candidates = run.WorkItems
+            .Where(item => boundaries.ContainsKey(item.SupplierPresetId))
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var candidateKeys = candidates
+            .Select(PairKey.Of)
+            .ToHashSet();
+
+        var supplierIds = candidates
+            .Select(item => item.SupplierPresetId)
+            .Distinct()
+            .ToList();
+
+        var earliestBoundary = boundaries.Values.Min();
+
+        // Pending in an unexpired open run, read before anything is expired. A run with no stored
+        // expiry - one of the runs #925 shipped the schema for - is one nothing expires
+        // automatically, so its pending work still blocks.
+        var pending = await _db.PriceCollectorWorkItems
+            .AsNoTracking()
+            .Where(item => supplierIds.Contains(item.SupplierPresetId)
+                && item.Outcome == null
+                && item.PriceCollectorRun!.Status == PriceCollectorRunStatus.Running
+                && (item.PriceCollectorRun.ExpiresAtUtc == null
+                    || item.PriceCollectorRun.ExpiresAtUtc > run.IssuedAtUtc))
+            .Select(item => new
+            {
+                item.SupplierPresetId,
+                item.MasterProductId,
+                item.WaitingKey,
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var inFlight = pending
+            .Select(item => new PairKey(
+                item.SupplierPresetId,
+                item.MasterProductId,
+                item.WaitingKey))
+            .Where(candidateKeys.Contains)
+            .ToHashSet();
+
+        // The latest answer each pair has, among the answers that could possibly still count.
+        // "Answered" is any recorded outcome except NotSearched, which is the one outcome that says
+        // nobody looked - the same distinction SupplierSearchDuePolicy.IsAnswered states.
+        var answers = await _db.PriceCollectorWorkItems
+            .AsNoTracking()
+            .Where(item => supplierIds.Contains(item.SupplierPresetId)
+                && item.Outcome != null
+                && item.Outcome != PriceCollectorWorkItemOutcome.NotSearched
+                && item.OutcomeAtUtc != null
+                && item.OutcomeAtUtc >= earliestBoundary)
+            .GroupBy(item => new
+            {
+                item.SupplierPresetId,
+                item.MasterProductId,
+                item.WaitingKey,
+            })
+            .Select(group => new
+            {
+                group.Key.SupplierPresetId,
+                group.Key.MasterProductId,
+                group.Key.WaitingKey,
+                LatestAnsweredAtUtc = group.Max(item => item.OutcomeAtUtc),
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var latestAnswered = answers
+            .Select(entry => (
+                Pair: new PairKey(entry.SupplierPresetId, entry.MasterProductId, entry.WaitingKey),
+                entry.LatestAnsweredAtUtc))
+            .Where(entry => candidateKeys.Contains(entry.Pair))
+            .ToDictionary(entry => entry.Pair, entry => entry.LatestAnsweredAtUtc);
+
+        return [.. candidates.Where(item =>
+        {
+            var pair = PairKey.Of(item);
+
+            return SupplierSearchDuePolicy.IsPairDueAtBoundary(
+                boundaries[item.SupplierPresetId],
+                latestAnswered.TryGetValue(pair, out var answered) ? answered : null,
+                inFlight.Contains(pair));
+        })];
+    }
+
+    /// <summary>
+    /// One product-and-supplier pair, which is what a work item is about and what the due rule is
+    /// decided per. The waiting key is compared with the record type's own default string equality,
+    /// which is ordinal - the same comparison the work list's rotation orders it by.
+    /// </summary>
+    private sealed record PairKey(int SupplierPresetId, long? MasterProductId, string? WaitingKey)
+    {
+        internal static PairKey Of(NewPriceCollectorWorkItem item) =>
+            new(item.SupplierPresetId, item.MasterProductId, item.WaitingKey);
     }
 
     /// <inheritdoc />

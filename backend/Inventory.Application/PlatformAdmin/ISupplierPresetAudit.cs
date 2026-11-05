@@ -1,3 +1,4 @@
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 
 namespace Inventory.Application.PlatformAdmin;
@@ -66,6 +67,29 @@ public enum SupplierPresetChange
 /// <param name="PriceConnectorKey">
 /// The connector key after the change, or <see langword="null"/> where the route takes none.
 /// </param>
+/// <param name="SearchFrequency">
+/// How often its prices are searched after the change (issue #1108). Recorded for the reason
+/// <paramref name="SearchPrices"/> is: on the paid routes a cadence is money, so "who moved this
+/// supplier from fortnightly to daily, and when" is exactly a question this trail exists to answer.
+/// </param>
+/// <param name="SearchDaysOfWeek">
+/// The weekdays it is searched on after the change, as the stored canonical list, and the empty
+/// string for a daily schedule.
+/// </param>
+/// <param name="FortnightStartDate">
+/// The fortnight start date after the change, or <see langword="null"/> for a schedule that has no
+/// off weeks.
+/// </param>
+/// <param name="ScheduleEffectiveFromUtc">
+/// When the schedule became effective after the change (issue #1108) - which is the instant of this
+/// change when the schedule moved or searching was switched on, and the previous instant otherwise.
+/// Recorded because it is what decides whether answers already given still count, so a trail without
+/// it could not say why a supplier's pairs all became due again.
+/// </param>
+/// <param name="PriceCheckFreshnessHours">
+/// The freshness limit after the change, as derived from the schedule (issue #1108). Recorded beside
+/// the schedule rather than instead of it, so a trail reading shows the derivation held.
+/// </param>
 /// <param name="OccurredAtUtc">When the change was committed, from the application clock.</param>
 public sealed record SupplierPresetAuditEntry(
     string ActorDirectoryTenantId,
@@ -79,6 +103,11 @@ public sealed record SupplierPresetAuditEntry(
     bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
+    SupplierSearchFrequency SearchFrequency,
+    string SearchDaysOfWeek,
+    DateOnly? FortnightStartDate,
+    DateTime ScheduleEffectiveFromUtc,
+    int PriceCheckFreshnessHours,
     DateTime OccurredAtUtc)
 {
     /// <summary>
@@ -111,6 +140,11 @@ public sealed record SupplierPresetAuditEntry(
             stored.PricesIncludeGst,
             stored.PriceConnector,
             stored.PriceConnectorKey,
+            stored.Schedule.Frequency,
+            SupplierSearchSchedulePolicy.StoredDaysOfWeek(stored.Schedule.DaysOfWeek),
+            stored.Schedule.FortnightStartDate,
+            stored.ScheduleEffectiveFromUtc,
+            stored.PriceCheckFreshnessHours,
             occurredAtUtc);
     }
 }
