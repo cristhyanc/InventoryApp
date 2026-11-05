@@ -1071,7 +1071,7 @@ The `always()` finalizer fetches a fresh token and submits independently validat
 then completes the issued run even after Claude fails or is stopped. Unanswered work becomes
 `not_searched`. Whole-job cancellation, hard timeout or runner loss may skip finalisation and
 cleanup; backend run expiry and verified reset/ephemeral self-hosted isolation remain necessary.
-Since 31 October 2026 (owner decision) a run is logged in full: the job summary has a counts-only per-supplier table (#1110: issued, given to Claude, searched, not searched) and lists every search
+Since 31 October 2026 (owner decision) a run is logged in full: the job summary has a counts-only per-supplier table (#1110: issued, given to Claude, searched only for a valid result file with a search outcome, not searched for everything else) and lists every search
 with the rows Claude wrote and the API's decision and reason for each, the finalise step prints every
 tool call with its input and answer, and a pinned `actions/upload-artifact` step keeps the masked run
 log (tool trace, Claude session transcripts, issued work, result files, API decisions) for 7 days as

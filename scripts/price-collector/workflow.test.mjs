@@ -647,22 +647,32 @@ test('the summary counts each supplier\'s issued, given, searched and unsearched
       { workItemId: 1, supplierPresetId: 3, supplierName: 'ALDI', product: coke },
       { workItemId: 2, supplierPresetId: 4, supplierName: 'Coles', product: coke },
       { workItemId: 3, supplierPresetId: 4, supplierName: 'Coles', product: { kind: 'waiting', searchName: 'Tasty Cheese', unitLabel: '45g' } },
+      { workItemId: 5, supplierPresetId: 6, supplierName: 'JB Metro', product: coke },
+      { workItemId: 6, supplierPresetId: 6, supplierName: 'JB Metro', product: { kind: 'waiting', searchName: 'Tasty Cheese', unitLabel: '45g' } },
+      { workItemId: 7, supplierPresetId: 6, supplierName: 'JB Metro', product: { kind: 'waiting', searchName: 'Mints', unitLabel: '30g' } },
       // Issued but left out of the sample: it must count as not searched, never as searched.
       { workItemId: 4, supplierPresetId: 5, supplierName: 'Woolworths', product: coke },
     ];
-    const work = { runId: 41, searches: issuedSearches.slice(0, 3), matching: { waitingProducts: [], masterProducts: [] },
+    const work = { runId: 41, searches: issuedSearches.filter(search => search.workItemId !== 4), matching: { waitingProducts: [], masterProducts: [] },
       issuedBySupplier: issuedCountsBySupplier(issuedSearches) };
     writeFileSync(join(dir, 'issued-work.json'), JSON.stringify(work));
     writeFileSync(join(dir, 'collector-status.json'), JSON.stringify({ status: 'timeout', costUsd: 0.1 }));
     const outputDir = join(dir, 'out');
     mkdirSync(outputDir);
-    writeFileSync(join(outputDir, '1.json'), JSON.stringify({ runId: 41, workItemId: 1, outcome: 'complete', rows: [
-      { supplierProductId: 'aldi-1', title: 'Coke Zero 18x375ml', packPrice: 20.99, packQuantity: 18, stockStatus: 'in_stock', sourceUrl: 'https://www.aldi.com.au/p/1' }] }));
-    writeFileSync(join(outputDir, '2.json'), JSON.stringify({ runId: 41, workItemId: 2, outcome: 'no_matches', rows: [] }));
+    writeFileSync(join(outputDir, '1.json'), JSON.stringify({ runId: 41, workItemId: 1, supplierPresetId: 3, outcome: 'complete', rows: [
+      { supplierProductId: 'aldi-1', title: 'Coke Zero 18x375ml', packPrice: 20.99, packQuantity: 18, stockStatus: 'in_stock', sourceUrl: 'https://www.aldi.com.au/p/1', currency: 'AUD', priceBasis: 'inclusive_of_gst' }] }));
+    writeFileSync(join(outputDir, '2.json'), JSON.stringify({ runId: 41, workItemId: 2, supplierPresetId: 4, outcome: 'no_matches', rows: [] }));
+    // A file that says not_searched, a malformed file, and a file of another run (refused before
+    // submission): none of them is evidence that a search happened.
+    writeFileSync(join(outputDir, '5.json'), JSON.stringify({ runId: 41, workItemId: 5, supplierPresetId: 6, outcome: 'not_searched', rows: [] }));
+    writeFileSync(join(outputDir, '6.json'), JSON.stringify({ runId: 41, workItemId: 6, supplierPresetId: 6, outcome: 'complete', rows: 'not a list' }));
+    writeFileSync(join(outputDir, '7.json'), JSON.stringify({ runId: 99, workItemId: 7, supplierPresetId: 6, outcome: 'no_matches', rows: [] }));
     const { suppliers } = await finaliseSample({ stateDir: dir, outputDir, env: {}, token: 't', submit: async () => ({ exitCode: 0, out: '' }) });
-    assert.match(suppliers, /^\| ALDI \| 1 \| 1 \| 1 \| 0 \| complete 1 \|$/m);
-    assert.match(suppliers, /^\| Coles \| 2 \| 2 \| 1 \| 1 \| no_matches 1 \|$/m);
-    assert.match(suppliers, /^\| Woolworths \| 1 \| 0 \| 0 \| 1 \| - \|$/m);
+    assert.match(suppliers, /^\| ALDI \| 1 \| 1 \| 1 \| 0 \| complete 1 \| 0 \|$/m);
+    assert.match(suppliers, /^\| Coles \| 2 \| 2 \| 1 \| 1 \| no_matches 1 \| 0 \|$/m);
+    // The not_searched file and the refused file are not searched; the malformed one is also unusable.
+    assert.match(suppliers, /^\| JB Metro \| 3 \| 3 \| 0 \| 3 \| - \| 1 \|$/m);
+    assert.match(suppliers, /^\| Woolworths \| 1 \| 0 \| 0 \| 1 \| - \| 0 \|$/m);
     // A supplier with no issued work is not listed at all.
     assert.ok(!/Kmart|BIG W/.test(suppliers));
     for (const detail of ['Coke Zero', 'aldi-1', '20.99', 'https://', 'Tasty Cheese', 'Zero Sugar']) assert.ok(!suppliers.includes(detail), detail);
@@ -672,5 +682,5 @@ test('the summary counts each supplier\'s issued, given, searched and unsearched
 
 test('the supplier counts say when nothing was issued and fall back to the searches given', () => {
   assert.match(supplierCounts({ searches: [] }, '/nonexistent'), /No searches were issued/);
-  assert.match(supplierCounts({ searches: [{ workItemId: 9, supplierPresetId: 2, supplierName: 'JB Metro' }] }, '/nonexistent'), /^\| JB Metro \| 1 \| 1 \| 0 \| 1 \| - \|$/m);
+  assert.match(supplierCounts({ searches: [{ workItemId: 9, supplierPresetId: 2, supplierName: 'JB Metro' }] }, '/nonexistent'), /^\| JB Metro \| 1 \| 1 \| 0 \| 1 \| - \| 0 \|$/m);
 });

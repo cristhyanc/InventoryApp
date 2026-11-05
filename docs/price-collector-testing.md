@@ -122,8 +122,12 @@ full even though this repository's Actions logs are public. Each run shows:
 
 - **Job summary**: the submission output (every outcome count and every reason the API gave,
   word for word, plus any submission error), a **Suppliers** table (#1110) with counts only, one row
-  per supplier that had issued work: searches issued, given to Claude, searched (a result file was
-  written, with its outcomes) and not searched, so an unvisited search never reads as searched;
+  per supplier that had issued work: searches issued, given to Claude, **searched** and **not
+  searched** (which add up to issued), the searched outcomes, and unusable files. A search counts
+  as searched only when its result file passed the pre-submission check (this run, this sample) and
+  the result-file schema with one of the four search outcomes (`complete`, `truncated`,
+  `no_matches`, `failed`). No file, a file that says `not_searched`, a refused or malformed file, or
+  a search left out of the run counts as not searched; malformed files are also counted as unusable;
   and a **Searches** list: for each search, the product
   and supplier, the outcome Claude reported (or that it wrote no file), and every row it wrote
   (title, supplier product id, price, pack, stock, link) with what the API did with that row and why.

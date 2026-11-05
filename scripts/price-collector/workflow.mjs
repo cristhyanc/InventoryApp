@@ -8,6 +8,8 @@ import { collectorToken } from './workflow-auth.mjs';
 import { JB_METRO_CAPS, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { runGetWork } from './get-work.mjs';
 import { runSubmission } from './submit-results.mjs';
+import { validateResultFile } from './output-schema.mjs';
+import { SEARCH_OUTCOMES } from './pagination.mjs';
 import { appendLog, clip, logDir, readTrace, redact, secretsOf, textOf, trace } from './trace.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -190,15 +192,33 @@ export function issuedCountsBySupplier(searches) {
   return [...counts.values()];
 }
 
+const SEARCHED_OUTCOMES = new Set(Object.values(SEARCH_OUTCOMES));
+
+/**
+ * What one search's result file says, for the supplier counts: `searched` with its outcome only for
+ * a file that passed the pre-submission check (this run, this sample, a regular file) and the
+ * result-file schema with one of the four search outcomes; `not_searched` when there is no such
+ * file or the file itself says not_searched; `unusable` for any other file, which proves nothing.
+ */
+function searchEvidence(search, submissionDir) {
+  const file = submissionDir ? readJson(join(submissionDir, `${search.workItemId}.json`)) : undefined;
+  if (file === undefined || file?.outcome === 'not_searched') return { kind: 'not_searched' };
+  if (!validateResultFile(file).ok || !SEARCHED_OUTCOMES.has(file.outcome)) return { kind: 'unusable' };
+  return { kind: 'searched', outcome: file.outcome };
+}
+
 /**
  * The run's searches per supplier (issue #1110), counts only: the searches the API issued, those
- * given to Claude, those Claude answered with a result file (by outcome), and those not searched.
- * Only suppliers with issued work appear, so a supplier with nothing due is never listed as searched.
+ * given to Claude, those searched (a valid result file with a search outcome, by outcome) and those
+ * not searched (everything else issued, so Searched + Not searched = Issued). A result file that was
+ * refused or is malformed is counted as not searched and also shown as unusable. Only suppliers with
+ * issued work appear, so a supplier with nothing due is never listed as searched. `submissionDir` is
+ * the folder of files that passed the pre-submission check, never Claude's raw output folder.
  */
-export function supplierCounts(work, outputDir) {
+export function supplierCounts(work, submissionDir) {
   const bySupplier = new Map();
   const entryFor = (id, name) => {
-    if (!bySupplier.has(id)) bySupplier.set(id, { name, issued: 0, given: 0, answered: 0, outcomes: new Map() });
+    if (!bySupplier.has(id)) bySupplier.set(id, { name, issued: 0, given: 0, searched: 0, unusable: 0, outcomes: new Map() });
     return bySupplier.get(id);
   };
   const issuedCounts = Array.isArray(work.issuedBySupplier) ? work.issuedBySupplier : issuedCountsBySupplier(work.searches);
@@ -206,18 +226,20 @@ export function supplierCounts(work, outputDir) {
   for (const search of work.searches) {
     const entry = entryFor(search.supplierPresetId, supplierLabel(search));
     entry.given += 1;
-    const file = readJson(join(outputDir, `${search.workItemId}.json`));
-    if (file === undefined) continue;
-    entry.answered += 1;
-    const outcome = /^[a-z_]{1,40}$/.test(String(file.outcome)) ? file.outcome : 'invalid';
-    entry.outcomes.set(outcome, (entry.outcomes.get(outcome) ?? 0) + 1);
+    const evidence = searchEvidence(search, submissionDir);
+    if (evidence.kind === 'unusable') entry.unusable += 1;
+    if (evidence.kind !== 'searched') continue;
+    entry.searched += 1;
+    entry.outcomes.set(evidence.outcome, (entry.outcomes.get(evidence.outcome) ?? 0) + 1);
   }
   if (bySupplier.size === 0) return '### Suppliers\n\nNo searches were issued.\n';
-  const lines = ['### Suppliers', '', '| Supplier | Issued | Given to Claude | Searched | Not searched | Outcomes |', '| --- | ---: | ---: | ---: | ---: | --- |'];
+  const lines = ['### Suppliers', '',
+    'Searched = a valid result file with a search outcome; Not searched = every other issued search (no file, a not_searched file, an unusable file, or left out of this run).', '',
+    '| Supplier | Issued | Given to Claude | Searched | Not searched | Searched outcomes | Unusable files |', '| --- | ---: | ---: | ---: | ---: | --- | ---: |'];
   for (const entry of [...bySupplier.values()].sort((a, b) => a.name.localeCompare(b.name))) {
     const outcomes = [...entry.outcomes].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => `${name} ${count}`).join(', ') || '-';
     const issued = Math.max(entry.issued, entry.given);
-    lines.push(`| ${entry.name.replace(/\|/g, '/')} | ${issued} | ${entry.given} | ${entry.answered} | ${issued - entry.answered} | ${outcomes} |`);
+    lines.push(`| ${entry.name.replace(/\|/g, '/')} | ${issued} | ${entry.given} | ${entry.searched} | ${issued - entry.searched} | ${outcomes} | ${entry.unusable} |`);
   }
   return lines.join('\n') + '\n';
 }
@@ -313,7 +335,7 @@ export async function finaliseSample({ stateDir, outputDir, env, apiUrl, token, 
   const subtype = typeof status.subtype === 'string' && /^[a-z_]{1,40}$/.test(status.subtype) ? status.subtype : 'unknown';
   const errors = result.err ? `Submission errors:\n${result.err}` : '';
   const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${batches}${toolUseReport(stateDir)}Searches given to Claude: ${work.searches.length}\nFiles refused before submission: ${refused}\n${result.out}${errors}Submission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
-  const suppliers = supplierCounts(work, outputDir);
+  const suppliers = supplierCounts(work, dir);
   const details = searchDetails(work, outputDir, result.decisions ?? []);
   appendLog(stateDir, 'submission.json', JSON.stringify({ out: result.out, err: result.err ?? '', decisions: result.decisions ?? [] }, null, 2), env);
   appendLog(stateDir, 'summary.md', `${report}\n${suppliers}\n${details}`, env);
