@@ -1,6 +1,7 @@
 import { Component, ElementRef, Input, ViewChild } from '@angular/core';
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import {
+  CheapestSupplierOffer,
   CheapestSupplierProduct,
   SupplierOfferIneligibility,
   SupplierPriceBasis
@@ -30,6 +31,12 @@ export type CheapestSupplierSummaryView =
       readonly supplierNames: readonly string[];
       readonly tied: boolean;
       readonly special: boolean;
+      /**
+       * Every offer behind {@link supplierNames}, in the same order, for the View link beside each
+       * one (issue #1098): the server's own `isCheapest` offers, never a second opinion about which
+       * is cheapest or an offer that fell out of the tie since the read.
+       */
+      readonly cheapestOffers: readonly CheapestSupplierOffer[];
     }
   | {
       readonly kind: 'stale';
@@ -90,7 +97,8 @@ export function cheapestSupplierSummaryView(
       basis: basisLabel(displayBasis),
       supplierNames: cheapest.map((offer) => offer.supplierName),
       tied: cheapest.length > 1,
-      special: cheapest.some((offer) => offer.isSpecial)
+      special: cheapest.some((offer) => offer.isSpecial),
+      cheapestOffers: cheapest
     };
   }
 
@@ -114,6 +122,10 @@ export function cheapestSupplierSummaryView(
  * when the server says so, and "Compare (N)" to open the shared supplier comparison. The same
  * component renders the desktop cell and the narrow-screen card's supplier line, so the two can
  * never disagree.
+ *
+ * Each cheapest offer with a `productUrl` also gets its own View link (issue #1098), opening that
+ * supplier's product page directly in a new tab rather than the comparison popup - never a link
+ * built from an arbitrary member of a tie, and never shown for a non-cheapest or stale offer.
  *
  * General guidance - that these are observed prices, and that a supplier's stock may differ - is
  * said once in the column heading's help, not repeated in every row.
@@ -156,6 +168,11 @@ export class CheapestSupplierSummaryComponent {
 
   get canOpen(): boolean {
     return this.supplierCount > 0;
+  }
+
+  /** Whether any of the cheapest offers has a URL to link to, so the View row renders only then. */
+  hasAnyProductUrl(offers: readonly CheapestSupplierOffer[]): boolean {
+    return offers.some((offer) => offer.productUrl !== null);
   }
 
   openComparison(): void {

@@ -8142,7 +8142,7 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **Export parity.** The reconciliation CSV/XLSX rows add `AdjustmentsSupported`, `AdjustmentsBasis` (the assumption above), the five status counts and `DataQualityNotes`. Each period row carries its own counts and its own notes; the `TOTAL` row carries the report's range-wide counts and notes rather than a sum of the period rows'. A clean period exports an empty `DataQualityNotes` cell and no boilerplate, and the export keeps every figure, filter and status it exported before.
 
-### The All Products page layout (issue #1093)
+### The All Products page layout (issue #1093, history visibility and View links fixed by issue #1098)
 
 **Products → All products** (`ProductListComponent`, routed inside `ProductsShellComponent`) was
 redesigned on the Dashboard and Pick List's `rr` scale. It is a presentation change: the page reads
@@ -8151,34 +8151,42 @@ exactly what it read before - one `GET api/products` per filter change, and the 
 `<app-cheapest-suppliers>` (observed supplier prices), each asked once for **every** listed product
 id - and no calculation, GST rule, threshold, permission or write moved or changed.
 
-**Page state is local and unpersisted.** The page owns its filters and sort as before, plus three
-pieces of view state: the optional history columns (`optionalColumns`, empty on every visit; a
-column is shown only while it is turned on *and* the role holds `Dashboard.ViewFinancials`), the
+**Last/Cheapest purchase have no optional-column state (issue #1098, an owner correction to
+#1093's original design).** The two columns in `ProductListComponent`'s desktop table and
+narrow-screen cards are gated on nothing but `canViewFinancials` (the page's own fresh read of
+`Dashboard.ViewFinancials`) - there is no `optionalColumns` set, no `toggleColumn`/`resetColumns`
+and no Columns disclosure left in the template; a role that may see purchase costs sees both
+columns on first render, and a role that may not sees neither, with no local preference able to
+hide or reveal either one. A sort already applied to one of them is cleared back to the default
+order if `canViewFinancials` turns false mid-visit (`clearPurchaseCostSortWhenHidden`, mirroring
+the existing `clearStatusSortWhenHidden` for the Status column), so a sort is never left pointing
+at a column that has just disappeared.
+
+**Page state is local and unpersisted.** The page owns its filters and sort as before, plus the
 page index and the page size (`PRODUCT_PAGE_SIZE_OPTIONS` = 5, 10, 20, 50, 100; default 10).
 Paging is client-side over the list already read, the strategy the Dashboard's Reorder priorities
 uses: `pagedProducts` is a window onto `sortedProducts` through the pure helpers in
-`components/shared/list-pagination/paging.ts`, so a page or size change, or turning a column on or
-off, issues no request. A size, filter or sort change returns to page 1; a refetch clamps the page
-to the last one that still exists. The desktop table and the narrow-screen cards (below `md`, both
-rendered and switched by CSS like the Dashboard's) iterate the same `pagedProducts`, so they cannot
-show different products or values.
+`components/shared/list-pagination/paging.ts`, so a page or size change issues no request. A size,
+filter or sort change returns to page 1; a refetch clamps the page to the last one that still
+exists. The desktop table and the narrow-screen cards (below `md`, both rendered and switched by
+CSS like the Dashboard's) iterate the same `pagedProducts` and read the same `canViewFinancials`,
+so they cannot show different products, values or history visibility.
 
 **Composition.** The page composes shared, presentation-only components and owns none of their
 behaviour:
 
 - `ActionMenuComponent` (`components/shared/action-menu`) - the menu button behind More actions and
-  each row's ⋮ menu (`kind="menu"`: `role="menu"`, Arrow/Home/End, an item closes it) and the
-  Columns disclosure (`kind="panel"`). Each panel is a manual `popover` positioned from its trigger
-  (so no table `overflow` clips it), closes on Escape (focus back to the trigger), outside click and
-  focus leaving it, and only one is open at a time. The items are the page's own buttons and links,
-  projected in, so every permission check (`sessionActive`, `canDelete`, `showImportProducts`) and
-  write handler stays where it was.
+  each row's ⋮ menu (`kind="menu"`: `role="menu"`, Arrow/Home/End, an item closes it). Each panel is
+  a manual `popover` positioned from its trigger (so no table `overflow` clips it), closes on
+  Escape (focus back to the trigger), outside click and focus leaving it, and only one is open at a
+  time. The items are the page's own buttons and links, projected in, so every permission check
+  (`sessionActive`, `canDelete`, `showImportProducts`) and write handler stays where it was.
 - `ListPaginationComponent` (`components/shared/list-pagination`) - the range, the per-page selector
   and Previous/Next; it only reports what was asked for.
 - `CheapestSupplierSummaryComponent` (`components/shared/cheapest-supplier`) - the Products layout of
   the Cheapest supplier answer (unit price, server GST basis, supplier or tied suppliers, Special,
-  Stale with its last check, Compare (N)), from the pure `cheapestSupplierSummaryView`. It formats
-  the server's answer and decides nothing.
+  Stale with its last check, a View link per cheapest offer, Compare (N)), from the pure
+  `cheapestSupplierSummaryView`. It formats the server's answer and decides nothing.
 - `SupplierComparisonDialogComponent` (`components/shared/cheapest-supplier`) - **the one supplier
   comparison**, extracted from `CheapestSupplierCellComponent`'s popup so the Dashboard, Needs
   Ordering and Products open the same native modal `<dialog>` with the same columns (Supplier, Pack
@@ -8186,6 +8194,25 @@ behaviour:
   Escape/backdrop dismissal and `closed` report; each opener returns focus to its own trigger.
   Unpublished pack or price data is shown as `—`. The shared wording (`money`, `basisLabel`,
   `offerStatus`, the notes) lives in `cheapest-supplier-format.ts` and is re-exported by the cell.
+
+**Direct cheapest-offer View links (issue #1098).** `cheapestSupplierSummaryView`'s `'price'`
+variant now carries `cheapestOffers` - exactly the server's own `isCheapest` offers behind
+`supplierNames`, in the same order, never a second opinion about which is cheapest. The template
+renders one `<a target="_blank" rel="noopener noreferrer">` per offer that has a `productUrl`,
+omitting the link rather than fabricating a destination when an offer has none; the visible text
+and the `aria-label` both name the supplier once there is more than one (a tie), so each link stays
+traceable to its own offer. The anchor is a sibling of the existing Compare trigger inside the same
+cell/card markup - not inside it - so activating a View link cannot open
+`SupplierComparisonDialogComponent`, and `ProductListComponent.onRowActivate`'s existing
+`closest('a, button, input, select, dialog, [popover]')` check already keeps any anchor click from
+navigating the row to the product editor, the same way the Compare trigger and Adjust stock already
+did. A non-cheapest, stale or not-yet-compared offer is never a candidate: `cheapestOffers` is
+populated only in the `'price'` case, so `'stale'`, `'noOffers'` and every statement state carry no
+link at all. The same `cheapestSupplierSummaryView` and template serve the desktop cell and the
+narrow-screen card (`layout="card"`), so a View link can never differ between them. Dashboard and
+Needs Ordering compose `CheapestSupplierCellComponent` instead (see
+[The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930))
+and are untouched by this: they keep the comparison-only Link column inside the popup.
 
 The general Cheapest supplier guidance (observed prices, stock may differ) is one
 `HelpToggletipComponent` on the column heading and on each card rather than a note in every cell.

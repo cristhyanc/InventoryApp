@@ -57,42 +57,13 @@
     }
 
     <!--
-      Columns, More actions and New product, last in the DOM so they are last in the keyboard order.
-      Columns exists only for a role that may see the history columns it offers. More actions holds
-      exactly Import products and Set GST rule in bulk, each on its existing permission, and is not
-      rendered when neither is offered. New product and Set GST rule in bulk are hidden rather than
-      disabled during a support session (issue #554): a session grants InventoryOperate, so these
-      writes would otherwise still render.
+      More actions and New product, last in the DOM so they are last in the keyboard order. More
+      actions holds exactly Import products and Set GST rule in bulk, each on its existing
+      permission, and is not rendered when neither is offered. New product and Set GST rule in bulk
+      are hidden rather than disabled during a support session (issue #554): a session grants
+      InventoryOperate, so these writes would otherwise still render.
     -->
     <div class="ml-auto flex flex-wrap items-center gap-2">
-      @if (canViewFinancials) {
-        <app-action-menu
-          kind="panel"
-          icon="view_column"
-          label="Columns"
-          [text]="activeColumnCount > 6 ? 'Columns (' + activeColumnCount + ' active)' : 'Columns'"
-          triggerClass="rr-button-secondary min-h-10 px-3"
-          testId="products-columns">
-          <div class="flex items-center justify-between gap-4 px-2 pb-1 pt-1">
-            <span class="text-xs font-semibold uppercase tracking-wide text-rr-muted">Optional columns</span>
-            <button
-              type="button"
-              class="text-xs font-semibold text-rr-teal hover:underline"
-              data-testid="products-columns-reset"
-              (click)="resetColumns()">Reset to default</button>
-          </div>
-          @for (option of optionalColumnOptions; track option.column) {
-            <label class="flex min-h-10 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-rr-canvas">
-              <input
-                type="checkbox"
-                [attr.data-testid]="'products-column-' + option.column"
-                [checked]="optionalColumns.has(option.column)"
-                (change)="toggleColumn(option.column, $any($event.target).checked)" />
-              <span>{{ option.label }}</span>
-            </label>
-          }
-        </app-action-menu>
-      }
       @if (showImportProducts || !sessionActive) {
         <app-action-menu
           icon="more_vert"
@@ -124,12 +95,13 @@
   </div>
 
   <!--
-    The purchase-cost read behind the optional Last and Cheapest purchase columns is its own feature
+    The purchase-cost read behind the Last and Cheapest purchase columns is its own feature
     component (issue #191's page composition boundary): this page hands it the product ids it is
     displaying and lays out the answer it publishes. Its failure message and Retry are shown only
-    while one of those columns is, because they describe columns nobody has turned on otherwise.
+    while a role may also see those columns (issue #1098), because they describe columns nobody
+    without the capability can see anyway.
   -->
-  <div [hidden]="!isColumnShown('lastPurchase') && !isColumnShown('cheapestPurchase')">
+  <div [hidden]="!canViewFinancials">
     <app-product-purchase-costs
       [productIds]="productIds"
       (costsChange)="onPurchaseCostsChange($event)"></app-product-purchase-costs>
@@ -149,8 +121,8 @@
   } @else if (loadState.loaded) {
     <!--
       The Actions column is pinned to the right edge of this scroll area so Adjust stock and the row
-      menu stay reachable when the optional history columns push the table wider than the viewport;
-      each sticky cell carries its own opaque background so scrolled columns never show through.
+      menu stay reachable when the history columns push the table wider than the viewport; each
+      sticky cell carries its own opaque background so scrolled columns never show through.
     -->
     <div class="hidden overflow-x-auto md:block" data-testid="products-table">
       <table class="table">
@@ -173,12 +145,10 @@
             <th scope="col" class="table-cell text-right" [attr.aria-sort]="ariaSort('averageCost')">
               <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageCost')">{{ sortLabel('Average cost', 'averageCost') }}</button>
             </th>
-            @if (isColumnShown('lastPurchase')) {
+            @if (canViewFinancials) {
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lastPurchase')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastPurchase')">{{ sortLabel('Last purchase', 'lastPurchase') }}</button>
               </th>
-            }
-            @if (isColumnShown('cheapestPurchase')) {
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('cheapestPurchase')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchase')">{{ sortLabel('Cheapest purchase', 'cheapestPurchase') }}</button>
               </th>
@@ -232,7 +202,7 @@
                 </td>
               }
               <td class="table-cell text-right tabular-nums">{{ averageCostDisplay(p) }}</td>
-              @if (isColumnShown('lastPurchase')) {
+              @if (canViewFinancials) {
                 <td class="table-cell" data-testid="product-last-purchase">
                   <div class="tabular-nums">{{ purchaseCostDisplay(p, 'lastPurchase') }}
                     @if (purchaseCostSupplierDisplay(p, 'lastPurchase'); as supplier) {
@@ -243,8 +213,6 @@
                     {{ ' ' }}<div class="text-xs text-rr-caption">{{ date }}</div>
                   }
                 </td>
-              }
-              @if (isColumnShown('cheapestPurchase')) {
                 <td class="table-cell" data-testid="product-cheapest-purchase">
                   <div class="tabular-nums">{{ purchaseCostDisplay(p, 'cheapestPurchase') }}
                     @if (purchaseCostSupplierDisplay(p, 'cheapestPurchase'); as supplier) {
@@ -305,8 +273,8 @@
 
     <!--
       Below `md` the same page of products as compact cards: the wrapped name, category, storage
-      stock, average cost, any history column the operator turned on, the cheapest supplier, Adjust
-      stock and the same row menu.
+      stock, average cost, the purchase history fields where the role may see them, the cheapest
+      supplier, Adjust stock and the same row menu.
     -->
     <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="product-cards">
       @for (p of pagedProducts; track p.id) {
@@ -338,7 +306,7 @@
               <dt class="text-xs text-rr-muted">Average cost</dt>
               <dd class="m-0 mt-0.5 font-semibold tabular-nums">{{ averageCostDisplay(p) }}</dd>
             </div>
-            @if (isColumnShown('lastPurchase')) {
+            @if (canViewFinancials) {
               <div class="col-span-2 break-words">
                 <dt class="inline text-xs text-rr-muted">Last purchase:</dt>
                 <dd class="m-0 inline tabular-nums">
@@ -347,8 +315,6 @@
                   @if (purchaseCostDateDisplay(p, 'lastPurchase'); as date) {<span class="text-xs text-rr-caption"> · {{ date }}</span>}
                 </dd>
               </div>
-            }
-            @if (isColumnShown('cheapestPurchase')) {
               <div class="col-span-2 break-words">
                 <dt class="inline text-xs text-rr-muted">Cheapest purchase:</dt>
                 <dd class="m-0 inline tabular-nums">

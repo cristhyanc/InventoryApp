@@ -2132,7 +2132,7 @@ does not manage.
 - **The Products and Categories screens use all of this** (issue #737, with the Products list
   actions as issue #825 left them, laid out since issue #1093 as described in
   [The All Products page](#the-all-products-page)). **Products → New product** sits in the All Products
-  search/filter toolbar, to the right of search, Category, Status, Columns and More actions, and **Categories → New
+  search/filter toolbar, to the right of search, Category, Status and More actions, and **Categories → New
   Category** creates a record this business maintains itself. (New Product is on All Products only —
   it is not in the shared Products header, so Needs Ordering, which orders products that already
   exist, no longer offers it.) **Needs Ordering → Mark as ordered** sits the same way, in that
@@ -2392,45 +2392,52 @@ same column, cell and popup — everything below applies to all three.
 - **Same column, same answer, everywhere it appears.** One endpoint and one component serve it, so
   the Dashboard's Reorder priorities and **Products → All Products** (issue #940) cannot ever
   disagree with Needs Ordering about which supplier is cheapest. On All Products it sits after the
-  optional purchase-cost columns, with one request for every listed product (not per page) — the same batching, failure
-  message and Retry described above, and no sort of its own. All Products lays the same answer out
-  as a unit price with its GST basis, the supplier (or tied suppliers) beneath and a **Special**
-  badge, with **Compare (N)** opening the same supplier comparison every page shares (issue #1093).
+  Last/Cheapest purchase fields, with one request for every listed product (not per page) — the
+  same batching, failure message and Retry described above, and no sort of its own. All Products
+  lays the same answer out as a unit price with its GST basis, the supplier (or tied suppliers)
+  beneath and a **Special** badge, with a direct **View ↗** link beside each cheapest supplier that
+  has a recorded product page - opening that supplier's own page in a new tab, named with the
+  supplier when offers are tied, and simply absent where a supplier has none (issue #1098) - and
+  **Compare (N)** still opening the same supplier comparison every page shares (issue #1093).
 
 ## The All Products page
 
 **Products → All products** (issue #1093) is one card: a toolbar, the product table (compact
 cards on a phone) and a pager. Everything on it uses data and permissions the page already had.
 
-- **Default columns** are Product (name, linking to Edit Product, with the SKU beneath), Category,
+- **Table columns** are Product (name, linking to Edit Product, with the SKU beneath), Category,
   **Storage stock** (storage only, no unit; low and zero stock keep their colours), Average cost,
-  Cheapest supplier and Actions.
-- **Columns** adds **Last purchase** and **Cheapest purchase** - each your own recorded price, its
-  supplier and the purchase date - and **Reset to default** removes them again. They are off on every
-  visit, shown only to a role that may see purchase costs, and a product with no history shows
-  `—`, never `$0.00`. Turning them on or off requests nothing.
+  **Last purchase** and **Cheapest purchase** (issue #1098: each your own recorded price, its
+  supplier and the purchase date), Cheapest supplier and Actions. Last and Cheapest purchase are
+  always shown to a role that may see purchase costs - there is no Columns control left to turn
+  them on or off, and no hidden preference can suppress either - and a product with no history
+  shows `—`, never `$0.00`.
 - **Cheapest supplier** shows the comparable unit price with the GST basis the server put it on,
   the supplier beneath (tied suppliers together, with a **Tied** badge) and **Special** when the
-  supplier says so. *Not tracked*, *No match found*, *Awaiting match*, *No current offers*, a
-  **Stale price** with when it was last checked, *Loading* and *Unavailable* (with the existing
-  Retry above the table) stay separate answers. What these prices are, and that a supplier's stock
+  supplier says so, each with its own direct **View ↗** link where the server recorded that
+  offer's product page (issue #1098) - opening it in a new tab rather than the comparison, named
+  with the supplier when offers are tied, and simply absent where a supplier has no recorded page.
+  *Not tracked*, *No match found*, *Awaiting match*, *No current offers*, a **Stale price** with
+  when it was last checked, *Loading* and *Unavailable* (with the existing Retry above the table)
+  stay separate answers and carry no View link. What these prices are, and that a supplier's stock
   may differ, is said once in the column heading's help button rather than on every row.
   **Compare (N)** opens the supplier comparison: Supplier, Pack size, Pack price, Unit price,
   Status & freshness and Link, with anything a supplier did not publish shown as `—`.
 - **Actions**: **Adjust stock** is on every row; the row's ⋮ menu holds Deactivate or Reactivate,
   and Delete where the server allows it, with the same confirmations as before.
 - **Toolbar**: search by name or SKU (with a clear button), Category, Status, **Clear filters** (shown
-  only while a filter differs from its default), Columns, **More actions** (Import products and Set
+  only while a filter differs from its default), **More actions** (Import products and Set
   GST rule in bulk, on their existing permissions) and **New product**.
 - **Pager**: 5, 10, 20, 50 or 100 per page, 10 by default; changing the size, a filter or the sort
   returns to page 1, and a refresh that shortens the list stays on the last page that still exists.
   Paging is over the list already loaded, so turning a page loads nothing.
-- **On a phone** each product is a card with its name, category, storage stock, average cost, any
-  history column you turned on, the cheapest supplier, Adjust stock and the same ⋮ menu.
+- **On a phone** each product is a card with its name, category, storage stock, average cost, the
+  purchase history fields where your role may see them, the cheapest supplier (with its own View
+  link), Adjust stock and the same ⋮ menu.
 
 Every menu and dialog starts closed, opens one at a time, works from the keyboard and closes on
-Escape with focus returned to the button that opened it. Screenshots of the seven reviewed states
-are in `docs/screenshots/issue-1093/`.
+Escape with focus returned to the button that opened it. Screenshots of the reviewed states are in
+`docs/screenshots/issue-1093/`.
 
 ## A supplier's website
 

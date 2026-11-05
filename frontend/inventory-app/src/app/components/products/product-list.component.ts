@@ -65,19 +65,6 @@ type ProductSortColumn =
 /** `GET api/products`'s working-catalogue/whole-catalogue choice (issue #737), as a page filter. */
 type ProductStatusFilter = 'active' | 'all';
 
-/**
- * The two optional history columns Columns offers (issue #1093). Neither is shown by default; the
- * default columns - Product, Category, Storage stock, Average cost, Cheapest supplier and Actions -
- * are always shown, so enabling either only adds to them.
- */
-export type ProductOptionalColumn = ProductPurchaseCostColumn;
-
-/** The optional columns in the order Columns lists them and the table places them. */
-export const PRODUCT_OPTIONAL_COLUMNS: readonly { readonly column: ProductOptionalColumn; readonly label: string }[] = [
-  { column: 'lastPurchase', label: 'Last purchase' },
-  { column: 'cheapestPurchase', label: 'Cheapest purchase' }
-];
-
 /** The page sizes the Products pager offers (issue #1093), the Dashboard's own set. */
 export const PRODUCT_PAGE_SIZE_OPTIONS = [5, 10, 20, 50, 100] as const;
 
@@ -140,15 +127,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
   statusFilter: ProductStatusFilter = 'active';
   sortColumn: ProductSortColumn | null = null;
   sortDirection: SortDirection = 'asc';
-
-  /**
-   * The optional history columns the operator turned on (issue #1093): none by default, local to
-   * this visit, and never persisted. They are shown only while the role may also see them
-   * ({@link canViewFinancials}); turning one on or off changes the layout only - the purchase-cost
-   * read is the same either way, so it never triggers a request.
-   */
-  optionalColumns: ReadonlySet<ProductOptionalColumn> = new Set();
-  readonly optionalColumnOptions = PRODUCT_OPTIONAL_COLUMNS;
 
   /**
    * The page of the sorted list on screen (issue #1093). Paging is client-side over the one list
@@ -240,9 +218,10 @@ export class ProductListComponent implements OnInit, OnDestroy {
     provider: ProviderAvailabilityService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
-    this.financialsAccessSubscription = access
-      .allows('Dashboard.ViewFinancials')
-      .subscribe((allowed) => (this.canViewFinancials = allowed));
+    this.financialsAccessSubscription = access.allows('Dashboard.ViewFinancials').subscribe((allowed) => {
+      this.canViewFinancials = allowed;
+      this.clearPurchaseCostSortWhenHidden();
+    });
     this.importProductsVisibilitySubscription = combineLatest([
       access.allows('Imports.Run'),
       provider.watch(),
@@ -375,38 +354,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
     return this.search !== '' || this.categoryId !== '' || this.statusFilter !== 'active';
   }
 
-  /** Whether an optional history column is on screen: turned on, and allowed for this role. */
-  isColumnShown(column: ProductOptionalColumn): boolean {
-    return this.canViewFinancials && this.optionalColumns.has(column);
-  }
-
-  /** How many columns the table shows, for the Columns trigger's "(N active)". */
-  get activeColumnCount(): number {
-    const defaults = 6 + (this.statusFilter === 'all' ? 1 : 0);
-    return defaults + this.optionalColumnOptions.filter((option) => this.isColumnShown(option.column)).length;
-  }
-
-  toggleColumn(column: ProductOptionalColumn, shown: boolean): void {
-    const next = new Set(this.optionalColumns);
-    if (shown) {
-      next.add(column);
-    } else {
-      next.delete(column);
-      if (this.sortColumn === column) {
-        this.sortColumn = null;
-        this.sortDirection = 'asc';
-      }
-    }
-    this.optionalColumns = next;
-  }
-
-  /** Columns' Reset: back to the default columns only. */
-  resetColumns(): void {
-    for (const option of this.optionalColumnOptions) {
-      this.toggleColumn(option.column, false);
-    }
-  }
-
   /** The products on the current page, in the current sort - one list both the table and the cards render. */
   get pagedProducts(): Product[] {
     return pageSlice(this.sortedProducts, this.pageIndex, this.pageSize);
@@ -453,6 +400,19 @@ export class ProductListComponent implements OnInit, OnDestroy {
   /** Clears a Status sort back to the default order once "Only active" hides the column it sorts. */
   private clearStatusSortWhenHidden(): void {
     if (this.statusFilter === 'active' && this.sortColumn === 'status') {
+      this.sortColumn = null;
+      this.sortDirection = 'asc';
+    }
+  }
+
+  /**
+   * Clears a Last/Cheapest purchase sort back to the default order once `canViewFinancials` turns
+   * false and hides both columns (issue #1098): they are no longer optional, but the role's
+   * capability can still change mid-visit, and a sort left pointing at a column no longer on
+   * screen would otherwise keep ordering the list by it invisibly.
+   */
+  private clearPurchaseCostSortWhenHidden(): void {
+    if (!this.canViewFinancials && (this.sortColumn === 'lastPurchase' || this.sortColumn === 'cheapestPurchase')) {
       this.sortColumn = null;
       this.sortDirection = 'asc';
     }
