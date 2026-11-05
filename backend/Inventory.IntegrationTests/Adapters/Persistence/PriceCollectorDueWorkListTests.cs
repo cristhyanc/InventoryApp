@@ -218,6 +218,82 @@ public class PriceCollectorDueWorkListTests
         Assert.Empty(third.MatchedProducts);
     }
 
+    /// <summary>
+    /// <strong>Due work is never stuck behind a covered stretch of the rotation.</strong> The budget
+    /// is filled from the pairs that are owed a search, not from the first products the rotation
+    /// reaches, so a candidate window that is entirely covered does not consume the run.
+    ///
+    /// <para>This is the regression for the starvation a budget applied <em>before</em> the due check
+    /// has. With one work item of budget, a cursor sitting at the last product and the product the
+    /// rotation comes round to already answered for this occurrence, the only candidate inside the
+    /// budget is covered: the run would be planned, dropped and answered as "nothing due", no run
+    /// would be created, and - because the cursor is read from the work that was actually issued - it
+    /// would never move. Every later call would make the same decision, and the unanswered pair one
+    /// place further on would never be issued again. So the call is repeated: each one must reach it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Due_work_past_a_covered_candidate_window_is_issued_on_every_repeated_call()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+
+        var supplier = fixture.SupplierPresetId;
+        await CollectableAsync(fixture, supplier);
+        await DailyAsync(fixture, supplier);
+
+        var cola = await TrackedProductAsync(fixture);
+        var pepsi = await TrackedProductAsync(
+            fixture,
+            "Pepsi",
+            "Max",
+            fixture.FirstBusinessPepsiId);
+
+        // The first product of the rotation is answered for this occurrence, so it is covered.
+        await AnsweredAsync(fixture, supplier, cola, Wednesday.AddMinutes(-60));
+
+        // And the cursor sits at the last product, so the rotation comes round to the covered one:
+        // a run issued earlier that declined to look, which neither covers the pair nor blocks it.
+        var earlier = await fixture.SeedRunAsync(Wednesday.AddMinutes(-30), Wednesday.AddHours(6));
+        var declined = await fixture.SeedWorkItemAsync(earlier, pepsi, waitingKey: null, supplier);
+        await fixture.AnswerWorkItemAsync(
+            declined,
+            PriceCollectorWorkItemOutcome.NotSearched,
+            Wednesday.AddMinutes(-20));
+        await fixture.CloseRunAsync(
+            earlier,
+            PriceCollectorRunStatus.Succeeded,
+            Wednesday.AddMinutes(-10));
+
+        // Three calls, each with room for exactly one work item: every one of them reaches the pair
+        // beyond the covered window rather than stopping at the window.
+        for (var call = 0; call < 3; call++)
+        {
+            var workList = await IssueDueAsync(fixture, budget: 1);
+
+            Assert.NotNull(workList.RunId);
+            var product = Assert.Single(workList.MatchedProducts);
+            Assert.Equal(pepsi, product.MasterProductId);
+            Assert.Equal(supplier, Assert.Single(product.WorkItems).SupplierPresetId);
+
+            // One due pair, one work item of budget: nothing was left out of this run.
+            Assert.False(workList.WorkItemLimitReached);
+
+            // The collector declines to look, which leaves the pair owed again at once and the run
+            // holding nothing in flight - the state the next call starts from.
+            await fixture.AnswerWorkItemAsync(
+                Assert.Single(product.WorkItems).WorkItemId,
+                PriceCollectorWorkItemOutcome.NotSearched,
+                Wednesday.AddMinutes(call + 1));
+        }
+
+        // And the covered pair was never issued by any of them: the only work item naming it is the
+        // answered one this test set up.
+        var all = await fixture.AllWorkItemsAsync();
+
+        Assert.Single(all.Where(item => item.MasterProductId == cola));
+        Assert.Equal(4, all.Count(item => item.MasterProductId == pepsi));
+    }
+
     #endregion
 
     #region Failures and not-searched pairs
@@ -310,6 +386,77 @@ public class PriceCollectorDueWorkListTests
         var runs = await fixture.AllRunsAsync();
         Assert.Equal(PriceCollectorRunStatus.Running, Assert.Single(runs).Status);
         Assert.Single(await fixture.AllWorkItemsAsync());
+    }
+
+    /// <summary>
+    /// <strong>Issuing other due pairs never expires a run a collector is still working on.</strong>
+    /// A <c>due</c> call that finds work in flight writes nothing at all, even when a different pair
+    /// is genuinely due.
+    ///
+    /// <para>This is the regression for taking a live run away from its collector. One collector
+    /// holds a pending pair in an unexpired run; another product becomes due. Issuing a run for that
+    /// second pair would expire the first run in the same transaction, finalise the pair being
+    /// searched right now as <c>NotSearched</c>, leave the collector holding a run nothing will
+    /// accept results for, and make the pair it is still searching issuable - and payable - a second
+    /// time before its own run ever expired. So the call defers: the pending pair keeps its outcome
+    /// open, its run stays usable, and the due pair is issued by the call after that run reports.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_due_pair_does_not_expire_an_unexpired_run_that_is_still_searching()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+
+        var supplier = fixture.SupplierPresetId;
+        await CollectableAsync(fixture, supplier);
+        await DailyAsync(fixture, supplier);
+
+        var searching = await TrackedProductAsync(fixture);
+        var due = await TrackedProductAsync(
+            fixture,
+            "Pepsi",
+            "Max",
+            fixture.FirstBusinessPepsiId);
+
+        // A collector issued half an hour ago is still working on its pair, in a run that expires
+        // hours from now. The other product has never been answered, so it is due.
+        var liveRun = await fixture.SeedRunAsync(Wednesday.AddMinutes(-30), Wednesday.AddHours(6));
+        var pending = await fixture.SeedWorkItemAsync(
+            liveRun,
+            searching,
+            waitingKey: null,
+            supplier);
+
+        var deferred = await IssueDueAsync(fixture);
+
+        // Nothing was issued and nothing was written: no second run, and no work item beyond the one
+        // the live run holds.
+        Assert.Null(deferred.RunId);
+        Assert.Empty(deferred.MatchedProducts);
+        Assert.False(deferred.WorkItemLimitReached);
+        Assert.Equal(liveRun, Assert.Single(await fixture.AllRunsAsync()).Id);
+        Assert.Equal(pending, Assert.Single(await fixture.AllWorkItemsAsync()).Id);
+
+        // The pair being searched is still pending and its run is still open, which is what makes
+        // the run usable: the results endpoint of #937 refuses a run that has finished.
+        Assert.Equal(PriceCollectorRunStatus.Running, await fixture.RunStatusAsync(liveRun));
+        Assert.Null(Assert.Single(await fixture.AllWorkItemsAsync()).Outcome);
+
+        // That collector reports and its run closes, which is the moment the deferred work is owed.
+        await fixture.AnswerWorkItemAsync(
+            pending,
+            PriceCollectorWorkItemOutcome.Complete,
+            Wednesday.AddMinutes(5));
+        await fixture.CloseRunAsync(
+            liveRun,
+            PriceCollectorRunStatus.Succeeded,
+            Wednesday.AddMinutes(6));
+
+        var issued = await IssueDueAsync(fixture);
+
+        var product = Assert.Single(issued.MatchedProducts);
+        Assert.Equal(due, product.MasterProductId);
+        Assert.Equal(supplier, Assert.Single(product.WorkItems).SupplierPresetId);
     }
 
     /// <summary>

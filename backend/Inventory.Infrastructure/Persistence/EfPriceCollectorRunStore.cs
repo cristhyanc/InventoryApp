@@ -26,6 +26,14 @@ namespace Inventory.Infrastructure.Persistence;
 /// and their outcomes: what changes is its status and its end instant, which is the instant it was
 /// expired rather than the instant it was due to expire - the two are different facts, and recording
 /// the second as the first would say the run ended at a time nothing happened.</para>
+///
+/// <para><strong>But a <c>schedule=due</c> issue never expires a run a collector is still working
+/// on</strong> (issue #1108). Work pending in a run that is still open and unexpired is a search in
+/// progress; expiring that run would finalise it as <c>NotSearched</c>, strand the collector holding
+/// it and let the same pair be issued and paid for again. So a <c>due</c> call that finds work in
+/// flight defers - it writes nothing at all - and the work it would have issued is owed again on the
+/// next call. The manual <c>schedule=all</c> run keeps today's behaviour and expires whatever is
+/// open, which is the same deliberate bypass that lets it re-issue a covered pair.</para>
 /// </summary>
 public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
 {
@@ -72,17 +80,41 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
             .BeginAsync(_db, cancellationToken)
             .ConfigureAwait(false);
 
-        var workItems = onlyDue is null
-            ? run.WorkItems
-            : await DueWorkItemsAsync(run, onlyDue, cancellationToken).ConfigureAwait(false);
+        var workItems = run.WorkItems;
+        var workItemLimitReached = false;
 
-        if (onlyDue is not null && workItems.Count == 0)
+        if (onlyDue is not null)
         {
-            // Nothing is due, so nothing at all is written - not even the expiry of the run that was
-            // open. An empty run would be a run left to expire into a page of NotSearched rows that
-            // claimed a search had been declined, and #1110 relies on a `due` call with nothing to do
-            // leaving nothing to finalise.
-            return null;
+            var due = await DueWorkItemsAsync(run, onlyDue, cancellationToken).ConfigureAwait(false);
+
+            // The budget is filled here, from the pairs that are actually owed a search, rather than
+            // by the caller from the first products the rotation reached (issue #1108): a budget's
+            // worth of covered or in-flight candidates would otherwise leave this run with nothing to
+            // issue while the due work just past them was never looked at.
+            var selection = onlyDue.Fill(due.WorkItems);
+
+            workItems = selection.WorkItems;
+            workItemLimitReached = selection.WorkItemLimitReached;
+
+            if (workItems.Count == 0)
+            {
+                // Nothing is due, so nothing at all is written - not even the expiry of the run that
+                // was open. An empty run would be a run left to expire into a page of NotSearched
+                // rows that claimed a search had been declined, and #1110 relies on a `due` call with
+                // nothing to do leaving nothing to finalise.
+                return null;
+            }
+
+            if (due.WorkIsInFlight)
+            {
+                // A collector is still working on an unexpired run. Issuing would expire it below and
+                // finalise its pending work as NotSearched, which would strand that collector and
+                // make the very pairs it is searching issuable - and payable - a second time. So this
+                // call defers instead and writes nothing: the single-open-run contract holds, the
+                // live run keeps its work, and the due pairs this run would have carried are owed
+                // again on the next call, once that run has reported or expired.
+                return null;
+            }
         }
 
         var stillOpen = await _db.PriceCollectorRuns
@@ -95,7 +127,10 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
             // The same closure a completion performs (issue #937), with the status fixed to
             // Expired: every search nobody answered becomes NotSearched, the per-outcome counts are
             // written, and what the run did manage is recorded. Expiring and completing differ only
-            // in what the status says about who reported.
+            // in what the status says about who reported. On a `due` issue nothing reaching here
+            // holds work in flight - the check above deferred if anything did - so this closes runs
+            // that are overdue or that already reported every search, and takes no search away from
+            // a collector; a manual `all` run deliberately expires whatever is open.
             await PriceCollectorRunClosure
                 .CloseAsync(
                     _db,
@@ -145,7 +180,8 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
                 item.Id,
                 item.SupplierPresetId,
                 item.MasterProductId,
-                item.WaitingKey)));
+                item.WaitingKey)),
+            workItemLimitReached);
     }
 
     /// <summary>
@@ -164,8 +200,14 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
     /// <para>A pair finalised as <c>NotSearched</c> appears in neither read, which is exactly its
     /// meaning: nothing looked, so it neither covers the pair nor blocks it, and the pair may be
     /// retried at once even while that run is still open.</para>
+    ///
+    /// <para><strong>The pending read answers a second question too</strong> (issue #1108): whether
+    /// <em>any</em> work at all is in flight, for any supplier. A run still open with pending work is
+    /// a collector still working, and the caller must not expire it to make room - so the pending
+    /// read is not narrowed to the candidate suppliers. It is bounded all the same, by a run rather
+    /// than by history.</para>
     /// </summary>
-    private async Task<IReadOnlyList<NewPriceCollectorWorkItem>> DueWorkItemsAsync(
+    private async Task<DueWork> DueWorkItemsAsync(
         NewPriceCollectorRun run,
         PriceCollectorDueWork onlyDue,
         CancellationToken cancellationToken)
@@ -176,9 +218,27 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
             .Where(item => boundaries.ContainsKey(item.SupplierPresetId))
             .ToList();
 
+        // Pending in an unexpired open run, read before anything is expired. A run with no stored
+        // expiry - one of the runs #925 shipped the schema for - is one nothing expires
+        // automatically, so its pending work still blocks.
+        var pending = await _db.PriceCollectorWorkItems
+            .AsNoTracking()
+            .Where(item => item.Outcome == null
+                && item.PriceCollectorRun!.Status == PriceCollectorRunStatus.Running
+                && (item.PriceCollectorRun.ExpiresAtUtc == null
+                    || item.PriceCollectorRun.ExpiresAtUtc > run.IssuedAtUtc))
+            .Select(item => new
+            {
+                item.SupplierPresetId,
+                item.MasterProductId,
+                item.WaitingKey,
+            })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         if (candidates.Count == 0)
         {
-            return [];
+            return new DueWork([], pending.Count > 0);
         }
 
         var candidateKeys = candidates
@@ -191,25 +251,6 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
             .ToList();
 
         var earliestBoundary = boundaries.Values.Min();
-
-        // Pending in an unexpired open run, read before anything is expired. A run with no stored
-        // expiry - one of the runs #925 shipped the schema for - is one nothing expires
-        // automatically, so its pending work still blocks.
-        var pending = await _db.PriceCollectorWorkItems
-            .AsNoTracking()
-            .Where(item => supplierIds.Contains(item.SupplierPresetId)
-                && item.Outcome == null
-                && item.PriceCollectorRun!.Status == PriceCollectorRunStatus.Running
-                && (item.PriceCollectorRun.ExpiresAtUtc == null
-                    || item.PriceCollectorRun.ExpiresAtUtc > run.IssuedAtUtc))
-            .Select(item => new
-            {
-                item.SupplierPresetId,
-                item.MasterProductId,
-                item.WaitingKey,
-            })
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
 
         var inFlight = pending
             .Select(item => new PairKey(
@@ -252,16 +293,33 @@ public sealed class EfPriceCollectorRunStore : IPriceCollectorRunStore
             .Where(entry => candidateKeys.Contains(entry.Pair))
             .ToDictionary(entry => entry.Pair, entry => entry.LatestAnsweredAtUtc);
 
-        return [.. candidates.Where(item =>
-        {
-            var pair = PairKey.Of(item);
+        return new DueWork(
+            [.. candidates.Where(item =>
+            {
+                var pair = PairKey.Of(item);
 
-            return SupplierSearchDuePolicy.IsPairDueAtBoundary(
-                boundaries[item.SupplierPresetId],
-                latestAnswered.TryGetValue(pair, out var answered) ? answered : null,
-                inFlight.Contains(pair));
-        })];
+                return SupplierSearchDuePolicy.IsPairDueAtBoundary(
+                    boundaries[item.SupplierPresetId],
+                    latestAnswered.TryGetValue(pair, out var answered) ? answered : null,
+                    inFlight.Contains(pair));
+            })],
+            pending.Count > 0);
     }
+
+    /// <summary>
+    /// What the due read decided (issue #1108): the candidate pairs that are owed a search, in the
+    /// order the work list published them, and whether any work at all is still in flight.
+    /// </summary>
+    /// <param name="WorkItems">The due pairs, before the budget is filled from them.</param>
+    /// <param name="WorkIsInFlight">
+    /// Whether a run that is still open and unexpired holds a pending work item - for any supplier,
+    /// not only a candidate one. Issuing would expire that run and finalise its pending work as
+    /// <c>NotSearched</c>, so a <c>due</c> call defers rather than take a live run away from the
+    /// collector working on it.
+    /// </param>
+    private sealed record DueWork(
+        IReadOnlyList<NewPriceCollectorWorkItem> WorkItems,
+        bool WorkIsInFlight);
 
     /// <summary>
     /// One product-and-supplier pair, which is what a work item is about and what the due rule is

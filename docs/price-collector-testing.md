@@ -361,10 +361,15 @@ things about it are worth knowing before reading a run log:
   run at all** and answers an empty work list with `runId: null`. There is nothing to submit results
   for and nothing to finalise, so a workflow that treats a missing run id as a failure is reading it
   wrongly.
-- **A pair already in flight is skipped.** Work issued by a run that is still open and not yet
-  expired is not issued again, whenever that run was issued — including a run left open across
-  midnight. Those pairs come back on the next `due` call once that run has been finalised or has
-  expired.
+- **A pair already in flight is skipped, and a `due` call waits for the collector holding it.** Work
+  issued by a run that is still open and not yet expired is not issued again, whenever that run was
+  issued — including a run left open across midnight. While any such work is in flight a `due` call
+  issues **nothing at all** and creates no run, even when some other pair is genuinely due: issuing
+  would expire that run and record the searches in progress as `not_searched`, so the run a collector
+  is working on is left alone instead. Everything deferred that way, its own pairs included, comes
+  back on the next `due` call once that run has been finalised or has expired. So if a `due` call
+  answers "nothing to do" unexpectedly, check for an open run before checking the schedules. (`all`
+  does not wait: it expires the open run, which is part of the bypass above.)
 - **A day with nothing scheduled is not the same as a day with nothing due.** The rule is per
   product-and-supplier pair and catches up: a Thursday-only supplier whose Thursday run never reached
   some of its products is still owed those searches on the Friday, and every day after, until
