@@ -1681,14 +1681,47 @@ public class AppDbContext : DbContext
         preset.Property(x => x.PriceConnectorKey)
             .HasMaxLength(SupplierPresetMasterPolicy.MaxConnectorKeyLength);
 
+        // When this supplier's prices are searched (issue #1108). The frequency is a nullable-free
+        // INTEGER with the daily default, because daily is what the collector did before the column
+        // existed; the days are one comma-separated column in SupplierSearchSchedulePolicy's own
+        // canonical order, for the reason the served states above are one column - a closed
+        // vocabulary read and written whole, with exactly one stored spelling per set, which is what
+        // lets a save decide whether the schedule actually changed; and the fortnight start date is a
+        // date with no instant and no zone, because it names a day of the collection calendar rather
+        // than a moment. No HasConversion on the frequency, exactly as the connector above: an enum
+        // numbered from 1 maps to an INTEGER and no stored number can be read as a frequency nobody
+        // chose.
+        preset.Property(x => x.SearchFrequency)
+            .IsRequired()
+            .HasDefaultValue(SupplierSearchFrequency.Daily)
+            // The sentinel is stated rather than left implicit: SupplierSearchFrequency is numbered
+            // from 1, so the CLR default 0 is "nothing was chosen" and is exactly when the column
+            // default is to apply. Without it EF only warns about the same behaviour.
+            .HasSentinel(default(SupplierSearchFrequency));
+        preset.Property(x => x.SearchDaysOfWeek)
+            .IsRequired()
+            .HasMaxLength(SupplierSearchSchedulePolicy.MaxStoredDaysOfWeekLength)
+            .HasDefaultValue(string.Empty);
+        preset.Property(x => x.FortnightStartDate);
+
+        // When the schedule last became effective (issue #1108): the instant an answer has to be at
+        // or after in order to count, together with the current occurrence's start. Persisted UTC and
+        // reported by this feature's API, so it is marked UTC on the way out for the reason the two
+        // instants below are.
+        preset.Property(x => x.ScheduleEffectiveFromUtc)
+            .IsRequired()
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
         // How old an observed price of this supplier may be and still be compared (issue #925). It is
         // stored here, on the supplier master record, precisely so that no code names a supplier: the
         // owner's 30 hours for a daily supplier and 102 for a twice-weekly one are two values of one
-        // column, and a supplier whose schedule changes is an edit rather than a release. The column
-        // default is the daily limit, because daily is what the collector does unless somebody
-        // records otherwise, and the range is checked here as well as in
-        // SupplierPriceFreshnessPolicy - a limit of zero would read as "never stale" or "always
-        // stale" depending on who resolved it.
+        // column, and a supplier whose schedule changes is an edit rather than a release. Since issue
+        // #1108 the value is derived from the schedule above rather than submitted, so the two cannot
+        // disagree. The column default is the daily limit, because daily is what the default schedule
+        // is, and the range is checked here as well as in SupplierPriceFreshnessPolicy - a limit of
+        // zero would read as "never stale" or "always stale" depending on who resolved it.
         preset.Property(x => x.PriceCheckFreshnessHours)
             .IsRequired()
             .HasDefaultValue(SupplierPriceFreshnessPolicy.DailyCheckLimitHours);

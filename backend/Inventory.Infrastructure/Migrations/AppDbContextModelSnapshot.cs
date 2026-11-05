@@ -220,7 +220,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "SnapshotDateUtc", "AccountSeries")
                         .IsUnique();
 
-                    b.ToTable("BusinessConnectedMachineSnapshots");
+                    b.ToTable("BusinessConnectedMachineSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>
@@ -420,7 +420,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "OccurredAtUtc");
 
-                    b.ToTable("BusinessPlanGrantAudits");
+                    b.ToTable("BusinessPlanGrantAudits", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Category", b =>
@@ -2920,6 +2920,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateOnly?>("FortnightStartDate")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("INTEGER");
 
@@ -2947,6 +2950,21 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<bool>("PricesIncludeGst")
                         .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ScheduleEffectiveFromUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SearchDaysOfWeek")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(27)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("");
+
+                    b.Property<int>("SearchFrequency")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1);
 
                     b.Property<bool>("SearchPrices")
                         .ValueGeneratedOnAdd()

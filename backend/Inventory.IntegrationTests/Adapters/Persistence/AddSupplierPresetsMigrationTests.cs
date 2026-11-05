@@ -235,6 +235,9 @@ public class AddSupplierPresetsMigrationTests
         Assert.Equal(
             [
                 "CreatedAtUtc",
+                // The four search-schedule columns of issue #1108, which is the only thing a later
+                // migration added here: still no business key of any kind.
+                "FortnightStartDate",
                 "Id",
                 "IsEnabled",
                 "Name",
@@ -243,6 +246,9 @@ public class AddSupplierPresetsMigrationTests
                 "PriceConnector",
                 "PriceConnectorKey",
                 "PricesIncludeGst",
+                "ScheduleEffectiveFromUtc",
+                "SearchDaysOfWeek",
+                "SearchFrequency",
                 "SearchPrices",
                 "ServedStates",
                 "ServesNationwide",

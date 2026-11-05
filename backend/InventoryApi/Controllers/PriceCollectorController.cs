@@ -1,4 +1,5 @@
 using Inventory.Application.PriceCatalogue;
+using Inventory.Domain.PriceCatalogue;
 using InventoryApi.Auth.PriceCollector;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
@@ -85,18 +86,45 @@ public sealed class PriceCollectorController : ControllerBase
     /// Issues one run and answers the work it is to do: the suppliers due on this run, every distinct
     /// tracked product to price, the work item id for each product-and-supplier pair, and - only while
     /// something is waiting for a match - the master products to match against.
+    ///
+    /// <para><c>schedule</c> chooses which work (issue #1108). <c>all</c>, or no value at all, is
+    /// every searchable supplier paired with every product the rotation reaches - exactly what this
+    /// route issued before, and a <strong>deliberate bypass</strong> of the due rule and the
+    /// in-flight protection, so a manual full run may re-search and re-pay for a pair that is already
+    /// covered or already being searched. <c>due</c> issues only the pairs owed a search on each
+    /// supplier's own schedule, and when nothing is due it creates no run and answers an empty list
+    /// with no run id.</para>
     /// </summary>
-    /// <response code="200">The work list. It carries no business data of any kind.</response>
+    /// <param name="schedule">
+    /// <c>all</c> (the default) or <c>due</c>. Any other value is refused.
+    /// </param>
+    /// <param name="cancellationToken">The request's own token.</param>
+    /// <response code="200">
+    /// The work list. It carries no business data of any kind. A <c>due</c> call with nothing due
+    /// answers an empty list with no run id, and no run was created.
+    /// </response>
+    /// <response code="400">
+    /// <c>schedule</c> is neither <c>all</c> nor <c>due</c>. Nothing was issued.
+    /// </response>
     /// <response code="401">
     /// The token is not the configured collector's app-only token, or no collector is configured for
     /// this deployment. Nothing was issued.
     /// </response>
     [HttpGet("work")]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<ActionResult<PriceCollectorWorkResponse>> Work(CancellationToken cancellationToken)
+    public async Task<ActionResult<PriceCollectorWorkResponse>> Work(
+        [FromQuery] string? schedule,
+        CancellationToken cancellationToken)
     {
-        var workList = await _issueWorkList.Handle(cancellationToken);
+        // The vocabulary is the Domain's, and so is the refusal: an unknown value raises
+        // DomainValidationException, which DomainExceptionHandler answers as 400 with the Domain's
+        // own sentence - see Http/DomainExceptionHandler.cs. Reading it here as "all" would make a
+        // typo in a scheduled run re-search the whole catalogue.
+        var requested = PriceCollectorWorkListPolicy.RequireSchedule(schedule);
+
+        var workList = await _issueWorkList.Handle(requested, cancellationToken);
 
         return Ok(PriceCollectorWorkResponse.From(workList));
     }

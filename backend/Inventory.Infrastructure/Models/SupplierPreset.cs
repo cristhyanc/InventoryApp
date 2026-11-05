@@ -170,6 +170,68 @@ public class SupplierPreset
     public string? PriceConnectorKey { get; set; }
 
     /// <summary>
+    /// How often this supplier's prices are searched (issue #1108, the owner's decision of
+    /// 5 November 2026): every day, on chosen weekdays, or on chosen weekdays every second week.
+    ///
+    /// <para>The schedule lives on the supplier master record for the reason
+    /// <see cref="PriceCheckFreshnessHours"/> does - so no code names a supplier - and it is now what
+    /// decides which work a scheduled run is issued, rather than how often somebody starts one. See
+    /// <c>SupplierSearchSchedulePolicy</c> for the rules and
+    /// <c>SupplierSearchDuePolicy</c> for what they mean for one product and supplier pair.</para>
+    ///
+    /// <para>It defaults to <see cref="SupplierSearchFrequency.Daily"/>, because daily is what the
+    /// collector did before this column existed, and <c>AddSupplierPresetSearchSchedule</c> mapped
+    /// every row that already existed from its stored freshness limit.</para>
+    /// </summary>
+    public SupplierSearchFrequency SearchFrequency { get; set; } = SupplierSearchFrequency.Daily;
+
+    /// <summary>
+    /// The weekdays this supplier is searched on, as <c>SupplierSearchSchedulePolicy</c> stores
+    /// them: the declared codes in that policy's own Monday-to-Sunday order, comma-separated, and the
+    /// empty string for a daily schedule (issue #1108).
+    ///
+    /// <para>One column rather than a child table, for the reason <see cref="ServedStates"/> is one:
+    /// the vocabulary is closed at seven values, a schedule is read and written whole, and nothing
+    /// joins to a weekday. The canonical order is what makes it comparable - one set of days has
+    /// exactly one stored spelling - which is what lets a save decide whether the schedule actually
+    /// changed and therefore whether <see cref="ScheduleEffectiveFromUtc"/> moves.</para>
+    /// </summary>
+    public string SearchDaysOfWeek { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The date whose week is an <em>on</em> week for a fortnightly schedule, and
+    /// <see langword="null"/> for every other frequency (issue #1108).
+    ///
+    /// <para>A date only, with no instant and no zone, because it names a day of the platform's
+    /// collection calendar (<c>SupplierSearchSchedulePolicy.TimeZoneId</c>) rather than a moment.
+    /// <strong>It only says which weeks are on</strong>: it is normalised to the Monday of its own
+    /// week and the weeks alternate from there in both directions, so a date before it follows the
+    /// same alternation rather than holding collection back until it arrives.</para>
+    /// </summary>
+    public DateOnly? FortnightStartDate { get; set; }
+
+    /// <summary>
+    /// When this supplier's schedule last became effective (issue #1108) - the instant an answer has
+    /// to be at or after, together with the current occurrence's start, in order to cover a pair
+    /// (<c>SupplierSearchDuePolicy.CoverageBoundary</c>).
+    ///
+    /// <para><strong>It moves on exactly two things</strong>, whichever request makes them: the
+    /// frequency, the days or the fortnight start date changing, and <see cref="SearchPrices"/> going
+    /// from off to on. An unrelated edit - a renamed preset, a new website, a changed market - leaves
+    /// it alone, because none of those makes an answer already given wrong. A legacy <c>PUT</c> that
+    /// carries no schedule fields at all is held to the same rule, which is what keeps the Super
+    /// Admin page deployed before #1109 working: it keeps the stored schedule, and advances this
+    /// instant only if that same request switched searching back on.</para>
+    ///
+    /// <para>Without it an answer given under the old schedule would satisfy the new one: a pair
+    /// answered on Monday morning would stay covered by a schedule somebody changed on Monday
+    /// afternoon, and switching searching off and straight back on would buy nothing.
+    /// <c>AddSupplierPresetSearchSchedule</c> set it to the instant the schedule columns arrived, so
+    /// no answer recorded before that counts.</para>
+    /// </summary>
+    public DateTime ScheduleEffectiveFromUtc { get; set; }
+
+    /// <summary>
     /// How old an observed price of this supplier may be and still be compared, in hours (issue
     /// #925).
     ///
@@ -177,14 +239,15 @@ public class SupplierPreset
     /// supplier.</strong> The owner's decision of 27 October 2026 is 30 hours for a supplier checked
     /// daily and 102 for BIG W, which is checked on Thursday and Sunday; both are the longest
     /// expected gap between two checks plus a six-hour margin, so a run that starts a little later
-    /// than yesterday's does not mark every price stale. A supplier whose schedule changes is an edit
-    /// to this column, and a supplier added later needs none.</para>
+    /// than yesterday's does not mark every price stale.</para>
     ///
-    /// <para>It defaults to <c>SupplierPriceFreshnessPolicy.DailyCheckLimitHours</c>, because daily
-    /// is what the collector does unless somebody records otherwise, and
-    /// <c>AddSupplierPriceObservations</c> set the twice-weekly limit on the one shipped record whose
-    /// cadence the owner stated. <c>SupplierPriceFreshnessPolicy</c> owns the arithmetic and the
-    /// accepted range; this column stores one supplier's answer.</para>
+    /// <para><strong>Since issue #1108 it is derived, not kept.</strong>
+    /// <c>SupplierSearchSchedulePolicy.FreshnessHoursFor</c> of the schedule above is the only way
+    /// this column is written - by both saves and by <c>AddSupplierPresetSearchSchedule</c> - so a
+    /// supplier's schedule and its freshness limit can no longer disagree, which is what they did
+    /// while the two were separate stored numbers. Nothing accepts a limit of its own any more.
+    /// <c>SupplierPriceFreshnessPolicy</c> still owns the arithmetic and the accepted range; this
+    /// column stores one supplier's answer.</para>
     /// </summary>
     public int PriceCheckFreshnessHours { get; set; } =
         SupplierPriceFreshnessPolicy.DailyCheckLimitHours;

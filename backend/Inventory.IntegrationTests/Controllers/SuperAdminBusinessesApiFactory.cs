@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
@@ -455,6 +456,17 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
                 PricesIncludeGst = true,
                 PriceConnector = null,
                 PriceConnectorKey = null,
+                // The daily schedule, with the freshness limit it derives and an effective-from
+                // instant in the baseline's own past (issue #1108). Stated rather than left to the
+                // entity's initialisers so a test about whether a save moves the coverage boundary
+                // has a boundary to compare against, and so no seeded row holds a schedule and a
+                // freshness that disagree.
+                SearchFrequency = SupplierSearchFrequency.Daily,
+                SearchDaysOfWeek = string.Empty,
+                FortnightStartDate = null,
+                ScheduleEffectiveFromUtc = CreatedAt,
+                PriceCheckFreshnessHours = SupplierSearchSchedulePolicy.FreshnessHoursFor(
+                    SupplierSearchSchedulePolicy.Daily),
                 CreatedAtUtc = CreatedAt,
                 UpdatedAtUtc = CreatedAt,
             });

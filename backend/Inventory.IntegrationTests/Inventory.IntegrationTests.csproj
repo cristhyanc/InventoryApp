@@ -103,6 +103,7 @@
     <Compile Include="..\Inventory.UnitTests\Application\Tenancy\FakeMemberProfileWriteStore.cs" Link="Application\Tenancy\FakeMemberProfileWriteStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Time\FakeBusinessCalendar.cs" Link="Application\Time\FakeBusinessCalendar.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Time\FakeClock.cs" Link="Application\Time\FakeClock.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Time\FakeSupplierSearchScheduleCalendar.cs" Link="Application\Time\FakeSupplierSearchScheduleCalendar.cs" />
   </ItemGroup>
 
 </Project>

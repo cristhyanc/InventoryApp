@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Inventory.Application.Suppliers;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 using Xunit;
 
@@ -258,9 +259,11 @@ public class SuperAdminSupplierPresetsApiTests
     #region The list
 
     /// <summary>
-    /// The baseline four, by name, with the twelve declared fields and nothing else. In particular
-    /// the stored normalised name is not published: it is the unique index's key, not a field of the
-    /// resource.
+    /// The baseline four, by name, with the seventeen declared fields and nothing else - the twelve
+    /// of issues #848, #931 and #1077 plus the five of #1108: the frequency, the days, the fortnight
+    /// start date, when the schedule became effective, and the freshness limit that schedule derives.
+    /// In particular the stored normalised name is not published: it is the unique index's key, not a
+    /// field of the resource.
     /// </summary>
     [Fact]
     public async Task The_list_reports_every_preset_ordered_by_name()
@@ -284,12 +287,17 @@ public class SuperAdminSupplierPresetsApiTests
             Assert.Equal(
                 [
                     "createdAtUtc",
+                    "fortnightStartDate",
                     "id",
                     "isEnabled",
                     "name",
+                    "priceCheckFreshnessHours",
                     "priceConnector",
                     "priceConnectorKey",
                     "pricesIncludeGst",
+                    "scheduleEffectiveFromUtc",
+                    "searchDaysOfWeek",
+                    "searchFrequency",
                     "searchPrices",
                     "servedStates",
                     "servesNationwide",
@@ -953,6 +961,452 @@ public class SuperAdminSupplierPresetsApiTests
 
     #endregion
 
+    #region The search schedule (issue #1108)
+
+    /// <summary>
+    /// A create that states a schedule stores it, derives the freshness limit from it, and makes it
+    /// effective from the instant it was created - so no answer recorded before the preset existed
+    /// can cover one of its pairs.
+    /// </summary>
+    [Fact]
+    public async Task A_create_stores_the_schedule_and_the_freshness_it_derives()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody(
+                "Aldi",
+                searchFrequency: (int)SupplierSearchFrequency.Weekly,
+                searchDaysOfWeek: ["sun", "THU"]));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var created = (await ReadJsonAsync(response)).RootElement;
+        Assert.Equal((int)SupplierSearchFrequency.Weekly, created.GetProperty("searchFrequency").GetInt32());
+
+        // The days come back in the server's own Monday-to-Sunday order, whatever order they arrived
+        // in - one set of days has exactly one spelling.
+        Assert.Equal(
+            ["THU", "SUN"],
+            created.GetProperty("searchDaysOfWeek")
+                .EnumerateArray()
+                .Select(day => day.GetString())
+                .ToArray());
+        Assert.Equal(JsonValueKind.Null, created.GetProperty("fortnightStartDate").ValueKind);
+        Assert.Equal(102, created.GetProperty("priceCheckFreshnessHours").GetInt32());
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi");
+        Assert.Equal(SupplierSearchFrequency.Weekly, stored.SearchFrequency);
+        Assert.Equal("THU,SUN", stored.SearchDaysOfWeek);
+        Assert.Null(stored.FortnightStartDate);
+        Assert.Equal(102, stored.PriceCheckFreshnessHours);
+
+        // Effective from the moment it was created, which is also what the response reports.
+        Assert.Equal(stored.CreatedAtUtc, stored.ScheduleEffectiveFromUtc);
+        Assert.Equal(
+            stored.ScheduleEffectiveFromUtc,
+            created.GetProperty("scheduleEffectiveFromUtc").GetDateTime());
+    }
+
+    /// <summary>A fortnightly create stores its start date and derives the fortnightly limit.</summary>
+    [Fact]
+    public async Task A_fortnightly_create_stores_its_start_date()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody(
+                "Aldi",
+                searchFrequency: (int)SupplierSearchFrequency.Fortnightly,
+                searchDaysOfWeek: ["MON", "FRI"],
+                fortnightStartDate: "2026-11-11"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var created = (await ReadJsonAsync(response)).RootElement;
+        Assert.Equal("2026-11-11", created.GetProperty("fortnightStartDate").GetString());
+        Assert.Equal(246, created.GetProperty("priceCheckFreshnessHours").GetInt32());
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi");
+        Assert.Equal(new DateOnly(2026, 11, 11), stored.FortnightStartDate);
+        Assert.Equal(246, stored.PriceCheckFreshnessHours);
+    }
+
+    /// <summary>
+    /// The Domain's refusals reach the caller as <c>400</c> with their own sentence, and nothing is
+    /// written. Each case is a combination this application does not store.
+    /// </summary>
+    [Theory]
+    [InlineData((int)SupplierSearchFrequency.Weekly, null, null, SupplierSearchSchedulePolicy.WeekdayRequiredMessage)]
+    [InlineData((int)SupplierSearchFrequency.Fortnightly, "THU", null, SupplierSearchSchedulePolicy.FortnightStartDateRequiredMessage)]
+    [InlineData((int)SupplierSearchFrequency.Daily, "THU", null, SupplierSearchSchedulePolicy.DailyNamesNoWeekdayMessage)]
+    [InlineData((int)SupplierSearchFrequency.Weekly, "THU", "2026-11-11", SupplierSearchSchedulePolicy.FortnightStartDateNotAllowedMessage)]
+    [InlineData(99, null, null, null)]
+    public async Task A_create_with_a_schedule_this_application_does_not_store_is_refused(
+        int frequency,
+        string? day,
+        string? startDate,
+        string? expectedMessage)
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody(
+                "Aldi",
+                searchFrequency: frequency,
+                searchDaysOfWeek: day is null ? null : [day],
+                fortnightStartDate: startDate));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        if (expectedMessage is not null)
+        {
+            Assert.Equal(expectedMessage, await MessageAsync(response));
+        }
+
+        await AssertOnlyTheShippedPresetsExistAsync();
+    }
+
+    /// <summary>
+    /// A weekday this application does not recognise is refused too, and the four states of the
+    /// frequency are not inferred from it.
+    /// </summary>
+    [Fact]
+    public async Task A_create_with_an_unrecognised_weekday_is_refused()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody(
+                "Aldi",
+                searchFrequency: (int)SupplierSearchFrequency.Weekly,
+                searchDaysOfWeek: ["Thursday"]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(SupplierSearchSchedulePolicy.UnknownWeekdayMessage, await MessageAsync(response));
+        await AssertOnlyTheShippedPresetsExistAsync();
+    }
+
+    /// <summary>
+    /// Days or a start date without a frequency is an incomplete schedule and is refused, rather than
+    /// defaulted: reading "Thursday" as "every day" would silently start paying for six extra
+    /// searches a week on a route that charges per search.
+    /// </summary>
+    [Fact]
+    public async Task A_schedule_without_a_frequency_is_refused()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            CreateBody("Aldi", searchDaysOfWeek: ["THU"]));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertOnlyTheShippedPresetsExistAsync();
+    }
+
+    /// <summary>
+    /// An edit that states a schedule stores it, derives the limit again, and <strong>advances the
+    /// effective-from instant</strong> - which is what makes every pair of that supplier due again
+    /// under the new schedule.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_that_changes_the_schedule_advances_the_effective_from_instant()
+    {
+        var before = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(before.Id),
+            EditBody(
+                "Coles",
+                isEnabled: true,
+                searchFrequency: (int)SupplierSearchFrequency.Weekly,
+                searchDaysOfWeek: ["WED", "SAT"]));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == before.Id);
+        Assert.Equal(SupplierSearchFrequency.Weekly, stored.SearchFrequency);
+        Assert.Equal("WED,SAT", stored.SearchDaysOfWeek);
+        Assert.Equal(102, stored.PriceCheckFreshnessHours);
+        Assert.True(stored.ScheduleEffectiveFromUtc > before.ScheduleEffectiveFromUtc);
+        Assert.Equal(stored.UpdatedAtUtc, stored.ScheduleEffectiveFromUtc);
+    }
+
+    /// <summary>
+    /// And an edit that states the <em>same</em> schedule leaves the instant alone: re-saving the
+    /// page without touching the cadence is not a schedule change, and treating it as one would make
+    /// every pair of the supplier due again and be paid for twice.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_that_states_the_same_schedule_leaves_the_effective_from_instant_alone()
+    {
+        var before = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(before.Id),
+            EditBody(
+                "Coles Renamed",
+                isEnabled: true,
+                url: "https://www.coles.com.au",
+                searchFrequency: (int)SupplierSearchFrequency.Daily));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == before.Id);
+        Assert.Equal("Coles Renamed", stored.Name);
+        Assert.Equal(before.ScheduleEffectiveFromUtc, stored.ScheduleEffectiveFromUtc);
+    }
+
+    /// <summary>
+    /// An unrelated edit - a rename, a new website, a changed market - does not move the boundary
+    /// either. None of those makes an answer already given wrong.
+    /// </summary>
+    [Fact]
+    public async Task An_unrelated_edit_does_not_move_the_effective_from_instant()
+    {
+        var before = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(before.Id),
+            EditBody(
+                "Coles Renamed",
+                isEnabled: false,
+                url: "https://www.coles.com.au",
+                servesNationwide: false,
+                servedStates: ["NSW"],
+                pricesIncludeGst: false));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == before.Id);
+        Assert.Equal(before.ScheduleEffectiveFromUtc, stored.ScheduleEffectiveFromUtc);
+
+        // And the schedule itself is untouched, with its derived limit.
+        Assert.Equal(before.SearchFrequency, stored.SearchFrequency);
+        Assert.Equal(before.SearchDaysOfWeek, stored.SearchDaysOfWeek);
+        Assert.Equal(before.PriceCheckFreshnessHours, stored.PriceCheckFreshnessHours);
+    }
+
+    #endregion
+
+    #region Compatibility with the Super Admin page deployed before #1109
+
+    /// <summary>
+    /// The criterion: a <c>PUT</c> that carries <strong>no schedule fields at all</strong> - which is
+    /// every request the page deployed today makes - keeps the stored schedule and does not move the
+    /// effective-from instant. Resetting a weekly supplier to daily would start paying for seven
+    /// times the searches on a route that charges per search.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_put_with_no_schedule_fields_keeps_the_stored_schedule()
+    {
+        var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles").Id;
+
+        // The schedule a Super Admin set with the new page, before the old one saves over it.
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await _factory.AsAdministrator().PutAsJsonAsync(
+                PresetUrl(id),
+                EditBody(
+                    "Coles",
+                    isEnabled: true,
+                    searchFrequency: (int)SupplierSearchFrequency.Fortnightly,
+                    searchDaysOfWeek: ["MON", "FRI"],
+                    fortnightStartDate: "2026-11-11"))).StatusCode);
+
+        var before = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == id);
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(id),
+            LegacyEditBody("Coles", isEnabled: true, searchPrices: true));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == id);
+        Assert.Equal(SupplierSearchFrequency.Fortnightly, stored.SearchFrequency);
+        Assert.Equal("MON,FRI", stored.SearchDaysOfWeek);
+        Assert.Equal(new DateOnly(2026, 11, 11), stored.FortnightStartDate);
+        Assert.Equal(246, stored.PriceCheckFreshnessHours);
+
+        // And the boundary did not move, because nothing about the schedule or the searching changed.
+        Assert.Equal(before.ScheduleEffectiveFromUtc, stored.ScheduleEffectiveFromUtc);
+    }
+
+    /// <summary>
+    /// The exact case the criterion names: a legacy <c>PUT</c> with no schedule fields that turns
+    /// <em>Search prices</em> from off to on keeps the schedule <strong>and</strong> advances the
+    /// boundary - so the supplier's pairs are owed a search again from that instant, which is the
+    /// whole reason somebody switched it back on.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_put_that_turns_searching_back_on_keeps_the_schedule_and_advances_the_boundary()
+    {
+        var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles").Id;
+
+        // A weekly schedule, and then searching switched off.
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await _factory.AsAdministrator().PutAsJsonAsync(
+                PresetUrl(id),
+                EditBody(
+                    "Coles",
+                    isEnabled: true,
+                    searchPrices: false,
+                    searchFrequency: (int)SupplierSearchFrequency.Weekly,
+                    searchDaysOfWeek: ["THU"]))).StatusCode);
+
+        var before = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == id);
+        Assert.False(before.SearchPrices);
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(id),
+            LegacyEditBody("Coles", isEnabled: true, searchPrices: true));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == id);
+        Assert.True(stored.SearchPrices);
+        Assert.Equal(SupplierSearchFrequency.Weekly, stored.SearchFrequency);
+        Assert.Equal("THU", stored.SearchDaysOfWeek);
+        Assert.Equal(174, stored.PriceCheckFreshnessHours);
+        Assert.True(stored.ScheduleEffectiveFromUtc > before.ScheduleEffectiveFromUtc);
+        Assert.Equal(stored.UpdatedAtUtc, stored.ScheduleEffectiveFromUtc);
+    }
+
+    /// <summary>
+    /// And turning searching off does <em>not</em> move the boundary: nothing is being searched, so
+    /// there is nothing for a boundary to make due. It moves again when it is switched back on.
+    /// </summary>
+    [Fact]
+    public async Task A_put_that_turns_searching_off_does_not_move_the_boundary()
+    {
+        var before = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(before.Id),
+            LegacyEditBody("Coles", isEnabled: true, searchPrices: false));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == before.Id);
+        Assert.False(stored.SearchPrices);
+        Assert.Equal(before.ScheduleEffectiveFromUtc, stored.ScheduleEffectiveFromUtc);
+    }
+
+    /// <summary>
+    /// A <c>POST</c> with no schedule fields creates a daily schedule - which is what the collector
+    /// did before this issue, and what the page deployed today therefore keeps creating.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_post_with_no_schedule_fields_creates_a_daily_schedule()
+    {
+        var response = await _factory.AsAdministrator().PostAsJsonAsync(
+            PresetsUrl,
+            LegacyCreateBody("Aldi"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var created = (await ReadJsonAsync(response)).RootElement;
+        Assert.Equal((int)SupplierSearchFrequency.Daily, created.GetProperty("searchFrequency").GetInt32());
+        Assert.Empty(created.GetProperty("searchDaysOfWeek").EnumerateArray());
+        Assert.Equal(30, created.GetProperty("priceCheckFreshnessHours").GetInt32());
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi");
+        Assert.Equal(SupplierSearchFrequency.Daily, stored.SearchFrequency);
+        Assert.Equal(string.Empty, stored.SearchDaysOfWeek);
+        Assert.Null(stored.FortnightStartDate);
+        Assert.Equal(30, stored.PriceCheckFreshnessHours);
+    }
+
+    /// <summary>
+    /// A freshness value an old client sends is <strong>ignored, not refused</strong>: the limit is
+    /// derived from the schedule and nothing accepts one of its own any more, and a client that still
+    /// sends the field must keep working rather than start failing.
+    /// </summary>
+    [Fact]
+    public async Task A_freshness_value_sent_by_an_old_client_is_ignored()
+    {
+        var created = await _factory.AsAdministrator().PostAsync(
+            PresetsUrl,
+            Json(new
+            {
+                name = "Aldi",
+                url = (string?)null,
+                servesNationwide = true,
+                servedStates = (string?[]?)null,
+                pricesIncludeGst = true,
+                priceConnector = (int?)null,
+                priceConnectorKey = (string?)null,
+                priceCheckFreshnessHours = 720,
+            }));
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(
+            30,
+            (await ReadJsonAsync(created)).RootElement
+                .GetProperty("priceCheckFreshnessHours")
+                .GetInt32());
+
+        var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Aldi").Id;
+        Assert.Equal(30, (await _factory.SupplierPresetsAsync()).Single(p => p.Id == id).PriceCheckFreshnessHours);
+
+        var edited = await _factory.AsAdministrator().PutAsync(
+            PresetUrl(id),
+            Json(new
+            {
+                name = "Aldi",
+                url = (string?)null,
+                isEnabled = true,
+                servesNationwide = true,
+                servedStates = (string?[]?)null,
+                pricesIncludeGst = true,
+                priceConnector = (int?)null,
+                priceConnectorKey = (string?)null,
+                searchPrices = true,
+                searchFrequency = (int)SupplierSearchFrequency.Weekly,
+                searchDaysOfWeek = new[] { "THU" },
+                priceCheckFreshnessHours = 12,
+            }));
+
+        Assert.Equal(HttpStatusCode.OK, edited.StatusCode);
+
+        // The derived 174 rather than the submitted 12: the schedule decides, always.
+        Assert.Equal(174, (await _factory.SupplierPresetsAsync()).Single(p => p.Id == id).PriceCheckFreshnessHours);
+    }
+
+    /// <summary>
+    /// The audit records the schedule each write ended in, its effective-from instant and the limit
+    /// derived from it - because on the paid routes a cadence is money, and "who moved this supplier
+    /// to daily" is exactly what the trail is read for. Still no name and no website.
+    /// </summary>
+    [Fact]
+    public async Task A_schedule_change_is_audited_without_the_name_or_the_website()
+    {
+        var id = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles").Id;
+
+        _factory.ClearLog();
+
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await _factory.AsAdministrator().PutAsJsonAsync(
+                PresetUrl(id),
+                EditBody(
+                    "Coles",
+                    isEnabled: true,
+                    url: "https://www.coles.com.au",
+                    searchFrequency: (int)SupplierSearchFrequency.Fortnightly,
+                    searchDaysOfWeek: ["MON", "FRI"],
+                    fortnightStartDate: "2026-11-11"))).StatusCode);
+
+        var entry = Assert.Single(_factory.LoggedEntries()
+            .Where(logged => logged.Contains("Platform supplier preset audit", StringComparison.Ordinal)));
+
+        Assert.Contains("search frequency Fortnightly", entry, StringComparison.Ordinal);
+        Assert.Contains("search days MON,FRI", entry, StringComparison.Ordinal);
+        Assert.Contains("fortnight start 2026-11-11", entry, StringComparison.Ordinal);
+        Assert.Contains("freshness hours 246", entry, StringComparison.Ordinal);
+        Assert.Contains("schedule effective", entry, StringComparison.Ordinal);
+        Assert.DoesNotContain("Coles", entry, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("coles.com.au", entry, StringComparison.OrdinalIgnoreCase);
+    }
+
+    #endregion
+
     #region Editing
 
     [Fact]
@@ -1254,7 +1708,10 @@ public class SuperAdminSupplierPresetsApiTests
         bool pricesIncludeGst = true,
         int? priceConnector = null,
         string? priceConnectorKey = null,
-        bool? searchPrices = null) =>
+        bool? searchPrices = null,
+        int? searchFrequency = null,
+        string?[]? searchDaysOfWeek = null,
+        string? fortnightStartDate = null) =>
         new
         {
             name,
@@ -1266,6 +1723,46 @@ public class SuperAdminSupplierPresetsApiTests
             priceConnectorKey,
             // Omitted by default, because "the caller said nothing" is the create's normal case and
             // the server's answer to it - searched - is a criterion of issue #1077 in its own right.
+            searchPrices,
+            // Omitted by default for the same reason (issue #1108): a create that states no schedule
+            // gets the daily one, which is the compatibility the page deployed before #1109 relies
+            // on and a criterion in its own right.
+            searchFrequency,
+            searchDaysOfWeek,
+            fortnightStartDate,
+        };
+
+    /// <summary>
+    /// A create body with <strong>none</strong> of the schedule fields present at all - the shape the
+    /// Super Admin page deployed before #1109 sends (issue #1108). It is a separate helper rather
+    /// than <see cref="CreateBody"/> with nulls because the two are different requests on the wire:
+    /// a body that sends <c>"searchFrequency": null</c> and one that omits the member entirely must
+    /// both mean "stated nothing", and only a body that omits it proves the second.
+    /// </summary>
+    private static object LegacyCreateBody(string? name) =>
+        new
+        {
+            name,
+            url = (string?)null,
+            servesNationwide = true,
+            servedStates = (string?[]?)null,
+            pricesIncludeGst = true,
+            priceConnector = (int?)null,
+            priceConnectorKey = (string?)null,
+        };
+
+    /// <summary>An edit body on the same terms, with the two flags that <c>PUT</c> always carries.</summary>
+    private static object LegacyEditBody(string? name, bool isEnabled, bool searchPrices) =>
+        new
+        {
+            name,
+            url = (string?)null,
+            isEnabled,
+            servesNationwide = true,
+            servedStates = (string?[]?)null,
+            pricesIncludeGst = true,
+            priceConnector = (int?)null,
+            priceConnectorKey = (string?)null,
             searchPrices,
         };
 
@@ -1281,7 +1778,10 @@ public class SuperAdminSupplierPresetsApiTests
         bool pricesIncludeGst = true,
         int? priceConnector = null,
         string? priceConnectorKey = null,
-        bool searchPrices = true) =>
+        bool searchPrices = true,
+        int? searchFrequency = null,
+        string?[]? searchDaysOfWeek = null,
+        string? fortnightStartDate = null) =>
         new
         {
             name,
@@ -1296,6 +1796,13 @@ public class SuperAdminSupplierPresetsApiTests
             // field is required on the wire so an omitted value cannot silently start or stop a
             // supplier's searches (issue #1077).
             searchPrices,
+            // The schedule, by contrast, is optional on the edit too (issue #1108): "nothing said"
+            // has a safe reading here - leave the schedule exactly as it is - which is what keeps the
+            // Super Admin page deployed before #1109 working. See LegacyEditBody for the body that
+            // omits the members entirely.
+            searchFrequency,
+            searchDaysOfWeek,
+            fortnightStartDate,
         };
 
     /// <summary>
@@ -1355,6 +1862,14 @@ public class SuperAdminSupplierPresetsApiTests
             Assert.True(preset.PricesIncludeGst);
             Assert.Null(preset.PriceConnector);
             Assert.Null(preset.PriceConnectorKey);
+            // And the baseline's search schedule (issue #1108), so "nothing was written" covers a
+            // refused create that carried a schedule as well as one that carried a market.
+            Assert.Equal(SupplierSearchFrequency.Daily, preset.SearchFrequency);
+            Assert.Equal(string.Empty, preset.SearchDaysOfWeek);
+            Assert.Null(preset.FortnightStartDate);
+            Assert.Equal(
+                SupplierSearchSchedulePolicy.FreshnessHoursFor(SupplierSearchSchedulePolicy.Daily),
+                preset.PriceCheckFreshnessHours);
         });
     }
 }

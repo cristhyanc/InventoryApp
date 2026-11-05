@@ -62,9 +62,10 @@ In GitHub → Actions → **Price collector (manual)** → Run workflow:
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
-   or overrides the backend's supplier list. Every supplier whose **Search prices** switch is on and
-   that has a collection route is in every run's work, however recently it was checked — see
-   [Pausing one supplier's searches](#pausing-one-suppliers-searches) below.
+   or overrides the backend's supplier list. A manual run asks for **all** work, so every supplier
+   whose **Search prices** switch is on and that has a collection route is in its work, however
+   recently it was checked — see [Pausing one supplier's searches](#pausing-one-suppliers-searches)
+   and [Choosing `all` or `due`](#choosing-all-or-due) below.
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.
@@ -313,7 +314,10 @@ Supplier presets** has a **Search prices** column beside the existing **Suggeste
 2. Press **Stop searching** and confirm. From the next run the collector is issued no work for that
    supplier, on any product. Nothing in the workflow, `apify-limits.json` or the collector scripts
    needs changing: the API simply stops putting that supplier in the work list.
-3. Press **Start searching** to resume. The next run includes it again.
+3. Press **Start searching** to resume. The next run includes it again — and since #1108 switching it
+   back on also makes that supplier's pairs **due again from that instant**, so a `due` run searches
+   them even if they were answered earlier the same day. That is deliberate: the reason to switch it
+   back on is to get current prices.
 
 What that switch does **not** do, which is the point of having two:
 
@@ -322,14 +326,60 @@ What that switch does **not** do, which is the point of having two:
   Kmart and BIG W searches leaves both suppliers on offer.
 - It removes nothing already collected. That supplier's listings, observed prices and pending
   readings stay exactly as they are, and the Cheapest supplier column keeps reading them until they
-  age out by the record's own freshness limit (174 hours for BIG W and Kmart) — after which the
-  supplier simply has no comparable price rather than a wrong one.
+  age out by the record's own freshness limit (since #1108 derived from that supplier's search
+  schedule — 174 hours for a once-a-week one) — after which the supplier simply has no comparable
+  price rather than a wrong one.
 - It does not cancel work a run already holds. A run issued before the switch moved can still submit
   its results and complete, because a submitted row is resolved through the work item it names.
 
 Pressing **Disable** on the same page is still the separate decision it always was: it stops the
-supplier being suggested to businesses and, since #1077, no longer stops its searches. Choosing
-which of the searched suppliers run on which day is still the later scheduled-run part of #929.
+supplier being suggested to businesses and, since #1077, no longer stops its searches. Which of the
+searched suppliers run on which day is each supplier's own **search schedule** since #1108 — see
+below.
+
+## Choosing `all` or `due`
+
+Since [#1108](https://github.com/cristhyanc/InventoryApp/issues/1108) the work list takes a
+`schedule` query value, and **a manual run uses `all`**:
+
+| Value | What it issues | Who asks for it |
+| --- | --- | --- |
+| `all`, or nothing at all | every searchable supplier paired with every product the rotation reaches | every manual run, including this workflow |
+| `due` | only the product-and-supplier pairs owed a search on each supplier's own schedule | the scheduled workflow of [#1110](https://github.com/cristhyanc/InventoryApp/issues/1110) |
+
+`all` is the default and is exactly what this route issued before #1108, so nothing in this document
+changes for an ordinary test run. It **deliberately bypasses** the whole due rule, the in-flight
+protection included: a manual full run may issue, and pay for, a pair another run answered an hour
+ago or is searching right now. That is the point of it — somebody asking for a full run has decided
+to re-search everything — so keep the search cap low (step 3 above) when testing against a
+production-sized catalogue.
+
+`due` is the one to use when checking a schedule by hand before #1110's cron is switched on. Three
+things about it are worth knowing before reading a run log:
+
+- **It can answer "nothing to do", and that is a success.** When no pair is due the API creates **no
+  run at all** and answers an empty work list with `runId: null`. There is nothing to submit results
+  for and nothing to finalise, so a workflow that treats a missing run id as a failure is reading it
+  wrongly.
+- **A pair already in flight is skipped, and a `due` call waits for the collector holding it.** Work
+  issued by a run that is still open and not yet expired is not issued again, whenever that run was
+  issued — including a run left open across midnight. While any such work is in flight a `due` call
+  issues **nothing at all** and creates no run, even when some other pair is genuinely due: issuing
+  would expire that run and record the searches in progress as `not_searched`, so the run a collector
+  is working on is left alone instead. Everything deferred that way, its own pairs included, comes
+  back on the next `due` call once that run has been finalised or has expired. So if a `due` call
+  answers "nothing to do" unexpectedly, check for an open run before checking the schedules. (`all`
+  does not wait: it expires the open run, which is part of the bypass above.)
+- **A day with nothing scheduled is not the same as a day with nothing due.** The rule is per
+  product-and-supplier pair and catches up: a Thursday-only supplier whose Thursday run never reached
+  some of its products is still owed those searches on the Friday, and every day after, until
+  something answers them.
+
+Anything other than `all` or `due` is refused with `400` and nothing is issued, so a typo in a
+workflow file cannot quietly re-search the whole catalogue. A supplier's schedule itself is set in
+**Super Admin → Supplier presets** (the page fields arrive with
+[#1109](https://github.com/cristhyanc/InventoryApp/issues/1109)); the freshness limit beside it is
+derived from that schedule and is not something to set by hand.
 
 ## Implementation and checks
 

@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 
 using Inventory.Application.PlatformAdmin;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 
 namespace InventoryApi.DTOs;
@@ -53,6 +54,30 @@ namespace InventoryApi.DTOs;
 /// <param name="PriceConnectorKey">
 /// Which retailer the connector is for, or <c>null</c> where the route takes no key.
 /// </param>
+/// <param name="SearchFrequency">
+/// How often the collector searches this supplier (issue #1108), as its enum's number - the shape
+/// <paramref name="PriceConnector"/> uses, and for the same reason.
+/// </param>
+/// <param name="SearchDaysOfWeek">
+/// The weekdays it is searched on, as the declared codes in the server's own Monday-to-Sunday order.
+/// Empty for a daily schedule, where every day is one.
+/// </param>
+/// <param name="FortnightStartDate">
+/// The date whose week is an <em>on</em> week, as <c>YYYY-MM-DD</c>, for a fortnightly schedule and
+/// <c>null</c> for every other. It only says which weeks are on: it is read as the Monday of its own
+/// week and the weeks alternate from there in both directions.
+/// </param>
+/// <param name="ScheduleEffectiveFromUtc">
+/// When that schedule last became effective (issue #1108). It moves on a schedule change and on
+/// <paramref name="SearchPrices"/> going from off to on, and on nothing else, and it is half of the
+/// boundary an already-recorded answer is measured against.
+/// </param>
+/// <param name="PriceCheckFreshnessHours">
+/// How old an observed price of this supplier may be and still be compared (issue #925), derived from
+/// <paramref name="SearchFrequency"/> and <paramref name="SearchDaysOfWeek"/> (issue #1108):
+/// <strong>reported, never submitted</strong>. A value in a request body is ignored, so the schedule
+/// and the limit cannot be made to disagree.
+/// </param>
 /// <param name="CreatedAtUtc">When it was created.</param>
 /// <param name="UpdatedAtUtc">When it was last changed; equal to creation until the first edit.</param>
 public sealed record SuperAdminSupplierPresetResponse(
@@ -66,6 +91,11 @@ public sealed record SuperAdminSupplierPresetResponse(
     bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
+    SupplierSearchFrequency SearchFrequency,
+    IReadOnlyList<string> SearchDaysOfWeek,
+    DateOnly? FortnightStartDate,
+    DateTime ScheduleEffectiveFromUtc,
+    int PriceCheckFreshnessHours,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc)
 {
@@ -84,9 +114,44 @@ public sealed record SuperAdminSupplierPresetResponse(
             preset.PricesIncludeGst,
             preset.PriceConnector,
             preset.PriceConnectorKey,
+            preset.Schedule.Frequency,
+            [.. preset.Schedule.DaysOfWeek.Select(SupplierSearchSchedulePolicy.CodeFor)],
+            preset.Schedule.FortnightStartDate,
+            preset.ScheduleEffectiveFromUtc,
+            preset.PriceCheckFreshnessHours,
             preset.CreatedAtUtc,
             preset.UpdatedAtUtc);
     }
+}
+
+/// <summary>
+/// The search-schedule fields of a create or an edit body (issue #1108), and the one place the
+/// "stated nothing at all" rule is decided.
+///
+/// <para><strong>All three are optional on the wire, and that is the compatibility requirement.</strong>
+/// The Super Admin page that writes these presets today does not know the fields exist and stays
+/// deployed until #1109, so a <c>PUT</c> from it carries none of them and must keep the stored
+/// schedule - resetting a fortnightly supplier to daily would start paying for fourteen times the
+/// searches. A body that states <em>any</em> of the three is stating a schedule, and the whole of it
+/// is then validated by <c>SupplierSearchSchedulePolicy</c>: a frequency is required of a stated
+/// schedule, because defaulting an omitted one would read "Thursday" as "every day".</para>
+/// </summary>
+internal static class SuperAdminSupplierPresetScheduleBody
+{
+    /// <summary>
+    /// The schedule submission these three fields make, or <see langword="null"/> when the body
+    /// stated no schedule at all.
+    /// </summary>
+    internal static SupplierSearchScheduleSubmission? ToSubmission(
+        SupplierSearchFrequency? searchFrequency,
+        IReadOnlyList<string?>? searchDaysOfWeek,
+        DateOnly? fortnightStartDate) =>
+        searchFrequency is null && searchDaysOfWeek is null && fortnightStartDate is null
+            ? null
+            : new SupplierSearchScheduleSubmission(
+                searchFrequency,
+                searchDaysOfWeek,
+                fortnightStartDate);
 }
 
 /// <summary>
@@ -140,6 +205,20 @@ public sealed record SuperAdminSupplierPresetResponse(
 /// <c>null</c>, means <c>true</c>, because a supplier added to this list is normally one somebody
 /// wants priced.
 /// </param>
+/// <param name="SearchFrequency">
+/// How often it is to be searched (issue #1108): <c>1</c> daily, <c>2</c> weekly, <c>3</c>
+/// fortnightly. Optional, and a body that states none of the three schedule fields creates a daily
+/// schedule - which is what the collector did before schedules existed and what the Super Admin page
+/// deployed before #1109 therefore gets.
+/// </param>
+/// <param name="SearchDaysOfWeek">
+/// The weekdays to search on, as the declared codes in any order, case or padding. Required of a
+/// weekly or fortnightly schedule and refused on a daily one.
+/// </param>
+/// <param name="FortnightStartDate">
+/// The date whose week is an <em>on</em> week, as <c>YYYY-MM-DD</c>. Required of a fortnightly
+/// schedule and refused on every other.
+/// </param>
 public sealed record SuperAdminCreateSupplierPresetRequest(
     string? Name,
     string? Url,
@@ -148,7 +227,10 @@ public sealed record SuperAdminCreateSupplierPresetRequest(
     [property: JsonRequired] bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
-    bool? SearchPrices = null)
+    bool? SearchPrices = null,
+    SupplierSearchFrequency? SearchFrequency = null,
+    IReadOnlyList<string?>? SearchDaysOfWeek = null,
+    DateOnly? FortnightStartDate = null)
 {
     /// <summary>
     /// The submission the use cases take, built from this body. Only the transport shape differs
@@ -168,7 +250,11 @@ public sealed record SuperAdminCreateSupplierPresetRequest(
             ServedStates,
             PricesIncludeGst,
             PriceConnector,
-            PriceConnectorKey);
+            PriceConnectorKey,
+            SuperAdminSupplierPresetScheduleBody.ToSubmission(
+                SearchFrequency,
+                SearchDaysOfWeek,
+                FortnightStartDate));
 }
 
 /// <summary>
@@ -203,6 +289,19 @@ public sealed record SuperAdminCreateSupplierPresetRequest(
 /// money. The create defaults an omitted value because a new preset has no state to overwrite; a
 /// <c>PUT</c> of the whole resource has.
 /// </param>
+/// <param name="SearchFrequency">
+/// How often it is to be searched (issue #1108). Deliberately <strong>not</strong> marked
+/// <see cref="JsonRequiredAttribute"/>, unlike <paramref name="IsEnabled"/> and
+/// <paramref name="SearchPrices"/> beside it: here "nothing said" has a safe reading and it is
+/// "leave the schedule exactly as it is". That is what keeps the Super Admin page deployed before
+/// #1109 working, and it is the opposite trade-off from those two flags, where an omitted value and
+/// <c>false</c> would be indistinguishable and would silently switch something off.
+/// </param>
+/// <param name="SearchDaysOfWeek">
+/// The weekdays to search on, on the create's terms. Part of the same all-or-nothing group: a body
+/// that states any of the three schedule fields is stating a schedule and is held to the whole rule.
+/// </param>
+/// <param name="FortnightStartDate">The fortnight start date, on the create's terms.</param>
 public sealed record SuperAdminUpdateSupplierPresetRequest(
     string? Name,
     string? Url,
@@ -212,7 +311,10 @@ public sealed record SuperAdminUpdateSupplierPresetRequest(
     [property: JsonRequired] bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
-    [property: JsonRequired] bool SearchPrices)
+    [property: JsonRequired] bool SearchPrices,
+    SupplierSearchFrequency? SearchFrequency = null,
+    IReadOnlyList<string?>? SearchDaysOfWeek = null,
+    DateOnly? FortnightStartDate = null)
 {
     /// <inheritdoc cref="SuperAdminCreateSupplierPresetRequest.ToSubmission" />
     public SupplierPresetSubmission ToSubmission() =>
@@ -224,5 +326,9 @@ public sealed record SuperAdminUpdateSupplierPresetRequest(
             ServedStates,
             PricesIncludeGst,
             PriceConnector,
-            PriceConnectorKey);
+            PriceConnectorKey,
+            SuperAdminSupplierPresetScheduleBody.ToSubmission(
+                SearchFrequency,
+                SearchDaysOfWeek,
+                FortnightStartDate));
 }

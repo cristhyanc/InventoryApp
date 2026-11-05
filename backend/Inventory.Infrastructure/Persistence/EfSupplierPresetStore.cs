@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 using Inventory.Infrastructure.Data;
 using Microsoft.Data.Sqlite;
@@ -60,6 +61,11 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             preset.PricesIncludeGst,
             preset.PriceConnector,
             preset.PriceConnectorKey,
+            preset.SearchFrequency,
+            preset.SearchDaysOfWeek,
+            preset.FortnightStartDate,
+            preset.ScheduleEffectiveFromUtc,
+            preset.PriceCheckFreshnessHours,
             preset.CreatedAtUtc,
             preset.UpdatedAtUtc);
 
@@ -138,6 +144,17 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             PricesIncludeGst = preset.PricesIncludeGst,
             PriceConnector = preset.PriceConnector,
             PriceConnectorKey = preset.PriceConnectorKey,
+            // The schedule, with the freshness limit and the effective-from instant derived from it
+            // rather than submitted (issue #1108): a create that could state a limit of its own is a
+            // create that could store a limit and a schedule that disagree, and the boundary a new
+            // preset's answers are measured against is the instant it came into existence.
+            SearchFrequency = preset.Schedule.Frequency,
+            SearchDaysOfWeek = SupplierSearchSchedulePolicy
+                .StoredDaysOfWeek(preset.Schedule.DaysOfWeek),
+            FortnightStartDate = preset.Schedule.FortnightStartDate,
+            ScheduleEffectiveFromUtc = preset.CreatedAtUtc,
+            PriceCheckFreshnessHours = SupplierSearchSchedulePolicy
+                .FreshnessHoursFor(preset.Schedule),
             CreatedAtUtc = preset.CreatedAtUtc,
             UpdatedAtUtc = preset.CreatedAtUtc,
         };
@@ -165,6 +182,19 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             return null;
         }
 
+        // The schedule and the effective-from instant are decided against the row this write holds,
+        // before anything is assigned (issue #1108): "did the schedule change?" and "did searching go
+        // from off to on?" are questions about the stored state, and the tracked row is the authority
+        // on it. An edit that states no schedule keeps the stored one, which is what a PUT from the
+        // Super Admin page deployed before #1109 sends.
+        var storedSchedule = SupplierSearchSchedulePolicy.Read(
+            row.SearchFrequency,
+            row.SearchDaysOfWeek,
+            row.FortnightStartDate);
+        var schedule = edit.Schedule ?? storedSchedule;
+        var scheduleChanged = !SupplierSearchSchedulePolicy.AreEquivalent(schedule, storedSchedule);
+        var searchingSwitchedOn = edit.SearchPrices && !row.SearchPrices;
+
         row.Name = edit.Name;
         row.NormalisedName = edit.NormalisedName;
         row.Url = edit.Url;
@@ -175,7 +205,19 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
         row.PricesIncludeGst = edit.PricesIncludeGst;
         row.PriceConnector = edit.PriceConnector;
         row.PriceConnectorKey = edit.PriceConnectorKey;
+        row.SearchFrequency = schedule.Frequency;
+        row.SearchDaysOfWeek = SupplierSearchSchedulePolicy.StoredDaysOfWeek(schedule.DaysOfWeek);
+        row.FortnightStartDate = schedule.FortnightStartDate;
+        row.PriceCheckFreshnessHours = SupplierSearchSchedulePolicy.FreshnessHoursFor(schedule);
         row.UpdatedAtUtc = edit.UpdatedAtUtc;
+
+        // Only on those two things, and never on an unrelated edit: a renamed preset, a new website
+        // or a changed market makes no answer already given wrong, and moving the boundary for one of
+        // them would make every pair of the supplier due again and be paid for twice.
+        if (scheduleChanged || searchingSwitchedOn)
+        {
+            row.ScheduleEffectiveFromUtc = edit.UpdatedAtUtc;
+        }
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
@@ -219,6 +261,14 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             row.PricesIncludeGst,
             row.PriceConnector,
             row.PriceConnectorKey,
+            // The schedule is reassembled with the Domain's own rule, exactly as the served states
+            // are: the three columns and the published schedule are one fact with one owner.
+            SupplierSearchSchedulePolicy.Read(
+                row.SearchFrequency,
+                row.SearchDaysOfWeek,
+                row.FortnightStartDate),
+            row.ScheduleEffectiveFromUtc,
+            row.PriceCheckFreshnessHours,
             row.CreatedAtUtc,
             row.UpdatedAtUtc);
 
@@ -238,13 +288,18 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
             row.PricesIncludeGst,
             row.PriceConnector,
             row.PriceConnectorKey,
+            row.SearchFrequency,
+            row.SearchDaysOfWeek,
+            row.FortnightStartDate,
+            row.ScheduleEffectiveFromUtc,
+            row.PriceCheckFreshnessHours,
             row.CreatedAtUtc,
             row.UpdatedAtUtc);
 
     /// <summary>
     /// One preset exactly as its columns hold it, which is what a SQL projection can produce: the
-    /// served states are still the stored string here, and become a list only in
-    /// <see cref="ToRecord"/>.
+    /// served states and the search days are still the stored strings here, and become a list and a
+    /// schedule only in <see cref="ToRecord"/>.
     /// </summary>
     private sealed record StoredSupplierPreset(
         int Id,
@@ -257,6 +312,11 @@ public sealed class EfSupplierPresetStore : ISupplierPresetStore
         bool PricesIncludeGst,
         SupplierPriceConnector? PriceConnector,
         string? PriceConnectorKey,
+        SupplierSearchFrequency SearchFrequency,
+        string SearchDaysOfWeek,
+        DateOnly? FortnightStartDate,
+        DateTime ScheduleEffectiveFromUtc,
+        int PriceCheckFreshnessHours,
         DateTime CreatedAtUtc,
         DateTime UpdatedAtUtc);
 }

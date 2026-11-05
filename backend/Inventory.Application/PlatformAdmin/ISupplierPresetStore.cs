@@ -1,3 +1,4 @@
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 
 namespace Inventory.Application.PlatformAdmin;
@@ -30,6 +31,21 @@ namespace Inventory.Application.PlatformAdmin;
 /// What the connector needs in order to know which retailer it is for, or <see langword="null"/>
 /// where the route takes none.
 /// </param>
+/// <param name="Schedule">
+/// When this supplier's prices are searched (issue #1108): the frequency, the weekdays, and the
+/// fortnight start date where one applies. It is what <paramref name="PriceCheckFreshnessHours"/> is
+/// derived from, so the two are reported together and can never say different things.
+/// </param>
+/// <param name="ScheduleEffectiveFromUtc">
+/// When that schedule last became effective (issue #1108) - advanced by a schedule change and by
+/// searching going from off to on, and by nothing else. Reported because it is half of the coverage
+/// boundary a pair's answer is measured against, so "why is this still due?" is answerable.
+/// </param>
+/// <param name="PriceCheckFreshnessHours">
+/// How old an observed price of this supplier may be and still be compared (issue #925), as
+/// <c>SupplierSearchSchedulePolicy.FreshnessHoursFor</c> derived it from
+/// <paramref name="Schedule"/> (issue #1108). Reported, never submitted.
+/// </param>
 /// <param name="CreatedAtUtc">When it was created.</param>
 /// <param name="UpdatedAtUtc">When it was last changed; equal to creation until the first edit.</param>
 public sealed record SupplierPresetRecord(
@@ -43,6 +59,9 @@ public sealed record SupplierPresetRecord(
     bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
+    SupplierSearchSchedule Schedule,
+    DateTime ScheduleEffectiveFromUtc,
+    int PriceCheckFreshnessHours,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc);
 
@@ -69,6 +88,13 @@ public sealed record SupplierPresetRecord(
 /// <param name="PricesIncludeGst">Whether the prices it publishes include GST.</param>
 /// <param name="PriceConnector">The validated collection route, or <see langword="null"/> for none.</param>
 /// <param name="PriceConnectorKey">The validated connector key, or <see langword="null"/>.</param>
+/// <param name="Schedule">
+/// The validated search schedule (issue #1108). A create always carries one: a body that states no
+/// schedule gets <c>SupplierSearchSchedulePolicy.Daily</c>, decided at the boundary, because a new
+/// preset has no stored schedule to keep and "every day" is what the collector did before schedules
+/// existed. The adapter derives the freshness limit and the effective-from instant from it rather
+/// than being handed either, so a create cannot store a schedule and a limit that disagree.
+/// </param>
 /// <param name="CreatedAtUtc">The instant to record as both created and updated.</param>
 public sealed record NewSupplierPreset(
     string Name,
@@ -80,6 +106,7 @@ public sealed record NewSupplierPreset(
     bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
+    SupplierSearchSchedule Schedule,
     DateTime CreatedAtUtc);
 
 /// <summary>
@@ -98,7 +125,22 @@ public sealed record NewSupplierPreset(
 /// <param name="PricesIncludeGst">Whether the prices it publishes include GST.</param>
 /// <param name="PriceConnector">The validated collection route, or <see langword="null"/> for none.</param>
 /// <param name="PriceConnectorKey">The validated connector key, or <see langword="null"/>.</param>
-/// <param name="UpdatedAtUtc">The instant to record as last changed.</param>
+/// <param name="Schedule">
+/// The validated search schedule, or <see langword="null"/> to <strong>keep the stored one</strong>
+/// (issue #1108).
+///
+/// <para>The null is the compatibility that keeps the Super Admin page deployed before #1109
+/// working: a <c>PUT</c> that carries no schedule fields at all must leave the schedule exactly as it
+/// is rather than reset it to daily, which would silently start paying to search a fortnightly
+/// supplier every day. It is the one field of this edit that means "unchanged" rather than a value,
+/// and it is nullable for that reason and not for permissiveness.</para>
+/// </param>
+/// <param name="UpdatedAtUtc">
+/// The instant to record as last changed, and the instant
+/// <c>SupplierPreset.ScheduleEffectiveFromUtc</c> advances to when this save moves the coverage
+/// boundary - which the adapter decides against the row it reads, because whether the schedule
+/// changed and whether searching went from off to on are questions about the stored state.
+/// </param>
 public sealed record SupplierPresetEdit(
     string Name,
     string NormalisedName,
@@ -110,6 +152,7 @@ public sealed record SupplierPresetEdit(
     bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
     string? PriceConnectorKey,
+    SupplierSearchSchedule? Schedule,
     DateTime UpdatedAtUtc);
 
 /// <summary>
