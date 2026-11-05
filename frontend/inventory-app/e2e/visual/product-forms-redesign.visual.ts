@@ -92,56 +92,61 @@ function json(route: Route, body: unknown, status = 200): Promise<void> {
   return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
+const trackedNayaxProduct = {
+  productId: 7,
+  tracked: true,
+  status: 3,
+  searchName: LONG_NAME,
+  unitLabel: '237 mL',
+  masterProduct: { name: 'Sample Brand Iced Double Espresso Extra Long Catalogue Name', sizeValue: 237, sizeUnit: 'ml' },
+  canTrack: true,
+  trackRefusal: null
+};
+
+const untrackedManualProduct = {
+  productId: 8,
+  tracked: false,
+  status: null,
+  searchName: null,
+  unitLabel: null,
+  masterProduct: null,
+  canTrack: true,
+  trackRefusal: null
+};
+
+/**
+ * The synthetic answer for each GET this page reads, by path suffix. Writes are answered in
+ * {@link answerWrite}. Order matters: the first suffix that matches wins.
+ */
+const reads: [suffix: string, body: unknown][] = [
+  ['/me/access', { role: 'Owner', capabilities: OWNER_CAPABILITIES, businessName: 'Sample Vending', timeZoneId: 'Australia/Sydney' }],
+  ['/me/account-state', { state: 'Member', onboardingEnabled: false, rejectionReason: null }],
+  ['/business/current', { name: 'Sample Vending', timeZoneId: 'Australia/Sydney' }],
+  ['/nayax-connection/status', { status: 'Ready', machineChecksPending: false }],
+  ['/categories', categories],
+  ['/products/7', nayaxProduct],
+  ['/products/8', manualProduct],
+  ['/products/7/gst-rule', { productId: 7, gstRule: 1 }],
+  ['/products/8/gst-rule', { productId: 8, gstRule: 0 }],
+  ['/products/7/price-tracking', trackedNayaxProduct],
+  ['/products/8/price-tracking', untrackedManualProduct]
+];
+
+/** The only writes this run makes: the product update succeeds and the GST rule write is refused. */
+function answerWrite(route: Route, path: string): Promise<void> {
+  if (path.endsWith('/products/8')) return route.fulfill({ status: 204 });
+  // The one refused write: it is what the partial-save capture shows.
+  if (path.endsWith('/products/8/gst-rule')) return json(route, { title: 'Server error' }, 500);
+  return json(route, []);
+}
+
 async function answerApi(page: Page): Promise<void> {
   await page.route('**/api/**', (route: Route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
-    if (path.endsWith('/me/access')) {
-      return json(route, {
-        role: 'Owner',
-        capabilities: OWNER_CAPABILITIES,
-        businessName: 'Sample Vending',
-        timeZoneId: 'Australia/Sydney'
-      });
-    }
-    if (path.endsWith('/me/account-state')) {
-      return json(route, { state: 'Member', onboardingEnabled: false, rejectionReason: null });
-    }
-    if (path.endsWith('/business/current')) return json(route, { name: 'Sample Vending', timeZoneId: 'Australia/Sydney' });
-    if (path.endsWith('/nayax-connection/status')) return json(route, { status: 'Ready', machineChecksPending: false });
-    if (path.endsWith('/categories')) return json(route, categories);
-    if (path.endsWith('/products/7')) return json(route, nayaxProduct);
-    if (path.endsWith('/products/8') && request.method() === 'GET') return json(route, manualProduct);
-    if (path.endsWith('/products/8') && request.method() === 'PUT') return route.fulfill({ status: 204 });
-    if (path.endsWith('/products/7/gst-rule')) return json(route, { productId: 7, gstRule: 1 });
-    if (path.endsWith('/products/8/gst-rule') && request.method() === 'GET') return json(route, { productId: 8, gstRule: 0 });
-    // The one refused write: it is what the partial-save capture shows.
-    if (path.endsWith('/products/8/gst-rule')) return json(route, { title: 'Server error' }, 500);
-    if (path.endsWith('/products/7/price-tracking')) {
-      return json(route, {
-        productId: 7,
-        tracked: true,
-        status: 3,
-        searchName: LONG_NAME,
-        unitLabel: '237 mL',
-        masterProduct: { name: 'Sample Brand Iced Double Espresso Extra Long Catalogue Name', sizeValue: 237, sizeUnit: 'ml' },
-        canTrack: true,
-        trackRefusal: null
-      });
-    }
-    if (path.endsWith('/products/8/price-tracking')) {
-      return json(route, {
-        productId: 8,
-        tracked: false,
-        status: null,
-        searchName: null,
-        unitLabel: null,
-        masterProduct: null,
-        canTrack: true,
-        trackRefusal: null
-      });
-    }
-    return json(route, []);
+    if (request.method() !== 'GET') return answerWrite(route, path);
+    const read = reads.find(([suffix]) => path.endsWith(suffix));
+    return json(route, read ? read[1] : []);
   });
 }
 
@@ -243,14 +248,13 @@ test.describe('New and Edit Product visual evidence (issue #1111)', () => {
 
   test('touch targets of the action bar and switches are at least 44px tall at 390px', async ({ page }) => {
     await open(page, 390, '/products/8/edit', 'Sample Corn Chips');
-    for (const selector of [
+    const selectors = [
       '[data-testid="product-form-submit"]',
       '[data-testid="product-form-cancel"]',
       '[data-testid="product-section-status"] label',
       '[data-testid="product-price-tracking"] label'
-    ]) {
-      const box = await page.locator(selector).first().boundingBox();
-      expect(box!.height, `${selector} height`).toBeGreaterThanOrEqual(44);
-    }
+    ];
+    const boxes = await Promise.all(selectors.map((selector) => page.locator(selector).first().boundingBox()));
+    boxes.forEach((box, index) => expect(box!.height, `${selectors[index]} height`).toBeGreaterThanOrEqual(44));
   });
 });

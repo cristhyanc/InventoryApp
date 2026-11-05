@@ -512,7 +512,7 @@ describe('ProductFormComponent editing a provider-linked product (issue #737)', 
     const { host } = await render({ product: providerManagedProduct() });
 
     expect(host.querySelector('h1')?.textContent?.trim()).toBe('E2E Chips');
-    expect(host.querySelectorAll('[data-testid="product-form-provider-badge"]').length).toBe(1);
+    expect(host.querySelectorAll('[data-testid="product-form-provider-badge"]')).toHaveLength(1);
     expect(host.textContent?.match(/Managed by Nayax/g)?.length).toBe(1);
     expect(host.textContent).not.toMatch(/\bSynced\b/);
     expect(host.querySelector('[data-testid="product-form-status-badge"]')?.textContent?.trim()).toBe('Active');

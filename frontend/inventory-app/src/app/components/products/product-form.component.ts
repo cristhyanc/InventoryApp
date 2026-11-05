@@ -167,9 +167,9 @@ export class ProductFormComponent implements OnInit, OnDestroy, PendingWorkGuard
    */
   masterProductConflict: string | null = null;
 
-  @ViewChild(ProductGstRuleComponent) private gstRulePanel?: ProductGstRuleComponent;
-  @ViewChild(ProductPriceTrackingComponent) private priceTrackingPanel?: ProductPriceTrackingComponent;
-  @ViewChild(ProductCreateGstRuleComponent) private createGstRulePanel?: ProductCreateGstRuleComponent;
+  @ViewChild(ProductGstRuleComponent) private readonly gstRulePanel?: ProductGstRuleComponent;
+  @ViewChild(ProductPriceTrackingComponent) private readonly priceTrackingPanel?: ProductPriceTrackingComponent;
+  @ViewChild(ProductCreateGstRuleComponent) private readonly createGstRulePanel?: ProductCreateGstRuleComponent;
 
   private readonly sessionActiveSubscription: Subscription;
 

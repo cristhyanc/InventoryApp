@@ -13,7 +13,7 @@
   </h2>
 
   @if (loading) {
-    <p class="mb-3 text-sm text-rr-muted" role="status">Loading supplier price tracking...</p>
+    <output class="mb-3 block text-sm text-rr-muted">Loading supplier price tracking...</output>
   }
   @if (error) {
     <p class="mb-3 text-sm text-rr-danger-text" role="alert" data-testid="price-tracking-error">{{ error }}</p>

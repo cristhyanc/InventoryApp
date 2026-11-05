@@ -436,7 +436,7 @@
     class="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 -mx-4 mt-6 flex items-center justify-between gap-3 border-t border-rr-line bg-white px-4 py-3 sm:-mx-6 sm:px-6 lg:bottom-0"
     data-testid="product-form-actions"
   >
-    <p class="m-0 flex min-w-0 items-center gap-2 text-xs font-medium text-rr-muted" role="status" data-testid="product-form-save-state">
+    <output class="m-0 flex min-w-0 items-center gap-2 text-xs font-medium text-rr-muted" data-testid="product-form-save-state">
       @if (saving) {
         Saving...
       } @else if (createdProductId !== null) {
@@ -448,7 +448,7 @@
       } @else if (!productId) {
         <span class="hidden sm:inline">New product</span>
       }
-    </p>
+    </output>
     <div class="flex shrink-0 items-center gap-3">
       <a routerLink="/products" class="rr-button-secondary" data-testid="product-form-cancel">Cancel</a>
       <button type="submit" form="product-form" class="rr-button-primary" data-testid="product-form-submit" [disabled]="submitDisabled">
