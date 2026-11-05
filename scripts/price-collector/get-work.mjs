@@ -28,18 +28,38 @@ import { BARCODE_SCOPES, PRICE_CONNECTORS, SIZE_UNITS, nameFor } from './enums.m
 
 export const WORK_PATH = '/api/price-collector/work';
 
-export const USAGE = 'get-work.mjs [--raw]';
+export const USAGE = 'get-work.mjs [--raw] [--schedule all|due]';
+
+/**
+ * Which work to ask for (issue #1108): `all` is every searchable supplier, exactly what the route
+ * issued before the schedules existed, and `due` is only the pairs owed a search on each supplier's
+ * own schedule. Without the option nothing is added to the request, which the API reads as `all`.
+ */
+export const SCHEDULES = Object.freeze(['all', 'due']);
 
 function parseArguments(argv) {
   let raw = false;
-  for (const argument of argv ?? []) {
-    if (String(argument) === '--raw') {
+  let schedule = null;
+  const list = [...(argv ?? [])].map(String);
+  for (let index = 0; index < list.length; index += 1) {
+    const argument = list[index];
+    if (argument === '--raw') {
       raw = true;
       continue;
     }
-    throw new ConfigurationError(`Unknown option ${String(argument)}.\n${USAGE}`);
+    if (argument === '--schedule' && schedule === null && SCHEDULES.includes(list[index + 1])) {
+      schedule = list[index + 1];
+      index += 1;
+      continue;
+    }
+    throw new ConfigurationError(`Unknown option ${argument}.\n${USAGE}`);
   }
-  return { raw };
+  return { raw, schedule };
+}
+
+/** The work route with the schedule the caller chose, or bare when it chose none. */
+export function workPath(schedule) {
+  return schedule === null || schedule === undefined ? WORK_PATH : `${WORK_PATH}?schedule=${schedule}`;
 }
 
 const listOf = (value) => (Array.isArray(value) ? value : []);
@@ -167,18 +187,28 @@ export function summariseWorkList(response) {
   };
 }
 
-/** Refuses an answer that is not a work list, so a run is never started from half a list. */
-function requireWorkList(response) {
-  const looksRight =
+/**
+ * Refuses an answer that is not a work list, so a run is never started from half a list. The one
+ * answer without a run is a `due` request that found nothing due (issue #1108): no run was created,
+ * so it must carry no run id and no work at all, and any other request must carry a run.
+ */
+function requireWorkList(response, schedule) {
+  const lists =
     response !== null &&
     typeof response === 'object' &&
-    Number.isInteger(response.runId) &&
-    response.runId > 0 &&
     Array.isArray(response.suppliers) &&
     Array.isArray(response.matchedProducts) &&
     Array.isArray(response.waitingProducts);
+  const issued = lists && Number.isInteger(response.runId) && response.runId > 0;
+  const nothingDue =
+    lists &&
+    schedule === 'due' &&
+    response.runId === null &&
+    response.suppliers.length === 0 &&
+    response.matchedProducts.length === 0 &&
+    response.waitingProducts.length === 0;
 
-  if (!looksRight) throw new ApiError(`GET ${WORK_PATH}: the answer is not a work list.`);
+  if (!issued && !nothingDue) throw new ApiError(`GET ${WORK_PATH}: the answer is not a work list.`);
   return response;
 }
 
@@ -195,8 +225,8 @@ export async function runGetWork({ env = {}, argv = [], fetchImpl = fetch } = {}
 
   const redact = redactorFor(api);
   try {
-    const { body } = await requestJson({ api, method: 'GET', path: WORK_PATH, fetchImpl });
-    const workList = requireWorkList(body);
+    const { body } = await requestJson({ api, method: 'GET', path: workPath(options.schedule), fetchImpl });
+    const workList = requireWorkList(body, options.schedule);
     const answer = options.raw ? workList : summariseWorkList(workList);
     return { exitCode: 0, out: `${JSON.stringify(answer, null, 2)}\n`, err: '' };
   } catch (error) {

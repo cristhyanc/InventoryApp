@@ -8,6 +8,8 @@ import { collectorToken } from './workflow-auth.mjs';
 import { JB_METRO_CAPS, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { runGetWork } from './get-work.mjs';
 import { runSubmission } from './submit-results.mjs';
+import { validateResultFile } from './output-schema.mjs';
+import { SEARCH_OUTCOMES } from './pagination.mjs';
 import { appendLog, clip, logDir, readTrace, redact, secretsOf, textOf, trace } from './trace.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -177,6 +179,71 @@ export function searchDetails(work, outputDir, decisions = []) {
   return lines.join('\n') + '\n';
 }
 
+const supplierLabel = search => oneLine(search.supplierName ?? 'supplier ' + search.supplierPresetId);
+
+/** How many of the issued searches each supplier had, kept with the work so a sample can say what it left out. */
+export function issuedCountsBySupplier(searches) {
+  const counts = new Map();
+  for (const search of searches ?? []) {
+    const entry = counts.get(search.supplierPresetId) ?? { supplierPresetId: search.supplierPresetId, supplierName: supplierLabel(search), issued: 0 };
+    entry.issued += 1;
+    counts.set(search.supplierPresetId, entry);
+  }
+  return [...counts.values()];
+}
+
+const SEARCHED_OUTCOMES = new Set(Object.values(SEARCH_OUTCOMES));
+
+/**
+ * What one search's result file says, for the supplier counts: `searched` with its outcome only for
+ * a file that passed the pre-submission check (this run, this sample, a regular file) and the
+ * result-file schema with one of the four search outcomes; `not_searched` when there is no such
+ * file or the file itself says not_searched; `unusable` for any other file, which proves nothing.
+ */
+function searchEvidence(search, submissionDir) {
+  const file = submissionDir ? readJson(join(submissionDir, `${search.workItemId}.json`)) : undefined;
+  if (file === undefined || file?.outcome === 'not_searched') return { kind: 'not_searched' };
+  if (!validateResultFile(file).ok || !SEARCHED_OUTCOMES.has(file.outcome)) return { kind: 'unusable' };
+  return { kind: 'searched', outcome: file.outcome };
+}
+
+/**
+ * The run's searches per supplier (issue #1110), counts only: the searches the API issued, those
+ * given to Claude, those searched (a valid result file with a search outcome, by outcome) and those
+ * not searched (everything else issued, so Searched + Not searched = Issued). A result file that was
+ * refused or is malformed is counted as not searched and also shown as unusable. Only suppliers with
+ * issued work appear, so a supplier with nothing due is never listed as searched. `submissionDir` is
+ * the folder of files that passed the pre-submission check, never Claude's raw output folder.
+ */
+export function supplierCounts(work, submissionDir) {
+  const bySupplier = new Map();
+  const entryFor = (id, name) => {
+    if (!bySupplier.has(id)) bySupplier.set(id, { name, issued: 0, given: 0, searched: 0, unusable: 0, outcomes: new Map() });
+    return bySupplier.get(id);
+  };
+  const issuedCounts = Array.isArray(work.issuedBySupplier) ? work.issuedBySupplier : issuedCountsBySupplier(work.searches);
+  for (const { supplierPresetId, supplierName, issued } of issuedCounts) entryFor(supplierPresetId, oneLine(supplierName)).issued += issued;
+  for (const search of work.searches) {
+    const entry = entryFor(search.supplierPresetId, supplierLabel(search));
+    entry.given += 1;
+    const evidence = searchEvidence(search, submissionDir);
+    if (evidence.kind === 'unusable') entry.unusable += 1;
+    if (evidence.kind !== 'searched') continue;
+    entry.searched += 1;
+    entry.outcomes.set(evidence.outcome, (entry.outcomes.get(evidence.outcome) ?? 0) + 1);
+  }
+  if (bySupplier.size === 0) return '### Suppliers\n\nNo searches were issued.\n';
+  const lines = ['### Suppliers', '',
+    'Searched = a valid result file with a search outcome; Not searched = every other issued search (no file, a not_searched file, an unusable file, or left out of this run).', '',
+    '| Supplier | Issued | Given to Claude | Searched | Not searched | Searched outcomes | Unusable files |', '| --- | ---: | ---: | ---: | ---: | --- | ---: |'];
+  for (const entry of [...bySupplier.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    const outcomes = [...entry.outcomes].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => `${name} ${count}`).join(', ') || '-';
+    const issued = Math.max(entry.issued, entry.given);
+    lines.push(`| ${entry.name.replace(/\|/g, '/')} | ${issued} | ${entry.given} | ${entry.searched} | ${issued - entry.searched} | ${outcomes} | ${entry.unusable} |`);
+  }
+  return lines.join('\n') + '\n';
+}
+
 /** One trace entry as a line of the step log. */
 function timelineLine(entry, width) {
   const time = String(entry.at ?? '').slice(11, 19);
@@ -268,11 +335,12 @@ export async function finaliseSample({ stateDir, outputDir, env, apiUrl, token, 
   const subtype = typeof status.subtype === 'string' && /^[a-z_]{1,40}$/.test(status.subtype) ? status.subtype : 'unknown';
   const errors = result.err ? `Submission errors:\n${result.err}` : '';
   const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${batches}${toolUseReport(stateDir)}Searches given to Claude: ${work.searches.length}\nFiles refused before submission: ${refused}\n${result.out}${errors}Submission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
+  const suppliers = supplierCounts(work, dir);
   const details = searchDetails(work, outputDir, result.decisions ?? []);
   appendLog(stateDir, 'submission.json', JSON.stringify({ out: result.out, err: result.err ?? '', decisions: result.decisions ?? [] }, null, 2), env);
-  appendLog(stateDir, 'summary.md', `${report}\n${details}`, env);
+  appendLog(stateDir, 'summary.md', `${report}\n${suppliers}\n${details}`, env);
   save(join(stateDir, 'submission-status.json'), { ok: result.exitCode === 0 && refused === 0 });
-  return { report, details };
+  return { report, suppliers, details };
 }
 
 /** The last `result` message of a stream-json transcript, or the whole text when it is one object. */
@@ -414,6 +482,26 @@ export function collectorTarget(env, production = productionApiOrigin()) {
 /** The validated target as the base URL the collector scripts take (they add `/api`). */
 export const collectorApiBaseUrl = env => collectorTarget(env).href.replace(/\/$/, '');
 
+/**
+ * Which work the run asks for (issue #1110): `all` (a manual run's default, today's behaviour) or
+ * `due` (the scheduled run, and a manual check of it). Anything else is refused before a run is
+ * issued, because reading a typo as `all` would re-search, and re-pay for, the whole catalogue.
+ */
+export function scheduleRequested(value) {
+  if (!['all', 'due'].includes(value)) throw new Error('Choose the all or due schedule.');
+  return value;
+}
+
+/** Whether the work call issued a run; a `due` call with nothing due issues none (issue #1108). */
+export const runWasIssued = issued => Number.isInteger(issued?.runId) && issued.runId > 0;
+
+/** A step output line for GitHub Actions, written only when the runner gives an output file. */
+function stepOutput(env, name, value) {
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${name}=${value}\n`);
+}
+
+export const NOTHING_DUE = 'Nothing due today: no supplier search is owed, so no run was issued and nothing was searched or spent.';
+
 /** Whether this is a production-sized run; anything but an explicit true or false is refused. */
 export function fullRunRequested(value) {
   if (!['true', 'false'].includes(value)) throw new Error('Specify whether this is a full run.');
@@ -423,6 +511,7 @@ export function fullRunRequested(value) {
 async function prepare(env, stateDir) {
   const apiUrl = collectorApiBaseUrl(env);
   const full = fullRunRequested(env.PRICE_COLLECTOR_FULL_RUN);
+  const schedule = scheduleRequested(env.PRICE_COLLECTOR_SCHEDULE);
   const size = Number(env.PRICE_COLLECTOR_SAMPLE_SIZE);
   // Validate all local configuration before issuing a run (GET work writes a run). A full run
   // ignores the sample size.
@@ -431,11 +520,21 @@ async function prepare(env, stateDir) {
   if (!['true', 'false'].includes(env.PRICE_COLLECTOR_INCLUDE_REVIEWED)) throw new Error('Specify whether verified retailer actors may run.');
   mkdirSync(stateDir, { mode: 0o700 }); // Refuse a previous attempt's directory; never reuse output.
   const token = await collectorToken(env);
-  const work = await runGetWork({ env: { PRICE_COLLECTOR_API_BASE_URL: apiUrl, PRICE_COLLECTOR_API_TOKEN: token } });
+  const work = await runGetWork({ env: { PRICE_COLLECTOR_API_BASE_URL: apiUrl, PRICE_COLLECTOR_API_TOKEN: token },
+    argv: ['--schedule', schedule] });
   if (work.exitCode !== 0) throw new Error('The collector API did not issue usable work.');
   const issued = JSON.parse(work.out);
+  if (!runWasIssued(issued)) {
+    // No run exists, so there is nothing for Claude to search and nothing to finalise: the later
+    // steps are skipped by this output, and find no issued work if they run anyway.
+    stepOutput(env, 'run_issued', 'false');
+    console.log(NOTHING_DUE);
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Price collector\n\n${NOTHING_DUE}\n`);
+    return;
+  }
+  stepOutput(env, 'run_issued', 'true');
   const sample = full ? fullRunWork(issued) : sampleWork(issued, size);
-  save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full });
+  save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full, issuedBySupplier: issuedCountsBySupplier(issued.searches) });
   // The whole work list the API issued, including the searches a sample leaves unsearched.
   appendLog(stateDir, 'issued-work.json', JSON.stringify(issued, null, 2), env);
   const source = json(join(here, 'apify-limits.json'));
@@ -517,13 +616,13 @@ async function main(env, mode) {
     const apiUrl = collectorApiBaseUrl(env);
     const token = await collectorToken(env);
     const outputDir = join(sandbox, 'price-collector-out');
-    const { report, details } = await finaliseSample({ stateDir, outputDir, env, apiUrl, token });
+    const { report, suppliers, details } = await finaliseSample({ stateDir, outputDir, env, apiUrl, token });
     // Keep Claude's result files with the run's logs, so the artifact holds exactly what was submitted.
     if (existsSync(outputDir)) cpSync(outputDir, join(logDir(stateDir), 'result-files'), { recursive: true });
     const secrets = secretsOf({ ...env, PRICE_COLLECTOR_API_TOKEN: token });
-    console.log(redact(`${report}\n${details}\n### Tool calls\n${toolTimeline(stateDir)}`, secrets));
+    console.log(redact(`${report}\n${suppliers}\n${details}\n### Tool calls\n${toolTimeline(stateDir)}`, secrets));
     if (env.GITHUB_STEP_SUMMARY) {
-      appendFileSync(env.GITHUB_STEP_SUMMARY, redact(`## Price collector run ${issuedWork(stateDir).runId}\n\n\`\`\`\n${report}\`\`\`\n\n${details}\nThe full log (every tool call with its input and answer, and each Claude session's transcript) is in this run's **price-collector-logs** artifact; the tool calls are also in the finalise step's log.\n`, secrets));
+      appendFileSync(env.GITHUB_STEP_SUMMARY, redact(`## Price collector run ${issuedWork(stateDir).runId}\n\n\`\`\`\n${report}\`\`\`\n\n${suppliers}\n${details}\nThe full log (every tool call with its input and answer, and each Claude session's transcript) is in this run's **price-collector-logs** artifact; the tool calls are also in the finalise step's log.\n`, secrets));
     }
     if (!json(join(stateDir, 'submission-status.json')).ok) process.exitCode = 1;
     return;
