@@ -1,7 +1,7 @@
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Observable, of, Subject, Subscription } from 'rxjs';
+import { Observable, of, Subject, Subscription, throwError } from 'rxjs';
 import { catchError, map, switchMap, tap } from 'rxjs/operators';
 import { ProductService } from '../../../services/product.service';
 import { GstClassification, ProductGstRule } from '../../../models/models';
@@ -11,12 +11,14 @@ import { SupportSessionService } from '../../../support-session/support-session.
 type ProductGstRuleRead = { id: number; configured: ProductGstRule | null };
 
 /**
- * Product GST rule configuration (issue #430). It owns its own fetch, loading, save and error
- * state, so the product-edit page only has to supply the product identity.
+ * Product GST rule configuration (issue #430). It owns its own read, loading and load-error state,
+ * so the product-edit page only has to supply the product identity.
  *
- * It saves separately from the product form on purpose. The rule is bookkeeping configuration on
- * its own API resource, not a catalogue field: saving it changes no name, price, cost or stock, and
- * it never reclassifies a purchase that is already recorded. Historical classification is the
+ * Since issue #1111 it has **no Save button of its own**. The product page's one primary action
+ * (Save changes) saves every editable section, so the page asks this panel whether the rule was
+ * changed ({@link dirty}) and, when it was, to write it ({@link persist}) after the product's own
+ * fields. The rule is still its own API resource: writing it changes no name, price, cost or stock,
+ * and it never reclassifies a purchase that is already recorded. Historical classification is the
  * Admin Preview/Apply maintenance workflow (issue #433), not this page.
  *
  * On New Product it runs **deferred** (issue #829): there is no product to read a rule from or write
@@ -45,6 +47,12 @@ export class ProductGstRuleComponent implements OnChanges, OnDestroy {
    */
   @Input() deferred = false;
 
+  /**
+   * Whether the page is saving (issue #1111): the picker is held still while a save is in flight, so
+   * the rule written is the rule that was on screen when Save changes was pressed.
+   */
+  @Input() disabled = false;
+
   /** The chosen rule, for the component that persists it once the product exists (issue #829). */
   @Output() readonly ruleChange = new EventEmitter<GstClassification>();
 
@@ -58,20 +66,25 @@ export class ProductGstRuleComponent implements OnChanges, OnDestroy {
   rule: GstClassification = GstClassification.Unknown;
 
   /**
+   * The rule the server last confirmed for the product on screen - read back, or just written - so
+   * {@link dirty} compares the picker with what is actually stored rather than with what was read
+   * when the page opened.
+   */
+  storedRule: GstClassification = GstClassification.Unknown;
+
+  /**
    * False until the stored rule of the product currently on screen has been read back successfully.
-   * The picker starts on the "no rule" placeholder, so saving before that - in particular after a
-   * failed load - would erase the rule the product already has. Saving stays disabled while this is
-   * false.
+   * The picker starts on the "no rule" placeholder, so writing before that - in particular after a
+   * failed load - would erase the rule the product already has. The picker stays disabled, and the
+   * rule is never {@link dirty}, while this is false.
    */
   loaded = false;
 
   loading = false;
-  saving = false;
-  saved = false;
   error = '';
 
   /**
-   * Whether a support session is active (issue #661): Save GST rule is disabled while it is,
+   * Whether a support session is active (issue #661): the rule is never written while it is,
    * because a session grants `InventoryOperate` - the capability the product pages and this rule
    * resource are gated on - and the backend refuses the write itself only by its read-only method
    * rule, never by withholding the capability. See `SupportSessionService.active$`.
@@ -110,11 +123,12 @@ export class ProductGstRuleComponent implements OnChanges, OnDestroy {
         this.loading = false;
         if (result.configured === null) {
           this.error =
-            'Failed to load the GST rule. Saving stays disabled until it loads; reload the page to try again.';
+            'Failed to load the GST rule, so it cannot be changed here. Other changes still save; reload the page to try again.';
           return;
         }
 
         this.rule = result.configured.gstRule;
+        this.storedRule = result.configured.gstRule;
         this.loaded = true;
       });
   }
@@ -140,46 +154,50 @@ export class ProductGstRuleComponent implements OnChanges, OnDestroy {
     this.ruleChange.emit(rule);
   }
 
-  save(): void {
+  /**
+   * Whether the picker differs from the stored rule (issue #1111), which is what tells the page that
+   * Save changes has a GST write to make. Never true before the stored rule has been read back, and
+   * never true deferred - on New Product the create's own flow writes the rule.
+   */
+  get dirty(): boolean {
+    return !this.deferred && this.loaded && this.rule !== this.storedRule;
+  }
+
+  /**
+   * Writes the rule on screen when it was changed (issue #1111), for the page's one Save changes.
+   * An unchanged rule writes nothing and completes at once. A failure is the caller's to report -
+   * the page says which of its sections were and were not saved - and leaves the picker, and
+   * {@link dirty}, exactly as they were, so pressing Save changes again retries this write.
+   *
+   * The session check is here as well as on the page, so the write is actually unavailable rather
+   * than merely inert - the endpoint refuses it either way.
+   */
+  persist(): Observable<void> {
     const id = this.productId;
-    // The session check is here as well as in the template, so the write is actually unavailable
-    // rather than merely inert - the endpoint refuses it either way. Deferred, this panel writes
-    // nothing at all: the component composing it saves the rule with the product being created.
-    if (this.deferred || id === null || !this.loaded || this.saving || this.sessionActive) {
-      return;
+    if (!this.dirty || id === null) {
+      return of(undefined);
+    }
+    if (this.sessionActive) {
+      return throwError(() => new Error('The GST rule cannot be changed during a support session.'));
     }
 
-    this.saving = true;
-    this.saved = false;
-    this.error = '';
-    this.productService.setGstRule(id, this.rule).subscribe({
-      next: () => {
-        // A save that finishes after another product was opened reports nothing: its outcome
-        // belongs to the product it was issued for, not to the picker now on screen.
-        if (id !== this.productId) {
-          return;
+    const rule = this.rule;
+    return this.productService.setGstRule(id, rule).pipe(
+      tap(() => {
+        // A write that finishes after another product was opened changes nothing on screen: its
+        // outcome belongs to the product it was issued for.
+        if (id === this.productId) {
+          this.storedRule = rule;
         }
-
-        this.saving = false;
-        this.saved = true;
-      },
-      error: () => {
-        if (id !== this.productId) {
-          return;
-        }
-
-        this.saving = false;
-        this.error = 'Failed to save the GST rule.';
-      }
-    });
+      })
+    );
   }
 
   private reset(): void {
     this.rule = GstClassification.Unknown;
+    this.storedRule = GstClassification.Unknown;
     this.loaded = false;
     this.loading = false;
-    this.saving = false;
-    this.saved = false;
     this.error = '';
   }
 }

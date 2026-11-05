@@ -72,7 +72,8 @@ describe('cheapestSupplierSummaryView (issue #1093)', () => {
       basis: 'inc GST',
       supplierNames: ['Coles'],
       tied: false,
-      special: false
+      special: false,
+      cheapestOffers: [offer()]
     });
     // Never a hardcoded "inc GST": a GST-registered business is shown ex GST.
     expect(cheapestSupplierSummaryView('loaded', product(), SupplierPriceBasis.ExclusiveOfGst)).toEqual(
@@ -81,13 +82,12 @@ describe('cheapestSupplierSummaryView (issue #1093)', () => {
   });
 
   it('names every tied supplier and marks a special, because the server reported them', () => {
-    const view = cheapestSupplierSummaryView(
-      'loaded',
-      product({ suppliers: [offer(), offer({ supplierId: 2, supplierName: 'Woolworths', isSpecial: true })] }),
-      INC
-    );
+    const tiedOffers = [offer(), offer({ supplierId: 2, supplierName: 'Woolworths', isSpecial: true })];
+    const view = cheapestSupplierSummaryView('loaded', product({ suppliers: tiedOffers }), INC);
 
-    expect(view).toEqual(expect.objectContaining({ supplierNames: ['Coles', 'Woolworths'], tied: true, special: true }));
+    expect(view).toEqual(
+      expect.objectContaining({ supplierNames: ['Coles', 'Woolworths'], tied: true, special: true, cheapestOffers: tiedOffers })
+    );
   });
 
   it('says Stale with the stale offer\'s own price and check time when only stale prices exist', () => {
@@ -169,6 +169,82 @@ describe('CheapestSupplierSummaryComponent (issue #1093)', () => {
     expect(host.querySelector('[data-testid="cheapest-supplier-summary-suppliers"]')?.textContent?.trim()).toBe('Coles / Woolworths');
     expect(host.querySelector('[data-testid="cheapest-supplier-summary-tied"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="cheapest-supplier-summary-special"]')).not.toBeNull();
+  });
+
+  /**
+   * The View link beside each cheapest offer (issue #1098): the server's own `isCheapest` offers,
+   * each opening its own product page directly rather than the comparison - never an arbitrary
+   * member of a tie, and never fabricated when an offer carries no URL.
+   */
+  describe('View links (issue #1098)', () => {
+    it('opens the cheapest offer\'s own product page in a new tab, named for its supplier and product', async () => {
+      const { host } = await render(product());
+
+      const link = host.querySelector<HTMLAnchorElement>('[data-testid="cheapest-supplier-summary-view-1"]');
+      expect(link?.textContent?.trim()).toBe('View ↗');
+      expect(link?.getAttribute('href')).toBe('https://example.test/coles/espresso');
+      expect(link?.getAttribute('target')).toBe('_blank');
+      expect(link?.getAttribute('rel')).toBe('noopener noreferrer');
+      expect(link?.getAttribute('aria-label')).toBe('Open Coles product page for Boss Iced Double Espresso 237mL');
+    });
+
+    it('gives each tied offer its own link to its own URL, named with its own supplier', async () => {
+      const { host } = await render(
+        product({
+          suppliers: [
+            offer({ supplierId: 1, supplierName: 'Coles', productUrl: 'https://example.test/coles/espresso' }),
+            offer({ supplierId: 2, supplierName: 'Woolworths', productUrl: 'https://example.test/woolworths/espresso' })
+          ]
+        })
+      );
+
+      const coles = host.querySelector<HTMLAnchorElement>('[data-testid="cheapest-supplier-summary-view-1"]');
+      const woolworths = host.querySelector<HTMLAnchorElement>('[data-testid="cheapest-supplier-summary-view-2"]');
+      expect(coles?.textContent?.trim()).toBe('View Coles ↗');
+      expect(coles?.getAttribute('href')).toBe('https://example.test/coles/espresso');
+      expect(woolworths?.textContent?.trim()).toBe('View Woolworths ↗');
+      expect(woolworths?.getAttribute('href')).toBe('https://example.test/woolworths/espresso');
+    });
+
+    it('omits the link for a cheapest offer with no product URL, rather than linking anywhere', async () => {
+      const { host } = await render(product({ suppliers: [offer({ productUrl: null })] }));
+
+      expect(host.querySelector('[data-testid="cheapest-supplier-summary-links"]')).toBeNull();
+    });
+
+    it('omits a tied offer\'s own link only for the one with no URL, keeping the other\'s', async () => {
+      const { host } = await render(
+        product({
+          suppliers: [
+            offer({ supplierId: 1, supplierName: 'Coles', productUrl: null }),
+            offer({ supplierId: 2, supplierName: 'Woolworths', productUrl: 'https://example.test/woolworths/espresso' })
+          ]
+        })
+      );
+
+      expect(host.querySelector('[data-testid="cheapest-supplier-summary-view-1"]')).toBeNull();
+      expect(host.querySelector('[data-testid="cheapest-supplier-summary-view-2"]')?.textContent?.trim()).toBe('View Woolworths ↗');
+    });
+
+    it('never links a stale or non-cheapest offer', async () => {
+      const { host } = await render(
+        product({
+          cheapestUnitPrice: null,
+          suppliers: [offer({ unitPrice: 2.1, isCheapest: false, ineligibility: SupplierOfferIneligibility.Stale })]
+        })
+      );
+
+      expect(host.querySelector('[data-testid^="cheapest-supplier-summary-view-"]')).toBeNull();
+    });
+
+    it('does not open the comparison popup when a View link is activated', async () => {
+      const { fixture, host, dialog } = await render(product());
+
+      host.querySelector<HTMLAnchorElement>('[data-testid="cheapest-supplier-summary-view-1"]')!.click();
+      fixture.detectChanges();
+
+      expect(dialog()).toBeNull();
+    });
   });
 
   it('shows the stale offer\'s check in the business time zone', async () => {

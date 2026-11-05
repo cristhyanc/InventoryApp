@@ -24,20 +24,31 @@ async function render(
 
   const host = fixture.nativeElement as HTMLElement;
   const select = () => host.querySelector<HTMLSelectElement>('#product-gst-rule')!;
-  const saveButton = () =>
-    Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
-      button.textContent?.trim().startsWith('Save')
-    )!;
-  const save = () => {
-    saveButton().click();
+  const choose = (label: string) => {
+    const picker = select();
+    picker.selectedIndex = Array.from(picker.options).findIndex((option) => option.textContent?.trim() === label);
+    picker.dispatchEvent(new Event('change'));
     fixture.detectChanges();
+  };
+  /**
+   * What the page's Save changes does (issue #1111): asks the panel to write its rule, and records
+   * how that write ended.
+   */
+  const persist = () => {
+    const outcome = { completed: false, error: null as unknown };
+    fixture.componentInstance.persist().subscribe({
+      complete: () => (outcome.completed = true),
+      error: (error: unknown) => (outcome.error = error)
+    });
+    fixture.detectChanges();
+    return outcome;
   };
   const openProduct = (productId: number) => {
     fixture.componentRef.setInput('productId', productId);
     fixture.detectChanges();
   };
 
-  return { fixture, host, select, saveButton, save, openProduct, getGstRule, setGstRule };
+  return { fixture, host, select, choose, persist, openProduct, getGstRule, setGstRule };
 }
 
 /**
@@ -91,15 +102,43 @@ describe('ProductGstRuleComponent', () => {
     ]);
   });
 
-  it('saves the selected rule', async () => {
-    const { fixture, host, save, setGstRule } = await render();
+  /**
+   * Issue #1111: the panel has no Save button of its own. The page's one Save changes asks it
+   * whether the rule changed and, when it did, to write it.
+   */
+  it('offers no Save button of its own on the edit page', async () => {
+    const { host } = await render(jest.fn(() => of({ productId: 42, gstRule: GstClassification.Taxable })));
 
-    fixture.componentInstance.rule = GstClassification.Taxable;
-    fixture.detectChanges();
-    save();
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it('is unchanged until a different rule is chosen, and changed back is unchanged again', async () => {
+    const { fixture, choose } = await render(jest.fn(() => of({ productId: 42, gstRule: GstClassification.Taxable })));
+
+    expect(fixture.componentInstance.dirty).toBe(false);
+    choose('GST-free');
+    expect(fixture.componentInstance.dirty).toBe(true);
+    choose('Taxable');
+    expect(fixture.componentInstance.dirty).toBe(false);
+  });
+
+  it('writes the chosen rule when asked, and is unchanged once it is stored', async () => {
+    const { fixture, choose, persist, setGstRule } = await render();
+
+    choose('Taxable');
+    const outcome = persist();
 
     expect(setGstRule).toHaveBeenCalledWith(42, GstClassification.Taxable);
-    expect(host.textContent).toContain('GST rule saved.');
+    expect(outcome.completed).toBe(true);
+    expect(fixture.componentInstance.dirty).toBe(false);
+    expect(fixture.componentInstance.storedRule).toBe(GstClassification.Taxable);
+  });
+
+  it('writes nothing for an unchanged rule, and completes at once', async () => {
+    const { persist, setGstRule } = await render(jest.fn(() => of({ productId: 42, gstRule: GstClassification.Taxable })));
+
+    expect(persist().completed).toBe(true);
+    expect(setGstRule).not.toHaveBeenCalled();
   });
 
   /**
@@ -107,60 +146,70 @@ describe('ProductGstRuleComponent', () => {
    * so the rule is cleared, which is not the same as saving GST-free.
    */
   it('saves no rule as the unknown classification rather than as GST-free', async () => {
-    const { fixture, save, setGstRule } = await render(
+    const { choose, persist, setGstRule } = await render(
       jest.fn(() => of({ productId: 42, gstRule: GstClassification.Taxable }))
     );
 
-    fixture.componentInstance.rule = GstClassification.Unknown;
-    fixture.detectChanges();
-    save();
+    choose('No rule');
+    persist();
 
     expect(setGstRule).toHaveBeenCalledWith(42, GstClassification.Unknown);
   });
 
-  it('reports a failed save and does not claim it succeeded', async () => {
-    const { host, save } = await render(
-      undefined,
-      jest.fn(() => throwError(() => new Error('rejected')))
-    );
+  it('hands a failed write to the page and keeps the choice, so a second Save retries it', async () => {
+    const { fixture, choose, persist } = await render(undefined, jest.fn(() => throwError(() => new Error('rejected'))));
 
-    save();
+    choose('Taxable');
+    const outcome = persist();
 
-    expect(host.textContent).toContain('Failed to save the GST rule.');
-    expect(host.textContent).not.toContain('GST rule saved.');
+    expect(outcome.error).toBeInstanceOf(Error);
+    expect(outcome.completed).toBe(false);
+    expect(fixture.componentInstance.rule).toBe(GstClassification.Taxable);
+    expect(fixture.componentInstance.dirty).toBe(true);
   });
 
   it('reports a failed load', async () => {
     const { host } = await render(jest.fn(() => throwError(() => new Error('unavailable'))));
 
-    expect(host.textContent).toContain('Failed to load the GST rule.');
+    expect(host.textContent).toContain('Failed to load the GST rule');
   });
 
   /**
    * A failed read leaves the picker on its "no rule" placeholder, which is a real value the API
-   * would store. Saving it would erase whatever rule the product already has, so saving must stay
-   * impossible until the stored rule has actually been read back.
+   * would store. Writing it would erase whatever rule the product already has, so the picker stays
+   * unusable and the rule is never counted as changed until the stored rule has been read back.
    */
-  it('keeps saving disabled after a failed load, so a failed GET cannot lead to a PUT', async () => {
-    const { fixture, saveButton, save, setGstRule } = await render(
+  it('never writes after a failed load, so a failed GET cannot lead to a PUT', async () => {
+    const { fixture, select, persist, setGstRule } = await render(
       jest.fn(() => throwError(() => new Error('unavailable')))
     );
 
     expect(fixture.componentInstance.loaded).toBe(false);
-    expect(saveButton().disabled).toBe(true);
-    save();
-    fixture.componentInstance.save();
+    expect(select().disabled).toBe(true);
+    fixture.componentInstance.rule = GstClassification.Taxable;
+    expect(fixture.componentInstance.dirty).toBe(false);
+    persist();
 
     expect(setGstRule).not.toHaveBeenCalled();
   });
 
-  it('keeps saving disabled while the rule is still loading', async () => {
-    const { fixture, saveButton, setGstRule } = await render(jest.fn(() => new Subject<ProductGstRule>()));
+  it('keeps the picker unusable while the rule is still loading', async () => {
+    const { select, persist, setGstRule } = await render(jest.fn(() => new Subject<ProductGstRule>()));
 
-    expect(saveButton().disabled).toBe(true);
-    fixture.componentInstance.save();
+    expect(select().disabled).toBe(true);
+    persist();
 
     expect(setGstRule).not.toHaveBeenCalled();
+  });
+
+  it('holds the picker still while the page is saving', async () => {
+    const { fixture, select } = await render();
+
+    fixture.componentRef.setInput('disabled', true);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(select().disabled).toBe(true);
   });
 
   /**
@@ -175,7 +224,7 @@ describe('ProductGstRuleComponent', () => {
       reads.set(id, read);
       return read;
     });
-    const { fixture, save, openProduct, setGstRule } = await render(getGstRule);
+    const { fixture, persist, openProduct, setGstRule } = await render(getGstRule);
 
     openProduct(43);
     reads.get(43)!.next({ productId: 43, gstRule: GstClassification.Taxable });
@@ -187,70 +236,50 @@ describe('ProductGstRuleComponent', () => {
 
     expect(fixture.componentInstance.rule).toBe(GstClassification.Taxable);
 
-    save();
+    fixture.componentInstance.rule = GstClassification.GstFree;
+    persist();
 
     expect(setGstRule).toHaveBeenCalledTimes(1);
-    expect(setGstRule).toHaveBeenCalledWith(43, GstClassification.Taxable);
+    expect(setGstRule).toHaveBeenCalledWith(43, GstClassification.GstFree);
   });
 
   /**
-   * The same ordering problem applies to a save: its outcome belongs to the product it was issued
-   * for, so it must not be reported on - or re-enable - the picker of a product opened since.
+   * The same ordering problem applies to a write: its outcome belongs to the product it was issued
+   * for, so it must not mark the picker of a product opened since as stored.
    */
-  it('does not report a save for one product on the picker of another', async () => {
+  it('does not record a write for one product on the picker of another', async () => {
     const saves = new Map<number, Subject<void>>();
     const setGstRule = jest.fn((id: number) => {
       const pending = new Subject<void>();
       saves.set(id, pending);
       return pending;
     });
-    const { fixture, host, save, openProduct } = await render(
+    const { fixture, persist, openProduct } = await render(
       jest.fn((id: number) => of({ productId: id, gstRule: GstClassification.Taxable })),
       setGstRule
     );
 
-    save();
+    fixture.componentInstance.rule = GstClassification.GstFree;
+    persist();
     openProduct(43);
 
     saves.get(42)!.next();
     saves.get(42)!.complete();
     fixture.detectChanges();
 
-    expect(host.textContent).not.toContain('GST rule saved.');
-    expect(fixture.componentInstance.saved).toBe(false);
-  });
-
-  it('does not report a failed save for one product on the picker of another', async () => {
-    const saves = new Map<number, Subject<void>>();
-    const setGstRule = jest.fn((id: number) => {
-      const pending = new Subject<void>();
-      saves.set(id, pending);
-      return pending;
-    });
-    const { fixture, host, save, openProduct } = await render(
-      jest.fn((id: number) => of({ productId: id, gstRule: GstClassification.Taxable })),
-      setGstRule
-    );
-
-    save();
-    openProduct(43);
-
-    saves.get(42)!.error(new Error('rejected'));
-    fixture.detectChanges();
-
-    expect(host.textContent).not.toContain('Failed to save the GST rule.');
-    expect(fixture.componentInstance.error).toBe('');
+    expect(fixture.componentInstance.storedRule).toBe(GstClassification.Taxable);
   });
 
   /**
-   * The copy the acceptance criteria call for: the page has to say that a product rule wins over a
-   * supplier default, and that configuring one changes no purchase already recorded.
+   * The copy issue #1111 calls for: the rule applies to future purchases, recorded purchases keep
+   * theirs, "No rule" is not GST-free - and a product rule still wins over a supplier default.
    */
-  it('explains the precedence and that recorded purchases are unaffected', async () => {
+  it('explains future purchases, recorded purchases, "No rule" and the precedence', async () => {
     const { host } = await render();
 
+    expect(host.textContent).toContain('Applies to future purchases. Existing purchases keep their recorded GST treatment.');
+    expect(host.textContent).toContain('"No rule" means unclassified, not GST-free.');
     expect(host.textContent).toContain('takes precedence over any supplier default');
-    expect(host.textContent).toContain('does not change the GST classification of any');
   });
 
   /**
@@ -294,10 +323,12 @@ describe('ProductGstRuleComponent', () => {
       ).toEqual([]);
     });
 
-    it('writes nothing itself, even if its guarded save handler is invoked', async () => {
-      const { fixture, setGstRule } = await renderDeferred();
+    it('writes nothing itself and is never counted as changed, even if asked to write', async () => {
+      const { fixture, choose, setGstRule } = await renderDeferred();
 
-      fixture.componentInstance.save();
+      choose('Taxable');
+      expect(fixture.componentInstance.dirty).toBe(false);
+      fixture.componentInstance.persist().subscribe();
 
       expect(setGstRule).not.toHaveBeenCalled();
     });
@@ -306,8 +337,8 @@ describe('ProductGstRuleComponent', () => {
       const { host } = await renderDeferred();
 
       expect(host.textContent).toContain('takes precedence over any supplier default');
-      expect(host.textContent).toContain('does not change the GST classification of any');
-      expect(host.textContent).toContain('"No rule" leaves the product unclassified');
+      expect(host.textContent).toContain('Existing purchases keep their recorded GST treatment.');
+      expect(host.textContent).toContain('"No rule" means unclassified, not GST-free.');
       expect(host.textContent).toContain('saved with the new product');
     });
   });
@@ -315,27 +346,15 @@ describe('ProductGstRuleComponent', () => {
   describe('in a support session (issue #661)', () => {
     const loaded = () => jest.fn(() => of({ productId: 42, gstRule: GstClassification.Taxable }));
 
-    it('disables Save GST rule while a session is active, even once the rule has loaded', async () => {
-      const { saveButton } = await render(loaded(), jest.fn(), of(true));
-
-      expect(saveButton().disabled).toBe(true);
-    });
-
-    it('leaves Save GST rule enabled while no session is active', async () => {
-      const { saveButton } = await render(loaded(), jest.fn(), of(false));
-
-      expect(saveButton().disabled).toBe(false);
-    });
-
-    it('calls no rule API from the guarded handler while a session is active', async () => {
+    it('calls no rule API even when asked to write a changed rule while a session is active', async () => {
       const setGstRule = jest.fn();
-      const { fixture } = await render(loaded(), setGstRule, of(true));
+      const { fixture, persist } = await render(loaded(), setGstRule, of(true));
 
-      fixture.componentInstance.save();
+      fixture.componentInstance.rule = GstClassification.GstFree;
+      const outcome = persist();
 
       expect(setGstRule).not.toHaveBeenCalled();
-      expect(fixture.componentInstance.saving).toBe(false);
-      expect(fixture.componentInstance.saved).toBe(false);
+      expect(outcome.error).toBeInstanceOf(Error);
     });
   });
 });

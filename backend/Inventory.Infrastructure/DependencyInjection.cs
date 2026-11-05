@@ -84,6 +84,14 @@ public static class InfrastructureServiceCollectionExtensions
         // must construct a ZonedBusinessCalendar with the zone it means, explicitly.
         services.AddScoped<IBusinessCalendar, CurrentBusinessCalendar>();
 
+        // The platform collection calendar (issue #1108), which is a different port from the one
+        // above and not a fallback for it: it dates no business and no financial record, it reads the
+        // one declared zone a supplier search schedule's days mean
+        // (SupplierSearchSchedulePolicy.TimeZoneId), and it needs no current business - which is why
+        // a supplier preset, which belongs to no business, has a collection day at all. Scoped so one
+        // issued work list decides every supplier's occurrence against one calendar.
+        services.AddScoped<ISupplierSearchScheduleCalendar, SupplierSearchScheduleCalendar>();
+
         // The uploaded Nayax sales export reader (issue #301). Unlike the pending-XML source below
         // it needs no host path and no configuration - the caller hands it the uploaded bytes - so
         // it is registered here rather than through its own extension, and is a singleton because

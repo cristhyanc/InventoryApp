@@ -46,13 +46,22 @@ async function render(
     fixture.detectChanges();
   };
 
-  /** What the page does when `POST api/products` has answered an id. */
+  /** What the page does when `POST api/products` has answered an id (issue #1111: a call). */
   const productCreated = (id: number) => {
-    fixture.componentRef.setInput('createdProductId', id);
+    const started = fixture.componentInstance.storeFor(id);
     fixture.detectChanges();
+    return started;
   };
 
-  const retry = () => host.querySelector<HTMLButtonElement>('button');
+  /**
+   * The retry, which since issue #1111 is the page's primary action calling `save()`: the
+   * component renders no button of its own.
+   */
+  const retry = () => {
+    const started = fixture.componentInstance.save();
+    fixture.detectChanges();
+    return started;
+  };
 
   return {
     fixture,
@@ -73,7 +82,7 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
   const refused = () => jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })));
 
   it('offers the edit page’s choices and help, reads nothing, and offers no write before a product exists', async () => {
-    const { host, retry, getGstRule, setGstRule } = await render();
+    const { host, getGstRule, setGstRule } = await render();
 
     expect(Array.from(host.querySelectorAll('option')).map((option) => option.textContent?.trim())).toEqual([
       'No rule',
@@ -81,13 +90,13 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
       'GST-free'
     ]);
     expect(host.textContent).toContain('takes precedence over any supplier default');
-    expect(host.textContent).toContain('does not change the GST classification of any');
+    expect(host.textContent).toContain('Applies to future purchases. Existing purchases keep their recorded GST treatment.');
     expect(host.querySelector<HTMLSelectElement>('app-product-gst-rule select')?.disabled).toBe(false);
 
     // There is no product yet: nothing to read a rule from and nothing to write one to.
     expect(getGstRule).not.toHaveBeenCalled();
     expect(setGstRule).not.toHaveBeenCalled();
-    expect(retry()).toBeNull();
+    expect(host.querySelectorAll('button')).toHaveLength(0);
   });
 
   it('writes the chosen rule to the product that was created, then reports the create finished', async () => {
@@ -124,8 +133,8 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
     expect(outcomes()).toEqual({ persisted: 1, failed: 0 });
   });
 
-  it('reports the partial failure in its own words, offers the retry, and never reports finished', async () => {
-    const { host, choose, productCreated, retry, outcomes } = await render({ setGstRule: refused() });
+  it('reports the partial failure in its own words, names the page’s retry, and never reports finished', async () => {
+    const { host, choose, productCreated, outcomes } = await render({ setGstRule: refused() });
 
     choose('Taxable');
     productCreated(55);
@@ -133,8 +142,9 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
     expect(outcomes()).toEqual({ persisted: 0, failed: 1 });
     expect(host.textContent).toContain('The product was created, but its GST rule was not saved.');
     expect(host.textContent).toContain('never creates a second product');
-    expect(retry()?.textContent).toContain('Save GST rule');
-    expect(retry()?.disabled).toBe(false);
+    expect(host.textContent).toContain('Press Retry GST rule');
+    // No button of its own (issue #1111): the page's primary action is the retry.
+    expect(host.querySelectorAll('button')).toHaveLength(0);
   });
 
   /**
@@ -155,8 +165,7 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
     expect(fixture.componentInstance.rule).toBe(GstClassification.Taxable);
 
     choose('GST-free');
-    retry()!.click();
-    fixture.detectChanges();
+    expect(retry()).toBe(true);
 
     expect(setGstRule).toHaveBeenCalledTimes(2);
     expect(setGstRule).toHaveBeenLastCalledWith(55, GstClassification.GstFree);
@@ -167,13 +176,12 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
 
   it('issues no second write while one is still in flight', async () => {
     const setGstRule = jest.fn(() => NEVER);
-    const { fixture, choose, productCreated, retry } = await render({ setGstRule });
+    const { choose, productCreated, retry } = await render({ setGstRule });
 
     choose('Taxable');
-    productCreated(55);
+    expect(productCreated(55)).toBe(true);
 
-    expect(retry()?.disabled).toBe(true);
-    fixture.componentInstance.save();
+    expect(retry()).toBe(false);
 
     expect(setGstRule).toHaveBeenCalledTimes(1);
   });
@@ -182,7 +190,7 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
     const { component, choose, setGstRule, outcomes } = await render();
 
     choose('Taxable');
-    component.save();
+    expect(component.save()).toBe(false);
 
     expect(setGstRule).not.toHaveBeenCalled();
     expect(outcomes()).toEqual({ persisted: 0, failed: 0 });
@@ -194,20 +202,20 @@ describe('ProductCreateGstRuleComponent (issue #829)', () => {
    * (issues #554/#661). The page refuses the create during a session as well, so the input below is
    * a state a person cannot reach - which is exactly why it is asserted to write nothing.
    */
-  it('writes nothing while a support session is active, and offers no usable retry', async () => {
-    const { component, choose, productCreated, retry, setGstRule, outcomes } = await render({
+  it('writes nothing while a support session is active, and no retry starts one', async () => {
+    const { component, choose, productCreated, setGstRule, outcomes } = await render({
       sessionActive: of(true),
       setGstRule: refused()
     });
 
     choose('Taxable');
-    productCreated(55);
+    // The page is told no outcome will be reported, so it never waits on one.
+    expect(productCreated(55)).toBe(false);
 
     expect(setGstRule).not.toHaveBeenCalled();
     expect(outcomes()).toEqual({ persisted: 0, failed: 0 });
-    expect(retry()?.disabled).toBe(true);
 
-    component.save();
+    expect(component.save()).toBe(false);
     expect(setGstRule).not.toHaveBeenCalled();
   });
 });

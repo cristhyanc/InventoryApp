@@ -1262,6 +1262,81 @@ internal sealed class PriceCatalogueFixture : IAsyncDisposable
     }
 
     /// <summary>
+    /// Records one supplier master record's <strong>search schedule</strong> and when that schedule
+    /// became effective (issue #1108), which together decide its coverage boundary on a
+    /// <c>schedule=due</c> run.
+    ///
+    /// <para>Written directly for the reason <see cref="SetSupplierCollectionAsync"/> is: the Super
+    /// Admin's preset save is what writes these columns in production, and what is under test here is
+    /// the <em>reads</em> the work list makes of them. The freshness limit is derived from the
+    /// schedule with the Domain's own rule, so a seeded row is as consistent as a saved one.</para>
+    /// </summary>
+    public async Task SetSupplierScheduleAsync(
+        int supplierPresetId,
+        SupplierSearchFrequency frequency,
+        IReadOnlyList<DayOfWeek>? daysOfWeek = null,
+        DateOnly? fortnightStartDate = null,
+        DateTime? scheduleEffectiveFromUtc = null)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var schedule = SupplierSearchSchedulePolicy.Require(
+            new SupplierSearchSchedule(frequency, daysOfWeek ?? [], fortnightStartDate));
+
+        var preset = await db.SupplierPresets.SingleAsync(row => row.Id == supplierPresetId);
+        preset.SearchFrequency = schedule.Frequency;
+        preset.SearchDaysOfWeek = SupplierSearchSchedulePolicy.StoredDaysOfWeek(schedule.DaysOfWeek);
+        preset.FortnightStartDate = schedule.FortnightStartDate;
+        preset.PriceCheckFreshnessHours = SupplierSearchSchedulePolicy.FreshnessHoursFor(schedule);
+        preset.ScheduleEffectiveFromUtc = scheduleEffectiveFromUtc ?? CreatedAt;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Finalises one issued work item with an outcome and the instant it was recorded at (issue
+    /// #1108), which is what makes a pair covered - or, for
+    /// <see cref="PriceCollectorWorkItemOutcome.NotSearched"/>, deliberately neither covered nor
+    /// blocked.
+    ///
+    /// <para>Written directly rather than through the results endpoint of #937 because what is under
+    /// test is the due rule's reading of the three work-item states, not how an outcome gets
+    /// recorded.</para>
+    /// </summary>
+    public async Task AnswerWorkItemAsync(
+        long workItemId,
+        PriceCollectorWorkItemOutcome outcome,
+        DateTime outcomeAtUtc)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var workItem = await db.PriceCollectorWorkItems.SingleAsync(row => row.Id == workItemId);
+        workItem.Outcome = outcome;
+        workItem.OutcomeAtUtc = outcomeAtUtc;
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Closes one run with a status of the test's choosing, so a test can state "that run is no
+    /// longer open" without going through the completion use case of #937.
+    /// </summary>
+    public async Task CloseRunAsync(
+        long runId,
+        PriceCollectorRunStatus status,
+        DateTime completedAtUtc)
+    {
+        await using var db = TestAppDbContext.Unrestricted(_options);
+
+        var run = await db.PriceCollectorRuns.SingleAsync(row => row.Id == runId);
+        run.Status = status;
+        run.CompletedAtUtc = completedAtUtc;
+
+        await db.SaveChangesAsync();
+    }
+
+
+    /// <summary>
     /// Records a match suggestion against one waiting key, which no port writes either: the matcher of
     /// #941 and the review of #928 do, and both are out of #924's scope.
     /// </summary>

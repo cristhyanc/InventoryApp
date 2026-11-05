@@ -1,16 +1,26 @@
-name: Price collector (manual)
+name: Price collector
 
-# #929 rollout: manual only, no cron. A separately reviewed change enables the Sydney schedule.
+# Scheduled collection (#1110, completing #929): one best-effort daily run at 05:17 Sydney time on
+# main, against production, asking only for the work that is due on each supplier's own schedule
+# (#1108). It ships switched off: the unprotected, credential-free gate job lets a scheduled run
+# continue only when the repository variable PRICE_COLLECTOR_SCHEDULE_ENABLED is exactly true, so a
+# switched-off schedule ends there without requesting the protected environment or its approval.
+# GitHub may delay or drop a scheduled run; a dropped day is caught up by the next run, and
+# overlapping due runs cannot issue a pair twice because the backend decides due per product and
+# supplier pair, atomically, and blocks pairs with pending work (#1108). A manual run's schedule
+# input defaults to all, which deliberately bypasses that and can re-search a covered pair.
 # target test: a human starts it from reviewed main or develop, normally against the hosted testing
 # API that Deploy Testing deploys from develop (docs/testing-environment.md), in the price-collector
 # environment with the collector's own federated identity, and it refuses the production API.
 # target production (owner decision, 1 November 2026): reviewed main only, in the separate
 # price-collector-production environment (main-only deployment branch rule and a required
 # reviewer), with that environment's own identity, and only to the production API origin.
-# full_run is the production-sized dry run the schedule waits for: every issued search with the
-# production page sizes, in fresh Claude sessions of a few searches each, still manual and still
-# against the test API, so the owner sees a full run's real duration and provider cost first.
+# full_run is a production-sized run: every issued search with the production page sizes, in fresh
+# Claude sessions of a few searches each. A scheduled run is always a full run of the due work.
 on:
+  schedule:
+    - cron: '17 5 * * *'
+      timezone: Australia/Sydney
   workflow_dispatch:
     inputs:
       target:
@@ -51,6 +61,14 @@ on:
         required: false
         type: string
         default: ''
+      schedule:
+        description: all = every searchable supplier (today's behaviour, may re-search covered pairs); due = only the pairs owed a search on each supplier's own schedule
+        required: true
+        type: choice
+        options:
+          - all
+          - due
+        default: all
 
 permissions: {}
 
@@ -60,10 +78,20 @@ concurrency:
 
 jobs:
   gate:
-    name: Check manual test authorization
+    name: Check run authorization
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
+    # No environment, no secrets and no id-token: a scheduled run that is switched off ends here,
+    # before anything requests the protected price-collector-production environment.
     permissions: {}
+    outputs:
+      proceed: ${{ steps.settings.outputs.proceed }}
+      target: ${{ steps.settings.outputs.target }}
+      schedule: ${{ steps.settings.outputs.schedule }}
+      sample_size: ${{ steps.settings.outputs.sample_size }}
+      full_run: ${{ steps.settings.outputs.full_run }}
+      include_verified_retailers: ${{ steps.settings.outputs.include_verified_retailers }}
+      stop_after_minutes: ${{ steps.settings.outputs.stop_after_minutes }}
     steps:
       - name: Report and validate runner mode
         env:
@@ -82,7 +110,32 @@ jobs:
             exit 1
           fi
 
+      - name: Decide whether scheduled collection is switched on
+        id: switch
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_REF: ${{ github.ref }}
+          SCHEDULE_ENABLED: ${{ vars.PRICE_COLLECTOR_SCHEDULE_ENABLED }}
+        run: |
+          case "$EVENT_NAME" in
+            workflow_dispatch) echo 'enabled=true' >> "$GITHUB_OUTPUT" ;;
+            schedule)
+              if [ "$SCHEDULE_ENABLED" != 'true' ]; then
+                echo 'Scheduled collection is switched off (PRICE_COLLECTOR_SCHEDULE_ENABLED is not true).'
+                printf '## Price collector\n\nScheduled collection is switched off: PRICE_COLLECTOR_SCHEDULE_ENABLED is not true, so nothing was requested, searched or spent.\n' >> "$GITHUB_STEP_SUMMARY"
+                echo 'enabled=false' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              if [ "$RUN_REF" != 'refs/heads/main' ]; then
+                echo '::error::A scheduled collector run must be on main.'
+                exit 1
+              fi
+              echo 'enabled=true' >> "$GITHUB_OUTPUT" ;;
+            *) echo '::error::The collector starts only by schedule or by hand.'; exit 1 ;;
+          esac
+
       - name: Require main or develop and the owner's confirmation for the chosen target
+        if: github.event_name == 'workflow_dispatch'
         env:
           RUN_REF: ${{ github.ref }}
           TARGET: ${{ inputs.target }}
@@ -112,6 +165,7 @@ jobs:
           esac
 
       - name: Require verified runner isolation for credentialed jobs
+        if: steps.switch.outputs.enabled == 'true'
         env:
           RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
           RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
@@ -121,19 +175,56 @@ jobs:
             exit 1
           fi
 
+      # The settings the collect job runs with. A manual run passes its inputs through; a scheduled
+      # run is a production-sized production run of the due work only, with the previously verified
+      # retailer actors allowed, because each supplier's Search prices switch and schedule decide
+      # whether it is searched at all.
+      - name: Publish the run's settings
+        id: settings
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ENABLED: ${{ steps.switch.outputs.enabled }}
+          TARGET: ${{ inputs.target }}
+          SCHEDULE: ${{ inputs.schedule }}
+          SAMPLE_SIZE: ${{ inputs.sample_size }}
+          FULL_RUN: ${{ inputs.full_run }}
+          INCLUDE_RETAILERS: ${{ inputs.include_verified_retailers }}
+          STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
+        run: |
+          if [ "$ENABLED" != 'true' ]; then
+            echo 'proceed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = 'schedule' ]; then
+            TARGET=production SCHEDULE=due SAMPLE_SIZE=3 FULL_RUN=true INCLUDE_RETAILERS=true STOP_AFTER_MINUTES=''
+          fi
+          case "$SCHEDULE" in
+            all|due) ;;
+            *) echo '::error::Choose the all or due schedule.'; exit 1 ;;
+          esac
+          {
+            echo 'proceed=true'
+            echo "target=$TARGET"
+            echo "schedule=$SCHEDULE"
+            echo "sample_size=$SAMPLE_SIZE"
+            echo "full_run=$FULL_RUN"
+            echo "include_verified_retailers=$INCLUDE_RETAILERS"
+            echo "stop_after_minutes=$STOP_AFTER_MINUTES"
+          } >> "$GITHUB_OUTPUT"
+
   collect:
     name: Collect and finalise the run
     needs: gate
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (inputs.target == 'test' || (inputs.target == 'production' && github.ref == 'refs/heads/main')) && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    if: needs.gate.outputs.proceed == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (needs.gate.outputs.target == 'test' || (needs.gate.outputs.target == 'production' && github.ref == 'refs/heads/main')) && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     # Each target has its own protected environment, identity, API URL variable and provider secrets.
-    environment: ${{ inputs.target == 'production' && 'price-collector-production' || 'price-collector' }}
+    environment: ${{ needs.gate.outputs.target == 'production' && 'price-collector-production' || 'price-collector' }}
     timeout-minutes: 160
     permissions:
       contents: read
       id-token: write
     env:
-      PRICE_COLLECTOR_TARGET: ${{ inputs.target }}
+      PRICE_COLLECTOR_TARGET: ${{ needs.gate.outputs.target }}
       PRICE_COLLECTOR_TEST_API_URL: ${{ vars.PRICE_COLLECTOR_TEST_API_URL }}
       PRICE_COLLECTOR_PRODUCTION_API_URL: ${{ vars.PRICE_COLLECTOR_PRODUCTION_API_URL }}
       PRICE_COLLECTOR_TENANT_ID: ${{ vars.PRICE_COLLECTOR_TENANT_ID }}
@@ -176,29 +267,33 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/price-collector-cli-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" --no-audit --no-fund @anthropic-ai/claude-code@2.1.316 > /dev/null 2>&1
 
       - name: Issue work using a short-lived OIDC token
+        id: prepare
         timeout-minutes: 2
         env:
-          PRICE_COLLECTOR_SAMPLE_SIZE: ${{ inputs.sample_size }}
-          PRICE_COLLECTOR_FULL_RUN: ${{ inputs.full_run }}
-          PRICE_COLLECTOR_INCLUDE_REVIEWED: ${{ inputs.include_verified_retailers }}
-          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
+          PRICE_COLLECTOR_SCHEDULE: ${{ needs.gate.outputs.schedule }}
+          PRICE_COLLECTOR_SAMPLE_SIZE: ${{ needs.gate.outputs.sample_size }}
+          PRICE_COLLECTOR_FULL_RUN: ${{ needs.gate.outputs.full_run }}
+          PRICE_COLLECTOR_INCLUDE_REVIEWED: ${{ needs.gate.outputs.include_verified_retailers }}
+          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ needs.gate.outputs.stop_after_minutes }}
         run: node scripts/price-collector/workflow.mjs prepare
 
+      # A due run with nothing due issues no run (#1108): there is nothing to search or finalise.
       - name: Run the bounded Claude collector
         id: claude
+        if: steps.prepare.outputs.run_issued == 'true'
         # A backstop only: workflow.mjs stops Claude after 14 minutes for a sample and 120 for a full
         # run. The job leaves 30 minutes after this step for finalisation and cleanup.
         timeout-minutes: 130
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
-          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ inputs.stop_after_minutes }}
+          PRICE_COLLECTOR_STOP_AFTER_MINUTES: ${{ needs.gate.outputs.stop_after_minutes }}
         run: |
           export PRICE_COLLECTOR_CLAUDE_BIN="$RUNNER_TEMP/price-collector-cli-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/node_modules/.bin/claude"
           node scripts/price-collector/workflow.mjs collect
 
       - name: Submit finished files and complete the issued run
-        if: always()
+        if: always() && steps.prepare.outputs.run_issued != 'false'
         timeout-minutes: 15
         run: node scripts/price-collector/workflow.mjs finalize
 

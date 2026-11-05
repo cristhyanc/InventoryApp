@@ -15,8 +15,8 @@ namespace InventoryApi.Tests.Architecture;
 /// those would fail a test that only checked the comparison arithmetic, which is why the boundary is
 /// pinned here instead.</para>
 ///
-/// <para>The rule is checked against the source text, like <see cref="TimeAcquisitionTests"/> and
-/// <see cref="ProviderLinkTableDisuseTests"/>, because what it forbids is a reference appearing at
+/// <para>The rule is checked against the source text, like <see cref="TimeAcquisitionTests"/>,
+/// because what it forbids is a reference appearing at
 /// all rather than a type-level dependency: the financial code and this feature live in the same
 /// assemblies, so a compiler cannot express "these files may not know about those tables".</para>
 ///
@@ -101,6 +101,20 @@ public class SupplierPriceObservationBoundaryTests
     /// </summary>
     private static readonly string[] FilesThatMayNameThem =
     [
+        // Issue #1108's per-supplier search schedule: the two Domain rules (when a supplier is
+        // searched, and whether one product-and-supplier pair is owed a search), the platform-admin
+        // port and audit entry that now report the derived freshness limit beside the schedule, the
+        // adapter that derives it on every save, and the Super Admin body and response that carry
+        // it. The limit became a *derived* value here rather than a submitted one, which is why
+        // these files name it at all - none of them reads an observed price, a cost, a valuation or
+        // a report, and the schedule decides only when a search happens.
+        "Inventory.Application/PlatformAdmin/ISupplierPresetAudit.cs",
+        "Inventory.Application/PlatformAdmin/ISupplierPresetStore.cs",
+        "Inventory.Domain/PriceCatalogue/SupplierSearchDuePolicy.cs",
+        "Inventory.Domain/PriceCatalogue/SupplierSearchSchedulePolicy.cs",
+        "Inventory.Infrastructure/Persistence/EfSupplierPresetStore.cs",
+        "InventoryApi/Adapters/PlatformAdmin/LoggingSupplierPresetAudit.cs",
+        "InventoryApi/DTOs/SuperAdminSupplierPresetDtos.cs",
         "Inventory.Application/PriceCatalogue/CompletePriceCollectorRun.cs",
         // Issue #930's cheapest-supplier summary: the port and the use case that hand stored facts
         // to the comparison, the adapter that reads the listings and their latest observations, and

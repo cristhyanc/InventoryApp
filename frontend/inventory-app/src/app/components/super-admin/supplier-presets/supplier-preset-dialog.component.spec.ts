@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { of, throwError } from 'rxjs';
 import {
   SupplierPriceConnector,
+  SupplierSearchFrequency,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
@@ -20,11 +21,27 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
     pricesIncludeGst: true,
     priceConnector: null,
     priceConnectorKey: null,
+    searchFrequency: SupplierSearchFrequency.Daily,
+    searchDaysOfWeek: [],
+    fortnightStartDate: null,
+    scheduleEffectiveFromUtc: '2026-10-23T00:00:00Z',
+    priceCheckFreshnessHours: 30,
     createdAtUtc: '2026-10-23T00:00:00Z',
     updatedAtUtc: '2026-10-23T00:00:00Z',
     ...overrides
   };
 }
+
+/**
+ * The schedule half of every write the dialog sends when nothing about it was changed (issue
+ * #1109). A new preset starts on the daily schedule, which is what the server stores for a create
+ * that states none and what the collector did before schedules existed.
+ */
+const dailySchedule = {
+  searchFrequency: SupplierSearchFrequency.Daily,
+  searchDaysOfWeek: [],
+  fortnightStartDate: null
+};
 
 /** The supplier-master half of every create the dialog sends when nothing was changed. */
 const nationwideGstInclusive = {
@@ -33,7 +50,8 @@ const nationwideGstInclusive = {
   servedStates: [],
   pricesIncludeGst: true,
   priceConnector: null,
-  priceConnectorKey: null
+  priceConnectorKey: null,
+  ...dailySchedule
 };
 
 function check(fixture: { detectChanges: () => void }, host: HTMLElement, id: string, checked: boolean): void {
@@ -296,7 +314,8 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
         servedStates: ['SA', 'NT'],
         pricesIncludeGst: true,
         priceConnector: null,
-        priceConnectorKey: null
+        priceConnectorKey: null,
+        ...dailySchedule
       });
     });
 
@@ -324,7 +343,8 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
         servedStates: [],
         pricesIncludeGst: true,
         priceConnector: null,
-        priceConnectorKey: null
+        priceConnectorKey: null,
+        ...dailySchedule
       });
     });
 
@@ -464,7 +484,8 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
         servedStates: ['SA', 'NT'],
         pricesIncludeGst: false,
         priceConnector: SupplierPriceConnector.Varnmill,
-        priceConnectorKey: 'aldi'
+        priceConnectorKey: 'aldi',
+        ...dailySchedule
       });
     });
 
@@ -486,6 +507,367 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
         'A supplier preset must serve Australia nationwide, or at least one state or territory.'
       );
       expect(update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the search schedule (issue #1109)', () => {
+    const SEARCH_WEEKDAY_REQUIRED =
+      'A weekly or fortnightly search schedule names at least one day of the week.';
+    const FORTNIGHT_START_DATE_REQUIRED =
+      'A fortnightly search schedule needs a start date, which decides which weeks are searched.';
+
+    function freshnessText(host: HTMLElement): string {
+      const preview = host.querySelector('#preset-search-freshness') as HTMLElement;
+      expect(preview).not.toBeNull();
+      return preview.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    }
+
+    it('starts a new preset on Daily, offering no weekday and no start date', async () => {
+      const create = jest.fn(() => of(preset()));
+      const { fixture, host } = await render({ create });
+
+      expect((host.querySelector('#preset-search-frequency') as HTMLSelectElement).value).toBe(
+        String(SupplierSearchFrequency.Daily)
+      );
+      // Every day is a search day, so there is nothing to tick and no off week to place.
+      expect(host.querySelector('#preset-search-day-MON')).toBeNull();
+      expect(host.querySelector('#preset-fortnight-start')).toBeNull();
+
+      type(fixture, host, 'preset-name', 'Aldi');
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(create).toHaveBeenCalledWith({ name: 'Aldi', url: null, ...nationwideGstInclusive });
+    });
+
+    it.each([
+      ['Weekly', SupplierSearchFrequency.Weekly],
+      ['Fortnightly', SupplierSearchFrequency.Fortnightly]
+    ])('offers the seven weekdays in Monday-to-Sunday order for %s', async (_name, frequency) => {
+      const { fixture, host } = await render({ create: jest.fn() });
+
+      select(fixture, host, 'preset-search-frequency', String(frequency));
+
+      const offered = Array.from(host.querySelectorAll('input[id^="preset-search-day-"]')).map(
+        (input) => input.id
+      );
+      expect(offered).toEqual([
+        'preset-search-day-MON',
+        'preset-search-day-TUE',
+        'preset-search-day-WED',
+        'preset-search-day-THU',
+        'preset-search-day-FRI',
+        'preset-search-day-SAT',
+        'preset-search-day-SUN'
+      ]);
+    });
+
+    it('sends a weekly schedule with its days in Monday-to-Sunday order and no start date', async () => {
+      const create = jest.fn(() => of(preset()));
+      const { fixture, host } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'Kmart');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Weekly));
+      // Ticked Saturday first: the order on the wire is the server's own, not the order of clicks.
+      check(fixture, host, 'preset-search-day-SAT', true);
+      check(fixture, host, 'preset-search-day-WED', true);
+
+      expect(host.querySelector('#preset-fortnight-start')).toBeNull();
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(create).toHaveBeenCalledWith({
+        name: 'Kmart',
+        url: null,
+        ...nationwideGstInclusive,
+        searchFrequency: SupplierSearchFrequency.Weekly,
+        searchDaysOfWeek: ['WED', 'SAT'],
+        fortnightStartDate: null
+      });
+    });
+
+    it('sends a fortnightly schedule with its start date as the characters it was given', async () => {
+      const create = jest.fn(() => of(preset()));
+      const { fixture, host } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'BIG W');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Fortnightly));
+      check(fixture, host, 'preset-search-day-THU', true);
+      type(fixture, host, 'preset-fortnight-start', '2026-11-09');
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(create).toHaveBeenCalledWith({
+        name: 'BIG W',
+        url: null,
+        ...nationwideGstInclusive,
+        searchFrequency: SupplierSearchFrequency.Fortnightly,
+        searchDaysOfWeek: ['THU'],
+        fortnightStartDate: '2026-11-09'
+      });
+    });
+
+    it('explains which weeks a fortnight start date chooses', async () => {
+      const { fixture, host } = await render({ create: jest.fn() });
+
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Fortnightly));
+
+      expect(host.textContent).toContain(
+        'The week this date falls in, Monday to Sunday, is an on week.'
+      );
+      expect(host.textContent).toContain('The weeks alternate on and off from there.');
+    });
+
+    it('says that the days are Sydney time and that a missed day is caught up', async () => {
+      const { host } = await render({ create: jest.fn() });
+
+      expect(host.textContent).toContain(
+        'Search days are Sydney time. A day a run misses is caught up on the next run.'
+      );
+    });
+
+    it.each([
+      ['Weekly', SupplierSearchFrequency.Weekly],
+      ['Fortnightly', SupplierSearchFrequency.Fortnightly]
+    ])('refuses %s with no day chosen without calling the API', async (_name, frequency) => {
+      const create = jest.fn();
+      const { fixture, host } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'Kmart');
+      select(fixture, host, 'preset-search-frequency', String(frequency));
+      if (frequency === SupplierSearchFrequency.Fortnightly) {
+        // So the missing weekday is the only thing left to refuse.
+        type(fixture, host, 'preset-fortnight-start', '2026-11-09');
+      }
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(host.textContent).toContain(SEARCH_WEEKDAY_REQUIRED);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a fortnightly schedule with no start date without calling the API', async () => {
+      const create = jest.fn();
+      const { fixture, host } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'BIG W');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Fortnightly));
+      check(fixture, host, 'preset-search-day-THU', true);
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(host.textContent).toContain(FORTNIGHT_START_DATE_REQUIRED);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A value that is not a plain `YYYY-MM-DD` date counts as no date, which is the one answer the
+     * server's vocabulary has here. A browser's date input cannot produce one; a value that reaches
+     * the model another way must still not be submitted.
+     */
+    it('treats a start date that is not a plain date as none', async () => {
+      const create = jest.fn();
+      const { fixture, host, component } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'BIG W');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Fortnightly));
+      check(fixture, host, 'preset-search-day-THU', true);
+      component.fortnightStartDate = '9/11/2026';
+      fixture.detectChanges();
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(host.textContent).toContain(FORTNIGHT_START_DATE_REQUIRED);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('clears a schedule message as soon as the schedule changes', async () => {
+      const create = jest.fn();
+      const { fixture, host } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'Kmart');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Weekly));
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+      expect(host.textContent).toContain(SEARCH_WEEKDAY_REQUIRED);
+
+      check(fixture, host, 'preset-search-day-THU', true);
+
+      expect(host.textContent).not.toContain(SEARCH_WEEKDAY_REQUIRED);
+    });
+
+    /**
+     * The server refuses a daily schedule that names weekdays and a non-fortnightly one that
+     * carries a start date, so the form never produces either: what the new frequency does not use
+     * is dropped when it is chosen, exactly as a ticked state is dropped by switching nationwide on.
+     */
+    it('does not send weekdays that were ticked before Daily was chosen', async () => {
+      const create = jest.fn(() => of(preset()));
+      const { fixture, host } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'Aldi');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Weekly));
+      check(fixture, host, 'preset-search-day-THU', true);
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Daily));
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          searchFrequency: SupplierSearchFrequency.Daily,
+          searchDaysOfWeek: [],
+          fortnightStartDate: null
+        })
+      );
+    });
+
+    it('does not send a start date that was typed before a weekly schedule was chosen', async () => {
+      const create = jest.fn(() => of(preset()));
+      const { fixture, host } = await render({ create });
+
+      type(fixture, host, 'preset-name', 'Kmart');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Fortnightly));
+      check(fixture, host, 'preset-search-day-THU', true);
+      type(fixture, host, 'preset-fortnight-start', '2026-11-09');
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Weekly));
+
+      expect(host.querySelector('#preset-fortnight-start')).toBeNull();
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          searchFrequency: SupplierSearchFrequency.Weekly,
+          searchDaysOfWeek: ['THU'],
+          fortnightStartDate: null
+        })
+      );
+    });
+
+    /**
+     * The limit is shown, never offered: the server derives the stored value from the schedule and
+     * ignores anything a request says about it, so there is no control to submit one and the values
+     * are the shared test cases' own (`docs/test-vectors/supplier-search-schedule.json`, read by
+     * `supplier-search-schedule.spec.ts` and by the backend's `SupplierSearchSchedulePolicyTests`).
+     */
+    it('previews the freshness limit read-only and updates it as the schedule changes', async () => {
+      const { fixture, host } = await render({ create: jest.fn() });
+
+      expect((host.querySelector('#preset-search-freshness') as HTMLElement).tagName).toBe('P');
+      expect(freshnessText(host)).toBe('Prices fresh for 30 h');
+
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Weekly));
+      // No day chosen yet: there is no gap between two searches to measure, so it says so rather
+      // than showing a number that would be wrong.
+      expect(freshnessText(host)).toBe('Choose at least one search day to see how long prices stay fresh.');
+
+      check(fixture, host, 'preset-search-day-THU', true);
+      expect(freshnessText(host)).toBe('Prices fresh for 174 h');
+
+      check(fixture, host, 'preset-search-day-SUN', true);
+      expect(freshnessText(host)).toBe('Prices fresh for 102 h');
+
+      // The same days a fortnight apart wait longer, and one day a fortnight waits longest of all.
+      select(fixture, host, 'preset-search-frequency', String(SupplierSearchFrequency.Fortnightly));
+      expect(freshnessText(host)).toBe('Prices fresh for 270 h');
+
+      check(fixture, host, 'preset-search-day-SUN', false);
+      expect(freshnessText(host)).toBe('Prices fresh for 342 h');
+    });
+
+    it('pre-fills the stored schedule when editing and sends it back unchanged', async () => {
+      const update = jest.fn(() => of(preset()));
+      const stored = preset({
+        searchFrequency: SupplierSearchFrequency.Fortnightly,
+        searchDaysOfWeek: ['MON', 'FRI'],
+        fortnightStartDate: '2026-11-09',
+        priceCheckFreshnessHours: 246
+      });
+      const { fixture, host } = await render({ update }, stored);
+
+      expect((host.querySelector('#preset-search-frequency') as HTMLSelectElement).value).toBe(
+        String(SupplierSearchFrequency.Fortnightly)
+      );
+      expect((host.querySelector('#preset-search-day-MON') as HTMLInputElement).checked).toBe(true);
+      expect((host.querySelector('#preset-search-day-FRI') as HTMLInputElement).checked).toBe(true);
+      expect((host.querySelector('#preset-search-day-THU') as HTMLInputElement).checked).toBe(false);
+      expect((host.querySelector('#preset-fortnight-start') as HTMLInputElement).value).toBe('2026-11-09');
+      expect(freshnessText(host)).toBe('Prices fresh for 246 h');
+
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(update).toHaveBeenCalledWith(4, {
+        name: 'Coles',
+        url: 'https://www.coles.com.au',
+        isEnabled: true,
+        ...nationwideGstInclusive,
+        searchFrequency: SupplierSearchFrequency.Fortnightly,
+        searchDaysOfWeek: ['MON', 'FRI'],
+        fortnightStartDate: '2026-11-09'
+      });
+    });
+
+    /**
+     * Turning the searches off is not the same as having no timetable: the schedule stays on screen
+     * and editable - setting one before the searches start is the point of the two switches being
+     * separate - and the dialog says plainly that nothing is searched meanwhile.
+     */
+    it('keeps the schedule visible and editable while Search prices is off, and says nothing is searched', async () => {
+      const update = jest.fn(() => of(preset()));
+      const stored = preset({
+        searchPrices: false,
+        searchFrequency: SupplierSearchFrequency.Weekly,
+        searchDaysOfWeek: ['WED', 'SAT'],
+        priceCheckFreshnessHours: 102
+      });
+      const { fixture, host } = await render({ update }, stored);
+
+      expect((host.querySelector('#preset-search-prices') as HTMLInputElement).checked).toBe(false);
+      expect((host.querySelector('#preset-search-frequency') as HTMLSelectElement).disabled).toBe(false);
+      expect((host.querySelector('#preset-search-day-WED') as HTMLInputElement).checked).toBe(true);
+      expect(host.textContent).toContain(
+        'Search prices is off, so nothing is searched on these days until it is switched back on.'
+      );
+
+      check(fixture, host, 'preset-search-day-MON', true);
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(update).toHaveBeenCalledWith(4, {
+        name: 'Coles',
+        url: 'https://www.coles.com.au',
+        isEnabled: true,
+        ...nationwideGstInclusive,
+        searchPrices: false,
+        searchFrequency: SupplierSearchFrequency.Weekly,
+        searchDaysOfWeek: ['MON', 'WED', 'SAT'],
+        fortnightStartDate: null
+      });
+    });
+
+    it('shows the API’s own refusal of a schedule it still will not store', async () => {
+      // The server stays the authority on the schedule, as it is on the name: a refusal that gets
+      // through the mirrored rules is shown in its own words.
+      const message = 'A daily search schedule names no day of the week, because every day is one.';
+      const create = jest.fn(() => throwError(() => ({ status: 400, error: { message } })));
+      const { fixture, host, component } = await render({ create });
+      const saved = jest.fn();
+      component.saved.subscribe(saved);
+
+      type(fixture, host, 'preset-name', 'Aldi');
+      buttonWithText(host, 'Save').click();
+      fixture.detectChanges();
+
+      expect(host.textContent).toContain(message);
+      expect(saved).not.toHaveBeenCalled();
     });
   });
 

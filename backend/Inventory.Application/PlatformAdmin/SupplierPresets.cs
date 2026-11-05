@@ -2,6 +2,7 @@ using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 
@@ -59,6 +60,10 @@ public sealed class ListSupplierPresets
 /// <param name="PricesIncludeGst">Whether the caller says the published prices include GST.</param>
 /// <param name="PriceConnector">The submitted collection route, which may be an undeclared number.</param>
 /// <param name="PriceConnectorKey">The submitted connector key.</param>
+/// <param name="Schedule">
+/// The submitted search schedule (issue #1108), or <see langword="null"/> when the request stated no
+/// schedule at all - which a create reads as "every day" and an edit reads as "keep the stored one".
+/// </param>
 public sealed record SupplierPresetSubmission(
     string? Name,
     string? Url,
@@ -67,7 +72,76 @@ public sealed record SupplierPresetSubmission(
     IReadOnlyList<string?>? ServedStates,
     bool PricesIncludeGst,
     SupplierPriceConnector? PriceConnector,
-    string? PriceConnectorKey);
+    string? PriceConnectorKey,
+    SupplierSearchScheduleSubmission? Schedule = null);
+
+/// <summary>
+/// What a Super Admin submits about one supplier's search schedule, before any rule has been applied
+/// to it (issue #1108).
+///
+/// <para>It is its own submission type, and the whole of it is optional on the wire, because the
+/// Super Admin page that writes these presets today does not know the fields exist: it stays deployed
+/// until #1109, and a <c>PUT</c> from it must keep the stored schedule rather than reset it. The
+/// presence of this object is therefore the signal - a request that states no schedule carries no
+/// object at all, and one that states a schedule states the whole of it.</para>
+///
+/// <para>Every value here is <em>submitted</em> and nothing here is trusted: the types are as
+/// permissive as the wire is, and <c>SupplierSearchSchedulePolicy</c> decides what is storable.</para>
+/// </summary>
+/// <param name="Frequency">
+/// The submitted frequency, which may be an undeclared number. Required of any stated schedule - a
+/// schedule without one is refused rather than defaulted, because "every day" and "the days you
+/// listed" are different schedules and on the paid routes the difference is money.
+/// </param>
+/// <param name="DaysOfWeek">
+/// The submitted weekday codes, in any order, case or padding. Omitted or empty for a daily schedule.
+/// </param>
+/// <param name="FortnightStartDate">
+/// The submitted fortnight start date, for a fortnightly schedule and for nothing else.
+/// </param>
+public sealed record SupplierSearchScheduleSubmission(
+    SupplierSearchFrequency? Frequency,
+    IReadOnlyList<string?>? DaysOfWeek,
+    DateOnly? FortnightStartDate);
+
+/// <summary>
+/// The one place a submitted schedule becomes a storable one (issue #1108), so the create and the
+/// edit cannot apply the rules differently.
+/// </summary>
+internal static class SupplierPresetSchedule
+{
+    /// <summary>What a caller who submitted a schedule without a frequency is told.</summary>
+    internal const string FrequencyRequiredMessage =
+        "A supplier's search schedule states its frequency.";
+
+    /// <summary>
+    /// <paramref name="submitted"/> through <c>SupplierSearchSchedulePolicy</c>, or
+    /// <see langword="null"/> when no schedule was stated at all.
+    /// </summary>
+    /// <exception cref="DomainValidationException">
+    /// The schedule is not one this application stores. Nothing is written.
+    /// </exception>
+    internal static SupplierSearchSchedule? Validate(SupplierSearchScheduleSubmission? submitted)
+    {
+        if (submitted is null)
+        {
+            return null;
+        }
+
+        // A stated schedule states its frequency. Defaulting an omitted one would mean a request that
+        // sent only "Thursday" silently stored "every day" and started paying for six extra searches
+        // a week.
+        if (submitted.Frequency is not { } frequency)
+        {
+            throw new DomainValidationException(FrequencyRequiredMessage);
+        }
+
+        return SupplierSearchSchedulePolicy.Require(new SupplierSearchSchedule(
+            frequency,
+            [.. (submitted.DaysOfWeek ?? []).Select(SupplierSearchSchedulePolicy.RequireWeekday)],
+            submitted.FortnightStartDate));
+    }
+}
 
 /// <summary>
 /// Adds one platform supplier preset (issue #848, with the supplier-master fields of #931).
@@ -139,6 +213,12 @@ public sealed class CreateSupplierPreset
             submitted.PriceConnector,
             submitted.PriceConnectorKey);
 
+        // A create always stores a schedule: a request that stated none gets the daily one, because a
+        // new preset has nothing to keep and "every day" is what the collector did before schedules
+        // existed (issue #1108). The derived freshness limit is the adapter's, from this schedule.
+        var schedule = SupplierPresetSchedule.Validate(submitted.Schedule)
+            ?? SupplierSearchSchedulePolicy.Daily;
+
         if (await _store
             .ExistsWithNormalisedNameAsync(normalisedName, excludingId: null, cancellationToken)
             .ConfigureAwait(false))
@@ -162,6 +242,7 @@ public sealed class CreateSupplierPreset
                         submitted.PricesIncludeGst,
                         submitted.PriceConnector,
                         connectorKey,
+                        schedule,
                         createdAtUtc),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -267,6 +348,11 @@ public sealed class UpdateSupplierPreset
             submitted.PriceConnector,
             submitted.PriceConnectorKey);
 
+        // Null means "keep the stored schedule" (issue #1108), which is what a PUT from the Super
+        // Admin page deployed before #1109 sends. Whether the boundary moves is decided against the
+        // row itself, inside the write, because it is a question about the stored state.
+        var schedule = SupplierPresetSchedule.Validate(submitted.Schedule);
+
         if (await _store
             .ExistsWithNormalisedNameAsync(normalisedName, excludingId: id, cancellationToken)
             .ConfigureAwait(false))
@@ -292,6 +378,7 @@ public sealed class UpdateSupplierPreset
                         submitted.PricesIncludeGst,
                         submitted.PriceConnector,
                         connectorKey,
+                        schedule,
                         updatedAtUtc),
                     cancellationToken)
                 .ConfigureAwait(false);

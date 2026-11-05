@@ -957,20 +957,19 @@ describe('ProductListComponent Status filter (issue #791)', () => {
    *
    * The Price column and its sort went the same way in issue #792 (A2): a product carries no
    * selling price either. Issue #791 (E of #786) then added the Average cost, Last purchase and
-   * Cheapest purchase columns, so the header row is exactly these six columns and the Actions
-   * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it. Issue #940
-   * then added Cheapest supplier, the same shared column Needs Ordering already carries (issue
-   * #930) - it is unrelated to the supplier filter/column this test is otherwise about, and is
-   * never hidden by a capability or a filter the way the two purchase-cost columns are. Issue #938
-   * had added a Tracked column alongside it; issue #1022 removed it because it repeated what
-   * Cheapest supplier already states.
+   * Cheapest purchase columns, always shown where `Dashboard.ViewFinancials` is granted (issue
+   * #1098), as the default stub here grants it - so the header row is exactly these seven columns
+   * and the Actions cell. Issue #940 then added Cheapest supplier, the same shared column Needs
+   * Ordering already carries (issue #930) - it is unrelated to the supplier filter/column this test
+   * is otherwise about, and is never hidden by a capability or a filter the way the two
+   * purchase-cost columns are. Issue #938 had added a Tracked column alongside it; issue #1022
+   * removed it because it repeated what Cheapest supplier already states.
    */
   it('offers no supplier or price filter, column or sort', async () => {
     const { fixture, host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
 
     expect(host.textContent).not.toContain('All Suppliers');
-    // Status is excluded here: under "Only active" (the default) it is hidden entirely (issue #828),
-    // and the two history columns are optional and off by default (issue #1093).
+    // Status is excluded here: under "Only active" (the default) it is hidden entirely (issue #828).
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
     ).toEqual([
@@ -978,14 +977,14 @@ describe('ProductListComponent Status filter (issue #791)', () => {
       'Category',
       'Storage stock',
       'Average cost',
+      'Last purchase',
+      'Cheapest purchase',
       'Cheapest supplier',
       'Actions'
     ]);
 
     statusSelect(host).value = 'all';
     statusSelect(host).dispatchEvent(new Event('change'));
-    fixture.componentInstance.toggleColumn('lastPurchase', true);
-    fixture.componentInstance.toggleColumn('cheapestPurchase', true);
     fixture.detectChanges();
 
     expect(
@@ -1284,12 +1283,10 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
-    // Status is shown only under "All" (issue #828), and the two history columns only once Columns
-    // turns them on (issue #1093); both are switched here so this block's existing column-index
-    // assertions keep describing the same cells.
+    // Status is shown only under "All" (issue #828); the two history columns are always shown where
+    // allowed (issue #1098), so only Status is switched here, to keep this block's existing
+    // column-index assertions describing the same cells.
     fixture.componentInstance.statusFilter = 'all';
-    fixture.componentInstance.toggleColumn('lastPurchase', true);
-    fixture.componentInstance.toggleColumn('cheapestPurchase', true);
     fixture.detectChanges();
     return { fixture, host: fixture.nativeElement as HTMLElement, getSummaries };
   }
@@ -1442,11 +1439,10 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
 
     const fixture = TestBed.createComponent(ProductListComponent);
     fixture.detectChanges();
-    // Status is shown only under "All" (issue #828) and the history columns once turned on (issue
-    // #1093); switched here so this test's column-index assertions keep describing the same cells.
+    // Status is shown only under "All" (issue #828); the history columns are always shown where
+    // allowed (issue #1098), so only Status is switched here, to keep this test's column-index
+    // assertions describing the same cells.
     fixture.componentInstance.statusFilter = 'all';
-    fixture.componentInstance.toggleColumn('lastPurchase', true);
-    fixture.componentInstance.toggleColumn('cheapestPurchase', true);
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
 
@@ -1561,7 +1557,7 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
     expect(newProduct.classList).toContain('rr-button-primary');
   });
 
-  it('keeps search, category, status, Columns, More actions and New product reachable in that keyboard order', async () => {
+  it('keeps search, category, status, More actions and New product reachable in that keyboard order', async () => {
     const { host } = await render();
 
     // Each control named by whatever identifies it: the search placeholder, the category select's
@@ -1574,8 +1570,9 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
         ?? control.textContent?.trim()
     );
     // Clear filters is not offered at the defaults (issue #1093), and Import products and Set GST
-    // rule in bulk sit inside More actions, which is closed.
-    expect(order).toEqual(['Search name or SKU', 'All categories', 'statusFilter', 'Columns', 'More actions', 'New product']);
+    // rule in bulk sit inside More actions, which is closed. There is no Columns control to reach
+    // (issue #1098): the history fields it used to toggle are always shown where permitted.
+    expect(order).toEqual(['Search name or SKU', 'All categories', 'statusFilter', 'More actions', 'New product']);
     // No control is taken out of the tab order or made unreachable to get the layout.
     expect(toolbar(host).querySelector('[tabindex="-1"]')).toBeNull();
   });

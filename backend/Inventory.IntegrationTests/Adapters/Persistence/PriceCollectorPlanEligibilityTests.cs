@@ -310,7 +310,8 @@ public class PriceCollectorPlanEligibilityTests
                 new FakeClock(observedAt))
             .Handle(
                 new PriceCollectorResultBatch(
-                    workList.RunId,
+                    // schedule=all always issues a run, so the id is always there (issue #1108).
+                    workList.RunId!.Value,
                     [
                         new PriceCollectorResultRowSubmission(
                             workItem.WorkItemId,
@@ -364,8 +365,9 @@ public class PriceCollectorPlanEligibilityTests
                 EnforcingStore(fixture),
                 fixture.DeniedRunStore(),
                 new FixedRunSettings(PriceCollectorRunPolicy.DefaultExpiryHours),
-                new FakeClock(IssuedAt))
-            .Handle(CancellationToken.None);
+                new FakeClock(IssuedAt),
+                new FakeSupplierSearchScheduleCalendar(DateOnly.FromDateTime(IssuedAt)))
+            .Handle(PriceCollectorWorkSchedule.All, CancellationToken.None);
 
     private sealed class FixedRunSettings(int runExpiryHours) : IPriceCollectorRunSettings
     {

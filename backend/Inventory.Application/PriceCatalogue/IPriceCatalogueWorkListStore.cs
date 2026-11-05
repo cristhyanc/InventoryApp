@@ -55,7 +55,18 @@ public sealed record ProductAwaitingMatch(string WaitingKey, string SearchName, 
 /// <see langword="null"/>.
 /// </param>
 /// <param name="PricesIncludeGst">Whether the prices it publishes include GST.</param>
-/// <param name="PriceCheckFreshnessHours">Its own stored freshness limit, which is its cadence.</param>
+/// <param name="PriceCheckFreshnessHours">
+/// Its own stored freshness limit, derived from <paramref name="Schedule"/> since issue #1108.
+/// </param>
+/// <param name="Schedule">
+/// When this supplier is searched (issue #1108) - the frequency, the weekdays and the fortnight
+/// start date. It is carried so <c>schedule=due</c> can work out this supplier's current occurrence;
+/// <c>schedule=all</c> reads none of it, which is what makes a manual full run unchanged.
+/// </param>
+/// <param name="ScheduleEffectiveFromUtc">
+/// When that schedule last became effective (issue #1108), which is the other half of the coverage
+/// boundary a pair's answer is measured against.
+/// </param>
 /// <param name="LastCheckedAtUtc">
 /// The most recent instant any of its listings was checked successfully, or <see langword="null"/>
 /// while none ever has been.
@@ -69,6 +80,8 @@ public sealed record CollectableSupplier(
     string? SiteUrl,
     bool PricesIncludeGst,
     int PriceCheckFreshnessHours,
+    SupplierSearchSchedule Schedule,
+    DateTime ScheduleEffectiveFromUtc,
     DateTime? LastCheckedAtUtc);
 
 /// <summary>

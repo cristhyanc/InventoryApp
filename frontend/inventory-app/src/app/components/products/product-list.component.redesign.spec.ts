@@ -59,9 +59,10 @@ function costSummary(productId: number): ProductPurchaseCostSummary {
 }
 
 /**
- * The Products redesign (issue #1093): optional history columns, client-side paging over the one
- * list already read, the narrow-screen cards and the toolbar's More actions. Every assertion is on
- * what the operator sees or what the page requests, never on markup for its own sake.
+ * The Products redesign (issue #1093, with the always-visible purchase history fields of its
+ * owner-corrected follow-up #1098): client-side paging over the one list already read, the
+ * narrow-screen cards and the toolbar's More actions. Every assertion is on what the operator sees
+ * or what the page requests, never on markup for its own sake.
  */
 describe('ProductListComponent redesign (issue #1093)', () => {
   afterEach(() => TestBed.resetTestingModule());
@@ -101,30 +102,15 @@ describe('ProductListComponent redesign (issue #1093)', () => {
     Array.from(host.querySelectorAll('[data-testid="product-card"]')).map((card) => card.querySelector('a')?.textContent?.trim());
   const many = (count: number) => Array.from({ length: count }, (_, index) => product(index + 1));
 
-  function openColumns(fixture: ComponentFixture<ProductListComponent>, host: HTMLElement): HTMLElement {
-    (host.querySelector('[data-testid="products-columns"]') as HTMLButtonElement).click();
-    fixture.detectChanges();
-    return host.querySelector('[data-testid="products-columns-panel"]') as HTMLElement;
-  }
+  /**
+   * The purchase history fields (issue #1098, an owner correction to #1093): both are always shown
+   * by default where the role may see them, so there is no Columns control left to turn either on,
+   * and no hidden preference can suppress one.
+   */
+  describe('purchase history fields', () => {
+    it('shows Last and Cheapest purchase by default, alongside the default columns, with no Columns control anywhere', async () => {
+      const { host } = await render([product(1)], { summaries: [costSummary(1)] });
 
-  function check(fixture: ComponentFixture<ProductListComponent>, host: HTMLElement, column: string): void {
-    (host.querySelector(`[data-testid="products-column-${column}"]`) as HTMLInputElement).click();
-    fixture.detectChanges();
-  }
-
-  describe('Columns', () => {
-    it('hides Last and Cheapest purchase by default and adds them without losing the default columns', async () => {
-      const { fixture, host } = await render([product(1)], { summaries: [costSummary(1)] });
-      const defaults = ['Product', 'Category', 'Storage stock', 'Average cost', 'Cheapest supplier', 'Actions'];
-
-      expect(headers(host)).toEqual(defaults);
-      expect(host.querySelector('[data-testid="products-columns-panel"]')).toBeNull();
-
-      openColumns(fixture, host);
-      check(fixture, host, 'cheapestPurchase');
-      expect(headers(host)).toEqual(['Product', 'Category', 'Storage stock', 'Average cost', 'Cheapest purchase', 'Cheapest supplier', 'Actions']);
-
-      check(fixture, host, 'lastPurchase');
       expect(headers(host)).toEqual([
         'Product',
         'Category',
@@ -135,55 +121,27 @@ describe('ProductListComponent redesign (issue #1093)', () => {
         'Cheapest supplier',
         'Actions'
       ]);
+      expect(host.querySelector('[data-testid="products-columns"]')).toBeNull();
+      expect(host.querySelector('[data-testid="products-columns-panel"]')).toBeNull();
       // Each shows the existing historical price, its supplier and the purchase's own date.
       const last = host.querySelector('tbody [data-testid="product-last-purchase"]')?.textContent?.replace(/\s+/g, ' ').trim();
       expect(last).toBe('$2.94 Coles 24 Oct 2026');
       const cheapest = host.querySelector('tbody [data-testid="product-cheapest-purchase"]')?.textContent?.replace(/\s+/g, ' ').trim();
       expect(cheapest).toBe('$2.20 Woolworths 12 Sep 2026');
-      expect((host.querySelector('[data-testid="products-columns"]') as HTMLElement).textContent?.trim()).toBe('Columns (8 active)');
     });
 
     it('shows an em dash, never $0.00, for a product with no purchase history', async () => {
-      const { fixture, host } = await render([product(1)], { summaries: [] });
-
-      openColumns(fixture, host);
-      check(fixture, host, 'lastPurchase');
+      const { host } = await render([product(1)], { summaries: [] });
 
       expect(host.querySelector('tbody [data-testid="product-last-purchase"]')?.textContent?.trim()).toBe('—');
     });
 
-    it('resets to the default columns', async () => {
-      const { fixture, host } = await render([product(1)]);
-
-      openColumns(fixture, host);
-      check(fixture, host, 'lastPurchase');
-      check(fixture, host, 'cheapestPurchase');
-      (host.querySelector('[data-testid="products-columns-reset"]') as HTMLButtonElement).click();
-      fixture.detectChanges();
-
-      expect(headers(host)).toEqual(['Product', 'Category', 'Storage stock', 'Average cost', 'Cheapest supplier', 'Actions']);
-      expect((host.querySelector('[data-testid="products-column-lastPurchase"]') as HTMLInputElement).checked).toBe(false);
-    });
-
-    it('requests nothing when a column is turned on or off', async () => {
-      const { fixture, host, getAll, getSummaries, getSummary } = await render([product(1)]);
-      const before = [getAll.mock.calls.length, getSummaries.mock.calls.length, getSummary.mock.calls.length];
-
-      openColumns(fixture, host);
-      check(fixture, host, 'lastPurchase');
-      check(fixture, host, 'lastPurchase');
-
-      expect([getAll.mock.calls.length, getSummaries.mock.calls.length, getSummary.mock.calls.length]).toEqual(before);
-    });
-
-    it('offers no Columns, and no history anywhere, to a role without Dashboard.ViewFinancials', async () => {
-      const { component, fixture, host, getSummaries } = await render([product(1)], { financials: false });
+    it('offers no Columns control, and no history anywhere, to a role without Dashboard.ViewFinancials', async () => {
+      const { host, getSummaries } = await render([product(1)], { financials: false });
 
       expect(host.querySelector('[data-testid="products-columns"]')).toBeNull();
-      component.toggleColumn('lastPurchase', true);
-      fixture.detectChanges();
-
       expect(host.textContent).not.toContain('Last purchase');
+      expect(host.textContent).not.toContain('Cheapest purchase');
       expect(getSummaries).not.toHaveBeenCalled();
       // Average cost is unaffected and always shown.
       expect(headers(host)).toContain('Average cost');
@@ -275,8 +233,8 @@ describe('ProductListComponent redesign (issue #1093)', () => {
       expect(cardNames(host)).toHaveLength(10);
     });
 
-    it('show storage stock, average cost, supplier, Adjust stock and the row menu, and history only once enabled', async () => {
-      const { fixture, host, component } = await render([product(1, { quantityInStock: 2, isLowStock: true })], { summaries: [costSummary(1)] });
+    it('shows storage stock, average cost, supplier, the purchase history fields, Adjust stock and the row menu', async () => {
+      const { host } = await render([product(1, { quantityInStock: 2, isLowStock: true })], { summaries: [costSummary(1)] });
       const card = () => host.querySelector('[data-testid="product-card"]') as HTMLElement;
 
       expect(card().textContent).toContain('SKU: SKU-1');
@@ -285,13 +243,16 @@ describe('ProductListComponent redesign (issue #1093)', () => {
       expect(card().querySelector('[data-testid="cheapest-supplier-summary"]')).not.toBeNull();
       expect(card().querySelector('a[href="/products/1/stock"]')?.textContent?.trim()).toBe('Adjust stock');
       expect(card().querySelector('[data-testid="product-card-menu"]')).not.toBeNull();
-      expect(card().textContent).not.toContain('Last purchase');
-
-      component.toggleColumn('lastPurchase', true);
-      fixture.detectChanges();
-
       expect(card().textContent).toContain('Last purchase:');
       expect(card().textContent).toContain('$2.94');
+    });
+
+    it('shows no purchase history field to a role without Dashboard.ViewFinancials', async () => {
+      const { host } = await render([product(1)], { financials: false, summaries: [costSummary(1)] });
+      const card = () => host.querySelector('[data-testid="product-card"]') as HTMLElement;
+
+      expect(card().textContent).not.toContain('Last purchase');
+      expect(card().textContent).not.toContain('Cheapest purchase');
     });
   });
 

@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { of, throwError } from 'rxjs';
 import {
   SupplierPriceConnector,
+  SupplierSearchFrequency,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
@@ -20,13 +21,22 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
     pricesIncludeGst: true,
     priceConnector: null,
     priceConnectorKey: null,
+    searchFrequency: SupplierSearchFrequency.Daily,
+    searchDaysOfWeek: [],
+    fortnightStartDate: null,
+    scheduleEffectiveFromUtc: '2026-10-23T00:00:00Z',
+    priceCheckFreshnessHours: 30,
     createdAtUtc: '2026-10-23T00:00:00Z',
     updatedAtUtc: '2026-10-23T00:00:00Z',
     ...overrides
   };
 }
 
-/** The supplier-master half of the row a toggle re-sends unchanged. */
+/**
+ * The supplier-master half of the row a toggle re-sends unchanged. It holds no schedule field:
+ * neither toggle states one (issue #1109), so the server keeps the schedule stored at the moment
+ * the button is pressed - see `scheduleFieldsOf` and the stale-schedule regressions below.
+ */
 const nationwideGstInclusive = {
   searchPrices: true,
   servesNationwide: true,
@@ -35,6 +45,21 @@ const nationwideGstInclusive = {
   priceConnector: null,
   priceConnectorKey: null
 };
+
+/** The three schedule field names, which is what a toggle's `PUT` must not carry. */
+const SCHEDULE_FIELDS = ['searchFrequency', 'searchDaysOfWeek', 'fortnightStartDate'] as const;
+
+/**
+ * Which of the three schedule fields a request body states at all, by name.
+ *
+ * Asked by key rather than by value because `toHaveBeenCalledWith` ignores a property whose value
+ * is `undefined`, and "stated as undefined" and "not stated" are the same thing on the wire but not
+ * the same thing to assert: a body that named the fields would still be a schedule edit the moment
+ * a value crept back in.
+ */
+function scheduleFieldsOf(body: unknown): string[] {
+  return SCHEDULE_FIELDS.filter((field) => field in (body as Record<string, unknown>));
+}
 
 async function render(service: Partial<SuperAdminSupplierPresetsService>, toast?: Partial<ToastService>) {
   await TestBed.configureTestingModule({
@@ -237,10 +262,13 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       servedStates: ['SA', 'NT'],
       pricesIncludeGst: false,
       priceConnector: SupplierPriceConnector.JbMetro,
-      priceConnectorKey: null
+      priceConnectorKey: null,
+      searchFrequency: SupplierSearchFrequency.Weekly,
+      searchDaysOfWeek: ['WED', 'SAT'],
+      priceCheckFreshnessHours: 102
     });
     const list = jest.fn(() => of([jbMetro]));
-    const update = jest.fn(() => of({ ...jbMetro, isEnabled: false }));
+    const update: jest.Mock = jest.fn(() => of({ ...jbMetro, isEnabled: false }));
     const { fixture, host } = await render({ list, update });
 
     buttonInRow(rowFor(host, 'JB Metro SA & NT'), 'Disable').click();
@@ -259,6 +287,10 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       priceConnector: SupplierPriceConnector.JbMetro,
       priceConnectorKey: null
     });
+
+    // And not the schedule: saying nothing about it is what keeps this weekly supplier's timetable,
+    // whatever it is by now, instead of submitting the row's copy of it as an edit.
+    expect(scheduleFieldsOf(update.mock.calls[0][1])).toEqual([]);
   });
 
   it('sends nothing when the confirmation is canceled', async () => {
@@ -494,6 +526,246 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
 
       expect(error).toHaveBeenCalledWith('Unable to change this supplier preset.');
       expect(list).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  /**
+   * A list row is a value read when the page last loaded, and a toggle is pressed some time later.
+   * Both regressions put a *newer* schedule in the database between the two - tab A loaded a daily
+   * Kmart, tab B saved Weekly Wed & Sat - and each one fails if the toggle states the schedule it
+   * cached: the server reads any of those three fields as a schedule edit, so the stale timetable
+   * would be stored, its freshness limit recalculated and its effective-from boundary advanced,
+   * making every one of that supplier's products due again, because somebody pressed a flag button.
+   *
+   * Saying nothing about the schedule is the fix the API already supports (issue #1108): a `PUT`
+   * that states none of the three keeps whatever is stored when it arrives. It is not a general
+   * concurrency guarantee - nothing here compares an expected state - but it does not need to be:
+   * these two buttons have no opinion about the schedule at all, so the field they must not decide
+   * is the one they do not send. A fresh `GET` before the `PUT` would have been the weaker answer,
+   * because the stale window would only have become smaller.
+   */
+  describe('a toggle whose cached schedule is out of date (issue #1109)', () => {
+    const dailyKmart = preset({
+      id: 20,
+      name: 'Kmart',
+      url: null,
+      priceConnector: SupplierPriceConnector.Kmart,
+      searchFrequency: SupplierSearchFrequency.Daily,
+      searchDaysOfWeek: [],
+      fortnightStartDate: null,
+      priceCheckFreshnessHours: 30
+    });
+
+    /** The same supplier as another tab stored it after the list above was read. */
+    const weeklyKmart = {
+      ...dailyKmart,
+      searchFrequency: SupplierSearchFrequency.Weekly,
+      searchDaysOfWeek: ['WED', 'SAT'],
+      priceCheckFreshnessHours: 102
+    };
+
+    it('states no schedule field when disabling, so the newer timetable survives', async () => {
+      const list: jest.Mock = jest
+        .fn()
+        .mockReturnValueOnce(of([dailyKmart]))
+        .mockReturnValue(of([{ ...weeklyKmart, isEnabled: false }]));
+      const update: jest.Mock = jest.fn(() => of({ ...weeklyKmart, isEnabled: false }));
+      const { fixture, host } = await render({ list, update });
+
+      // What the page is showing is the daily schedule it loaded.
+      expect(rowFor(host, 'Kmart').textContent).toContain('Daily');
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Disable').click();
+      fixture.detectChanges();
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      // The flag the button is about, and every other field of the row, exactly as stored.
+      expect(update).toHaveBeenCalledWith(20, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: false,
+        searchPrices: true,
+        servesNationwide: true,
+        servedStates: [],
+        pricesIncludeGst: true,
+        priceConnector: SupplierPriceConnector.Kmart,
+        priceConnectorKey: null
+      });
+
+      // And nothing at all about the schedule, not even the daily one on screen.
+      expect(scheduleFieldsOf(update.mock.calls[0][1])).toEqual([]);
+
+      // The re-read list shows the timetable the other tab saved, undisturbed.
+      expect(rowFor(host, 'Kmart').textContent).toContain('Weekly: Wed, Sat');
+      expect(rowFor(host, 'Kmart').textContent).toContain('Prices fresh for 102 h');
+    });
+
+    it('states no schedule field when stopping searches, so the newer timetable survives', async () => {
+      const list: jest.Mock = jest
+        .fn()
+        .mockReturnValueOnce(of([dailyKmart]))
+        .mockReturnValue(of([{ ...weeklyKmart, searchPrices: false }]));
+      const update: jest.Mock = jest.fn(() => of({ ...weeklyKmart, searchPrices: false }));
+      const { fixture, host } = await render({ list, update });
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Stop searching').click();
+      fixture.detectChanges();
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      expect(update).toHaveBeenCalledWith(20, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: true,
+        searchPrices: false,
+        servesNationwide: true,
+        servedStates: [],
+        pricesIncludeGst: true,
+        priceConnector: SupplierPriceConnector.Kmart,
+        priceConnectorKey: null
+      });
+      expect(scheduleFieldsOf(update.mock.calls[0][1])).toEqual([]);
+
+      // Switching searching off is also the one case where the server moves the boundary by itself,
+      // off to on; this direction moves nothing, and either way the schedule is the server's to
+      // keep. The re-read row still holds the newer timetable, now paused.
+      expect(rowFor(host, 'Kmart').textContent).toContain('Weekly: Wed, Sat');
+      expect(rowFor(host, 'Kmart').textContent).toContain('Search prices is off, so nothing is searched.');
+    });
+  });
+
+  describe('the Search schedule column (issue #1109)', () => {
+    /**
+     * The cell under the named column header, found by the header's own position rather than by a
+     * fixed index, so a column added beside it moves the assertion with it.
+     */
+    function cellUnder(host: HTMLElement, row: HTMLTableRowElement, header: string): HTMLElement {
+      const headers = Array.from(host.querySelectorAll('thead th')).map((cell) => cell.textContent?.trim());
+      const index = headers.indexOf(header);
+      expect(index).toBeGreaterThanOrEqual(0);
+
+      const cell = row.querySelectorAll('td')[index] as HTMLElement;
+      expect(cell).toBeDefined();
+      return cell;
+    }
+
+    /** The lines the Search schedule cell shows, in order and without its blank nodes. */
+    function scheduleLines(host: HTMLElement, name: string): string[] {
+      const cell = cellUnder(host, rowFor(host, name), 'Search schedule');
+
+      return Array.from(cell.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE || node.nodeType === Node.ELEMENT_NODE)
+        .map((node) => node.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+        .filter((text) => text.length > 0);
+    }
+
+    it('shows each preset’s schedule and the freshness hours the API reported', async () => {
+      const list = jest.fn(() =>
+        of([
+          // Each row's connector is one no other row's name mentions, so a row is found by its own
+          // name rather than by another row's Price source cell.
+          preset({ id: 1, name: 'Coles', priceConnector: SupplierPriceConnector.Varnmill }),
+          preset({
+            id: 2,
+            name: 'Kmart',
+            priceConnector: SupplierPriceConnector.Kmart,
+            searchFrequency: SupplierSearchFrequency.Weekly,
+            searchDaysOfWeek: ['WED', 'SAT'],
+            priceCheckFreshnessHours: 102
+          }),
+          preset({
+            id: 3,
+            name: 'Big W',
+            priceConnector: SupplierPriceConnector.BigW,
+            searchFrequency: SupplierSearchFrequency.Fortnightly,
+            searchDaysOfWeek: ['THU'],
+            fortnightStartDate: '2026-11-09',
+            priceCheckFreshnessHours: 342
+          })
+        ])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Coles')).toEqual(['Daily', 'Prices fresh for 30 h']);
+      expect(scheduleLines(host, 'Kmart')).toEqual(['Weekly: Wed, Sat', 'Prices fresh for 102 h']);
+      // The start date is shown as the day it names, with no browser zone able to move it.
+      expect(scheduleLines(host, 'Big W')).toEqual([
+        'Fortnightly: Thu (on weeks from 9 Nov 2026)',
+        'Prices fresh for 342 h'
+      ]);
+    });
+
+    /**
+     * The hours are the API's own reported value, never a second calculation of them: the server
+     * derives the stored limit from the schedule, and a row whose two values disagree is something
+     * to see rather than something for the page to quietly correct.
+     */
+    it('reports the hours the API gave even where they do not match the schedule', async () => {
+      const list = jest.fn(() =>
+        of([
+          preset({
+            name: 'Legacy Row',
+            priceConnector: SupplierPriceConnector.Kmart,
+            searchFrequency: SupplierSearchFrequency.Weekly,
+            searchDaysOfWeek: ['WED', 'SAT'],
+            priceCheckFreshnessHours: 999
+          })
+        ])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Legacy Row')).toEqual([
+        'Weekly: Wed, Sat',
+        'Prices fresh for 999 h'
+      ]);
+    });
+
+    /**
+     * The schedule stays on the row for a supplier nothing searches - it is still the timetable the
+     * searches would follow, and the dialog still edits it - but the row says plainly that nothing
+     * is searched meanwhile, so a timetable is never read as "searched on these days".
+     */
+    it('says nothing is searched while Search prices is off, and still shows the schedule', async () => {
+      const list = jest.fn(() =>
+        of([
+          preset({
+            name: 'Paused Kmart',
+            priceConnector: SupplierPriceConnector.Kmart,
+            searchPrices: false,
+            searchFrequency: SupplierSearchFrequency.Weekly,
+            searchDaysOfWeek: ['THU'],
+            priceCheckFreshnessHours: 174
+          })
+        ])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Paused Kmart')).toEqual([
+        'Weekly: Thu',
+        'Prices fresh for 174 h',
+        'Search prices is off, so nothing is searched.'
+      ]);
+    });
+
+    it('says a preset with no price route has nothing searched at all', async () => {
+      const list = jest.fn(() => of([preset({ name: 'Costco', priceConnector: null })]));
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Costco')).toEqual([
+        'Daily',
+        'Prices fresh for 30 h',
+        'No price route, so nothing is searched.'
+      ]);
+    });
+
+    it('says nothing about searching for a supplier whose schedule is in force', async () => {
+      const list = jest.fn(() =>
+        of([preset({ name: 'Coles', priceConnector: SupplierPriceConnector.Kmart })])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Coles')).toEqual(['Daily', 'Prices fresh for 30 h']);
     });
   });
 

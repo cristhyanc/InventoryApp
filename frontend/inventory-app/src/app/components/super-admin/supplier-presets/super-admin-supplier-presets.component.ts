@@ -6,11 +6,12 @@ import {
   SUPPLIER_PRICE_CONNECTOR_LABELS,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService,
-  UpdateSupplierPresetRequest
+  UpdateSupplierPresetKeepingScheduleRequest
 } from '../../../services/super-admin-supplier-presets.service';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { SupplierPresetDialogComponent } from './supplier-preset-dialog.component';
 import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
+import { describeSearchSchedule } from './supplier-search-schedule';
 
 /**
  * The Super Admin Supplier presets page (issue #848), at `/super-admin/supplier-presets`, over the
@@ -19,6 +20,10 @@ import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
  * It is presentation only: the API decides every rule a create or edit might refuse - the name
  * rules, the website rule and the duplicate-name conflict only it can settle - and this page shows
  * that refusal's own sentence rather than a second copy of the rule.
+ *
+ * Since issue #1109 the table also reports each supplier's **search schedule** and the freshness
+ * limit the API derived from it (issue #1108), and the dialog edits that schedule. The limit in the
+ * table is the value the API reported, never a recalculation of it.
  *
  * Per docs/architecture.md § Page composition boundary, the page owns the table and the two
  * confirmations behind the shared `ConfirmationDialogComponent` - enable/disable, and the
@@ -157,6 +162,42 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
     return preset.priceConnector !== null;
   }
 
+  /**
+   * What the table shows in the Search schedule column (issue #1109): the supplier's own timetable
+   * in words - "Daily", "Weekly: Wed, Sat", "Fortnightly: Thu (on weeks from 9 Nov 2026)" - read
+   * from the schedule fields the API publishes.
+   *
+   * The freshness hours beside it in the template are the API's own reported
+   * `priceCheckFreshnessHours`, not a second calculation of it: the server derives the stored value
+   * from the schedule, and the table reports what is stored. The dialog is the one place the rule is
+   * mirrored, and only to preview a schedule nobody has saved yet.
+   */
+  scheduleText(preset: SuperAdminSupplierPreset): string {
+    return describeSearchSchedule({
+      frequency: preset.searchFrequency,
+      daysOfWeek: preset.searchDaysOfWeek,
+      fortnightStartDate: preset.fortnightStartDate
+    });
+  }
+
+  /**
+   * Why nothing is searched at this supplier despite the schedule beside it, or `null` when the
+   * schedule is in force.
+   *
+   * The schedule stays visible and editable for a paused supplier - setting a timetable before the
+   * searches start is the point of having two switches - but a timetable shown on its own would read
+   * as "searched on these days", so the row says which of the two halves is missing. The
+   * `priceCheckFreshnessHours` beside it is still true either way: it ages out prices already
+   * collected, which switching searching off does not remove.
+   */
+  notSearchedNote(preset: SuperAdminSupplierPreset): string | null {
+    if (!this.canSearchPrices(preset)) {
+      return 'No price route, so nothing is searched.';
+    }
+
+    return preset.searchPrices ? null : 'Search prices is off, so nothing is searched.';
+  }
+
   requestToggle(preset: SuperAdminSupplierPreset): void {
     this.toggleTarget = preset;
   }
@@ -220,7 +261,7 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
 
     const isEnabled = !target.isEnabled;
 
-    this.put(target, { ...this.wholeResource(target), isEnabled }, (preset) =>
+    this.put(target, { ...this.rowWithoutItsSchedule(target), isEnabled }, (preset) =>
       isEnabled ? `${preset.name} is suggested again.` : `${preset.name} is no longer suggested.`
     );
   }
@@ -234,7 +275,7 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
 
     const searchPrices = !target.searchPrices;
 
-    this.put(target, { ...this.wholeResource(target), searchPrices }, (preset) =>
+    this.put(target, { ...this.rowWithoutItsSchedule(target), searchPrices }, (preset) =>
       searchPrices
         ? `${preset.name} prices are searched again.`
         : `${preset.name} prices are no longer searched.`
@@ -242,14 +283,29 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The row exactly as it is stored, which is what either toggle starts from. This endpoint is a
-   * `PUT` of the whole resource, so a button that sent the form's defaults instead would move a JB
-   * Metro record's market to nationwide and its prices to GST-inclusive as a side effect of pressing
-   * Disable - a financial field changed by a button that does not say so. Since issue #1077 that
-   * includes each other's flag: pressing Disable must not start or stop a search, and pressing Stop
-   * searching must not withdraw the supplier from businesses.
+   * The row as either toggle re-states it: every field it holds **except the search schedule**.
+   *
+   * This endpoint is a `PUT` of the whole resource, so a button that sent the form's defaults
+   * instead would move a JB Metro record's market to nationwide and its prices to GST-inclusive as a
+   * side effect of pressing Disable - a financial field changed by a button that does not say so.
+   * Since issue #1077 that includes each other's flag: pressing Disable must not start or stop a
+   * search, and pressing Stop searching must not withdraw the supplier from businesses.
+   *
+   * **The schedule is the one part of the row a toggle deliberately says nothing about** (issues
+   * #1108 and #1109). The server reads a `PUT` that states none of the three schedule fields as
+   * "keep the stored schedule", so saying nothing keeps whatever timetable is stored *at the moment
+   * the button is pressed*. Re-sending the three fields from this list row would instead submit a
+   * schedule edit built from a value read when the page last loaded: a timetable saved since - by
+   * another Super Admin, or by this one in another tab - would be reverted to the stale one, its
+   * freshness limit recalculated and `ScheduleEffectiveFromUtc` advanced, making every one of that
+   * supplier's products due again, because somebody pressed Disable. The request type makes the
+   * omission unsendable rather than merely intended
+   * ({@link UpdateSupplierPresetKeepingScheduleRequest}); the dialog, where a person is actually
+   * looking at the schedule, is the one place that states it.
    */
-  private wholeResource(preset: SuperAdminSupplierPreset): UpdateSupplierPresetRequest {
+  private rowWithoutItsSchedule(
+    preset: SuperAdminSupplierPreset
+  ): UpdateSupplierPresetKeepingScheduleRequest {
     return {
       name: preset.name,
       url: preset.url,
@@ -266,7 +322,7 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
   /** The one call and the one failure handling both toggles share. */
   private put(
     target: SuperAdminSupplierPreset,
-    request: UpdateSupplierPresetRequest,
+    request: UpdateSupplierPresetKeepingScheduleRequest,
     succeeded: (preset: SuperAdminSupplierPreset) => string
   ): void {
     this.presetsService.update(target.id, request).subscribe({

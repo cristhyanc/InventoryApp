@@ -51,13 +51,44 @@ namespace Inventory.Application.PriceCatalogue;
 /// a product description, a waiting key, a supplier master record and a listing. See
 /// <see cref="IPriceCatalogueWorkListStore"/> for why that is what makes the cross-business read
 /// safe.</para>
+///
+/// <para><strong>Since issue #1108 the caller chooses which work it is asking for.</strong>
+/// <see cref="PriceCollectorWorkSchedule.All"/> - the default, and what a manual run sends - issues
+/// exactly what it issued before: every searchable supplier paired with every product the rotation
+/// reaches, deliberately bypassing the due rule and the in-flight protection alike.
+/// <see cref="PriceCollectorWorkSchedule.Due"/>, which the scheduled workflow of #1110 sends, issues
+/// only the product-and-supplier pairs <see cref="SupplierSearchDuePolicy"/> says are owed a search:
+/// each supplier's coverage boundary is worked out here, from its own schedule and the platform
+/// collection calendar, and the two facts that can change under a concurrent run - a pair's latest
+/// answer and whether it is already in flight - are re-read by the write itself, inside the
+/// transaction that stores the run. The whole rotation is handed to that write and the budget is
+/// filled from what survives the check, so a stretch of covered or in-flight products never hides
+/// the due work behind it. A <c>due</c> call with nothing due, and one that finds a collector still
+/// working on an unexpired run, <strong>creates no run at all</strong> and answers an empty list with
+/// no run id.</para>
 /// </summary>
 public sealed class IssuePriceCollectorWorkList
 {
+    /// <summary>
+    /// The answer for a <see cref="PriceCollectorWorkSchedule.Due"/> call that found no due pair: no
+    /// run id, no instants, no work, and <c>WorkItemLimitReached</c> false - nothing was truncated,
+    /// there was nothing to issue (issue #1108).
+    /// </summary>
+    private static readonly PriceCollectorWorkList NothingToDo = new(
+        RunId: null,
+        IssuedAtUtc: null,
+        ExpiresAtUtc: null,
+        Suppliers: [],
+        MatchedProducts: [],
+        WaitingProducts: [],
+        MasterProductsForMatching: [],
+        WorkItemLimitReached: false);
+
     private readonly IPriceCatalogueWorkListStore _catalogue;
     private readonly IPriceCollectorRunStore _runs;
     private readonly IPriceCollectorRunSettings _settings;
     private readonly IClock _clock;
+    private readonly ISupplierSearchScheduleCalendar _calendar;
     private readonly int _workItemBudget;
 
     /// <summary>
@@ -73,40 +104,71 @@ public sealed class IssuePriceCollectorWorkList
         IPriceCollectorRunStore runs,
         IPriceCollectorRunSettings settings,
         IClock clock,
+        ISupplierSearchScheduleCalendar calendar,
         int workItemBudget = PriceCollectorWorkListPolicy.MaxWorkItemsPerRun)
     {
         _catalogue = catalogue;
         _runs = runs;
         _settings = settings;
         _clock = clock;
+        _calendar = calendar;
         _workItemBudget = workItemBudget;
     }
 
-    public async Task<PriceCollectorWorkList> Handle(CancellationToken cancellationToken)
+    /// <summary>
+    /// Issues one work list. <paramref name="schedule"/> defaults to
+    /// <see cref="PriceCollectorWorkSchedule.All"/>, which is what the route answers when no
+    /// <c>schedule</c> value is given, so a manual run is exactly what it was before issue #1108.
+    /// </summary>
+    public async Task<PriceCollectorWorkList> Handle(
+        PriceCollectorWorkSchedule schedule,
+        CancellationToken cancellationToken)
     {
         var issuedAtUtc = _clock.UtcNow;
+        var budget = PriceCollectorWorkListPolicy.BudgetFor(_workItemBudget);
+        var onlyDue = schedule == PriceCollectorWorkSchedule.Due;
 
         var suppliers = await DueSuppliersAsync(cancellationToken);
         var matched = await _catalogue.ListTrackedMasterProductsAsync(cancellationToken);
         var waiting = await _catalogue.ListProductsAwaitingMatchAsync(cancellationToken);
         var continueAfter = await _runs.LastIssuedWorkAsync(cancellationToken);
 
-        var plan = Plan(suppliers, matched, waiting, _workItemBudget, continueAfter);
+        // On `due` the candidate set is the whole rotation and the budget is filled by the write,
+        // from the pairs that survive its authoritative due check. Capping the candidates here first
+        // would be capping them before anything knew which of them were owed a search: a budget's
+        // worth of covered or in-flight candidates would leave nothing to issue, no run to read a
+        // cursor from, and the due pair just past them unreachable on every later call.
+        var plan = Plan(suppliers, matched, waiting, onlyDue ? null : budget, continueAfter);
 
         var issued = await _runs.IssueAsync(
             new NewPriceCollectorRun(
                 issuedAtUtc,
                 PriceCollectorRunPolicy.ExpiresAt(issuedAtUtc, _settings.RunExpiryHours),
                 plan.WorkItems),
+            onlyDue ? DueWork(suppliers, budget) : null,
             cancellationToken);
+
+        if (issued is null)
+        {
+            // Nothing was due, or a run a collector is still working on holds work in flight and was
+            // not expired to make room for this one. Either way no run exists, which is a success
+            // with nothing to do rather than an empty run somebody would have to finalise.
+            return NothingToDo;
+        }
 
         var handles = HandlesByProduct(issued);
 
+        // The products this run actually carries work for. With schedule=all that is every planned
+        // product; with schedule=due the write dropped the pairs that were covered or in flight, so a
+        // product whose every pair was dropped is not published at all - publishing it with an empty
+        // work list would read as "search this and report nothing".
         var includedMatchedIds = plan.MatchedProducts
+            .Where(product => handles.MatchedProducts.ContainsKey(product.Id))
             .Select(product => product.Id)
             .ToList();
 
         var includedWaitingKeys = plan.WaitingProducts
+            .Where(product => handles.WaitingProducts.ContainsKey(product.WaitingKey))
             .Select(product => product.WaitingKey)
             .ToList();
 
@@ -154,7 +216,9 @@ public sealed class IssuePriceCollectorWorkList
                 supplier.PriceConnectorKey,
                 supplier.SiteUrl,
                 supplier.PricesIncludeGst))],
-            [.. plan.MatchedProducts.Select(product => new PriceCollectorMatchedProduct(
+            [.. plan.MatchedProducts
+                .Where(product => handles.MatchedProducts.ContainsKey(product.Id))
+                .Select(product => new PriceCollectorMatchedProduct(
                 product.Id,
                 product.Brand,
                 product.Name,
@@ -165,7 +229,9 @@ public sealed class IssuePriceCollectorWorkList
                     : [],
                 knownListings.MasterProductsBeyondLimit.Contains(product.Id),
                 handles.MatchedProducts.TryGetValue(product.Id, out var ownWork) ? ownWork : []))],
-            [.. plan.WaitingProducts.Select(product => new PriceCollectorWaitingProduct(
+            [.. plan.WaitingProducts
+                .Where(product => handles.WaitingProducts.ContainsKey(product.WaitingKey))
+                .Select(product => new PriceCollectorWaitingProduct(
                 product.WaitingKey,
                 product.SearchName,
                 product.UnitLabel,
@@ -187,7 +253,10 @@ public sealed class IssuePriceCollectorWorkList
                 master.Name,
                 master.SizeValue,
                 master.SizeUnit))],
-            plan.WorkItemLimitReached);
+            // Whichever of the two bounds this run met. On `all` the plan is the bounded one and the
+            // write stores everything it was given; on `due` the plan is the whole rotation and the
+            // write is the only thing that knows how much due work was left for the next call.
+            plan.WorkItemLimitReached || issued.WorkItemLimitReached);
     }
 
     /// <summary>
@@ -209,6 +278,37 @@ public sealed class IssuePriceCollectorWorkList
     }
 
     /// <summary>
+    /// Each searchable supplier's coverage boundary for today (issue #1108): the later of the start
+    /// of its <em>current occurrence</em> and the instant its schedule became effective.
+    ///
+    /// <para><strong>Today is the collection calendar's date, and the occurrence is its own
+    /// supplier's.</strong> One date is read for the whole run so two suppliers cannot be judged
+    /// against two different days, and each supplier's occurrence comes from its own stored schedule -
+    /// which is what makes a Thursday-only supplier's boundary last Thursday on a Wednesday, and a
+    /// daily supplier's boundary this morning.</para>
+    ///
+    /// <para>The occurrence's start is a true instant rather than a date, because a pair's answer is
+    /// an instant: 00:00 of that date in the collection zone, converted by the one calendar that
+    /// knows the zone's own daylight-saving rules.</para>
+    ///
+    /// <para>The run's budget travels with them, because on a <c>due</c> run it is the <em>due</em>
+    /// work that fills it and only the write knows which pairs those are.</para>
+    /// </summary>
+    private PriceCollectorDueWork DueWork(IReadOnlyList<CollectableSupplier> suppliers, int budget)
+    {
+        var today = _calendar.Today;
+
+        return new PriceCollectorDueWork(
+            suppliers.ToDictionary(
+                supplier => supplier.SupplierPresetId,
+                supplier => SupplierSearchDuePolicy.CoverageBoundary(
+                    _calendar.StartOfDayUtc(
+                        SupplierSearchSchedulePolicy.CurrentOccurrenceOn(supplier.Schedule, today)),
+                    supplier.ScheduleEffectiveFromUtc)),
+            budget);
+    }
+
+    /// <summary>
     /// Which products this run is issued for, and the work items that pairs them with the due
     /// suppliers.
     ///
@@ -222,12 +322,18 @@ public sealed class IssuePriceCollectorWorkList
     /// <para>That is what makes the work-item bound a schedule: the next run reads the product this
     /// one stopped at as its own cursor, so an oversized catalogue is issued stretch by stretch and
     /// every tracked product is eventually searched.</para>
+    ///
+    /// <para><paramref name="workItemBudget"/> is <see langword="null"/> on a <c>schedule=due</c>
+    /// run (issue #1108): the whole rotation is the candidate set there, and the budget is filled
+    /// from the pairs the write finds due rather than from the first products the rotation reaches.
+    /// The order is the same one either way, so the stretch a <c>due</c> run ends up carrying is
+    /// still a contiguous stretch of the rotation - of its due work.</para>
     /// </summary>
     private static WorkPlan Plan(
         IReadOnlyList<CollectableSupplier> dueSuppliers,
         IReadOnlyList<TrackedMasterProduct> matched,
         IReadOnlyList<ProductAwaitingMatch> waiting,
-        int workItemBudget,
+        int? workItemBudget,
         PriceCollectorWorkCursor? continueAfter)
     {
         List<TrackedMasterProduct> plannedMatched = [];
@@ -248,12 +354,11 @@ public sealed class IssuePriceCollectorWorkList
             return new WorkPlan(plannedMatched, plannedWaiting, workItems, WorkItemLimitReached: false);
         }
 
-        var budget = PriceCollectorWorkListPolicy.BudgetFor(workItemBudget);
         var start = StartOf(rotation, continueAfter);
 
         for (var offset = 0; offset < rotation.Count; offset++)
         {
-            if (workItems.Count + dueSuppliers.Count > budget)
+            if (workItemBudget is { } budget && workItems.Count + dueSuppliers.Count > budget)
             {
                 break;
             }

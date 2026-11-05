@@ -1,12 +1,11 @@
 import { Component, Input, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Observable, of, Subject, Subscription } from 'rxjs';
+import { Observable, of, Subject, Subscription, throwError } from 'rxjs';
 import { catchError, map, switchMap, tap } from 'rxjs/operators';
 import { ProductService } from '../../../services/product.service';
 import { ProductPriceTracking, ProductPriceTrackingStatus } from '../../../models/models';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import { RolePreviewService } from '../../../role-preview/role-preview.service';
-import { apiErrorMessage } from '../../shared/api-error-message';
 
 /** A read tagged with the product it was issued for; `state` is null when the read failed. */
 type ProductPriceTrackingRead = { id: number; state: ProductPriceTracking | null };
@@ -17,11 +16,14 @@ type ProductPriceTrackingRead = { id: number; state: ProductPriceTracking | null
  * product-edit page only has to supply the product identity (issue #191's page composition
  * boundary).
  *
- * It saves separately from the product form on purpose, like the GST rule panel above it. Tracking is
- * its own API resource: turning it on creates this business's statement that it wants the product
- * priced and copies the product's own name and unit label as the search text, and turning it off
- * removes that statement. Neither changes a name, a cost, a quantity or a price, and neither touches
- * the shared catalogue of master products and supplier listings.
+ * Since issue #1111 the switch **writes nothing when it is pressed**. It records the requested
+ * setting ({@link requested}), and the product page's one primary action (Save changes) asks whether
+ * it changed ({@link dirty}) and writes it ({@link persist}) after the product's own fields and its
+ * GST rule - last, because turning tracking on copies the *stored* name and unit label as the search
+ * text. Tracking is still its own API resource: turning it on creates this business's statement that
+ * it wants the product priced, and turning it off removes that statement. Neither changes a name, a
+ * cost, a quantity or a price, and neither touches the shared catalogue of master products and
+ * supplier listings.
  *
  * **It words no rule of its own.** Whether the switch may be turned on, and the sentence explaining
  * why not, are the server's answers (`canTrack`/`trackRefusal`, decided by
@@ -41,8 +43,16 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
   /** The state the server last reported, or `null` until a read has succeeded. */
   state: ProductPriceTracking | null = null;
 
+  /**
+   * The setting the operator asked for and has not saved yet (issue #1111), or `null` while the
+   * switch shows what is stored.
+   */
+  requested: boolean | null = null;
+
+  /** Whether the page is saving (issue #1111); the switch is held still meanwhile. */
+  @Input() disabled = false;
+
   loading = false;
-  saving = false;
   error = '';
 
   /**
@@ -97,7 +107,7 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
         this.loading = false;
         if (result.state === null) {
           this.error =
-            'Failed to load supplier price tracking. The switch stays unavailable until it loads; reload the page to try again.';
+            'Failed to load supplier price tracking, so it cannot be changed here. Other changes still save; reload the page to try again.';
           return;
         }
 
@@ -123,19 +133,40 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
     return this.state?.tracked === true;
   }
 
+  /** What the switch shows: the unsaved request when there is one, otherwise what is stored. */
+  get checked(): boolean {
+    return this.requested ?? this.tracked;
+  }
+
+  /** Whether the switch asks for something other than what is stored (issue #1111). */
+  get dirty(): boolean {
+    return this.state !== null && this.requested !== null && this.requested !== this.tracked;
+  }
+
   /**
-   * Whether the switch is unavailable. It is while the state has not loaded, while a write is in
-   * flight, in a read-only support session or role preview, and - for turning it *on* - while the
+   * Whether the switch is unavailable. It is while the state has not loaded, while the page is
+   * saving, in a read-only support session or role preview, and - for turning it *on* - while the
    * server says the product may not be tracked. Turning it **off** stays available in that last
    * case: a product that was tracked before its unit label was made generic must still be
    * untrackable, or the business would be stuck with a search it cannot withdraw.
    */
   get switchDisabled(): boolean {
-    if (this.state === null || this.saving || this.sessionActive || this.previewing) {
+    if (this.state === null || this.disabled || this.sessionActive || this.previewing) {
       return true;
     }
 
     return !this.tracked && !this.state.canTrack;
+  }
+
+  /** The sentence beside an unsaved switch, saying what Save changes will do, or `null`. */
+  get pendingNote(): string | null {
+    if (!this.dirty) {
+      return null;
+    }
+
+    return this.requested
+      ? 'Tracking starts when you save. The product is then searched for by its saved name and unit label.'
+      : 'Tracking stops when you save.';
   }
 
   /**
@@ -180,6 +211,24 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
   }
 
   /**
+   * The colour family of the status pill: presentation only, and always beside the status text, so
+   * the colour never carries the meaning on its own.
+   */
+  get statusTone(): 'ok' | 'teal' | 'warn' | 'neutral' {
+    switch (this.state?.status) {
+      case ProductPriceTrackingStatus.Matched:
+        return 'ok';
+      case ProductPriceTrackingStatus.AutoMatched:
+        return 'teal';
+      case ProductPriceTrackingStatus.NotFound:
+      case ProductPriceTrackingStatus.AwaitingProductDetails:
+        return 'warn';
+      default:
+        return 'neutral';
+    }
+  }
+
+  /**
    * The matched master product as one line - its name and its size - or `null` while the mapping
    * names none. Those two values are the whole of what the API publishes about the shared catalogue.
    */
@@ -208,57 +257,58 @@ export class ProductPriceTrackingComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * The switch's change handler. What is stored - not what was clicked - is what the control shows:
-   * the checkbox is put straight back to {@link tracked} and only moves when a re-read says the
-   * server stored the change. Otherwise a refused or failed write would leave a switch saying the
-   * opposite of what the business actually has, which is the one thing this control must never do.
+   * The switch's change handler (issue #1111): it records the request and writes nothing. A switch
+   * that may not move - not loaded, saving, read-only, or a refused turn-on - is put straight back to
+   * what it showed, so the control never says something the page would not save.
    */
   toggle(event: Event): void {
     const control = event.target as HTMLInputElement;
     const requested = control.checked;
-    control.checked = this.tracked;
 
-    const id = this.productId;
-    // Checked here as well as disabled in the template, so the write is actually unavailable rather
-    // than merely inert - the endpoint refuses it either way.
-    if (id === null || this.switchDisabled || requested === this.tracked) {
+    if (this.state === null || this.switchDisabled) {
+      control.checked = this.checked;
       return;
     }
 
-    const tracked = requested;
-    this.saving = true;
-    this.error = '';
-    this.productService.setPriceTracking(id, tracked).subscribe({
-      next: () => {
+    this.requested = requested === this.tracked ? null : requested;
+  }
+
+  /**
+   * Writes the requested setting when it differs from what is stored (issue #1111), for the page's
+   * one Save changes. An unchanged switch writes nothing and completes at once. A failure is the
+   * caller's to report, and leaves the request in place, so pressing Save changes again retries it.
+   *
+   * After a successful write the state is read again rather than assumed: turning tracking on gives
+   * the mapping a status and a captured search text the server decided, and this is the one place
+   * they are published.
+   */
+  persist(): Observable<void> {
+    const id = this.productId;
+    const requested = this.requested;
+    if (!this.dirty || id === null || requested === null) {
+      return of(undefined);
+    }
+    // Checked here as well as on the page, so the write is actually unavailable rather than merely
+    // inert - the endpoint refuses it either way.
+    if (this.sessionActive || this.previewing) {
+      return throwError(() => new Error('Supplier price tracking cannot be changed in a read-only session.'));
+    }
+
+    return this.productService.setPriceTracking(id, requested).pipe(
+      tap(() => {
         // A write that finishes after another product was opened reports nothing: its outcome
         // belongs to the product it was issued for, not to the switch now on screen.
-        if (id !== this.productId) {
-          return;
+        if (id === this.productId) {
+          this.requestedProductId.next(id);
         }
-
-        this.saving = false;
-        // Re-read rather than assume: turning tracking on gives the mapping a status and a captured
-        // search text the server decided, and this is the one place they are published.
-        this.requestedProductId.next(id);
-      },
-      error: (error: unknown) => {
-        if (id !== this.productId) {
-          return;
-        }
-
-        this.saving = false;
-        this.error = apiErrorMessage(
-          error,
-          tracked ? 'Failed to turn supplier price tracking on.' : 'Failed to turn supplier price tracking off.'
-        );
-      }
-    });
+      })
+    );
   }
 
   private reset(): void {
     this.state = null;
+    this.requested = null;
     this.loading = false;
-    this.saving = false;
     this.error = '';
   }
 }

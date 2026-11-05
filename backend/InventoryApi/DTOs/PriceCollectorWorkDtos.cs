@@ -203,11 +203,15 @@ public sealed record PriceCollectorMasterProductResponse(
 /// remainder is searched on later runs. What travels under each published product is bounded per
 /// product, and a product whose listings or refusals were omitted says so.</para>
 /// </summary>
-/// <param name="RunId">The run the collector reports its results under (#937).</param>
-/// <param name="IssuedAtUtc">When the run was issued.</param>
+/// <param name="RunId">
+/// The run the collector reports its results under (#937), or <c>null</c> when a
+/// <c>schedule=due</c> call found no due pair and therefore created no run at all (issue #1108).
+/// A <c>schedule=all</c> call - the default - always issues a run and always carries one.
+/// </param>
+/// <param name="IssuedAtUtc">When the run was issued, or <c>null</c> when there is no run.</param>
 /// <param name="ExpiresAtUtc">
-/// When the run stops being open unless the collector reports back. A later run expires this one
-/// whatever this instant says.
+/// When the run stops being open unless the collector reports back, or <c>null</c> when there is no
+/// run. A later run expires this one whatever this instant says.
 /// </param>
 /// <param name="Suppliers">The suppliers due on this run, with the route to each.</param>
 /// <param name="MatchedProducts">The master products to price, with their known listings.</param>
@@ -222,9 +226,9 @@ public sealed record PriceCollectorMasterProductResponse(
 /// lost".
 /// </param>
 public sealed record PriceCollectorWorkResponse(
-    long RunId,
-    DateTime IssuedAtUtc,
-    DateTime ExpiresAtUtc,
+    long? RunId,
+    DateTime? IssuedAtUtc,
+    DateTime? ExpiresAtUtc,
     IReadOnlyList<PriceCollectorSupplierResponse> Suppliers,
     IReadOnlyList<PriceCollectorMatchedProductResponse> MatchedProducts,
     IReadOnlyList<PriceCollectorWaitingProductResponse> WaitingProducts,

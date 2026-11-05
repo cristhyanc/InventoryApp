@@ -220,7 +220,7 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "SnapshotDateUtc", "AccountSeries")
                         .IsUnique();
 
-                    b.ToTable("BusinessConnectedMachineSnapshots");
+                    b.ToTable("BusinessConnectedMachineSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>
@@ -420,7 +420,7 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("BusinessId", "OccurredAtUtc");
 
-                    b.ToTable("BusinessPlanGrantAudits");
+                    b.ToTable("BusinessPlanGrantAudits", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Category", b =>
@@ -454,41 +454,6 @@ namespace Inventory.Infrastructure.Migrations
                         .HasFilter("\"ExternalCategoryId\" IS NOT NULL");
 
                     b.ToTable("Categories", (string)null);
-                });
-
-            modelBuilder.Entity("Inventory.Infrastructure.Models.CategoryExternalId", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("BusinessId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<long>("CategoryId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ExternalId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("Provider")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BusinessId");
-
-                    b.HasIndex("BusinessId", "CategoryId");
-
-                    b.HasIndex("BusinessId", "Provider", "CategoryId")
-                        .IsUnique();
-
-                    b.HasIndex("BusinessId", "Provider", "ExternalId")
-                        .IsUnique();
-
-                    b.ToTable("CategoryExternalIds", (string)null);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.CommissionPayment", b =>
@@ -2022,41 +1987,6 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("Products", (string)null);
                 });
 
-            modelBuilder.Entity("Inventory.Infrastructure.Models.ProductExternalId", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("BusinessId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ExternalId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<long>("ProductId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("Provider")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BusinessId");
-
-                    b.HasIndex("BusinessId", "ProductId");
-
-                    b.HasIndex("BusinessId", "Provider", "ExternalId")
-                        .IsUnique();
-
-                    b.HasIndex("BusinessId", "Provider", "ProductId")
-                        .IsUnique();
-
-                    b.ToTable("ProductExternalIds", (string)null);
-                });
-
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProductMatchSuggestion", b =>
                 {
                     b.Property<long>("Id")
@@ -2990,6 +2920,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateOnly?>("FortnightStartDate")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("INTEGER");
 
@@ -3017,6 +2950,21 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<bool>("PricesIncludeGst")
                         .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ScheduleEffectiveFromUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SearchDaysOfWeek")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(27)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("");
+
+                    b.Property<int>("SearchFrequency")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1);
 
                     b.Property<bool>("SearchPrices")
                         .ValueGeneratedOnAdd()
@@ -3178,18 +3126,6 @@ namespace Inventory.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Business");
-                });
-
-            modelBuilder.Entity("Inventory.Infrastructure.Models.CategoryExternalId", b =>
-                {
-                    b.HasOne("Inventory.Infrastructure.Models.Category", "Category")
-                        .WithMany()
-                        .HasForeignKey("BusinessId", "CategoryId")
-                        .HasPrincipalKey("BusinessId", "Id")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Category");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedDevicePayment", b =>
@@ -3441,18 +3377,6 @@ namespace Inventory.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("Category");
-                });
-
-            modelBuilder.Entity("Inventory.Infrastructure.Models.ProductExternalId", b =>
-                {
-                    b.HasOne("Inventory.Infrastructure.Models.Product", "Product")
-                        .WithMany()
-                        .HasForeignKey("BusinessId", "ProductId")
-                        .HasPrincipalKey("BusinessId", "Id")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProductMatchSuggestion", b =>

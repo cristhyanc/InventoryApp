@@ -56,8 +56,21 @@ async function render(
     fixture.componentRef.setInput('productId', productId);
     fixture.detectChanges();
   };
+  /**
+   * What the page's Save changes does (issue #1111): asks the card to write the switch's request,
+   * and records how that write ended.
+   */
+  const persist = () => {
+    const outcome = { completed: false, error: null as unknown };
+    fixture.componentInstance.persist().subscribe({
+      complete: () => (outcome.completed = true),
+      error: (error: unknown) => (outcome.error = error)
+    });
+    fixture.detectChanges();
+    return outcome;
+  };
 
-  return { fixture, host, switchControl, text, toggle, openProduct, getPriceTracking, setPriceTracking };
+  return { fixture, host, switchControl, text, toggle, persist, openProduct, getPriceTracking, setPriceTracking };
 }
 
 describe('ProductPriceTrackingComponent', () => {
@@ -78,7 +91,26 @@ describe('ProductPriceTrackingComponent', () => {
       expect(switchControl().checked).toBe(true);
     });
 
-    it('turns tracking on and re-reads the state the server decided', async () => {
+    /**
+     * Issue #1111: pressing the switch records the request and writes nothing. The page's one Save
+     * changes asks the card whether it changed and writes it.
+     */
+    it('records a turn-on as an unsaved change and writes nothing until asked', async () => {
+      const { fixture, switchControl, toggle, setPriceTracking, text } = await render();
+
+      toggle();
+
+      expect(setPriceTracking).not.toHaveBeenCalled();
+      expect(switchControl().checked).toBe(true);
+      expect(fixture.componentInstance.dirty).toBe(true);
+      expect(text('price-tracking-pending')).toContain('Tracking starts when you save.');
+
+      toggle();
+      expect(fixture.componentInstance.dirty).toBe(false);
+      expect(text('price-tracking-pending')).toBeNull();
+    });
+
+    it('turns tracking on when asked and re-reads the state the server decided', async () => {
       const reads = jest
         .fn()
         .mockReturnValueOnce(of(state()))
@@ -92,51 +124,74 @@ describe('ProductPriceTrackingComponent', () => {
             })
           )
         );
-      const { switchControl, toggle, setPriceTracking, text } = await render(reads);
+      const { fixture, switchControl, toggle, persist, setPriceTracking, text } = await render(reads);
 
       toggle();
+      const outcome = persist();
 
+      expect(outcome.completed).toBe(true);
       expect(setPriceTracking).toHaveBeenCalledWith(42, true);
       expect(reads).toHaveBeenCalledTimes(2);
       expect(switchControl().checked).toBe(true);
-      expect(text('price-tracking-status')).toBe('Status: Awaiting match');
+      expect(fixture.componentInstance.dirty).toBe(false);
+      expect(text('price-tracking-status-label')).toBe('Awaiting match');
       expect(text('price-tracking-search-text')).toBe('Searched for as "Coca-Cola Classic 375mL".');
     });
 
-    it('turns tracking off', async () => {
+    it('turns tracking off when asked', async () => {
       const reads = jest
         .fn()
         .mockReturnValueOnce(of(state({ tracked: true, status: ProductPriceTrackingStatus.Requested })))
         .mockReturnValueOnce(of(state()));
-      const { switchControl, toggle, setPriceTracking } = await render(reads);
+      const { switchControl, toggle, persist, setPriceTracking, text } = await render(reads);
 
       toggle();
+      expect(text('price-tracking-pending')).toBe('Tracking stops when you save.');
+      persist();
 
       expect(setPriceTracking).toHaveBeenCalledWith(42, false);
       expect(switchControl().checked).toBe(false);
     });
 
-    it('reports a failed write and leaves the switch as it was', async () => {
-      const { switchControl, toggle, text } = await render(
+    it('writes nothing for an unchanged switch, and completes at once', async () => {
+      const { persist, setPriceTracking } = await render();
+
+      expect(persist().completed).toBe(true);
+      expect(setPriceTracking).not.toHaveBeenCalled();
+    });
+
+    it('hands a failed write to the page and keeps the request, so a second Save retries it', async () => {
+      const { fixture, switchControl, toggle, persist } = await render(
         jest.fn(() => of(state())),
         jest.fn(() => throwError(() => new Error('nope')))
       );
 
       toggle();
+      const outcome = persist();
 
-      expect(text('price-tracking-error')).toBe('Failed to turn supplier price tracking on.');
-      expect(switchControl().checked).toBe(false);
+      expect(outcome.error).toBeInstanceOf(Error);
+      expect(switchControl().checked).toBe(true);
+      expect(fixture.componentInstance.dirty).toBe(true);
     });
 
     it('keeps the switch unavailable when the state could not be read', async () => {
       const { switchControl, text } = await render(jest.fn(() => throwError(() => new Error('nope'))));
 
       expect(switchControl().disabled).toBe(true);
-      expect(text('price-tracking-error')).toContain('Failed to load supplier price tracking.');
+      expect(text('price-tracking-error')).toContain('Failed to load supplier price tracking');
+    });
+
+    it('holds the switch still while the page is saving', async () => {
+      const { fixture, switchControl } = await render();
+
+      fixture.componentRef.setInput('disabled', true);
+      fixture.detectChanges();
+
+      expect(switchControl().disabled).toBe(true);
     });
 
     it('writes nothing while a support session is active', async () => {
-      const { switchControl, toggle, setPriceTracking } = await render(
+      const { fixture, switchControl, toggle, persist, setPriceTracking } = await render(
         jest.fn(() => of(state())),
         jest.fn(() => of(undefined)),
         of(true)
@@ -144,11 +199,13 @@ describe('ProductPriceTrackingComponent', () => {
 
       expect(switchControl().disabled).toBe(true);
       toggle();
+      expect(fixture.componentInstance.dirty).toBe(false);
+      persist();
       expect(setPriceTracking).not.toHaveBeenCalled();
     });
 
     it('writes nothing while a role preview is active', async () => {
-      const { switchControl, toggle, setPriceTracking } = await render(
+      const { fixture, switchControl, toggle, setPriceTracking } = await render(
         jest.fn(() => of(state())),
         jest.fn(() => of(undefined)),
         of(false),
@@ -157,20 +214,20 @@ describe('ProductPriceTrackingComponent', () => {
 
       expect(switchControl().disabled).toBe(true);
       toggle();
+      expect(fixture.componentInstance.dirty).toBe(false);
       expect(setPriceTracking).not.toHaveBeenCalled();
     });
 
-    it('discards a write whose product is no longer the one on screen', async () => {
+    it('drops an unsaved request when another product is opened', async () => {
       const reads = jest.fn(() => of(state()));
       const { openProduct, toggle, fixture } = await render(reads);
 
       toggle();
       openProduct(43);
 
-      // The second product's own read is the last one, and the first product's write reported
-      // nothing: the state on screen is 43's.
       expect(reads).toHaveBeenLastCalledWith(43);
-      expect(fixture.componentInstance.saving).toBe(false);
+      expect(fixture.componentInstance.requested).toBeNull();
+      expect(fixture.componentInstance.dirty).toBe(false);
     });
   });
 
@@ -183,6 +240,7 @@ describe('ProductPriceTrackingComponent', () => {
       expect(text('price-tracking-refusal')).toBe(UNIT_LABEL_REFUSAL);
       expect(switchControl().disabled).toBe(true);
       toggle();
+      expect(switchControl().checked).toBe(false);
       expect(setPriceTracking).not.toHaveBeenCalled();
     });
 
@@ -201,7 +259,7 @@ describe('ProductPriceTrackingComponent', () => {
      * wrong, so it changed deliberately rather than being dropped.
      */
     it('still lets a tracked product be turned off when it could no longer be turned on', async () => {
-      const { switchControl, toggle, text, setPriceTracking } = await render(
+      const { switchControl, toggle, persist, text, setPriceTracking } = await render(
         jest.fn(() =>
           of(
             state({
@@ -217,6 +275,7 @@ describe('ProductPriceTrackingComponent', () => {
       expect(switchControl().disabled).toBe(false);
       expect(text('price-tracking-refusal')).toBe(UNIT_LABEL_REFUSAL);
       toggle();
+      persist();
       expect(setPriceTracking).toHaveBeenCalledWith(42, false);
     });
   });
@@ -227,7 +286,7 @@ describe('ProductPriceTrackingComponent', () => {
         jest.fn(() => of(state({ tracked: true, status: ProductPriceTrackingStatus.Requested })))
       );
 
-      expect(text('price-tracking-status')).toBe('Status: Awaiting match');
+      expect(text('price-tracking-status-label')).toBe('Awaiting match');
       expect(text('price-tracking-match')).toBeNull();
     });
 
@@ -244,7 +303,8 @@ describe('ProductPriceTrackingComponent', () => {
         )
       );
 
-      expect(text('price-tracking-status')).toBe('Status: Matched automatically, awaiting check — Classic 375ml');
+      expect(text('price-tracking-status-label')).toBe('Matched automatically, awaiting check');
+      expect(text('price-tracking-match')).toBe('Classic 375ml');
     });
 
     it('reads a matched mapping with the master product name and size', async () => {
@@ -260,7 +320,8 @@ describe('ProductPriceTrackingComponent', () => {
         )
       );
 
-      expect(text('price-tracking-status')).toBe('Status: Matched — Classic 375ml');
+      expect(text('price-tracking-status-label')).toBe('Matched');
+      expect(text('price-tracking-match')).toBe('Classic 375ml');
     });
 
     it('reads a not-found mapping as the recorded answer it is', async () => {
@@ -268,7 +329,7 @@ describe('ProductPriceTrackingComponent', () => {
         jest.fn(() => of(state({ tracked: true, status: ProductPriceTrackingStatus.NotFound })))
       );
 
-      expect(text('price-tracking-status')).toBe('Status: Not found');
+      expect(text('price-tracking-status-label')).toBe('Not found');
       expect(text('price-tracking-match')).toBeNull();
     });
 
@@ -295,7 +356,7 @@ describe('ProductPriceTrackingComponent', () => {
         )
       );
 
-      expect(text('price-tracking-status')).toBe('Status: Paused - this product cannot be searched for');
+      expect(text('price-tracking-status-label')).toBe('Paused - this product cannot be searched for');
       expect(text('price-tracking-match')).toBeNull();
       expect(text('price-tracking-search-text')).toBeNull();
       expect(text('price-tracking-refusal')).toBe(UNIT_LABEL_REFUSAL);
@@ -320,7 +381,7 @@ describe('ProductPriceTrackingComponent', () => {
         )
       );
 
-      expect(text('price-tracking-status')).toBe('Status: Awaiting match');
+      expect(text('price-tracking-status-label')).toBe('Awaiting match');
       expect(text('price-tracking-match')).toBeNull();
       expect(text('price-tracking-search-text')).toBe('Searched for as "Coca-Cola Classic 1.25L".');
       expect(text('price-tracking-refusal')).toBeNull();
@@ -332,5 +393,35 @@ describe('ProductPriceTrackingComponent', () => {
       expect(text('price-tracking-status')).toBeNull();
       expect(text('price-tracking-search-text')).toBeNull();
     });
+  });
+});
+
+describe('ProductPriceTrackingComponent matching state (issue #1111)', () => {
+  it('wraps a long matched product name instead of widening the card', async () => {
+    const longName = 'Extremely Long Imported Sparkling Mineral Water With Natural Lemon And Lime Flavour';
+    const { host } = await render(
+      jest.fn(() =>
+        of(
+          state({
+            tracked: true,
+            status: ProductPriceTrackingStatus.Matched,
+            masterProduct: { name: longName, sizeValue: 500, sizeUnit: 'ml' }
+          })
+        )
+      )
+    );
+
+    const match = host.querySelector('[data-testid="price-tracking-match"]')!;
+    expect(match.textContent).toContain(longName);
+    expect(match.classList).toContain('break-words');
+  });
+
+  it('states only what the server published: no timestamps, supplier counts or sample matches', async () => {
+    const { host } = await render(
+      jest.fn(() => of(state({ tracked: true, status: ProductPriceTrackingStatus.Requested })))
+    );
+
+    expect(host.textContent).not.toMatch(/\d+ suppliers?|last (synced|checked)|ago/i);
+    expect(host.querySelector('[data-testid="price-tracking-match"]')).toBeNull();
   });
 });

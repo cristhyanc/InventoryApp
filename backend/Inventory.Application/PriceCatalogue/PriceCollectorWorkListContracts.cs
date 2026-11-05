@@ -150,11 +150,20 @@ public sealed record PriceCollectorMasterProduct(
 /// on later runs rather than never (<see cref="PriceCollectorWorkListPolicy"/>). What travels under
 /// each published product is bounded per product, and a product whose context was omitted says
 /// so.</para>
+///
+/// <para><strong>A <c>schedule=due</c> call with nothing due has no run</strong> (issue #1108):
+/// <see cref="RunId"/> and both instants are absent, every list is empty, and no run was created.
+/// It is a success with nothing to do, deliberately rather than an empty run - an empty run would be
+/// left open to expire into a page of <c>NotSearched</c> rows that said a search had been declined,
+/// and #1110 relies on there being nothing to finalise. The three are nullable for that one answer
+/// only: a <c>schedule=all</c> call always issues a run and always carries all three, so nothing a
+/// caller already relies on changed. <see cref="WorkItemLimitReached"/> is false in that answer:
+/// nothing was truncated, there was nothing to issue.</para>
 /// </summary>
 public sealed record PriceCollectorWorkList(
-    long RunId,
-    DateTime IssuedAtUtc,
-    DateTime ExpiresAtUtc,
+    long? RunId,
+    DateTime? IssuedAtUtc,
+    DateTime? ExpiresAtUtc,
     IReadOnlyList<PriceCollectorSupplier> Suppliers,
     IReadOnlyList<PriceCollectorMatchedProduct> MatchedProducts,
     IReadOnlyList<PriceCollectorWaitingProduct> WaitingProducts,

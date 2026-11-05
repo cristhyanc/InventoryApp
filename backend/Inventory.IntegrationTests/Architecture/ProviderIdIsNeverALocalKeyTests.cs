@@ -22,7 +22,7 @@ namespace InventoryApi.Tests.Architecture;
 /// what says no.</para>
 ///
 /// <para>Two of the three rules are checked against the source text, like
-/// <see cref="ProviderLinkTableDisuseTests"/> and <see cref="TimeAcquisitionTests"/>, because what
+/// <see cref="TimeAcquisitionTests"/>, because what
 /// they forbid is an assignment and a comparison rather than a type-level dependency. They are
 /// deliberately narrow and literal: they catch the shapes this slice removed and the shapes a future
 /// change would most plausibly reintroduce, and they are pinned by their own samples below so the

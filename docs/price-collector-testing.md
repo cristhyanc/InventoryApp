@@ -3,9 +3,10 @@
 The actor choices have already been tested. This run tests the **integration**: issue work from a
 disposable Restockroo test API, let Claude search and match through the guard, submit each finished
 file, and complete the run. It makes real paid supplier calls and writes the **test catalogue**.
-It has no cron. A **test** run (the default `target`) never reaches the production API; a
-**production** run is a separate, main-only target described in [Production run](#production-run).
-#926 stays open until real output/cost evidence exists; #929 stays open for the later Sydney schedule.
+A **test** run (the default `target`) never reaches the production API; a **production** run is a
+separate, main-only target described in [Production run](#production-run). The same workflow also
+has one daily production schedule, which ships switched off; see [Daily schedule](#daily-schedule).
+#926 stays open until real output/cost evidence exists.
 
 ## One-time human setup
 
@@ -53,7 +54,7 @@ It has no cron. A **test** run (the default `target`) never reaches the producti
 
 ## First run
 
-In GitHub → Actions → **Price collector (manual)** → Run workflow:
+In GitHub → Actions → **Price collector** → Run workflow:
 
 1. Select **develop** (to test the code the hosted testing API runs) or **main**, and leave
    **target** on `test`.
@@ -62,9 +63,10 @@ In GitHub → Actions → **Price collector (manual)** → Run workflow:
 3. Start with **3 supplier searches** (maximum 10). This is searches, not 3 products across every
    supplier; the API's due work controls which suppliers are available. Choose representative test
    products/suppliers in the test API when testing another route; the workflow never fabricates ids
-   or overrides the backend's supplier list. Every supplier whose **Search prices** switch is on and
-   that has a collection route is in every run's work, however recently it was checked — see
-   [Pausing one supplier's searches](#pausing-one-suppliers-searches) below.
+   or overrides the backend's supplier list. A manual run asks for **all** work, so every supplier
+   whose **Search prices** switch is on and that has a collection route is in its work, however
+   recently it was checked — see [Pausing one supplier's searches](#pausing-one-suppliers-searches)
+   and [Choosing `all` or `due`](#choosing-all-or-due) below.
 4. Enable **include_verified_retailers** if this sample should exercise the previously verified
    Kmart/BIG W actors. This changes only the private run limits, not repository activation flags.
    Otherwise those actors stay blocked and their unanswered work becomes `not_searched`.
@@ -109,8 +111,9 @@ Varnmill cost about US$0.02 for 15 searches and keeps its 50-result pages.
 BIG W and Kmart are searched **once a week** (owner decision, 1 November 2026): BIG W on Thursdays,
 when its catalogues start, and Kmart on Mondays. Their supplier records' price freshness limit is
 174 hours (a week plus the six-hour margin), so a price stays comparable until the next week's run.
-Choosing which suppliers a run includes on which day is the later scheduled-run part of #929; a
-manual run still searches every supplier it is given.
+Which suppliers are searched on which day is each supplier's own search schedule since #1108, and
+only a `due` run follows it (see [Choosing `all` or `due`](#choosing-all-or-due)); a manual run with
+the default **schedule** `all` still searches every supplier it is given.
 
 ### Run log
 
@@ -118,7 +121,14 @@ The owner decided on 31 October 2026 that a run must not be a black box: the run
 full even though this repository's Actions logs are public. Each run shows:
 
 - **Job summary**: the submission output (every outcome count and every reason the API gave,
-  word for word, plus any submission error) and a **Searches** list: for each search, the product
+  word for word, plus any submission error), a **Suppliers** table (#1110) with counts only, one row
+  per supplier that had issued work: searches issued, given to Claude, **searched** and **not
+  searched** (which add up to issued), the searched outcomes, and unusable files. A search counts
+  as searched only when its result file passed the pre-submission check (this run, this sample) and
+  the result-file schema with one of the four search outcomes (`complete`, `truncated`,
+  `no_matches`, `failed`). No file, a file that says `not_searched`, a refused or malformed file, or
+  a search left out of the run counts as not searched; malformed files are also counted as unusable;
+  and a **Searches** list: for each search, the product
   and supplier, the outcome Claude reported (or that it wrote no file), and every row it wrote
   (title, supplier product id, price, pack, stock, link) with what the API did with that row and why.
 - **Finalise step log**: the same, plus every tool call in order: its input as the guard allowed it,
@@ -140,8 +150,8 @@ and currency there. No observed supplier price changes purchases, GST accounting
 
 ## Full (production-sized) run
 
-Tick **full_run** to see what a real run costs before any schedule is enabled. It is still manual
-and still refuses the production API. It ignores **sample_size**, keeps the production limits in
+Tick **full_run** to see what a real run costs before the daily schedule is switched on; a
+scheduled run is always a full run. It ignores **sample_size**, keeps the production limits in
 `apify-limits.json` (up to 600 actor calls, full page sizes and up to 3 pages per search, except Kmart and BIG W) and gives
 Claude every issued search, at most 576, in batches of about 24 (3 products of 8 searches). Each
 batch is a fresh Claude session with 120 turns and a US$1 budget, so no session's context grows with
@@ -217,8 +227,8 @@ product's price.
 ## Production run
 
 A **production** run (owner decision, 1 November 2026) collects real supplier prices into the
-production catalogue. It is the same workflow, still manual with no schedule, with **target**
-`production`. What keeps it apart from a test run:
+production catalogue. It is the same workflow, started by hand with **target** `production`, or
+by the [daily schedule](#daily-schedule) once that is switched on. What keeps it apart from a test run:
 
 - The gate and the credentialed job's own condition refuse it unless it was started from reviewed
   **main**; a test run still refuses the production API origin, from either ref.
@@ -274,7 +284,7 @@ public comment.
 
 ### Running it
 
-Actions → **Price collector (manual)** → Run workflow from **main**, **target** `production`, tick
+Actions → **Price collector** → Run workflow from **main**, **target** `production`, tick
 **confirm_production_api**, leave **confirm_test_api** off, choose a sample or **full_run** (tick
 **include_verified_retailers** for Kmart and BIG W), and approve the environment job. Then confirm
 proposed listings and pending prices in production's Super Admin supplier price review.
@@ -313,7 +323,10 @@ Supplier presets** has a **Search prices** column beside the existing **Suggeste
 2. Press **Stop searching** and confirm. From the next run the collector is issued no work for that
    supplier, on any product. Nothing in the workflow, `apify-limits.json` or the collector scripts
    needs changing: the API simply stops putting that supplier in the work list.
-3. Press **Start searching** to resume. The next run includes it again.
+3. Press **Start searching** to resume. The next run includes it again — and since #1108 switching it
+   back on also makes that supplier's pairs **due again from that instant**, so a `due` run searches
+   them even if they were answered earlier the same day. That is deliberate: the reason to switch it
+   back on is to get current prices.
 
 What that switch does **not** do, which is the point of having two:
 
@@ -322,14 +335,102 @@ What that switch does **not** do, which is the point of having two:
   Kmart and BIG W searches leaves both suppliers on offer.
 - It removes nothing already collected. That supplier's listings, observed prices and pending
   readings stay exactly as they are, and the Cheapest supplier column keeps reading them until they
-  age out by the record's own freshness limit (174 hours for BIG W and Kmart) — after which the
-  supplier simply has no comparable price rather than a wrong one.
+  age out by the record's own freshness limit (since #1108 derived from that supplier's search
+  schedule — 174 hours for a once-a-week one) — after which the supplier simply has no comparable
+  price rather than a wrong one.
 - It does not cancel work a run already holds. A run issued before the switch moved can still submit
   its results and complete, because a submitted row is resolved through the work item it names.
 
 Pressing **Disable** on the same page is still the separate decision it always was: it stops the
-supplier being suggested to businesses and, since #1077, no longer stops its searches. Choosing
-which of the searched suppliers run on which day is still the later scheduled-run part of #929.
+supplier being suggested to businesses and, since #1077, no longer stops its searches. Which of the
+searched suppliers run on which day is each supplier's own **search schedule** since #1108 — see
+below.
+
+## Choosing `all` or `due`
+
+Since [#1108](https://github.com/cristhyanc/InventoryApp/issues/1108) the work list takes a
+`schedule` query value, and **a manual run uses `all`** unless its **schedule** input is set to
+`due`:
+
+| Value | What it issues | Who asks for it |
+| --- | --- | --- |
+| `all`, or nothing at all | every searchable supplier paired with every product the rotation reaches | a manual run, whose **schedule** input defaults to `all` |
+| `due` | only the product-and-supplier pairs owed a search on each supplier's own schedule | the [daily schedule](#daily-schedule) of [#1110](https://github.com/cristhyanc/InventoryApp/issues/1110), and a manual run with **schedule** `due` |
+
+`all` is the default and is exactly what this route issued before #1108, so nothing in this document
+changes for an ordinary test run. It **deliberately bypasses** the whole due rule, the in-flight
+protection included: a manual full run may issue, and pay for, a pair another run answered an hour
+ago or is searching right now. That is the point of it — somebody asking for a full run has decided
+to re-search everything — so keep the search cap low (step 3 above) when testing against a
+production-sized catalogue.
+
+`due` is the one to use when checking the schedules by hand before the daily schedule is switched
+on: run the workflow with **schedule** `due`. Three
+things about it are worth knowing before reading a run log:
+
+- **It can answer "nothing to do", and that is a success.** When no pair is due the API creates **no
+  run at all** and answers an empty work list with `runId: null`. There is nothing to submit results
+  for and nothing to finalise, so a workflow that treats a missing run id as a failure is reading it
+  wrongly. This workflow ends such a run green with "Nothing due today" in its summary, without
+  starting Claude or the finalisation step.
+- **A pair already in flight is skipped, and a `due` call waits for the collector holding it.** Work
+  issued by a run that is still open and not yet expired is not issued again, whenever that run was
+  issued — including a run left open across midnight. While any such work is in flight a `due` call
+  issues **nothing at all** and creates no run, even when some other pair is genuinely due: issuing
+  would expire that run and record the searches in progress as `not_searched`, so the run a collector
+  is working on is left alone instead. Everything deferred that way, its own pairs included, comes
+  back on the next `due` call once that run has been finalised or has expired. So if a `due` call
+  answers "nothing to do" unexpectedly, check for an open run before checking the schedules. (`all`
+  does not wait: it expires the open run, which is part of the bypass above.)
+- **A day with nothing scheduled is not the same as a day with nothing due.** The rule is per
+  product-and-supplier pair and catches up: a Thursday-only supplier whose Thursday run never reached
+  some of its products is still owed those searches on the Friday, and every day after, until
+  something answers them.
+
+Anything other than `all` or `due` is refused with `400` and nothing is issued, so a typo in a
+workflow file cannot quietly re-search the whole catalogue. A supplier's schedule itself is set in
+**Super Admin → Supplier presets**, whose Search schedule column and dialog fields arrived with
+[#1109](https://github.com/cristhyanc/InventoryApp/issues/1109); the freshness limit beside it is
+derived from that schedule, shown read-only on both the list and the dialog, and is not something to
+set by hand.
+
+## Daily schedule
+
+[#1110](https://github.com/cristhyanc/InventoryApp/issues/1110) adds one schedule to the same
+workflow: `cron: '17 5 * * *'` with `timezone: Australia/Sydney`, so it is due at 05:17 Sydney time
+every day in both standard and daylight time. A scheduled run is fixed, with no inputs: it runs on
+**main** against **production**, asks for `due` work only, is a **full run**, and allows the
+previously verified Kmart and BIG W actors, because each supplier's **Search prices** switch and
+search schedule already decide whether it is searched that day.
+
+**It ships switched off.** The run continues only when the repository variable
+`PRICE_COLLECTOR_SCHEDULE_ENABLED` is exactly `true`. That check is made in the workflow's first job
+(**Check run authorization**), which names no environment and holds no secret, API token or OIDC
+permission, so a switched-off scheduled run ends there green, saying "Scheduled collection is
+switched off", without requesting `price-collector-production` or its reviewer's approval. Any
+other value, or no variable at all, means off.
+
+**Best effort.** GitHub may start a scheduled run late, or drop it when Actions is busy; 05:17 is
+off the hour because the start of an hour is the busiest. The workflow does not check the hour, so a
+late run still does its work. A dropped day is caught up by the next run, because `due` is decided
+per product-and-supplier pair and an owed search stays owed. Runs share the non-cancelling
+`price-collector` concurrency group, and the backend never issues a pair that another open run holds.
+A day with nothing due ends green with "Nothing due today" and spends nothing.
+
+**Approval.** The `price-collector-production` environment has a required reviewer, so every
+switched-on scheduled run waits for that approval before its credentialed job starts, just like a
+manual production run. The workflow does not change environment protection rules; whether to keep
+that approval for scheduled runs is the owner's decision in the environment's settings.
+
+**Switching it on**, after the change is released to **main**:
+
+1. Set each supplier's search schedule in **Super Admin → Supplier presets** (#1109).
+2. Run the workflow by hand from **main** with **target** `production`, **confirm_production_api**
+   ticked, **schedule** `due`, **full_run** ticked and **include_verified_retailers** ticked, and
+   check that it issues only the suppliers due today, or ends with "Nothing due today".
+3. In GitHub → Settings → Secrets and variables → Actions → Variables, create
+   `PRICE_COLLECTOR_SCHEDULE_ENABLED` with the value `true`. Delete it, or set it to anything else, to
+   switch the schedule off again.
 
 ## Implementation and checks
 
@@ -351,7 +452,7 @@ as actor calls. Every other Apify account tool stays denied. Claude is launched 
 The finalizer obtains a **fresh** API token, copies only this sample's regular result files to a
 private submission folder, and delegates independent schema validation, batching, outcome ordering
 and completion to `submit-results.mjs`. It never prints raw error bodies or supplier-provided text.
-There is no automatic retry loop or schedule.
+There is no automatic retry loop; the only automatic start is the [daily schedule](#daily-schedule).
 
 ```bash
 node --test scripts/price-collector/*.test.mjs
