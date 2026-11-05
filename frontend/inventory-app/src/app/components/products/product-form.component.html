@@ -109,6 +109,11 @@
       data-testid="product-form-main"
       (ngSubmit)="submit()"
     >
+      <!-- Every product field, picker and button is held still while a save is in flight (issue
+           #1111 review): a save writes the values captured when it was pressed and then leaves the
+           page, so a later edit would otherwise be dropped without a warning. A native disabled
+           fieldset disables every descendant control, the composed pickers' included. -->
+      <fieldset class="m-0 min-w-0 space-y-6 border-0 p-0" [disabled]="saving" data-testid="product-form-fields">
       <!-- Product details -->
       <section
         class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
@@ -308,6 +313,7 @@
           </p>
         }
       </section>
+      </fieldset>
     </form>
 
     <!-- Settings column -->
@@ -331,6 +337,7 @@
               [(ngModel)]="form.isActive"
               [ngModelOptions]="{ standalone: true }"
               name="isActive"
+              [disabled]="saving"
               type="checkbox"
               role="switch"
               class="peer sr-only"
@@ -388,6 +395,7 @@
                   [(ngModel)]="trackSupplierPrices"
                   [ngModelOptions]="{ standalone: true }"
                   name="trackSupplierPrices"
+                  [disabled]="saving"
                   type="checkbox"
                   role="switch"
                   class="peer sr-only"

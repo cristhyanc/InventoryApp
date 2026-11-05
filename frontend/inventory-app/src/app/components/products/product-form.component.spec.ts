@@ -2017,6 +2017,89 @@ describe('ProductFormComponent single save orchestration (issue #1111)', () => {
     expect(navigate).toHaveBeenCalledWith(['/products']);
   });
 
+  /** Every product control of the page, the composed pickers' and the settings switches' included. */
+  const productControls = (host: HTMLElement) =>
+    Array.from(
+      host.querySelectorAll<HTMLElement>(
+        '[data-testid="product-form-main"] :is(input, select, textarea, button), input[name="isActive"], input[name="trackSupplierPrices"]'
+      )
+    );
+
+  it('holds every product field still while an edit save is in flight, so no later edit is dropped', async () => {
+    const pending = new Subject<void>();
+    const update = jest.fn(() => pending.asObservable());
+    const { fixture, component, host, navigate } = await render({ update });
+
+    component.form.sku = 'SNK-A';
+    component.save();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const controls = productControls(host);
+    expect(controls.length).toBeGreaterThan(5);
+    expect(host.querySelector<HTMLFieldSetElement>('[data-testid="product-form-fields"]')!.disabled).toBe(true);
+    for (const control of controls) {
+      expect(control.matches(':disabled')).toBe(true);
+    }
+    // The SKU field cannot take a second value while the first is being written.
+    expect(host.querySelector<HTMLInputElement>('input[name="sku"]')!.matches(':disabled')).toBe(true);
+
+    pending.next();
+    pending.complete();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ sku: 'SNK-A' }));
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('gives the fields back, with the entered values, when an edit save fails', async () => {
+    const pending = new Subject<void>();
+    const update = jest.fn(() => pending.asObservable());
+    const { fixture, component, host, navigate } = await render({ update });
+
+    component.form.sku = 'SNK-A';
+    component.save();
+    fixture.detectChanges();
+    pending.error(new HttpErrorResponse({ status: 500 }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(host.querySelector<HTMLFieldSetElement>('[data-testid="product-form-fields"]')!.disabled).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('input[name="sku"]')!.matches(':disabled')).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('input[name="isActive"]')!.matches(':disabled')).toBe(false);
+    expect(component.form.sku).toBe('SNK-A');
+    expect(component.hasUnsavedChanges).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('holds every product field still while a create is in flight, so no later edit is dropped', async () => {
+    const pending = new Subject<Product>();
+    const create = jest.fn(() => pending.asObservable());
+    const { fixture, component, host, navigate } = await render({ routeParams: {}, create });
+
+    component.form.name = 'New Snack';
+    component.form.unit = 'bag';
+    component.form.categoryId = 2;
+    component.form.lowStockThreshold = 2;
+    component.form.restockTo = 8;
+    component.save();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const controls = productControls(host);
+    expect(controls.length).toBeGreaterThan(5);
+    for (const control of controls) {
+      expect(control.matches(':disabled')).toBe(true);
+    }
+
+    pending.next(product({ id: 21, name: 'New Snack' }));
+    pending.complete();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
   it('removes the supplier price comparison from Edit Product entirely', async () => {
     const { host } = await render();
 
