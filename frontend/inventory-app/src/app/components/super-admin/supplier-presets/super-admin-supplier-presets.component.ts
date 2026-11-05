@@ -11,6 +11,7 @@ import {
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { SupplierPresetDialogComponent } from './supplier-preset-dialog.component';
 import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
+import { describeSearchSchedule } from './supplier-search-schedule';
 
 /**
  * The Super Admin Supplier presets page (issue #848), at `/super-admin/supplier-presets`, over the
@@ -19,6 +20,10 @@ import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
  * It is presentation only: the API decides every rule a create or edit might refuse - the name
  * rules, the website rule and the duplicate-name conflict only it can settle - and this page shows
  * that refusal's own sentence rather than a second copy of the rule.
+ *
+ * Since issue #1109 the table also reports each supplier's **search schedule** and the freshness
+ * limit the API derived from it (issue #1108), and the dialog edits that schedule. The limit in the
+ * table is the value the API reported, never a recalculation of it.
  *
  * Per docs/architecture.md § Page composition boundary, the page owns the table and the two
  * confirmations behind the shared `ConfirmationDialogComponent` - enable/disable, and the
@@ -157,6 +162,42 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
     return preset.priceConnector !== null;
   }
 
+  /**
+   * What the table shows in the Search schedule column (issue #1109): the supplier's own timetable
+   * in words - "Daily", "Weekly: Wed, Sat", "Fortnightly: Thu (on weeks from 9 Nov 2026)" - read
+   * from the schedule fields the API publishes.
+   *
+   * The freshness hours beside it in the template are the API's own reported
+   * `priceCheckFreshnessHours`, not a second calculation of it: the server derives the stored value
+   * from the schedule, and the table reports what is stored. The dialog is the one place the rule is
+   * mirrored, and only to preview a schedule nobody has saved yet.
+   */
+  scheduleText(preset: SuperAdminSupplierPreset): string {
+    return describeSearchSchedule({
+      frequency: preset.searchFrequency,
+      daysOfWeek: preset.searchDaysOfWeek,
+      fortnightStartDate: preset.fortnightStartDate
+    });
+  }
+
+  /**
+   * Why nothing is searched at this supplier despite the schedule beside it, or `null` when the
+   * schedule is in force.
+   *
+   * The schedule stays visible and editable for a paused supplier - setting a timetable before the
+   * searches start is the point of having two switches - but a timetable shown on its own would read
+   * as "searched on these days", so the row says which of the two halves is missing. The
+   * `priceCheckFreshnessHours` beside it is still true either way: it ages out prices already
+   * collected, which switching searching off does not remove.
+   */
+  notSearchedNote(preset: SuperAdminSupplierPreset): string | null {
+    if (!this.canSearchPrices(preset)) {
+      return 'No price route, so nothing is searched.';
+    }
+
+    return preset.searchPrices ? null : 'Search prices is off, so nothing is searched.';
+  }
+
   requestToggle(preset: SuperAdminSupplierPreset): void {
     this.toggleTarget = preset;
   }
@@ -247,7 +288,10 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
    * Metro record's market to nationwide and its prices to GST-inclusive as a side effect of pressing
    * Disable - a financial field changed by a button that does not say so. Since issue #1077 that
    * includes each other's flag: pressing Disable must not start or stop a search, and pressing Stop
-   * searching must not withdraw the supplier from businesses.
+   * searching must not withdraw the supplier from businesses. Since issue #1109 it includes the
+   * search schedule, stated exactly as the row holds it: the server reads an equivalent schedule as
+   * no change and leaves `ScheduleEffectiveFromUtc` where it is, so neither button moves the
+   * supplier's timetable or makes every one of its products due again.
    */
   private wholeResource(preset: SuperAdminSupplierPreset): UpdateSupplierPresetRequest {
     return {
@@ -259,7 +303,10 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
       servedStates: preset.servedStates,
       pricesIncludeGst: preset.pricesIncludeGst,
       priceConnector: preset.priceConnector,
-      priceConnectorKey: preset.priceConnectorKey
+      priceConnectorKey: preset.priceConnectorKey,
+      searchFrequency: preset.searchFrequency,
+      searchDaysOfWeek: preset.searchDaysOfWeek,
+      fortnightStartDate: preset.fortnightStartDate
     };
   }
 

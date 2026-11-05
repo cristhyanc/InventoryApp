@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { of, throwError } from 'rxjs';
 import {
   SupplierPriceConnector,
+  SupplierSearchFrequency,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
@@ -20,6 +21,11 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
     pricesIncludeGst: true,
     priceConnector: null,
     priceConnectorKey: null,
+    searchFrequency: SupplierSearchFrequency.Daily,
+    searchDaysOfWeek: [],
+    fortnightStartDate: null,
+    scheduleEffectiveFromUtc: '2026-10-23T00:00:00Z',
+    priceCheckFreshnessHours: 30,
     createdAtUtc: '2026-10-23T00:00:00Z',
     updatedAtUtc: '2026-10-23T00:00:00Z',
     ...overrides
@@ -33,7 +39,12 @@ const nationwideGstInclusive = {
   servedStates: [],
   pricesIncludeGst: true,
   priceConnector: null,
-  priceConnectorKey: null
+  priceConnectorKey: null,
+  // The schedule travels on a toggle's `PUT` too (issue #1109), stated exactly as the row holds it,
+  // so neither button moves the supplier's timetable.
+  searchFrequency: SupplierSearchFrequency.Daily,
+  searchDaysOfWeek: [],
+  fortnightStartDate: null
 };
 
 async function render(service: Partial<SuperAdminSupplierPresetsService>, toast?: Partial<ToastService>) {
@@ -228,7 +239,7 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
    * its market to nationwide and its prices to GST-inclusive - a financial field changed by a button
    * that says "Disable".
    */
-  it('re-sends the row’s own served states, GST basis and connector when toggling', async () => {
+  it('re-sends the row’s own served states, GST basis, connector and schedule when toggling', async () => {
     const jbMetro = preset({
       id: 7,
       name: 'JB Metro SA & NT',
@@ -237,7 +248,10 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       servedStates: ['SA', 'NT'],
       pricesIncludeGst: false,
       priceConnector: SupplierPriceConnector.JbMetro,
-      priceConnectorKey: null
+      priceConnectorKey: null,
+      searchFrequency: SupplierSearchFrequency.Weekly,
+      searchDaysOfWeek: ['WED', 'SAT'],
+      priceCheckFreshnessHours: 102
     });
     const list = jest.fn(() => of([jbMetro]));
     const update = jest.fn(() => of({ ...jbMetro, isEnabled: false }));
@@ -257,7 +271,12 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       servedStates: ['SA', 'NT'],
       pricesIncludeGst: false,
       priceConnector: SupplierPriceConnector.JbMetro,
-      priceConnectorKey: null
+      priceConnectorKey: null,
+      // The stored schedule, not the daily default: pressing Disable must not reset a weekly
+      // supplier's timetable to every day, which on the paid routes is seven times the searches.
+      searchFrequency: SupplierSearchFrequency.Weekly,
+      searchDaysOfWeek: ['WED', 'SAT'],
+      fortnightStartDate: null
     });
   });
 
@@ -435,7 +454,10 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
         servedStates: [],
         pricesIncludeGst: true,
         priceConnector: SupplierPriceConnector.Kmart,
-        priceConnectorKey: null
+        priceConnectorKey: null,
+        searchFrequency: SupplierSearchFrequency.Daily,
+        searchDaysOfWeek: [],
+        fortnightStartDate: null
       });
       expect(success).toHaveBeenCalledWith('Kmart prices are no longer searched.');
       expect(list).toHaveBeenCalledTimes(2);
@@ -464,7 +486,10 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
         servedStates: [],
         pricesIncludeGst: true,
         priceConnector: SupplierPriceConnector.Kmart,
-        priceConnectorKey: null
+        priceConnectorKey: null,
+        searchFrequency: SupplierSearchFrequency.Daily,
+        searchDaysOfWeek: [],
+        fortnightStartDate: null
       });
     });
 
@@ -494,6 +519,140 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
 
       expect(error).toHaveBeenCalledWith('Unable to change this supplier preset.');
       expect(list).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('the Search schedule column (issue #1109)', () => {
+    /**
+     * The cell under the named column header, found by the header's own position rather than by a
+     * fixed index, so a column added beside it moves the assertion with it.
+     */
+    function cellUnder(host: HTMLElement, row: HTMLTableRowElement, header: string): HTMLElement {
+      const headers = Array.from(host.querySelectorAll('thead th')).map((cell) => cell.textContent?.trim());
+      const index = headers.indexOf(header);
+      expect(index).toBeGreaterThanOrEqual(0);
+
+      const cell = row.querySelectorAll('td')[index] as HTMLElement;
+      expect(cell).toBeDefined();
+      return cell;
+    }
+
+    /** The lines the Search schedule cell shows, in order and without its blank nodes. */
+    function scheduleLines(host: HTMLElement, name: string): string[] {
+      const cell = cellUnder(host, rowFor(host, name), 'Search schedule');
+
+      return Array.from(cell.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE || node.nodeType === Node.ELEMENT_NODE)
+        .map((node) => node.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+        .filter((text) => text.length > 0);
+    }
+
+    it('shows each preset’s schedule and the freshness hours the API reported', async () => {
+      const list = jest.fn(() =>
+        of([
+          // Each row's connector is one no other row's name mentions, so a row is found by its own
+          // name rather than by another row's Price source cell.
+          preset({ id: 1, name: 'Coles', priceConnector: SupplierPriceConnector.Varnmill }),
+          preset({
+            id: 2,
+            name: 'Kmart',
+            priceConnector: SupplierPriceConnector.Kmart,
+            searchFrequency: SupplierSearchFrequency.Weekly,
+            searchDaysOfWeek: ['WED', 'SAT'],
+            priceCheckFreshnessHours: 102
+          }),
+          preset({
+            id: 3,
+            name: 'Big W',
+            priceConnector: SupplierPriceConnector.BigW,
+            searchFrequency: SupplierSearchFrequency.Fortnightly,
+            searchDaysOfWeek: ['THU'],
+            fortnightStartDate: '2026-11-09',
+            priceCheckFreshnessHours: 342
+          })
+        ])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Coles')).toEqual(['Daily', 'Prices fresh for 30 h']);
+      expect(scheduleLines(host, 'Kmart')).toEqual(['Weekly: Wed, Sat', 'Prices fresh for 102 h']);
+      // The start date is shown as the day it names, with no browser zone able to move it.
+      expect(scheduleLines(host, 'Big W')).toEqual([
+        'Fortnightly: Thu (on weeks from 9 Nov 2026)',
+        'Prices fresh for 342 h'
+      ]);
+    });
+
+    /**
+     * The hours are the API's own reported value, never a second calculation of them: the server
+     * derives the stored limit from the schedule, and a row whose two values disagree is something
+     * to see rather than something for the page to quietly correct.
+     */
+    it('reports the hours the API gave even where they do not match the schedule', async () => {
+      const list = jest.fn(() =>
+        of([
+          preset({
+            name: 'Legacy Row',
+            priceConnector: SupplierPriceConnector.Kmart,
+            searchFrequency: SupplierSearchFrequency.Weekly,
+            searchDaysOfWeek: ['WED', 'SAT'],
+            priceCheckFreshnessHours: 999
+          })
+        ])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Legacy Row')).toEqual([
+        'Weekly: Wed, Sat',
+        'Prices fresh for 999 h'
+      ]);
+    });
+
+    /**
+     * The schedule stays on the row for a supplier nothing searches - it is still the timetable the
+     * searches would follow, and the dialog still edits it - but the row says plainly that nothing
+     * is searched meanwhile, so a timetable is never read as "searched on these days".
+     */
+    it('says nothing is searched while Search prices is off, and still shows the schedule', async () => {
+      const list = jest.fn(() =>
+        of([
+          preset({
+            name: 'Paused Kmart',
+            priceConnector: SupplierPriceConnector.Kmart,
+            searchPrices: false,
+            searchFrequency: SupplierSearchFrequency.Weekly,
+            searchDaysOfWeek: ['THU'],
+            priceCheckFreshnessHours: 174
+          })
+        ])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Paused Kmart')).toEqual([
+        'Weekly: Thu',
+        'Prices fresh for 174 h',
+        'Search prices is off, so nothing is searched.'
+      ]);
+    });
+
+    it('says a preset with no price route has nothing searched at all', async () => {
+      const list = jest.fn(() => of([preset({ name: 'Costco', priceConnector: null })]));
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Costco')).toEqual([
+        'Daily',
+        'Prices fresh for 30 h',
+        'No price route, so nothing is searched.'
+      ]);
+    });
+
+    it('says nothing about searching for a supplier whose schedule is in force', async () => {
+      const list = jest.fn(() =>
+        of([preset({ name: 'Coles', priceConnector: SupplierPriceConnector.Kmart })])
+      );
+      const { host } = await render({ list });
+
+      expect(scheduleLines(host, 'Coles')).toEqual(['Daily', 'Prices fresh for 30 h']);
     });
   });
 

@@ -3,8 +3,10 @@ import { Observable, of } from 'rxjs';
 import { ConfigService } from './config.service';
 import {
   SUPPLIER_PRICE_CONNECTOR_LABELS,
+  SUPPLIER_SEARCH_WEEKDAYS,
   SUPPLIER_SERVED_STATES,
   SupplierPriceConnector,
+  SupplierSearchFrequency,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from './super-admin-supplier-presets.service';
@@ -26,6 +28,11 @@ const preset: SuperAdminSupplierPreset = {
   pricesIncludeGst: true,
   priceConnector: SupplierPriceConnector.Varnmill,
   priceConnectorKey: 'coles',
+  searchFrequency: SupplierSearchFrequency.Daily,
+  searchDaysOfWeek: [],
+  fortnightStartDate: null,
+  scheduleEffectiveFromUtc: '2026-10-23T00:00:00Z',
+  priceCheckFreshnessHours: 30,
   createdAtUtc: '2026-10-23T00:00:00Z',
   updatedAtUtc: '2026-10-23T00:00:00Z'
 };
@@ -37,7 +44,10 @@ const nationwideGstInclusive = {
   servedStates: [],
   pricesIncludeGst: true,
   priceConnector: null,
-  priceConnectorKey: null
+  priceConnectorKey: null,
+  searchFrequency: SupplierSearchFrequency.Daily,
+  searchDaysOfWeek: [],
+  fortnightStartDate: null
 };
 
 function createService(
@@ -101,7 +111,10 @@ describe('SuperAdminSupplierPresetsService (issue #848)', () => {
         servedStates: ['SA', 'NT'],
         pricesIncludeGst: false,
         priceConnector: SupplierPriceConnector.JbMetro,
-        priceConnectorKey: null
+        priceConnectorKey: null,
+        searchFrequency: SupplierSearchFrequency.Daily,
+        searchDaysOfWeek: [],
+        fortnightStartDate: null
       })
       .subscribe();
 
@@ -115,8 +128,92 @@ describe('SuperAdminSupplierPresetsService (issue #848)', () => {
       servedStates: ['SA', 'NT'],
       pricesIncludeGst: false,
       priceConnector: SupplierPriceConnector.JbMetro,
-      priceConnectorKey: null
+      priceConnectorKey: null,
+      searchFrequency: SupplierSearchFrequency.Daily,
+      searchDaysOfWeek: [],
+      fortnightStartDate: null
     });
+  });
+
+  /**
+   * The three schedule fields travel exactly as given on both calls (issues #1108 and #1109). This
+   * client decides nothing about them - not the weekday order, not whether a start date belongs to
+   * the chosen frequency - and it never sends a freshness value, because the server derives the
+   * stored limit itself and ignores one a request states.
+   */
+  it('posts the schedule fields it was given, unchanged, and no freshness value (issue #1109)', () => {
+    const { service, http } = createService();
+
+    service
+      .create({
+        name: 'Kmart',
+        url: null,
+        ...nationwideGstInclusive,
+        searchFrequency: SupplierSearchFrequency.Fortnightly,
+        searchDaysOfWeek: ['MON', 'FRI'],
+        fortnightStartDate: '2026-11-09'
+      })
+      .subscribe();
+
+    expect(http.post).toHaveBeenCalledWith('/api/super-admin/supplier-presets', {
+      name: 'Kmart',
+      url: null,
+      ...nationwideGstInclusive,
+      searchFrequency: SupplierSearchFrequency.Fortnightly,
+      searchDaysOfWeek: ['MON', 'FRI'],
+      fortnightStartDate: '2026-11-09'
+    });
+    expect(http.post.mock.calls[0][1]).not.toHaveProperty('priceCheckFreshnessHours');
+  });
+
+  it('puts the schedule fields it was given, unchanged (issue #1109)', () => {
+    const { service, http } = createService();
+
+    service
+      .update(4, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: true,
+        ...nationwideGstInclusive,
+        searchFrequency: SupplierSearchFrequency.Weekly,
+        searchDaysOfWeek: ['WED', 'SAT'],
+        fortnightStartDate: null
+      })
+      .subscribe();
+
+    expect(http.put).toHaveBeenCalledWith('/api/super-admin/supplier-presets/4', {
+      name: 'Kmart',
+      url: null,
+      isEnabled: true,
+      ...nationwideGstInclusive,
+      searchFrequency: SupplierSearchFrequency.Weekly,
+      searchDaysOfWeek: ['WED', 'SAT'],
+      fortnightStartDate: null
+    });
+    expect(http.put.mock.calls[0][1]).not.toHaveProperty('priceCheckFreshnessHours');
+  });
+
+  /**
+   * The start date is a date-only value and this client is a pass-through for it: the characters the
+   * caller gave are the characters that go on the wire, with no `Date` and no zone in between.
+   */
+  it('sends the fortnight start date as the characters it was given (issue #1109)', () => {
+    const { service, http } = createService();
+
+    service
+      .create({
+        name: 'Kmart',
+        url: null,
+        ...nationwideGstInclusive,
+        searchFrequency: SupplierSearchFrequency.Fortnightly,
+        searchDaysOfWeek: ['THU'],
+        fortnightStartDate: '2026-11-09'
+      })
+      .subscribe();
+
+    expect(http.post.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ fortnightStartDate: '2026-11-09' })
+    );
   });
 
   it('puts an edit of the whole resource, enabled state included', () => {
@@ -187,6 +284,15 @@ describe('SuperAdminSupplierPresetsService (issue #848)', () => {
     expect(SupplierPriceConnector.JbMetro).toBe(4);
 
     expect(SUPPLIER_SERVED_STATES).toEqual(['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'ACT', 'NT']);
+
+    // The schedule vocabulary is the server's too (issue #1108). The numbers start at 1 on both
+    // sides so a stored 0 is never read as the first declared frequency, and the weekday order is
+    // the Monday-to-Sunday one the schedule's own weeks run in. `supplier-search-schedule.spec.ts`
+    // pins both against the shared test-case file the backend tests read.
+    expect(SupplierSearchFrequency.Daily).toBe(1);
+    expect(SupplierSearchFrequency.Weekly).toBe(2);
+    expect(SupplierSearchFrequency.Fortnightly).toBe(3);
+    expect(SUPPLIER_SEARCH_WEEKDAYS).toEqual(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']);
 
     // Every declared route has a label, so the page can never show a blank price source for a
     // preset that has one.

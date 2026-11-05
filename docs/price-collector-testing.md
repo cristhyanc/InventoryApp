@@ -377,9 +377,10 @@ things about it are worth knowing before reading a run log:
 
 Anything other than `all` or `due` is refused with `400` and nothing is issued, so a typo in a
 workflow file cannot quietly re-search the whole catalogue. A supplier's schedule itself is set in
-**Super Admin → Supplier presets** (the page fields arrive with
-[#1109](https://github.com/cristhyanc/InventoryApp/issues/1109)); the freshness limit beside it is
-derived from that schedule and is not something to set by hand.
+**Super Admin → Supplier presets**, whose Search schedule column and dialog fields arrived with
+[#1109](https://github.com/cristhyanc/InventoryApp/issues/1109); the freshness limit beside it is
+derived from that schedule, shown read-only on both the list and the dialog, and is not something to
+set by hand.
 
 ## Implementation and checks
 

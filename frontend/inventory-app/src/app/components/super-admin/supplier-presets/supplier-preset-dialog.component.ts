@@ -3,12 +3,24 @@ import { Component, EventEmitter, Input, OnInit, Output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import {
   SUPPLIER_PRICE_CONNECTOR_LABELS,
+  SUPPLIER_SEARCH_WEEKDAYS,
   SUPPLIER_SERVED_STATES,
   SupplierPriceConnector,
+  SupplierSearchFrequency,
+  SupplierSearchScheduleRequest,
+  SupplierSearchWeekday,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
 import { SUPPLIER_URL_MAX_LENGTH, normalizeSupplierUrl } from '../../suppliers/supplier-url';
+import {
+  SUPPLIER_SEARCH_FREQUENCY_LABELS,
+  SUPPLIER_SEARCH_WEEKDAY_NAMES,
+  SupplierSearchSchedule,
+  isSearchDateOnly,
+  orderedSearchWeekdays,
+  searchFreshnessHours
+} from './supplier-search-schedule';
 
 /** The server's own name rules, mirrored so the form can say what is wrong before it submits. */
 export const SUPPLIER_PRESET_NAME_MAX_LENGTH = 200;
@@ -29,6 +41,21 @@ const CONNECTOR_KEY_TOO_LONG_MESSAGE = 'A price connector key must be 100 charac
 
 /** The one route a connector key belongs to, which is the whole reason the field exists. */
 const CONNECTOR_WITH_A_KEY = SupplierPriceConnector.Varnmill;
+
+/**
+ * The two search-schedule refusals of issue #1108 that a person can reach, in the server's own
+ * sentences (`Inventory.Domain.PriceCatalogue.SupplierSearchSchedulePolicy`), so the field says what
+ * is wrong instead of a round trip saying it.
+ *
+ * Its other two - a daily schedule naming weekdays, and a non-fortnightly schedule carrying a start
+ * date - are not mirrored because they are made unreachable instead: the controls that would produce
+ * them exist only for the frequencies that use them and are cleared when another frequency is
+ * chosen, which is the same agreement the nationwide and connector-key rules already have here.
+ */
+const SEARCH_WEEKDAY_REQUIRED_MESSAGE =
+  'A weekly or fortnightly search schedule names at least one day of the week.';
+const FORTNIGHT_START_DATE_REQUIRED_MESSAGE =
+  'A fortnightly search schedule needs a start date, which decides which weeks are searched.';
 
 /**
  * The Add and Edit dialog of the Super Admin Supplier presets page (issues #848 and #931), over
@@ -56,7 +83,19 @@ const CONNECTOR_WITH_A_KEY = SupplierPriceConnector.Varnmill;
  * kind of agreement with a rule: the state checkboxes only exist while nationwide is off and are
  * cleared when it is switched back on, so "nationwide *and* NSW" cannot be submitted; and the
  * connector key field only exists for the one route that reads it and is cleared when another route
- * is chosen, so a key for a keyless route cannot be submitted either.
+ * is chosen, so a key for a keyless route cannot be submitted either. The search schedule of issue
+ * #1109 is offered on the same terms: the weekday checkboxes exist for Weekly and Fortnightly, the
+ * fortnight start date for Fortnightly alone, and a frequency change clears what the new frequency
+ * does not use.
+ *
+ * **The schedule (issues #1108 and #1109) is the supplier's own timetable, and the freshness limit
+ * it derives is shown rather than offered.** The server derives `priceCheckFreshnessHours` from the
+ * schedule and ignores anything a request says about it, so the dialog previews that answer with
+ * `supplier-search-schedule.ts` - the one mirror of the backend rule, pinned to the shared test-case
+ * file both sides read - and submits only the three fields the API accepts. The fortnight start date
+ * is handled as the `YYYY-MM-DD` characters it arrives as, never through a `Date`: it names a day of
+ * the Sydney collection calendar rather than a moment, and parsing it would let a Super Admin in
+ * another zone move the on week by a day.
  */
 @Component({
   selector: 'app-supplier-preset-dialog',
@@ -198,6 +237,99 @@ const CONNECTOR_WITH_A_KEY = SupplierPriceConnector.Varnmill;
           Search prices for this supplier
         </label>
 
+        <!-- Always offered, whether or not the switch above is on (issue #1109): a supplier's
+             timetable is worth setting before its searches start, and a paused supplier's schedule
+             has to stay visible and editable rather than disappearing with the searching. -->
+        <fieldset class="mb-1 mt-3">
+          <legend class="mb-1 block text-sm font-medium text-md-gray-700">Search schedule</legend>
+
+          <label class="mb-1 block text-sm font-medium text-md-gray-700" for="preset-search-frequency">
+            Frequency
+          </label>
+          <select
+            id="preset-search-frequency"
+            class="mb-1 w-full rounded-md-control border border-md-gray-300 p-2 text-sm"
+            [disabled]="submitting"
+            [(ngModel)]="frequencyValue"
+            (ngModelChange)="onFrequencyChanged()"
+          >
+            @for (option of frequencyOptions; track option.value) {
+              <option [value]="option.value">{{ option.label }}</option>
+            }
+          </select>
+
+          @if (scheduleNamesWeekdays) {
+            <fieldset class="mt-2">
+              <legend class="mb-1 block text-sm font-medium text-md-gray-700">Search days</legend>
+              <div class="flex flex-wrap gap-x-4 gap-y-1">
+                @for (weekday of searchWeekdays; track weekday) {
+                  <label
+                    class="flex items-center gap-2 text-sm text-md-gray-700"
+                    [attr.for]="weekdayInputId(weekday)"
+                  >
+                    <input
+                      [id]="weekdayInputId(weekday)"
+                      type="checkbox"
+                      [disabled]="submitting"
+                      [(ngModel)]="daySelections[weekday]"
+                      (ngModelChange)="onFieldChanged()"
+                    />
+                    {{ weekdayName(weekday) }}
+                  </label>
+                }
+              </div>
+            </fieldset>
+            @if (searchDaysError) {
+              <p class="mb-2 mt-1 text-sm text-red-600" role="alert">{{ searchDaysError }}</p>
+            }
+          }
+
+          @if (scheduleNamesAFortnightStartDate) {
+            <label class="mb-1 mt-2 block text-sm font-medium text-md-gray-700" for="preset-fortnight-start">
+              Fortnight start date
+            </label>
+            <!-- A date-only value, bound as the YYYY-MM-DD characters the API sends and takes back:
+                 no Date and no browser zone is involved, so a Super Admin outside Sydney cannot
+                 shift the on week by a day. -->
+            <input
+              id="preset-fortnight-start"
+              type="date"
+              class="mb-1 w-full rounded-md-control border border-md-gray-300 p-2 text-sm"
+              [attr.aria-invalid]="fortnightStartDateError !== null"
+              [disabled]="submitting"
+              [(ngModel)]="fortnightStartDate"
+              (ngModelChange)="onFieldChanged()"
+            />
+            <p class="mb-1 text-sm text-md-gray-500">
+              The week this date falls in, Monday to Sunday, is an on week. The weeks alternate on and off
+              from there.
+            </p>
+            @if (fortnightStartDateError) {
+              <p class="mb-2 text-sm text-red-600" role="alert">{{ fortnightStartDateError }}</p>
+            }
+          }
+
+          <!-- Read-only: the server derives the stored limit from the schedule and ignores any value
+               a request states, so this is a preview of what it will decide. -->
+          <p id="preset-search-freshness" class="mt-2 text-sm text-md-gray-700" aria-live="polite">
+            @if (freshnessHoursPreview !== null) {
+              Prices fresh for {{ freshnessHoursPreview }} h
+            } @else {
+              Choose at least one search day to see how long prices stay fresh.
+            }
+          </p>
+
+          <p class="mt-1 text-sm text-md-gray-500">
+            Search days are Sydney time. A day a run misses is caught up on the next run.
+          </p>
+
+          @if (!searchPrices) {
+            <p class="mt-1 text-sm text-md-gray-500">
+              Search prices is off, so nothing is searched on these days until it is switched back on.
+            </p>
+          }
+        </fieldset>
+
         @if (preset) {
           <label class="mb-3 mt-3 flex items-center gap-2 text-sm text-md-gray-700" for="preset-enabled">
             <input
@@ -272,6 +404,14 @@ export class SupplierPresetDialogComponent implements OnInit {
     .filter((value): value is SupplierPriceConnector => typeof value === 'number')
     .map((value) => ({ value: String(value), label: SUPPLIER_PRICE_CONNECTOR_LABELS[value] }));
 
+  /** The declared search frequencies, as the select's string values and their labels. */
+  readonly frequencyOptions = Object.values(SupplierSearchFrequency)
+    .filter((value): value is SupplierSearchFrequency => typeof value === 'number')
+    .map((value) => ({ value: String(value), label: SUPPLIER_SEARCH_FREQUENCY_LABELS[value] }));
+
+  /** The seven choices, in the server's own Monday-to-Sunday order rather than the browser's. */
+  readonly searchWeekdays = SUPPLIER_SEARCH_WEEKDAYS;
+
   name = '';
   url = '';
   isEnabled = true;
@@ -305,12 +445,39 @@ export class SupplierPresetDialogComponent implements OnInit {
 
   connectorKey = '';
 
+  /**
+   * The chosen frequency as the select's own string value (issue #1108). A new preset starts
+   * {@link SupplierSearchFrequency.Daily}, which is what the server stores for a create that states
+   * no schedule and what the collector did before schedules existed.
+   */
+  frequencyValue = String(SupplierSearchFrequency.Daily);
+
+  /**
+   * Which search days are ticked, by the server's own weekday code. Only read while the chosen
+   * frequency names weekdays, and cleared when Daily is chosen, so "every day *and* Thursday" -
+   * which the server refuses - cannot be submitted.
+   */
+  daySelections: Record<string, boolean> = {};
+
+  /**
+   * The fortnight start date as the `YYYY-MM-DD` characters the API sent, or `''` for none.
+   *
+   * **A string, deliberately, and never a `Date`.** It names a day of the collection calendar
+   * rather than a moment, so it is read from and sent to the API verbatim; parsing it would move a
+   * fortnightly supplier's on week by a day for a Super Admin outside Sydney. Only read while
+   * Fortnightly is chosen, and cleared when another frequency is, so a date nothing reads cannot be
+   * submitted either.
+   */
+  fortnightStartDate = '';
+
   submitting = false;
   errorMessage: string | null = null;
   nameError: string | null = null;
   urlError: string | null = null;
   statesError: string | null = null;
   connectorKeyError: string | null = null;
+  searchDaysError: string | null = null;
+  fortnightStartDateError: string | null = null;
 
   constructor(private readonly presets: SuperAdminSupplierPresetsService) {}
 
@@ -321,6 +488,28 @@ export class SupplierPresetDialogComponent implements OnInit {
   /** Whether the chosen route is the one identified by a connector key. */
   get connectorTakesAKey(): boolean {
     return this.connectorValue === String(CONNECTOR_WITH_A_KEY);
+  }
+
+  /** Whether the chosen frequency is searched on named weekdays rather than every day. */
+  get scheduleNamesWeekdays(): boolean {
+    return this.selectedFrequency() !== SupplierSearchFrequency.Daily;
+  }
+
+  /** Whether the chosen frequency has off weeks for a start date to place. */
+  get scheduleNamesAFortnightStartDate(): boolean {
+    return this.selectedFrequency() === SupplierSearchFrequency.Fortnightly;
+  }
+
+  /**
+   * The freshness limit the schedule on screen would derive, in hours, or `null` while it does not
+   * yet derive one - which is the state it is in before a weekday is chosen.
+   *
+   * Read-only on purpose: the server derives the stored value from the schedule and ignores
+   * anything a request says about it (issue #1108), so this previews its answer with the same rule
+   * rather than offering a number to submit.
+   */
+  get freshnessHoursPreview(): number | null {
+    return searchFreshnessHours(this.scheduleBeingEdited());
   }
 
   ngOnInit(): void {
@@ -342,10 +531,27 @@ export class SupplierPresetDialogComponent implements OnInit {
     this.pricesIncludeGst = this.preset?.pricesIncludeGst ?? true;
     this.connectorValue = this.preset?.priceConnector === null ? '' : String(this.preset?.priceConnector ?? '');
     this.connectorKey = this.preset?.priceConnectorKey ?? '';
+
+    // The stored schedule exactly as it arrived (issue #1109). The start date is assigned as the
+    // characters the API sent, with nothing parsing them in between.
+    this.frequencyValue = String(this.preset?.searchFrequency ?? SupplierSearchFrequency.Daily);
+    this.daySelections = {};
+    for (const weekday of orderedSearchWeekdays(this.preset?.searchDaysOfWeek)) {
+      this.daySelections[weekday] = true;
+    }
+    this.fortnightStartDate = this.preset?.fortnightStartDate ?? '';
   }
 
   stateInputId(state: string): string {
     return `preset-state-${state}`;
+  }
+
+  weekdayInputId(weekday: SupplierSearchWeekday): string {
+    return `preset-search-day-${weekday}`;
+  }
+
+  weekdayName(weekday: SupplierSearchWeekday): string {
+    return SUPPLIER_SEARCH_WEEKDAY_NAMES[weekday];
   }
 
   /** Clears the field and server messages as soon as the value they were about changes. */
@@ -354,7 +560,24 @@ export class SupplierPresetDialogComponent implements OnInit {
     this.urlError = null;
     this.statesError = null;
     this.connectorKeyError = null;
+    this.searchDaysError = null;
+    this.fortnightStartDateError = null;
     this.errorMessage = null;
+  }
+
+  /**
+   * Choosing a frequency drops whatever the new one does not use, for the reason the nationwide and
+   * connector-key switches do it: the server refuses a daily schedule that names weekdays and a
+   * non-fortnightly one that carries a start date, so the form cannot produce either.
+   */
+  onFrequencyChanged(): void {
+    if (!this.scheduleNamesWeekdays) {
+      this.daySelections = {};
+    }
+    if (!this.scheduleNamesAFortnightStartDate) {
+      this.fortnightStartDate = '';
+    }
+    this.onFieldChanged();
   }
 
   /**
@@ -391,15 +614,25 @@ export class SupplierPresetDialogComponent implements OnInit {
     const servedStates = this.selectedStates();
     const connector = this.selectedConnector();
     const connectorKey = this.connectorKey.trim();
+    const schedule = this.scheduleBeingEdited();
 
     this.nameError = nameErrorFor(this.name);
     this.urlError = website.error;
     this.statesError =
       this.servesNationwide || servedStates.length > 0 ? null : SERVED_STATES_REQUIRED_MESSAGE;
     this.connectorKeyError = connectorKeyErrorFor(connector, connectorKey);
+    this.searchDaysError = searchDaysErrorFor(schedule);
+    this.fortnightStartDateError = fortnightStartDateErrorFor(schedule);
     this.errorMessage = null;
 
-    if (this.nameError || this.urlError || this.statesError || this.connectorKeyError) {
+    if (
+      this.nameError ||
+      this.urlError ||
+      this.statesError ||
+      this.connectorKeyError ||
+      this.searchDaysError ||
+      this.fortnightStartDateError
+    ) {
       return;
     }
 
@@ -413,7 +646,10 @@ export class SupplierPresetDialogComponent implements OnInit {
       servedStates,
       pricesIncludeGst: this.pricesIncludeGst,
       priceConnector: connector,
-      priceConnectorKey: connectorKey.length > 0 ? connectorKey : null
+      priceConnectorKey: connectorKey.length > 0 ? connectorKey : null,
+      // Exactly the API's three schedule fields, with the values the chosen frequency does not use
+      // sent as the empty list and null rather than as whatever was last typed.
+      ...scheduleRequestOf(schedule)
     };
 
     const request = this.preset
@@ -445,6 +681,60 @@ export class SupplierPresetDialogComponent implements OnInit {
   private selectedConnector(): SupplierPriceConnector | null {
     return this.connectorValue === '' ? null : (Number(this.connectorValue) as SupplierPriceConnector);
   }
+
+  private selectedFrequency(): SupplierSearchFrequency {
+    return Number(this.frequencyValue) as SupplierSearchFrequency;
+  }
+
+  /**
+   * The schedule the form currently describes: the chosen frequency, the ticked days in the
+   * server's own order, and the start date only where the frequency has off weeks for it. One
+   * method, so the freshness preview, the validation and the submission can never be reading three
+   * different schedules.
+   */
+  private scheduleBeingEdited(): SupplierSearchSchedule {
+    const frequency = this.selectedFrequency();
+
+    return {
+      frequency,
+      daysOfWeek:
+        frequency === SupplierSearchFrequency.Daily
+          ? []
+          : orderedSearchWeekdays(
+              this.searchWeekdays.filter((weekday) => this.daySelections[weekday] === true)
+            ),
+      fortnightStartDate:
+        frequency === SupplierSearchFrequency.Fortnightly && isSearchDateOnly(this.fortnightStartDate.trim())
+          ? this.fortnightStartDate.trim()
+          : null
+    };
+  }
+}
+
+/** The schedule as the API's own three field names, which is the whole of what a write sends. */
+function scheduleRequestOf(schedule: SupplierSearchSchedule): SupplierSearchScheduleRequest {
+  return {
+    searchFrequency: schedule.frequency,
+    searchDaysOfWeek: schedule.daysOfWeek,
+    fortnightStartDate: schedule.fortnightStartDate
+  };
+}
+
+function searchDaysErrorFor(schedule: SupplierSearchSchedule): string | null {
+  return schedule.frequency !== SupplierSearchFrequency.Daily && schedule.daysOfWeek.length === 0
+    ? SEARCH_WEEKDAY_REQUIRED_MESSAGE
+    : null;
+}
+
+/**
+ * A fortnightly schedule needs a start date. A value that is not a plain `YYYY-MM-DD` date counts
+ * as none - rather than as a mistake with a sentence of its own - because the server's vocabulary
+ * has no third answer here, and the one message is what a Super Admin has to act on either way.
+ */
+function fortnightStartDateErrorFor(schedule: SupplierSearchSchedule): string | null {
+  return schedule.frequency === SupplierSearchFrequency.Fortnightly && schedule.fortnightStartDate === null
+    ? FORTNIGHT_START_DATE_REQUIRED_MESSAGE
+    : null;
 }
 
 function nameErrorFor(name: string): string | null {
