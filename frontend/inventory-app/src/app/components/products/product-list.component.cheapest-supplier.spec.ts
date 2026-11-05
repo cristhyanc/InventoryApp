@@ -139,8 +139,8 @@ describe('ProductListComponent Cheapest supplier column (issue #940)', () => {
     expect(getSummary).toHaveBeenCalledTimes(1);
     expect(getSummary).toHaveBeenCalledWith([1, 2]);
     expect(cells(host).map(text)).toEqual([
-      '$0.95 / unit inc GST JB Metro Compare (1) ›',
-      '$0.95 / unit inc GST JB Metro Compare (1) ›'
+      '$0.95 / unit inc GST JB Metro View ↗ Compare (1) ›',
+      '$0.95 / unit inc GST JB Metro View ↗ Compare (1) ›'
     ]);
   });
 
@@ -159,6 +159,27 @@ describe('ProductListComponent Cheapest supplier column (issue #940)', () => {
     const { host } = await render([product({ id: 1 })], getSummary);
 
     expect(cells(host).map(text)).toEqual(['Not tracked']);
+  });
+
+  /**
+   * The direct View link beside the cheapest supplier (issue #1098): composed from the same
+   * `isCheapest` offers the cell and the popup already read, opening that supplier's own page
+   * rather than the popup, and never navigating the row to the product editor.
+   */
+  it('links directly to the cheapest offer\'s own product page, never opening the popup or editor', async () => {
+    const getSummary = jest.fn(() => of(summary([1])));
+    const { fixture, host } = await render([product({ id: 1 })], getSummary);
+
+    const link = cells(host)[0].querySelector<HTMLAnchorElement>('[data-testid^="cheapest-supplier-summary-view-"]');
+    expect(link?.getAttribute('href')).toBe('https://example.test/jb-metro/cola');
+    expect(link?.getAttribute('target')).toBe('_blank');
+    expect(link?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link?.getAttribute('aria-label')).toBe('Open JB Metro product page for Coca-Cola Classic');
+
+    link!.click();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="cheapest-supplier-popup"]')).toBeNull();
   });
 
   it('opens the popup from a row and lists that product\'s suppliers', async () => {

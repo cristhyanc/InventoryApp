@@ -3,10 +3,12 @@ import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 /**
- * The visual evidence for issue #1093: the redesigned Products page in the seven states the
- * approved design names - desktop default, desktop with the optional history columns, mobile,
- * Columns open, More actions open, a row's overflow menu open and the supplier comparison open -
- * at 1440px, plus the mobile layout with history on and the supplier comparison at 390px.
+ * The visual evidence for issue #1093, with the always-visible history fields and direct
+ * cheapest-supplier View links of its owner-corrected follow-up #1098: the redesigned Products
+ * page's desktop default (now carrying Last/Cheapest purchase and a View link beside the cheapest
+ * supplier by default, with no Columns control left), a tied cheapest offer's two distinct View
+ * links, mobile, More actions open, a row's overflow menu open and the supplier comparison open -
+ * at 1440px, plus mobile and the supplier comparison at 390px.
  *
  * Like the other visual runs this starts no API and no database. Every `/api/` request is answered
  * in the browser with neutral synthetic products, purchase costs and observed supplier prices (none
@@ -217,27 +219,9 @@ async function capture(page: Page, name: string, fullPage = true): Promise<void>
   await page.screenshot({ path: join(screenshotDirectory, `${name}.png`), fullPage });
 }
 
-async function turnOnHistory(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Columns' }).click();
-  await page.getByLabel('Last purchase').check();
-  await page.getByLabel('Cheapest purchase').check();
-  await page.keyboard.press('Escape');
-}
-
-test.describe('Products redesign (issue #1093)', () => {
+test.describe('Products redesign (issue #1093, issue #1098)', () => {
   test('1 desktop default at 1440px', async ({ page }) => {
     await openProducts(page, 1440);
-
-    await expect(page.locator('thead th')).toHaveText(['Product', 'Category', 'Storage stock', 'Average cost', 'Cheapest supplier', 'Actions']);
-    await expect(page.locator('[data-testid="list-pagination-range"]')).toHaveText(/Showing 1–10 of 23 products/);
-    await expect(page.getByRole('menu')).toHaveCount(0);
-    await expect(page.locator('dialog[open]')).toHaveCount(0);
-    await capture(page, 'products-desktop-default-1440');
-  });
-
-  test('2 desktop with the history columns at 1440px', async ({ page }) => {
-    await openProducts(page, 1440);
-    await turnOnHistory(page);
 
     await expect(page.locator('thead th')).toHaveText([
       'Product',
@@ -249,11 +233,36 @@ test.describe('Products redesign (issue #1093)', () => {
       'Cheapest supplier',
       'Actions'
     ]);
+    await expect(page.locator('[data-testid="list-pagination-range"]')).toHaveText(/Showing 1–10 of 23 products/);
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(page.locator('dialog[open]')).toHaveCount(0);
+    // No Columns control is left to turn the history fields on - both are already on screen.
+    await expect(page.getByRole('button', { name: 'Columns' })).toHaveCount(0);
+    // A direct View link sits beside the single cheapest supplier, opening its own page.
+    const link = page.getByRole('link', { name: 'Open Sample Wholesale South Coast product page for Sample Beef Jerky Original 25g' });
+    await expect(link).toHaveText('View ↗');
+    await expect(link).toHaveAttribute('href', 'https://example.test/1/12');
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     // The wide table scrolls inside its card; the page itself never does.
     const table = page.locator('[data-testid="products-table"]');
     const scroll = await table.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
     expect(scroll.scroll).toBeGreaterThanOrEqual(scroll.client);
-    await capture(page, 'products-desktop-history-columns-1440');
+    await capture(page, 'products-desktop-default-1440');
+  });
+
+  test('2 a tied cheapest offer gets two distinct View links at 1440px', async ({ page }) => {
+    await openProducts(page, 1440);
+
+    // Sample Cheese & Crackers 38g (product 3) is tied between Sample Grocer and Sample Market;
+    // each keeps its own link to its own page, named so neither can be mistaken for the other's.
+    const grocer = page.getByRole('link', { name: 'Open Sample Grocer product page for Sample Cheese & Crackers 38g' });
+    const market = page.getByRole('link', { name: 'Open Sample Market product page for Sample Cheese & Crackers 38g' });
+    await expect(grocer).toHaveText('View Sample Grocer ↗');
+    await expect(grocer).toHaveAttribute('href', 'https://example.test/2/1');
+    await expect(market).toHaveText('View Sample Market ↗');
+    await expect(market).toHaveAttribute('href', 'https://example.test/3/1');
+    await capture(page, 'products-desktop-tied-view-links-1440', false);
   });
 
   test('3 mobile at 390px', async ({ page }) => {
@@ -261,35 +270,14 @@ test.describe('Products redesign (issue #1093)', () => {
 
     await expect(page.locator('[data-testid="product-card"]')).toHaveCount(10);
     await expect(page.locator('[data-testid="products-table"]')).toBeHidden();
-    await expect(page.getByRole('button', { name: 'Columns' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Columns' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'More actions', exact: true })).toBeVisible();
+    await expect(page.locator('[data-testid="product-card"]').first()).toContainText('Last purchase:');
+    await expect(page.getByRole('link', { name: 'Open Sample Wholesale South Coast product page for Sample Beef Jerky Original 25g' })).toBeVisible();
     await capture(page, 'products-mobile-390');
   });
 
-  test('3b mobile with the history columns at 390px', async ({ page }) => {
-    await openProducts(page, 390);
-    await turnOnHistory(page);
-
-    await expect(page.locator('[data-testid="product-card"]').first()).toContainText('Last purchase:');
-    await capture(page, 'products-mobile-history-390');
-  });
-
-  test('4 Columns open at 1440px', async ({ page }) => {
-    await openProducts(page, 1440);
-    const trigger = page.getByRole('button', { name: 'Columns' });
-    await trigger.click();
-
-    await expect(page.getByRole('group', { name: 'Columns' })).toBeVisible();
-    // Focus moves into the panel, onto its first control.
-    await expect(page.getByRole('button', { name: 'Reset to default' })).toBeFocused();
-    await capture(page, 'products-columns-open-1440', false);
-
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('group', { name: 'Columns' })).toHaveCount(0);
-    await expect(trigger).toBeFocused();
-  });
-
-  test('5 More actions open at 1440px', async ({ page }) => {
+  test('4 More actions open at 1440px', async ({ page }) => {
     await openProducts(page, 1440);
     const trigger = page.getByRole('button', { name: 'More actions', exact: true });
     await trigger.focus();
@@ -307,7 +295,7 @@ test.describe('Products redesign (issue #1093)', () => {
     await expect(trigger).toBeFocused();
   });
 
-  test('6 row overflow open at 1440px', async ({ page }) => {
+  test('5 row overflow open at 1440px', async ({ page }) => {
     await openProducts(page, 1440);
     await page.getByRole('button', { name: 'More actions for Sample Cheese & Crackers 38g' }).click();
 
@@ -318,7 +306,7 @@ test.describe('Products redesign (issue #1093)', () => {
   });
 
   for (const width of [1440, 390]) {
-    test(`7 supplier comparison open at ${width}px`, async ({ page }) => {
+    test(`6 supplier comparison open at ${width}px`, async ({ page }) => {
       await openProducts(page, width);
       const compare = page.getByRole('button', { name: 'Compare 4 supplier prices for Sample Iced Coffee Double Shot 237mL' });
       await compare.click();
