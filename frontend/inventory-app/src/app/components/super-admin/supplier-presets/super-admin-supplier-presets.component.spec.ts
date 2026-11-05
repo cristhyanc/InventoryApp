@@ -32,20 +32,34 @@ function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSu
   };
 }
 
-/** The supplier-master half of the row a toggle re-sends unchanged. */
+/**
+ * The supplier-master half of the row a toggle re-sends unchanged. It holds no schedule field:
+ * neither toggle states one (issue #1109), so the server keeps the schedule stored at the moment
+ * the button is pressed - see `scheduleFieldsOf` and the stale-schedule regressions below.
+ */
 const nationwideGstInclusive = {
   searchPrices: true,
   servesNationwide: true,
   servedStates: [],
   pricesIncludeGst: true,
   priceConnector: null,
-  priceConnectorKey: null,
-  // The schedule travels on a toggle's `PUT` too (issue #1109), stated exactly as the row holds it,
-  // so neither button moves the supplier's timetable.
-  searchFrequency: SupplierSearchFrequency.Daily,
-  searchDaysOfWeek: [],
-  fortnightStartDate: null
+  priceConnectorKey: null
 };
+
+/** The three schedule field names, which is what a toggle's `PUT` must not carry. */
+const SCHEDULE_FIELDS = ['searchFrequency', 'searchDaysOfWeek', 'fortnightStartDate'] as const;
+
+/**
+ * Which of the three schedule fields a request body states at all, by name.
+ *
+ * Asked by key rather than by value because `toHaveBeenCalledWith` ignores a property whose value
+ * is `undefined`, and "stated as undefined" and "not stated" are the same thing on the wire but not
+ * the same thing to assert: a body that named the fields would still be a schedule edit the moment
+ * a value crept back in.
+ */
+function scheduleFieldsOf(body: unknown): string[] {
+  return SCHEDULE_FIELDS.filter((field) => field in (body as Record<string, unknown>));
+}
 
 async function render(service: Partial<SuperAdminSupplierPresetsService>, toast?: Partial<ToastService>) {
   await TestBed.configureTestingModule({
@@ -239,7 +253,7 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
    * its market to nationwide and its prices to GST-inclusive - a financial field changed by a button
    * that says "Disable".
    */
-  it('re-sends the row’s own served states, GST basis, connector and schedule when toggling', async () => {
+  it('re-sends the row’s own served states, GST basis and connector when toggling', async () => {
     const jbMetro = preset({
       id: 7,
       name: 'JB Metro SA & NT',
@@ -254,7 +268,7 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       priceCheckFreshnessHours: 102
     });
     const list = jest.fn(() => of([jbMetro]));
-    const update = jest.fn(() => of({ ...jbMetro, isEnabled: false }));
+    const update: jest.Mock = jest.fn(() => of({ ...jbMetro, isEnabled: false }));
     const { fixture, host } = await render({ list, update });
 
     buttonInRow(rowFor(host, 'JB Metro SA & NT'), 'Disable').click();
@@ -271,13 +285,12 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
       servedStates: ['SA', 'NT'],
       pricesIncludeGst: false,
       priceConnector: SupplierPriceConnector.JbMetro,
-      priceConnectorKey: null,
-      // The stored schedule, not the daily default: pressing Disable must not reset a weekly
-      // supplier's timetable to every day, which on the paid routes is seven times the searches.
-      searchFrequency: SupplierSearchFrequency.Weekly,
-      searchDaysOfWeek: ['WED', 'SAT'],
-      fortnightStartDate: null
+      priceConnectorKey: null
     });
+
+    // And not the schedule: saying nothing about it is what keeps this weekly supplier's timetable,
+    // whatever it is by now, instead of submitting the row's copy of it as an edit.
+    expect(scheduleFieldsOf(update.mock.calls[0][1])).toEqual([]);
   });
 
   it('sends nothing when the confirmation is canceled', async () => {
@@ -454,10 +467,7 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
         servedStates: [],
         pricesIncludeGst: true,
         priceConnector: SupplierPriceConnector.Kmart,
-        priceConnectorKey: null,
-        searchFrequency: SupplierSearchFrequency.Daily,
-        searchDaysOfWeek: [],
-        fortnightStartDate: null
+        priceConnectorKey: null
       });
       expect(success).toHaveBeenCalledWith('Kmart prices are no longer searched.');
       expect(list).toHaveBeenCalledTimes(2);
@@ -486,10 +496,7 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
         servedStates: [],
         pricesIncludeGst: true,
         priceConnector: SupplierPriceConnector.Kmart,
-        priceConnectorKey: null,
-        searchFrequency: SupplierSearchFrequency.Daily,
-        searchDaysOfWeek: [],
-        fortnightStartDate: null
+        priceConnectorKey: null
       });
     });
 
@@ -519,6 +526,112 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
 
       expect(error).toHaveBeenCalledWith('Unable to change this supplier preset.');
       expect(list).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  /**
+   * A list row is a value read when the page last loaded, and a toggle is pressed some time later.
+   * Both regressions put a *newer* schedule in the database between the two - tab A loaded a daily
+   * Kmart, tab B saved Weekly Wed & Sat - and each one fails if the toggle states the schedule it
+   * cached: the server reads any of those three fields as a schedule edit, so the stale timetable
+   * would be stored, its freshness limit recalculated and its effective-from boundary advanced,
+   * making every one of that supplier's products due again, because somebody pressed a flag button.
+   *
+   * Saying nothing about the schedule is the fix the API already supports (issue #1108): a `PUT`
+   * that states none of the three keeps whatever is stored when it arrives. It is not a general
+   * concurrency guarantee - nothing here compares an expected state - but it does not need to be:
+   * these two buttons have no opinion about the schedule at all, so the field they must not decide
+   * is the one they do not send. A fresh `GET` before the `PUT` would have been the weaker answer,
+   * because the stale window would only have become smaller.
+   */
+  describe('a toggle whose cached schedule is out of date (issue #1109)', () => {
+    const dailyKmart = preset({
+      id: 20,
+      name: 'Kmart',
+      url: null,
+      priceConnector: SupplierPriceConnector.Kmart,
+      searchFrequency: SupplierSearchFrequency.Daily,
+      searchDaysOfWeek: [],
+      fortnightStartDate: null,
+      priceCheckFreshnessHours: 30
+    });
+
+    /** The same supplier as another tab stored it after the list above was read. */
+    const weeklyKmart = {
+      ...dailyKmart,
+      searchFrequency: SupplierSearchFrequency.Weekly,
+      searchDaysOfWeek: ['WED', 'SAT'],
+      priceCheckFreshnessHours: 102
+    };
+
+    it('states no schedule field when disabling, so the newer timetable survives', async () => {
+      const list: jest.Mock = jest
+        .fn()
+        .mockReturnValueOnce(of([dailyKmart]))
+        .mockReturnValue(of([{ ...weeklyKmart, isEnabled: false }]));
+      const update: jest.Mock = jest.fn(() => of({ ...weeklyKmart, isEnabled: false }));
+      const { fixture, host } = await render({ list, update });
+
+      // What the page is showing is the daily schedule it loaded.
+      expect(rowFor(host, 'Kmart').textContent).toContain('Daily');
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Disable').click();
+      fixture.detectChanges();
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      // The flag the button is about, and every other field of the row, exactly as stored.
+      expect(update).toHaveBeenCalledWith(20, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: false,
+        searchPrices: true,
+        servesNationwide: true,
+        servedStates: [],
+        pricesIncludeGst: true,
+        priceConnector: SupplierPriceConnector.Kmart,
+        priceConnectorKey: null
+      });
+
+      // And nothing at all about the schedule, not even the daily one on screen.
+      expect(scheduleFieldsOf(update.mock.calls[0][1])).toEqual([]);
+
+      // The re-read list shows the timetable the other tab saved, undisturbed.
+      expect(rowFor(host, 'Kmart').textContent).toContain('Weekly: Wed, Sat');
+      expect(rowFor(host, 'Kmart').textContent).toContain('Prices fresh for 102 h');
+    });
+
+    it('states no schedule field when stopping searches, so the newer timetable survives', async () => {
+      const list: jest.Mock = jest
+        .fn()
+        .mockReturnValueOnce(of([dailyKmart]))
+        .mockReturnValue(of([{ ...weeklyKmart, searchPrices: false }]));
+      const update: jest.Mock = jest.fn(() => of({ ...weeklyKmart, searchPrices: false }));
+      const { fixture, host } = await render({ list, update });
+
+      buttonInRow(rowFor(host, 'Kmart'), 'Stop searching').click();
+      fixture.detectChanges();
+      buttonWithText(host, 'Confirm').click();
+      fixture.detectChanges();
+
+      expect(update).toHaveBeenCalledWith(20, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: true,
+        searchPrices: false,
+        servesNationwide: true,
+        servedStates: [],
+        pricesIncludeGst: true,
+        priceConnector: SupplierPriceConnector.Kmart,
+        priceConnectorKey: null
+      });
+      expect(scheduleFieldsOf(update.mock.calls[0][1])).toEqual([]);
+
+      // Switching searching off is also the one case where the server moves the boundary by itself,
+      // off to on; this direction moves nothing, and either way the schedule is the server's to
+      // keep. The re-read row still holds the newer timetable, now paused.
+      expect(rowFor(host, 'Kmart').textContent).toContain('Weekly: Wed, Sat');
+      expect(rowFor(host, 'Kmart').textContent).toContain('Search prices is off, so nothing is searched.');
     });
   });
 

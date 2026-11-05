@@ -648,7 +648,10 @@ export class SupplierPresetDialogComponent implements OnInit {
       priceConnector: connector,
       priceConnectorKey: connectorKey.length > 0 ? connectorKey : null,
       // Exactly the API's three schedule fields, with the values the chosen frequency does not use
-      // sent as the empty list and null rather than as whatever was last typed.
+      // sent as the empty list and null rather than as whatever was last typed. This dialog is the
+      // one caller that states them: a person is looking at the schedule here and the values on
+      // screen are the ones to store, whereas the list's toggle buttons say nothing about it and
+      // leave the stored timetable alone (issue #1109).
       ...scheduleRequestOf(schedule)
     };
 

@@ -6,7 +6,7 @@ import {
   SUPPLIER_PRICE_CONNECTOR_LABELS,
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService,
-  UpdateSupplierPresetRequest
+  UpdateSupplierPresetKeepingScheduleRequest
 } from '../../../services/super-admin-supplier-presets.service';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { SupplierPresetDialogComponent } from './supplier-preset-dialog.component';
@@ -261,7 +261,7 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
 
     const isEnabled = !target.isEnabled;
 
-    this.put(target, { ...this.wholeResource(target), isEnabled }, (preset) =>
+    this.put(target, { ...this.rowWithoutItsSchedule(target), isEnabled }, (preset) =>
       isEnabled ? `${preset.name} is suggested again.` : `${preset.name} is no longer suggested.`
     );
   }
@@ -275,7 +275,7 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
 
     const searchPrices = !target.searchPrices;
 
-    this.put(target, { ...this.wholeResource(target), searchPrices }, (preset) =>
+    this.put(target, { ...this.rowWithoutItsSchedule(target), searchPrices }, (preset) =>
       searchPrices
         ? `${preset.name} prices are searched again.`
         : `${preset.name} prices are no longer searched.`
@@ -283,17 +283,29 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The row exactly as it is stored, which is what either toggle starts from. This endpoint is a
-   * `PUT` of the whole resource, so a button that sent the form's defaults instead would move a JB
-   * Metro record's market to nationwide and its prices to GST-inclusive as a side effect of pressing
-   * Disable - a financial field changed by a button that does not say so. Since issue #1077 that
-   * includes each other's flag: pressing Disable must not start or stop a search, and pressing Stop
-   * searching must not withdraw the supplier from businesses. Since issue #1109 it includes the
-   * search schedule, stated exactly as the row holds it: the server reads an equivalent schedule as
-   * no change and leaves `ScheduleEffectiveFromUtc` where it is, so neither button moves the
-   * supplier's timetable or makes every one of its products due again.
+   * The row as either toggle re-states it: every field it holds **except the search schedule**.
+   *
+   * This endpoint is a `PUT` of the whole resource, so a button that sent the form's defaults
+   * instead would move a JB Metro record's market to nationwide and its prices to GST-inclusive as a
+   * side effect of pressing Disable - a financial field changed by a button that does not say so.
+   * Since issue #1077 that includes each other's flag: pressing Disable must not start or stop a
+   * search, and pressing Stop searching must not withdraw the supplier from businesses.
+   *
+   * **The schedule is the one part of the row a toggle deliberately says nothing about** (issues
+   * #1108 and #1109). The server reads a `PUT` that states none of the three schedule fields as
+   * "keep the stored schedule", so saying nothing keeps whatever timetable is stored *at the moment
+   * the button is pressed*. Re-sending the three fields from this list row would instead submit a
+   * schedule edit built from a value read when the page last loaded: a timetable saved since - by
+   * another Super Admin, or by this one in another tab - would be reverted to the stale one, its
+   * freshness limit recalculated and `ScheduleEffectiveFromUtc` advanced, making every one of that
+   * supplier's products due again, because somebody pressed Disable. The request type makes the
+   * omission unsendable rather than merely intended
+   * ({@link UpdateSupplierPresetKeepingScheduleRequest}); the dialog, where a person is actually
+   * looking at the schedule, is the one place that states it.
    */
-  private wholeResource(preset: SuperAdminSupplierPreset): UpdateSupplierPresetRequest {
+  private rowWithoutItsSchedule(
+    preset: SuperAdminSupplierPreset
+  ): UpdateSupplierPresetKeepingScheduleRequest {
     return {
       name: preset.name,
       url: preset.url,
@@ -303,17 +315,14 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
       servedStates: preset.servedStates,
       pricesIncludeGst: preset.pricesIncludeGst,
       priceConnector: preset.priceConnector,
-      priceConnectorKey: preset.priceConnectorKey,
-      searchFrequency: preset.searchFrequency,
-      searchDaysOfWeek: preset.searchDaysOfWeek,
-      fortnightStartDate: preset.fortnightStartDate
+      priceConnectorKey: preset.priceConnectorKey
     };
   }
 
   /** The one call and the one failure handling both toggles share. */
   private put(
     target: SuperAdminSupplierPreset,
-    request: UpdateSupplierPresetRequest,
+    request: UpdateSupplierPresetKeepingScheduleRequest,
     succeeded: (preset: SuperAdminSupplierPreset) => string
   ): void {
     this.presetsService.update(target.id, request).subscribe({

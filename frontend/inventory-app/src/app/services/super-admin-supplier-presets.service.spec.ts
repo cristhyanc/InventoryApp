@@ -194,6 +194,43 @@ describe('SuperAdminSupplierPresetsService (issue #848)', () => {
   });
 
   /**
+   * An edit that states no schedule at all sends a body with none of the three fields in it, which
+   * is the API's own "keep the stored schedule" path (issue #1108) and what the list's two toggle
+   * buttons rely on (issue #1109). The field has to be *absent*, not `null` or an empty list: the
+   * server reads any of the three as a whole schedule being stated, so a `searchFrequency: null`
+   * would be a schedule edit refused for having no frequency rather than a request that said nothing.
+   */
+  it('puts no schedule field at all when the edit states none (issue #1109)', () => {
+    const { service, http } = createService();
+
+    service
+      .update(4, {
+        name: 'Kmart',
+        url: null,
+        isEnabled: false,
+        searchPrices: true,
+        servesNationwide: true,
+        servedStates: [],
+        pricesIncludeGst: true,
+        priceConnector: SupplierPriceConnector.Kmart,
+        priceConnectorKey: null
+      })
+      .subscribe();
+
+    expect(Object.keys(http.put.mock.calls[0][1])).toEqual([
+      'name',
+      'url',
+      'isEnabled',
+      'searchPrices',
+      'servesNationwide',
+      'servedStates',
+      'pricesIncludeGst',
+      'priceConnector',
+      'priceConnectorKey'
+    ]);
+  });
+
+  /**
    * The start date is a date-only value and this client is a pass-through for it: the characters the
    * caller gave are the characters that go on the wire, with no `Date` and no zone in between.
    */

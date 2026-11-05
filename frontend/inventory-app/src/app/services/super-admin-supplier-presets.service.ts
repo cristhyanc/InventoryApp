@@ -138,9 +138,11 @@ export interface SuperAdminSupplierPreset {
  * both calls.
  *
  * The server treats all three as optional and reads "none of them stated" as *leave the stored
- * schedule alone*, which is what kept the page working before issue #1109. This client always
- * states them, so what the dialog shows is what is stored - and `null`/`[]` here mean the value the
- * chosen frequency does not use, not "say nothing".
+ * schedule alone*. A write that states them is stating a whole schedule, so `null`/`[]` here mean
+ * the value the chosen frequency does not use, not "say nothing" - which is why the two are
+ * separate request shapes rather than one with optional fields
+ * ({@link UpdateSupplierPresetScheduleRequest} and
+ * {@link UpdateSupplierPresetKeepingScheduleRequest}).
  */
 export interface SupplierSearchScheduleRequest {
   readonly searchFrequency: SupplierSearchFrequency;
@@ -168,15 +170,12 @@ export interface CreateSupplierPresetRequest extends SupplierSearchScheduleReque
 }
 
 /**
- * What an edit submits: the whole resource, so enabling and disabling is this call - and so is
- * switching price searching on and off (issue #1077). Both flags are required by the server, so
- * every caller has to state the one it is not changing rather than letting it default.
- *
- * Since issue #1109 the schedule travels on it too, for the same reason the two flags do: a caller
- * that is pressing *Stop searching* states the stored schedule unchanged rather than omitting it, so
- * what is sent is always the whole row and no field changes as a side effect of another.
+ * The fields every edit states: the whole resource apart from the schedule, so enabling and
+ * disabling is this call - and so is switching price searching on and off (issue #1077). Both flags
+ * are required by the server, so every caller has to state the one it is not changing rather than
+ * letting it default.
  */
-export interface UpdateSupplierPresetRequest extends SupplierSearchScheduleRequest {
+export interface SupplierPresetEditFields {
   readonly name: string;
   readonly url: string | null;
   readonly isEnabled: boolean;
@@ -187,6 +186,38 @@ export interface UpdateSupplierPresetRequest extends SupplierSearchScheduleReque
   readonly priceConnector: SupplierPriceConnector | null;
   readonly priceConnectorKey: string | null;
 }
+
+/**
+ * What an edit that *decides* the schedule submits (issue #1109): the dialog's Save, where a person
+ * has the three fields in front of them and the values on screen are the ones to store.
+ */
+export interface UpdateSupplierPresetScheduleRequest
+  extends SupplierPresetEditFields,
+    SupplierSearchScheduleRequest {}
+
+/**
+ * What an edit that decides something *other* than the schedule submits (issue #1109): the list's
+ * two toggle confirmations, which change one flag.
+ *
+ * **The three schedule fields are absent on purpose, and the `never` is what says so.** The server
+ * reads a `PUT` that states none of them as *keep the stored schedule*, and leaves
+ * `scheduleEffectiveFromUtc` where it is unless that same request turned **Search prices** from off
+ * to on. Re-sending the schedule from a list row read some time ago would instead submit it as a
+ * schedule edit: a timetable another Super Admin (or another tab) has saved since would be
+ * overwritten by the stale one, its freshness limit recalculated and its effective-from boundary
+ * advanced - making every one of that supplier's products due again - by a button that only said
+ * *Disable*. Omitting them makes the stale value unsendable rather than merely unlikely to be sent.
+ */
+export interface UpdateSupplierPresetKeepingScheduleRequest extends SupplierPresetEditFields {
+  readonly searchFrequency?: never;
+  readonly searchDaysOfWeek?: never;
+  readonly fortnightStartDate?: never;
+}
+
+/** Either kind of edit: one states a whole schedule, the other states none of it. */
+export type UpdateSupplierPresetRequest =
+  | UpdateSupplierPresetScheduleRequest
+  | UpdateSupplierPresetKeepingScheduleRequest;
 
 /**
  * What a connector is called on screen. Written out rather than derived from the enum's member names
