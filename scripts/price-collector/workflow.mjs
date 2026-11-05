@@ -414,6 +414,26 @@ export function collectorTarget(env, production = productionApiOrigin()) {
 /** The validated target as the base URL the collector scripts take (they add `/api`). */
 export const collectorApiBaseUrl = env => collectorTarget(env).href.replace(/\/$/, '');
 
+/**
+ * Which work the run asks for (issue #1110): `all` (a manual run's default, today's behaviour) or
+ * `due` (the scheduled run, and a manual check of it). Anything else is refused before a run is
+ * issued, because reading a typo as `all` would re-search, and re-pay for, the whole catalogue.
+ */
+export function scheduleRequested(value) {
+  if (!['all', 'due'].includes(value)) throw new Error('Choose the all or due schedule.');
+  return value;
+}
+
+/** Whether the work call issued a run; a `due` call with nothing due issues none (issue #1108). */
+export const runWasIssued = issued => Number.isInteger(issued?.runId) && issued.runId > 0;
+
+/** A step output line for GitHub Actions, written only when the runner gives an output file. */
+function stepOutput(env, name, value) {
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${name}=${value}\n`);
+}
+
+export const NOTHING_DUE = 'Nothing due today: no supplier search is owed, so no run was issued and nothing was searched or spent.';
+
 /** Whether this is a production-sized run; anything but an explicit true or false is refused. */
 export function fullRunRequested(value) {
   if (!['true', 'false'].includes(value)) throw new Error('Specify whether this is a full run.');
@@ -423,6 +443,7 @@ export function fullRunRequested(value) {
 async function prepare(env, stateDir) {
   const apiUrl = collectorApiBaseUrl(env);
   const full = fullRunRequested(env.PRICE_COLLECTOR_FULL_RUN);
+  const schedule = scheduleRequested(env.PRICE_COLLECTOR_SCHEDULE);
   const size = Number(env.PRICE_COLLECTOR_SAMPLE_SIZE);
   // Validate all local configuration before issuing a run (GET work writes a run). A full run
   // ignores the sample size.
@@ -431,9 +452,19 @@ async function prepare(env, stateDir) {
   if (!['true', 'false'].includes(env.PRICE_COLLECTOR_INCLUDE_REVIEWED)) throw new Error('Specify whether verified retailer actors may run.');
   mkdirSync(stateDir, { mode: 0o700 }); // Refuse a previous attempt's directory; never reuse output.
   const token = await collectorToken(env);
-  const work = await runGetWork({ env: { PRICE_COLLECTOR_API_BASE_URL: apiUrl, PRICE_COLLECTOR_API_TOKEN: token } });
+  const work = await runGetWork({ env: { PRICE_COLLECTOR_API_BASE_URL: apiUrl, PRICE_COLLECTOR_API_TOKEN: token },
+    argv: ['--schedule', schedule] });
   if (work.exitCode !== 0) throw new Error('The collector API did not issue usable work.');
   const issued = JSON.parse(work.out);
+  if (!runWasIssued(issued)) {
+    // No run exists, so there is nothing for Claude to search and nothing to finalise: the later
+    // steps are skipped by this output, and find no issued work if they run anyway.
+    stepOutput(env, 'run_issued', 'false');
+    console.log(NOTHING_DUE);
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `## Price collector\n\n${NOTHING_DUE}\n`);
+    return;
+  }
+  stepOutput(env, 'run_issued', 'true');
   const sample = full ? fullRunWork(issued) : sampleWork(issued, size);
   save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full });
   // The whole work list the API issued, including the searches a sample leaves unsearched.

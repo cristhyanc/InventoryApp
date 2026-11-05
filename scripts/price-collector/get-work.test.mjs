@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { API_BASE_URL_ENV, API_TOKEN_ENV } from './collector-api.mjs';
-import { runGetWork, summariseWorkList } from './get-work.mjs';
+import { WORK_PATH, runGetWork, summariseWorkList, workPath } from './get-work.mjs';
 import { startStubServer } from './stub-server.mjs';
 
 const WORK_ROUTE = 'GET /api/price-collector/work';
@@ -300,5 +300,58 @@ describe('when the API refuses', () => {
 
     assert.equal(answer.exitCode, 1);
     assert.equal(answer.out, '');
+  });
+});
+
+describe('the schedule it asks for (issue #1110)', () => {
+  const nothingDue = { runId: null, issuedAtUtc: null, expiresAtUtc: null, suppliers: [], matchedProducts: [], waitingProducts: [], masterProductsForMatching: [], workItemLimitReached: false };
+
+  it('asks for the chosen schedule, and for the bare route when none is chosen', async () => {
+    assert.equal(workPath(null), WORK_PATH);
+    assert.equal(workPath('due'), `${WORK_PATH}?schedule=due`);
+    stub = await startStubServer({
+      [`${WORK_ROUTE}?schedule=due`]: { status: 200, body: workList() },
+      [`${WORK_ROUTE}?schedule=all`]: { status: 200, body: workList({ runId: 42 }) },
+    });
+
+    const due = await runGetWork({ env: envFor(stub.baseUrl), argv: ['--schedule', 'due'] });
+    const all = await runGetWork({ env: envFor(stub.baseUrl), argv: ['--schedule', 'all'] });
+
+    assert.equal(JSON.parse(due.out).runId, 41);
+    assert.equal(JSON.parse(all.out).runId, 42);
+    assert.deepEqual(stub.requests.map((request) => request.path), [`${WORK_PATH}?schedule=due`, `${WORK_PATH}?schedule=all`]);
+  });
+
+  it('refuses an unknown, missing or repeated schedule before calling the API', async () => {
+    for (const argv of [['--schedule', 'weekly'], ['--schedule'], ['--schedule', 'due', '--schedule', 'all']]) {
+      const answer = await runGetWork({ env: envFor('https://api.example.test'), argv, fetchImpl: () => assert.fail('no call') });
+      assert.equal(answer.exitCode, 2, argv.join(' '));
+      assert.equal(answer.out, '');
+    }
+  });
+
+  it('accepts a due answer with no run and no work as nothing due', async () => {
+    stub = await startStubServer({ [`${WORK_ROUTE}?schedule=due`]: { status: 200, body: nothingDue } });
+
+    const answer = await runGetWork({ env: envFor(stub.baseUrl), argv: ['--schedule', 'due'] });
+
+    assert.equal(answer.exitCode, 0, answer.err);
+    const printed = JSON.parse(answer.out);
+    assert.equal(printed.runId, null);
+    assert.equal(printed.searchCount, 0);
+  });
+
+  it('refuses an answer with no run unless it is a due answer with no work at all', async () => {
+    stub = await startStubServer({
+      [WORK_ROUTE]: { status: 200, body: nothingDue },
+      [`${WORK_ROUTE}?schedule=all`]: { status: 200, body: nothingDue },
+      [`${WORK_ROUTE}?schedule=due`]: { status: 200, body: workList({ runId: null }) },
+    });
+
+    for (const argv of [[], ['--schedule', 'all'], ['--schedule', 'due']]) {
+      const answer = await runGetWork({ env: envFor(stub.baseUrl), argv });
+      assert.equal(answer.exitCode, 1, argv.join(' '));
+      assert.equal(answer.out, '');
+    }
   });
 });

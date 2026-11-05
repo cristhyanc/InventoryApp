@@ -1,4 +1,6 @@
-// Contract for the deliberately manual stage of #929: a test target, and a main-only production target.
+// Contract for the price collector workflow (#929, #1110): a manual test target, a main-only
+// production target, and one daily Sydney-time schedule that ships switched off behind an
+// unprotected, credential-free gate job.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,8 +17,15 @@ export const RUN_LOG_STEP = `      - name: Upload the run log
           retention-days: 7
           if-no-files-found: ignore
 `;
-export const COLLECT_ENVIRONMENT = "    environment: ${{ inputs.target == 'production' && 'price-collector-production' || 'price-collector' }}\n";
-export const COLLECT_CONDITION = "    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (inputs.target == 'test' || (inputs.target == 'production' && github.ref == 'refs/heads/main')) && (";
+export const COLLECT_ENVIRONMENT = "    environment: ${{ needs.gate.outputs.target == 'production' && 'price-collector-production' || 'price-collector' }}\n";
+export const COLLECT_CONDITION = "    if: needs.gate.outputs.proceed == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (needs.gate.outputs.target == 'test' || (needs.gate.outputs.target == 'production' && github.ref == 'refs/heads/main')) && (";
+// One best-effort daily run in Sydney time (#1110), off the hour because GitHub documents that
+// scheduled runs at the start of an hour are the likeliest to be delayed or dropped.
+export const SCHEDULE_TRIGGER = "on:\n  schedule:\n    - cron: '17 5 * * *'\n      timezone: Australia/Sydney\n  workflow_dispatch:\n";
+export const SCHEDULE_SWITCH = `            schedule)
+              if [ "$SCHEDULE_ENABLED" != 'true' ]; then`;
+export const SCHEDULED_SETTINGS = "            TARGET=production SCHEDULE=due SAMPLE_SIZE=3 FULL_RUN=true INCLUDE_RETAILERS=true STOP_AFTER_MINUTES=''\n";
+export const FINALISE_STEP = "      - name: Submit finished files and complete the issued run\n        if: always() && steps.prepare.outputs.run_issued != 'false'\n        timeout-minutes: 15";
 export const GATE_PRODUCTION = `            production)
               if [ "$RUN_REF" != 'refs/heads/main' ]; then
                 echo '::error::Only the reviewed main workflow may run against production.'
@@ -27,7 +36,19 @@ export function verifyCollectorWorkflow(text) {
   const problems = runnerPlacementViolations(text, workflowPath);
   const requireText = (part, reason) => { if (!text.includes(part)) problems.push(reason); };
   requireText('  workflow_dispatch:', 'The collector must have a manual entry point.');
-  if (/^ {2}(?:schedule|push|pull_request|pull_request_target|workflow_run|workflow_call):/m.test(text)) problems.push('Stage 1 must not start automatically.');
+  requireText(SCHEDULE_TRIGGER, 'The only automatic start is one daily schedule at 05:17 Sydney time.');
+  if ((text.match(/^ {4}- cron:/gm) ?? []).length !== 1) problems.push('There must be exactly one schedule entry.');
+  if (/^ {2}(?:push|pull_request|pull_request_target|workflow_run|workflow_call|repository_dispatch):/m.test(text)) problems.push('Nothing but the schedule may start the collector automatically.');
+  // A delayed scheduled run still does its work; the backend's due rule (#1108) makes repeats safe.
+  if (/date\s+[+-]|\$\(date|TZ=/.test(text)) problems.push('No runtime check of the hour or date may discard a delayed scheduled run.');
+  // The switch is checked in the gate job, which names no environment and holds no credential, so a
+  // switched-off schedule never requests the protected environment or its reviewer's approval.
+  requireText("          SCHEDULE_ENABLED: ${{ vars.PRICE_COLLECTOR_SCHEDULE_ENABLED }}\n", 'The schedule must be switched by its repository variable.');
+  requireText(SCHEDULE_SWITCH, 'A scheduled run must stop unless PRICE_COLLECTOR_SCHEDULE_ENABLED is exactly true.');
+  requireText("              if [ \"$RUN_REF\" != 'refs/heads/main' ]; then\n                echo '::error::A scheduled collector run must be on main.'", 'A scheduled run must be on main.');
+  requireText(SCHEDULED_SETTINGS, 'A scheduled run is a full production run of the due work only.');
+  requireText("        if: github.event_name == 'workflow_dispatch'\n", "The manual confirmation gate must apply to every manual run.");
+  requireText("    needs: gate\n", 'The credentialed job must wait for the gate.');
   requireText('group: price-collector\n  cancel-in-progress: false', 'Collector runs must not overlap or cancel one another.');
   // Reviewed main or develop only (develop to test against the hosted testing API); a feature branch
   // never receives the collector's credentials, and the refusal runs before the credentialed job.
@@ -40,12 +61,17 @@ export function verifyCollectorWorkflow(text) {
   if (/refs\/heads\/(?!(?:main|develop)\b)/.test(text)) problems.push('Only main and develop may be named as collector refs.');
   requireText(COLLECT_ENVIRONMENT, 'Each target needs its dedicated protected environment.');
   if ((text.match(/^ {4}environment:/gm) ?? []).length !== 1) problems.push('Only the collect job may name an environment.');
-  requireText('      PRICE_COLLECTOR_TARGET: ${{ inputs.target }}\n', 'The scripts must check the chosen target.');
+  requireText('      PRICE_COLLECTOR_TARGET: ${{ needs.gate.outputs.target }}\n', 'The scripts must check the chosen target.');
+  requireText('          PRICE_COLLECTOR_SCHEDULE: ${{ needs.gate.outputs.schedule }}\n', 'The work call must be told which schedule was chosen.');
+  // A due run with nothing due issues no run (#1108): nothing to search, nothing to finalise.
+  requireText("        id: claude\n        if: steps.prepare.outputs.run_issued == 'true'\n", 'Claude must not start when no run was issued.');
   requireText('      PRICE_COLLECTOR_TEST_API_URL: ${{ vars.PRICE_COLLECTOR_TEST_API_URL }}\n', 'The test target requires the dedicated test API setting.');
   requireText('      PRICE_COLLECTOR_PRODUCTION_API_URL: ${{ vars.PRICE_COLLECTOR_PRODUCTION_API_URL }}\n', 'The production target requires its own API setting.');
   requireText('          persist-credentials: false', 'Checkout must not leave a GitHub credential.');
   const jobs = workflowJobs(text, workflowPath);
   const collect = jobs.collect ?? '';
+  const gate = jobs.gate ?? '';
+  if (!gate.includes('    permissions: {}\n') || /^\s*environment:|secrets\.|^\s*id-token:/m.test(gate.replace(/^\s*#.*$/gm, ''))) problems.push('The gate job must name no environment and hold no secret or OIDC permission.');
   if (!collect.includes('    permissions:\n      contents: read\n      id-token: write\n')) problems.push('Collector permissions must be read-only plus OIDC.');
   if (/(?:contents|actions|issues|pull-requests|deployments): write|permissions: write-all/.test(text)) problems.push('The collector cannot write GitHub resources.');
   if (/azure\/login|webapps-deploy|--dangerously-skip-permissions|PRICE_COLLECTOR_API_TOKEN:/.test(text)) problems.push('No deployments, permission bypass or stored API token.');
@@ -55,7 +81,7 @@ export function verifyCollectorWorkflow(text) {
   if (artifact.length > 1 || (artifact.length === 1 && artifact[0] !== `uses: ${UPLOAD_ARTIFACT}`)) problems.push('Only the pinned run-log artifact may be uploaded.');
   requireText(RUN_LOG_STEP, 'The run log must be uploaded, masked, for 7 days, after failure too.');
   if (text.indexOf(RUN_LOG_STEP) > text.indexOf('      - name: Remove private work, files and CLI installation')) problems.push('The run log must be uploaded before cleanup.');
-  requireText('      - name: Submit finished files and complete the issued run\n        if: always()\n        timeout-minutes: 15', 'Partial-result finalisation must run after failure with its own time budget.');
+  requireText(FINALISE_STEP, 'Partial-result finalisation must run after failure with its own time budget, whenever a run was issued.');
   requireText('      - name: Remove private work, files and CLI installation\n        if: always()', 'Private files must be cleaned after failure too.');
   if (!collect.includes('    timeout-minutes: 160\n') || !collect.includes('        timeout-minutes: 130\n')) problems.push('The job must leave at least 15 minutes after Claude stops.');
   if (problems.length) throw new Error(problems.join('\n'));
@@ -63,5 +89,5 @@ export function verifyCollectorWorkflow(text) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   verifyCollectorWorkflow(readFileSync(workflowPath, 'utf8'));
-  console.log('Manual collector workflow contract passed.');
+  console.log('Collector workflow contract passed.');
 }

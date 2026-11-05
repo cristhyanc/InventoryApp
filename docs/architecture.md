@@ -15562,10 +15562,10 @@ Cleanup removes private temporary data and the per-job CLI installation; reset/e
 is still mandatory for credentialed self-hosted jobs.
 
 Manual limits and the explicit retailer-test checkbox apply only to that run's private limits;
-they do not turn on repository actor activation or production scheduling. The later Sydney
-schedule and production activation remain under #929 after real end-to-end/cost evidence. See
+they do not turn on repository actor activation. The daily Sydney schedule (#1110) ships switched
+off behind the `PRICE_COLLECTOR_SCHEDULE_ENABLED` repository variable. See
 [Manual collector test](price-collector-testing.md) for setup, bounds and the interruption check,
-and [automation](automation.md#manual-supplier-price-collector-929-stage-1) for the workflow boundary.
+and [automation](automation.md#supplier-price-collector-929-1110) for the workflow boundary.
 
 ### The collector prompt, the Apify limits and the helper scripts (issue #926)
 

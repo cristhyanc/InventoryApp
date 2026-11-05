@@ -729,7 +729,7 @@ Documentation (`AGENTS.md`, `CLAUDE.md`, `docs/`, `README.md`, and the issue and
 | `vm-manager.yml` | Nothing (backend build and tests on `push` to `develop` and `main`) | — |
 | `deploy-production.yml` | API to Azure App Service, then frontend to Azure Static Web Apps | `workflow_dispatch` started by a human from `main` only |
 | `deploy-testing.yml` | The **test** API to the test App Service, then the test frontend to the test Static Web App (never production) | `push` to `develop`, or `workflow_dispatch` on `develop` |
-| `price-collector.yml` | Nothing (manual collector test against a test API) | — |
+| `price-collector.yml` | Nothing (supplier price collection against the test or production API) | — |
 
 `scripts/validate-deployment-workflows.mjs` (run by `validate.yml`, with its tests) enforces this table: no workflow other than `deploy-production-release.yml` may contain an Azure login, App Service or Static Web Apps deploy step, the Static Web Apps token or the production environment; only the two entry points may call it, both must be manual-only, gated to `main`, share the non-cancelling `deploy-production` concurrency group and pass their entry point; the normal one may expose no inputs and the recovery one must require a full `sha`; and the release must keep its `workflow_call`-only trigger, dispatch-commit release SHA, recorded-baseline rules, single release SHA, job ordering and permission boundaries. Its tests also run the two resolve steps in bash against a throwaway repository and a fake `gh`, covering the dispatch commit after `main` advances, refused inputs, automatic, missing, invalid, unreadable and conflicting baselines.
 
@@ -1035,9 +1035,10 @@ Rerunning the same workflow run selects the most recent checkpoint from an earli
 
 Runs for one issue are queued rather than cancelled by a newer invocation, so a new label event cannot interrupt the persistence boundary. Runner termination, hard timeout, credential/API/network failure, and work never committed can still prevent remote persistence; this is not an absolute guarantee against infrastructure loss. Persistence errors remain visible as workflow failures. Deterministic tests use real temporary repositories and a bare remote to exercise downstream failures, failed-agent recovery, no-commit behavior, SHA/ancestry rejection, protected history, collision rejection and exact-SHA resume.
 
-## Manual supplier price collector (#929, stage 1)
+## Supplier price collector (#929, #1110)
 
-`price-collector.yml` is a **manual workflow**, with no schedule and no deployment. Its `test` target
+`price-collector.yml` deploys nothing. It starts by hand, or from one daily schedule (#1110) that
+ships switched off; see [Scheduled runs](#scheduled-collector-runs) below. Its `test` target
 runs only reviewed `main` or reviewed `develop` (develop to test against the hosted testing API) in
 the protected `price-collector` environment and refuses the production API origin; its `production`
 target runs only reviewed `main` in the separate, reviewer-protected `price-collector-production`
@@ -1053,8 +1054,8 @@ fail-closed hook keep the model's authority separate from the finalizer's. The d
 sample is capped at 10; private run limits cap actor calls at 12, items at 5 (Dromb 1), and internal
 pages at 1. A manual checkbox can permit the previously verified retailer actors for that sample
 without enabling them in repository configuration. Claude has 40 turns, a US$1 budget and a
-14-minute deadline. The **full_run** checkbox is the production-sized dry run the schedule waits
-for, still manual and still against the test API: it ignores the sample size, keeps the production
+14-minute deadline. The **full_run** checkbox is the production-sized run, which every scheduled
+run also is: it ignores the sample size, keeps the production
 limits in `apify-limits.json` (the 600-call run cap and full page sizes), and works through every
 issued search (at most 576) in fresh Claude sessions of about 24 searches, never splitting one
 product's searches. JB Metro's lookup reads up to 5 pages of 20 in a full run (1 page of 5 in a
@@ -1079,9 +1080,25 @@ any line is written (`scripts/price-collector/trace.mjs`); `workflow-contract.mj
 one artifact. See [Run log](price-collector-testing.md#run-log). The cleanup step then removes the
 private workspace, state and CLI installation.
 
+### Scheduled collector runs
+
+The only automatic trigger is `schedule` with `cron: '17 5 * * *'` and `timezone: Australia/Sydney`
+(best effort: GitHub may delay or drop it, and the workflow does not check the hour). The first job,
+`gate`, has `permissions: {}`, no environment and no secret. For a scheduled run it reads the
+repository variable `PRICE_COLLECTOR_SCHEDULE_ENABLED` and ends green unless it is exactly `true`,
+so a switched-off schedule never requests the protected environment; it refuses a scheduled run on
+any ref but `main`; and it publishes fixed settings (target `production`, `due` work, full run,
+verified retailer actors allowed) as job outputs, which the credentialed `collect` job (`needs:
+gate`) reads instead of `inputs`. A manual run keeps its confirmation gate and gains a `schedule`
+input (`all` by default, or `due`). When a `due` request issues no run (#1108), the prepare step
+outputs `run_issued=false`, and the Claude and finalisation steps are skipped. Every switched-on
+scheduled run still waits for `price-collector-production`'s required reviewer; the workflow changes
+no environment rule. `workflow-contract.mjs` checks the single schedule, the switch, the
+credential-free gate, the fixed scheduled settings and the skipped steps.
+
 See [Manual collector test](price-collector-testing.md) for all environment variables/secrets,
-Entra setup, the normal and interruption tests, actual supplier cost evidence, and the later
-Sydney schedule/production rollout that remains under #929. Local tests use a stub API and fake
+Entra setup, the normal and interruption tests, actual supplier cost evidence, and how to switch
+the [daily schedule](price-collector-testing.md#daily-schedule) on. Local tests use a stub API and fake
 CLI process; they are not evidence of a successful live OIDC or paid collector run.
 
 ## Retired Copilot routes

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, productionApiOrigin, finaliseSample, launchClaude, toolUseReport, searchDetails, toolTimeline, claudeResult } from './workflow.mjs';
+import { sampleWork, sampleLimits, fullRunLimits, fullRunWork, fullRunRequested, workBatches, collectBatches, FULL_RUN, collectorEnvironment, collectorDeadlineMinutes, collectorTarget, scheduleRequested, runWasIssued, NOTHING_DUE, productionApiOrigin, finaliseSample, launchClaude, toolUseReport, searchDetails, toolTimeline, claudeResult } from './workflow.mjs';
 import { JB_METRO_CAPS, failureCode, jbMetroFlags, permittedCommand, recordDecision, toolDecision, toolLabel, TOOL_LOG_FILE } from './workflow-tool-guard.mjs';
 import { LEDGER_FILE, MAX_POLLS_PER_RUN, leadingJsonObject, runFromResponse } from './workflow-run-ledger.mjs';
 import { collectorToken } from './workflow-auth.mjs';
@@ -627,4 +627,14 @@ test('the run log masks every credential and keeps long answers to their head an
   assert.equal(clip('short', 10), 'short');
   const long = clip('a'.repeat(30) + 'b'.repeat(30), 20);
   assert.match(long, /^a{10} … \[40 characters left out\] … b{10}$/);
+});
+
+test('the work schedule is all or due and nothing else, and no run id means nothing was issued', () => {
+  assert.equal(scheduleRequested('all'), 'all');
+  assert.equal(scheduleRequested('due'), 'due');
+  // A typo read as all would re-search, and re-pay for, the whole catalogue.
+  for (const value of [undefined, '', 'Due', 'weekly', 'all ']) assert.throws(() => scheduleRequested(value), /all or due/);
+  assert.equal(runWasIssued({ runId: 41 }), true);
+  for (const issued of [{ runId: null }, { runId: 0 }, { runId: '41' }, {}, null]) assert.equal(runWasIssued(issued), false);
+  assert.match(NOTHING_DUE, /^Nothing due today/);
 });
