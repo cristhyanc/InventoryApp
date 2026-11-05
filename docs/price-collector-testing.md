@@ -121,7 +121,10 @@ The owner decided on 31 October 2026 that a run must not be a black box: the run
 full even though this repository's Actions logs are public. Each run shows:
 
 - **Job summary**: the submission output (every outcome count and every reason the API gave,
-  word for word, plus any submission error) and a **Searches** list: for each search, the product
+  word for word, plus any submission error), a **Suppliers** table (#1110) with counts only, one row
+  per supplier that had issued work: searches issued, given to Claude, searched (a result file was
+  written, with its outcomes) and not searched, so an unvisited search never reads as searched;
+  and a **Searches** list: for each search, the product
   and supplier, the outcome Claude reported (or that it wrote no file), and every row it wrote
   (title, supplier product id, price, pack, stock, link) with what the API did with that row and why.
 - **Finalise step log**: the same, plus every tool call in order: its input as the guard allowed it,

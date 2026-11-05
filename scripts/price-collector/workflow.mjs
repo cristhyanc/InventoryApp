@@ -177,6 +177,51 @@ export function searchDetails(work, outputDir, decisions = []) {
   return lines.join('\n') + '\n';
 }
 
+const supplierLabel = search => oneLine(search.supplierName ?? 'supplier ' + search.supplierPresetId);
+
+/** How many of the issued searches each supplier had, kept with the work so a sample can say what it left out. */
+export function issuedCountsBySupplier(searches) {
+  const counts = new Map();
+  for (const search of searches ?? []) {
+    const entry = counts.get(search.supplierPresetId) ?? { supplierPresetId: search.supplierPresetId, supplierName: supplierLabel(search), issued: 0 };
+    entry.issued += 1;
+    counts.set(search.supplierPresetId, entry);
+  }
+  return [...counts.values()];
+}
+
+/**
+ * The run's searches per supplier (issue #1110), counts only: the searches the API issued, those
+ * given to Claude, those Claude answered with a result file (by outcome), and those not searched.
+ * Only suppliers with issued work appear, so a supplier with nothing due is never listed as searched.
+ */
+export function supplierCounts(work, outputDir) {
+  const bySupplier = new Map();
+  const entryFor = (id, name) => {
+    if (!bySupplier.has(id)) bySupplier.set(id, { name, issued: 0, given: 0, answered: 0, outcomes: new Map() });
+    return bySupplier.get(id);
+  };
+  const issuedCounts = Array.isArray(work.issuedBySupplier) ? work.issuedBySupplier : issuedCountsBySupplier(work.searches);
+  for (const { supplierPresetId, supplierName, issued } of issuedCounts) entryFor(supplierPresetId, oneLine(supplierName)).issued += issued;
+  for (const search of work.searches) {
+    const entry = entryFor(search.supplierPresetId, supplierLabel(search));
+    entry.given += 1;
+    const file = readJson(join(outputDir, `${search.workItemId}.json`));
+    if (file === undefined) continue;
+    entry.answered += 1;
+    const outcome = /^[a-z_]{1,40}$/.test(String(file.outcome)) ? file.outcome : 'invalid';
+    entry.outcomes.set(outcome, (entry.outcomes.get(outcome) ?? 0) + 1);
+  }
+  if (bySupplier.size === 0) return '### Suppliers\n\nNo searches were issued.\n';
+  const lines = ['### Suppliers', '', '| Supplier | Issued | Given to Claude | Searched | Not searched | Outcomes |', '| --- | ---: | ---: | ---: | ---: | --- |'];
+  for (const entry of [...bySupplier.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    const outcomes = [...entry.outcomes].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => `${name} ${count}`).join(', ') || '-';
+    const issued = Math.max(entry.issued, entry.given);
+    lines.push(`| ${entry.name.replace(/\|/g, '/')} | ${issued} | ${entry.given} | ${entry.answered} | ${issued - entry.answered} | ${outcomes} |`);
+  }
+  return lines.join('\n') + '\n';
+}
+
 /** One trace entry as a line of the step log. */
 function timelineLine(entry, width) {
   const time = String(entry.at ?? '').slice(11, 19);
@@ -268,11 +313,12 @@ export async function finaliseSample({ stateDir, outputDir, env, apiUrl, token, 
   const subtype = typeof status.subtype === 'string' && /^[a-z_]{1,40}$/.test(status.subtype) ? status.subtype : 'unknown';
   const errors = result.err ? `Submission errors:\n${result.err}` : '';
   const report = `Collector status: ${label}\nClaude cost USD: ${cost}\nClaude turns: ${turns}; result: ${subtype}\n${batches}${toolUseReport(stateDir)}Searches given to Claude: ${work.searches.length}\nFiles refused before submission: ${refused}\n${result.out}${errors}Submission status: ${result.exitCode === 0 && refused === 0 ? 'completed' : 'failed'}\n`;
+  const suppliers = supplierCounts(work, outputDir);
   const details = searchDetails(work, outputDir, result.decisions ?? []);
   appendLog(stateDir, 'submission.json', JSON.stringify({ out: result.out, err: result.err ?? '', decisions: result.decisions ?? [] }, null, 2), env);
-  appendLog(stateDir, 'summary.md', `${report}\n${details}`, env);
+  appendLog(stateDir, 'summary.md', `${report}\n${suppliers}\n${details}`, env);
   save(join(stateDir, 'submission-status.json'), { ok: result.exitCode === 0 && refused === 0 });
-  return { report, details };
+  return { report, suppliers, details };
 }
 
 /** The last `result` message of a stream-json transcript, or the whole text when it is one object. */
@@ -466,7 +512,7 @@ async function prepare(env, stateDir) {
   }
   stepOutput(env, 'run_issued', 'true');
   const sample = full ? fullRunWork(issued) : sampleWork(issued, size);
-  save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full });
+  save(join(stateDir, ISSUED_WORK), { ...sample, fullRun: full, issuedBySupplier: issuedCountsBySupplier(issued.searches) });
   // The whole work list the API issued, including the searches a sample leaves unsearched.
   appendLog(stateDir, 'issued-work.json', JSON.stringify(issued, null, 2), env);
   const source = json(join(here, 'apify-limits.json'));
@@ -548,13 +594,13 @@ async function main(env, mode) {
     const apiUrl = collectorApiBaseUrl(env);
     const token = await collectorToken(env);
     const outputDir = join(sandbox, 'price-collector-out');
-    const { report, details } = await finaliseSample({ stateDir, outputDir, env, apiUrl, token });
+    const { report, suppliers, details } = await finaliseSample({ stateDir, outputDir, env, apiUrl, token });
     // Keep Claude's result files with the run's logs, so the artifact holds exactly what was submitted.
     if (existsSync(outputDir)) cpSync(outputDir, join(logDir(stateDir), 'result-files'), { recursive: true });
     const secrets = secretsOf({ ...env, PRICE_COLLECTOR_API_TOKEN: token });
-    console.log(redact(`${report}\n${details}\n### Tool calls\n${toolTimeline(stateDir)}`, secrets));
+    console.log(redact(`${report}\n${suppliers}\n${details}\n### Tool calls\n${toolTimeline(stateDir)}`, secrets));
     if (env.GITHUB_STEP_SUMMARY) {
-      appendFileSync(env.GITHUB_STEP_SUMMARY, redact(`## Price collector run ${issuedWork(stateDir).runId}\n\n\`\`\`\n${report}\`\`\`\n\n${details}\nThe full log (every tool call with its input and answer, and each Claude session's transcript) is in this run's **price-collector-logs** artifact; the tool calls are also in the finalise step's log.\n`, secrets));
+      appendFileSync(env.GITHUB_STEP_SUMMARY, redact(`## Price collector run ${issuedWork(stateDir).runId}\n\n\`\`\`\n${report}\`\`\`\n\n${suppliers}\n${details}\nThe full log (every tool call with its input and answer, and each Claude session's transcript) is in this run's **price-collector-logs** artifact; the tool calls are also in the finalise step's log.\n`, secrets));
     }
     if (!json(join(stateDir, 'submission-status.json')).ok) process.exitCode = 1;
     return;
