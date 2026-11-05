@@ -19,6 +19,7 @@ using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
@@ -396,6 +397,12 @@ public static class ApplicationServiceCollectionExtensions
         // about the process, and a per-request memory would remember nothing at all.
         services.AddSingleton<NayaxSalesSyncFreshness>();
         services.AddScoped<SyncLatestNayaxSales>();
+        // The slot-to-product lookup a queued Nayax SQS message needs (issue #1102), which an SQS
+        // message cannot answer itself: it reports the machine's MDB slot and no product id.
+        // Scoped like every other Nayax consumer, because the credentials, status gate and
+        // support-session refusal behind INayaxLynxClient belong to one caller's business. Its own
+        // message parser is a pure function and is registered nowhere.
+        services.AddScoped<INayaxSqsSlotProductResolver, NayaxSqsSlotProductResolver>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();
         services.AddScoped<ListPurchases>();
