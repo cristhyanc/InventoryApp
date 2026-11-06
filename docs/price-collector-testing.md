@@ -164,9 +164,15 @@ A full run covers the whole catalogue (owner decision, 1 November 2026): run 413
 product per session and 15 sessions, so it reached only 15 of 71 products (120 of 568 searches) and
 the other 56 were never searched. It took about 1.6 minutes and US$0.14 of Claude per product, so
 the 71 products need about 115 minutes and US$10.
-JB Metro (not an Apify actor) reads up to 5 pages of 20 products per search in a full run, with 2
-attempts of 15 seconds per page; a sample reads one page of 5 with one attempt. The guard appends
-these caps to every JB Metro call, so Claude cannot widen them.
+JB Metro (not an Apify actor) reads up to 5 pages of 20 products per search in a full run, with 3
+attempts of 25 seconds per page (raised from 2 of 15 after run 42128721044 lost 40 JB Metro searches
+to slow answers and GraphQL internal errors); a sample reads one page of 5 with one attempt of 15
+seconds. The guard appends these caps to every JB Metro call, so Claude cannot widen them.
+
+The write hook also runs submission's own preparation and schema check on every result and match
+file before it is written. A file submission would skip (for example a row with a field that is not
+in `output.schema.json`, as two files in run 42128721044 had) is refused with the reason and code
+`write-invalid`; a refused write is not recorded, so Claude can write the corrected file once.
 
 The summary adds `Claude batches: N of M`, and Claude's cost and turns are totals across batches
 (unknown if any batch did not report them). Apify spend is limited only by the Apify account usage

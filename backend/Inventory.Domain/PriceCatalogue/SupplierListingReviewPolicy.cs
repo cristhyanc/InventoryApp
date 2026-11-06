@@ -213,7 +213,9 @@ public static class SupplierListingReviewPolicy
         ArgumentNullException.ThrowIfNull(confirmed);
         ArgumentNullException.ThrowIfNull(read);
 
-        return !PriceCollectorResultPolicy.HasIdentityChanged(
+        // A value the reading leaves out is not reported, so it cannot disagree with what the reviewer
+        // confirms (owner decision, 6 November 2026; PriceCollectorResultPolicy.ReadingDisagrees).
+        return !PriceCollectorResultPolicy.ReadingDisagrees(
             confirmed with { UnitsPerPack = read.UnitsPerPack },
             read);
     }

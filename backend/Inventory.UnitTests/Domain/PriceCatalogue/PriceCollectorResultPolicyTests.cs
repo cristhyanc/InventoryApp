@@ -146,6 +146,50 @@ public class PriceCollectorResultPolicyTests
                 Confirmed,
                 Confirmed with { Variant = "  classic " }));
 
+    public static TheoryData<SupplierListingIdentity> UnreportedFields() =>
+        new()
+        {
+            Confirmed with { Variant = null },
+            Confirmed with { Variant = "   " },
+            Confirmed with { SizeValue = null, SizeUnit = null },
+            Confirmed with { SizeValue = null },
+            Confirmed with { SizeUnit = null },
+            Confirmed with { UnitsPerPack = null },
+            new SupplierListingIdentity(null, null, null, null, null, null),
+        };
+
+    /// <summary>
+    /// A field the reading leaves out is not reported, so it cannot contradict a confirmed listing
+    /// (owner decision, 6 November 2026, after run 42128721044 held 82 such readings): the reading
+    /// is priced as usual.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(UnreportedFields))]
+    public void A_field_the_reading_leaves_out_does_not_send_a_confirmed_listing_to_review(SupplierListingIdentity observed)
+    {
+        Assert.False(PriceCollectorResultPolicy.ReadingDisagrees(Confirmed, observed));
+
+        var decision = Decide(
+            SupplierListingMatchStatus.Confirmed,
+            Confirmed,
+            observed,
+            packPrice: 10m,
+            lastAcceptedPackPrice: 10m);
+
+        Assert.Equal(PriceCollectorRowOutcome.Accepted, decision.Outcome);
+        Assert.True(decision.RecordsAcceptedObservation);
+    }
+
+    /// <summary>A field the reading does report still decides, even when another is left out.</summary>
+    [Fact]
+    public void A_reported_field_still_disagrees_when_another_is_left_out()
+    {
+        Assert.True(PriceCollectorResultPolicy.ReadingDisagrees(Confirmed, Confirmed with { Variant = null, UnitsPerPack = 24 }));
+        Assert.True(PriceCollectorResultPolicy.ReadingDisagrees(Confirmed, Confirmed with { UnitsPerPack = null, SizeValue = 600m }));
+        // Two complete identities are still compared field by field, a missing value included.
+        Assert.True(PriceCollectorResultPolicy.HasIdentityChanged(Confirmed, Confirmed with { Variant = null }));
+    }
+
     public static TheoryData<SupplierListingIdentity> BarcodeOnlyDifferences() =>
         new()
         {

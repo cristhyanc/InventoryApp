@@ -309,11 +309,30 @@ describe('SupplierListingReviewComponent (issue #928)', () => {
    * every decision, and a correction carried onto another listing would be a pack quantity nobody
    * reviewed.
    */
+  it('starts from what a fresh held reading reports, keeping the stored value for what it leaves out', async () => {
+    const { component } = await render(
+      listing({
+        pendingObservation: pending({ variant: null, sizeValue: 46, sizeUnit: MasterProductSizeUnit.Gram, unitsPerPack: 1 })
+      })
+    );
+
+    expect(component.variant).toBe('Classic');
+    expect(component.sizeValue).toBe(46);
+    expect(component.sizeUnit).toBe(MasterProductSizeUnit.Gram);
+    expect(component.unitsPerPack).toBe(1);
+  });
+
+  it('keeps the stored identity when the held reading is stale', async () => {
+    const { component } = await render(listing({ pendingObservation: pending({ isFresh: false, unitsPerPack: 1 }) }));
+
+    expect(component.unitsPerPack).toBe(30);
+  });
+
   it('starts from the stored identity when another listing is reviewed', async () => {
     const { fixture, component } = await render(listing());
 
     component.unitsPerPack = 99;
-    fixture.componentRef.setInput('listing', listing({ id: 8, unitsPerPack: 24 }));
+    fixture.componentRef.setInput('listing', listing({ id: 8, unitsPerPack: 24, pendingObservation: null }));
     fixture.detectChanges();
 
     expect(component.unitsPerPack).toBe(24);

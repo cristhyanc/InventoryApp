@@ -106,10 +106,17 @@ export class SupplierListingReviewComponent implements OnChanges {
     this.error = null;
     this.submitting = false;
     this.approvePriceException = false;
-    this.variant = this.listing.variant;
-    this.sizeValue = this.listing.sizeValue;
-    this.sizeUnit = this.listing.sizeUnit;
-    this.unitsPerPack = this.listing.unitsPerPack;
+    // A fresh held reading is what the reviewer is deciding about, so the card starts from what it
+    // reports (owner decision, 6 November 2026): confirming it as shown makes it the price at once,
+    // where starting from the stored identity confirmed the old pack and dropped the reading until
+    // the next run. A field the reading leaves out keeps the stored value, and a stale reading,
+    // which cannot become a price anyway, leaves the stored identity alone.
+    const reading = this.listing.pendingObservation?.isFresh ? this.listing.pendingObservation : null;
+    const sizeReported = reading?.sizeValue != null && reading.sizeUnit != null;
+    this.variant = reading?.variant?.trim() ? reading.variant : this.listing.variant;
+    this.sizeValue = sizeReported ? reading.sizeValue : this.listing.sizeValue;
+    this.sizeUnit = sizeReported ? reading.sizeUnit : this.listing.sizeUnit;
+    this.unitsPerPack = reading?.unitsPerPack ?? this.listing.unitsPerPack;
     this.barcode = this.listing.barcode;
     this.barcodeScope = this.listing.barcodeScope;
   }
