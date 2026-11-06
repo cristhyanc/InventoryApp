@@ -23,6 +23,9 @@ namespace InventoryApi.DTOs;
 /// <param name="IsEnabled">
 /// Whether the mapping is in force. <c>true</c> with no sender id is refused with <c>400</c>, because
 /// a mapping switched on with nothing to match on would claim the queue is attributed when it is not.
+/// Marked <see cref="JsonRequiredAttribute"/> so a body that omits it is refused rather than silently
+/// bound to <c>false</c> - which would turn an under-posted "change the id" request into a silent
+/// disable.
 /// </param>
 /// <param name="ExpectedRevision">
 /// The revision the caller read, and <c>null</c> to create the first row. Marked
@@ -33,7 +36,7 @@ namespace InventoryApi.DTOs;
 /// </param>
 public sealed record SuperAdminNayaxSqsSenderRequest(
     string? AwsSenderId,
-    bool IsEnabled,
+    [property: JsonRequired] bool IsEnabled,
     [property: JsonRequired] int? ExpectedRevision);
 
 /// <summary>

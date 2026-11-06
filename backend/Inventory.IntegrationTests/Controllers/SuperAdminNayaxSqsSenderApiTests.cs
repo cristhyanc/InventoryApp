@@ -332,6 +332,21 @@ public class SuperAdminNayaxSqsSenderApiTests
         Assert.Empty(await _factory.SendersOfAsync(_factory.OtherBusinessId));
     }
 
+    /// <summary>
+    /// A body that omits <c>isEnabled</c> is refused rather than silently bound to <c>false</c>,
+    /// which would turn an under-posted "change the id" request into a silent disable.
+    /// </summary>
+    [Fact]
+    public async Task A_body_without_is_enabled_is_refused()
+    {
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            SenderUrl(_factory.OtherBusinessId),
+            new { awsSenderId = SenderId, expectedRevision = (int?)null });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(await _factory.SendersOfAsync(_factory.OtherBusinessId));
+    }
+
     #endregion
 
     #region Refusals
