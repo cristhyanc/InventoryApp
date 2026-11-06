@@ -4,6 +4,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runGuard } from './apify-guard.mjs';
+import { prepareOutputFile } from './submit-results.mjs';
 import { recordRun, reserveRead } from './workflow-run-ledger.mjs';
 import { textOf, trace } from './trace.mjs';
 
@@ -40,6 +41,15 @@ export function noteToolUse(stateDir, entry) {
   } catch {
     // Diagnostics never change a decision.
   }
+}
+
+/**
+ * Why submission would skip this file, or null. The same preparation and schema check as
+ * submit-results.mjs, on a copy, so the file Claude writes is never changed here.
+ */
+function submissionProblem(content, isResult) {
+  const { checked } = prepareOutputFile(structuredClone(content), isResult, new Date());
+  return checked.ok ? null : checked.problems.slice(0, 3).join(' ');
 }
 
 /** 'ok', or which part of the sample check a result file failed. */
@@ -146,14 +156,16 @@ function dedicatedActorTools(limits) {
 
 /**
  * JB Metro's caps per run type. A sample reads one page of 5; a full run reads up to 5 pages of 20
- * (100 products), with 2 attempts of 15 s per page so one call stays inside the Bash tool's
- * 2-minute limit. HARD is the ceiling a limits file can never exceed.
+ * (100 products). A full run allows 3 attempts of 25 s per page (live run 42128721044: JB Metro
+ * failed 23 searches with no answer within 15 s and 17 with a GraphQL internal error), so a page's
+ * worst case is about 78 s with backoff, inside the Bash tool's 2-minute limit. HARD is the ceiling
+ * a limits file can never exceed.
  */
 export const JB_METRO_CAPS = Object.freeze({
   sample: Object.freeze({ pageSize: 5, maxPages: 1, batchSize: 5, attempts: 1, timeoutMs: 15000 }),
-  full: Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 2, timeoutMs: 15000 }),
+  full: Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 3, timeoutMs: 25000 }),
 });
-const JB_METRO_HARD = Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 2, timeoutMs: 15000 });
+const JB_METRO_HARD = Object.freeze({ pageSize: 20, maxPages: 5, batchSize: 20, attempts: 3, timeoutMs: 25000 });
 const JB_METRO_FLAGS = Object.freeze({ pageSize: '--page-size', maxPages: '--max-pages', batchSize: '--batch-size', attempts: '--attempts', timeoutMs: '--timeout-ms' });
 
 /** The flags for this run's JB Metro caps; the sample caps when the limits name none or a bad one. */
@@ -194,6 +206,11 @@ export async function toolDecision(event, env) {
   if (name === 'Write') {
     const sample = writeSampleCode(event, env.PRICE_COLLECTOR_STATE_DIR);
     if (sample !== 'ok') return decision('deny', 'A result must answer this prepared sample and its run.', undefined, sample);
+    // A file submission would skip is refused before it exists, so the search is not lost: the
+    // write is not recorded, and Claude can write the corrected file once (live run 42128721044).
+    const isResult = /^[1-9]\d*\.json$/.test(basename(String(event.tool_input.file_path ?? '')));
+    const problem = submissionProblem(JSON.parse(event.tool_input.content), isResult);
+    if (problem) return decision('deny', `Submission would skip this file: ${problem} Write it again with only the fields of output.schema.json.`, undefined, 'write-invalid');
   }
   // The connector's dedicated tools use --, while the original guard knows -slash-.
   // Normalize only exact, reviewed actor names; unknown tools still fail closed.
