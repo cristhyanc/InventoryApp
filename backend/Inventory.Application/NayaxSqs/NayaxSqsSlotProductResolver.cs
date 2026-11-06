@@ -6,11 +6,12 @@ namespace Inventory.Application.NayaxSqs;
 /// Resolves the machine slot a Nayax SQS message reports (<c>Product Code in Map</c>, the MDB code)
 /// to Nayax's own product id (issue #1102).
 ///
-/// <para>It exists because an SQS transaction message does not carry a <c>NayaxProductID</c> at all:
-/// the nested product entry names the slot, the PA code, the product name and the catalogue number,
-/// and the slot is the only one of those the machine's product map turns into a product id. The
-/// <c>lastSales</c> payload carries the id directly, so this step has no counterpart on that
-/// path.</para>
+/// <para>It is the <strong>fallback</strong> for a message that states no usable product id of its
+/// own. The nested product entry carries <c>Product ID</c>, Nayax's own identifier, which the parser
+/// maps straight onto the sale; but it is a selectable column and the value is not always a usable
+/// identifier, and the slot is then the only thing the message says about which product was vended
+/// besides its name. The <c>lastSales</c> payload always carries the id directly, so this step has
+/// no counterpart on that path.</para>
 /// </summary>
 public interface INayaxSqsSlotProductResolver
 {

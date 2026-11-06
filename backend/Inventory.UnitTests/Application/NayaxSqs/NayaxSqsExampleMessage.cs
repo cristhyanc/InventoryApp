@@ -15,9 +15,11 @@ namespace InventoryApi.Tests.Application.NayaxSqs;
 /// the fields the parser reads would prove nothing at all.</para>
 ///
 /// <para>The example predates the selectable status columns, so it carries no
-/// <c>Transaction Status ID</c>, <c>Transaction Status Name</c> or
-/// <c>Is Revalue Reward Transaction</c>: Nayax Core's Transactions Report tab is where an operator
-/// selects those, and parent #1100's setup step says to select them.
+/// <c>Transaction Status ID</c>, <c>Transaction Status Name</c>, <c>Is Revalue Reward Transaction</c>
+/// or product <c>Product ID</c>: Nayax Core's Transactions Report tab is where an operator
+/// selects those, and parent #1100's setup step says to select them. A message whose product entry
+/// states no product id is therefore also what this fixture shows - the case the slot resolver is
+/// the fallback for; <see cref="NayaxSqsRealMessage"/> is the fixture that carries one.
 /// <see cref="PublishedWith"/> adds them the way a real message carries them - as keys of the same
 /// <c>Data</c> object.</para>
 /// </summary>

@@ -7,8 +7,9 @@ namespace InventoryApi.Tests.Application.NayaxSqs;
 
 /// <summary>
 /// Issue #1102: turning the machine slot an SQS message reports into Nayax's own product id, through
-/// the machine's product map. An SQS message carries no product id, so this is the only thing that
-/// links a queued sale to a product by anything other than its name.
+/// the machine's product map. It is the fallback for a message that states no usable
+/// <c>"Product ID"</c> of its own, and then the only thing that links a queued sale to a product by
+/// anything other than its name.
 /// </summary>
 public class NayaxSqsSlotProductResolverTests
 {

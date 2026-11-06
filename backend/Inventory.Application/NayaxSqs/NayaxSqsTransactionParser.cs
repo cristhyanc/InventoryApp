@@ -18,7 +18,9 @@ namespace Inventory.Application.NayaxSqs;
 ///   <item><strong>Invalid</strong> - not JSON, or missing a field a sale cannot be built from:
 ///   <c>TransactionId</c>, <c>MachineId</c>, <c>Data</c>, <c>Data.SeValue</c>,
 ///   <c>Data."Transaction Status ID"</c>, <c>Data."Authorization Time"</c> or a non-empty
-///   <c>Data.Products</c>.</item>
+///   <c>Data.Products</c>; or carrying a <c>Data</c> copy of either identifier
+///   (<c>Data."Transaction ID"</c>, <c>Data."Machine ID"</c>) that disagrees with the root
+///   value.</item>
 ///   <item><strong>Revalue</strong> - a prepaid credit top-up, not a product sale.</item>
 ///   <item><strong>Multivend</strong> - by the flag or by more than one product; deferred by parent
 ///   #1100 to the hourly <c>lastSales</c> run.</item>
@@ -47,10 +49,17 @@ namespace Inventory.Application.NayaxSqs;
 /// rather than a refunded transaction. A refund is recognised by status <c>62</c> and by nothing
 /// else; reading the card flag as refund evidence would quietly stop counting real sales.</para>
 ///
+/// <para><strong>Every boolean flag is false unless the message says <c>true</c></strong>. The
+/// first real message sends <c>Settlment Failed</c> and <c>Is Revalue Reward Transaction</c> as
+/// <c>null</c> on an ordinary settled sale, and each flag the parser reads diverts a message away
+/// from being saved, so reading "not set" as "set" would discard real sales. <c>Cancel Type</c>
+/// follows the same rule: absent and <c>null</c> both mean "no cancel reason", which is what that
+/// message carries on a transaction it also calls settled.</para>
+///
 /// <para><strong>Nothing here makes a call</strong> - no AWS SDK, no EF Core, no Nayax read. The
-/// message's slot is returned beside the report for the reader to resolve through
-/// <see cref="INayaxSqsSlotProductResolver"/>, and the report's <c>NayaxProductId</c> is left
-/// unset.</para>
+/// report's <c>NayaxProductId</c> is the product entry's own <c>Product ID</c> when the message
+/// states a usable one, and the message's slot is returned beside the report either way, for the
+/// reader to resolve through <see cref="INayaxSqsSlotProductResolver"/> when it is not.</para>
 /// </summary>
 public static class NayaxSqsTransactionParser
 {
@@ -192,6 +201,25 @@ public static class NayaxSqsTransactionParser
             return false;
         }
 
+        // The last clause of rule 1. Data repeats both root identifiers, and the two copies of one
+        // identifier may not disagree: a message like that is not a message about one transaction,
+        // and saving it would attribute a sale to whichever copy this code happened to read.
+        // Absent and null copies say nothing and are no contradiction; a copy that is present but
+        // unreadable cannot be shown to agree, so it is refused - the fail-closed reading.
+        if (!NayaxSqsJsonValues.IsAbsent(data.TransactionId)
+            && NayaxSqsJsonValues.AsInt64(data.TransactionId) != transactionId)
+        {
+            reason = NayaxSqsRejectionReason.TransactionIdMismatch;
+            return false;
+        }
+
+        if (!NayaxSqsJsonValues.IsAbsent(data.MachineId)
+            && NayaxSqsJsonValues.AsInt64(data.MachineId) != machineId)
+        {
+            reason = NayaxSqsRejectionReason.MachineIdMismatch;
+            return false;
+        }
+
         fields = new RequiredFields(
             transactionId, machineId, data, settlementValue, transactionStatusId, authorizedAtGmt, products);
         reason = NayaxSqsRejectionReason.None;
@@ -255,8 +283,8 @@ public static class NayaxSqsTransactionParser
 
     /// <summary>
     /// The mapping onto the record the application already saves. Only the allow-listed fields are
-    /// read; <c>NayaxProductId</c> is deliberately left unset, because an SQS message carries no
-    /// product id and the reader resolves one from the slot.
+    /// read; <c>NayaxProductId</c> comes from the product entry's own <c>Product ID</c> when that
+    /// is a usable identifier, and is otherwise left unset for the reader to resolve from the slot.
     /// </summary>
     private static NayaxLastSalesReport MapReport(
         long transactionId,
@@ -270,6 +298,14 @@ public static class NayaxSqsTransactionParser
         {
             TransactionID = transactionId,
             MachineID = machineId,
+
+            // Nayax's own product id, when the message states a usable one. It is an external
+            // identity and is carried as reported: the product links the application stores are
+            // keyed by this value, so resolving the slot again instead would be a second guess at
+            // something the provider already answered. A value that is not a positive integer is
+            // no identifier at all - 0 is a real slot but never a real product id - and leaves the
+            // field unset for the reader's slot lookup and the existing name fallback.
+            NayaxProductId = AsProductIdentifier(product?.ProductId),
 
             // The supplied status, which the store honours as given from issue #1103 onwards. It is
             // the message's own Transaction Status ID and nothing derived from the amount.
@@ -297,4 +333,12 @@ public static class NayaxSqsTransactionParser
                 NayaxSqsJsonValues.AsDecimal(product?.CostPrice)
                 ?? NayaxSqsJsonValues.AsDecimal(data.CostPrice)
         };
+
+    /// <summary>
+    /// The field as a Nayax product id, which is a positive integer or nothing. Zero, a negative
+    /// value and every non-integer shape are reported as no id rather than carried, so a sale is
+    /// never attached to a product id that cannot exist.
+    /// </summary>
+    private static long? AsProductIdentifier(JsonElement? element) =>
+        NayaxSqsJsonValues.AsInt64(element) is { } productId && productId > 0 ? productId : null;
 }

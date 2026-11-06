@@ -30,6 +30,8 @@ public class NayaxSqsTransactionPrivacyTests
 
     private static readonly string[] AllowedDataFields =
     [
+        "Transaction ID",
+        "Machine ID",
         "SeValue",
         "Transaction Status ID",
         "Authorization Time",
@@ -47,7 +49,7 @@ public class NayaxSqsTransactionPrivacyTests
     ];
 
     private static readonly string[] AllowedProductFields =
-        ["Product Name", "Product Code in Map", "Cost Price"];
+        ["Product ID", "Product Name", "Product Code in Map", "Cost Price"];
 
     /// <summary>
     /// The card and customer fields the issue names explicitly. None of them may be declared by any
@@ -77,6 +79,20 @@ public class NayaxSqsTransactionPrivacyTests
         "Loyalty Card Number",
         "CLI",
         "Guest Name",
+        "Brand",
+        "Card ID",
+
+        // The payment-processor references the issue names. They identify the merchant account and
+        // the authorization at the processor, which this application neither reconciles against nor
+        // has any other use for - and the first real message carries every one of them.
+        "Merchant ID",
+        "Terminal ID",
+        "Authorization Code",
+        "Authorization RRN",
+        "PayServTransid",
+        "sePayServTransId",
+        "Device Number",
+        "Device Transaction ID (DTID)",
     ];
 
     private static IEnumerable<string> DeclaredJsonFields(Type model) =>
@@ -183,6 +199,76 @@ public class NayaxSqsTransactionPrivacyTests
                 (key, """{ "unexpected": [1, 2, 3] }"""));
 
             var outcome = NayaxSqsTransactionParser.Parse(body);
+
+            Assert.True(
+                Enum.IsDefined(outcome.Kind),
+                $"'{key}' arriving as an object must still produce a stated outcome.");
+        }
+    }
+
+    /// <summary>
+    /// The same rule against the shape of the first real message, which is the one that matters in
+    /// practice: the owner's Nayax Core currently sends the card, consumer and processor columns, so
+    /// this document carries them on every outcome the parser can reach.
+    /// </summary>
+    public static TheoryData<string, string> RealMessageOutcomes() => new()
+    {
+        { "a completed sale", NayaxSqsRealMessage.Received },
+        { "a declined transaction", NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "26")) },
+        { "a refund", NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")) },
+        { "an unknown status", NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "99")) },
+        { "a revalue", NayaxSqsRealMessage.ReceivedWith(("Is Revalue Transaction", "true")) },
+        { "a multivend", NayaxSqsRealMessage.ReceivedWith(("Is Multivend", "true")) },
+        { "a free vend", NayaxSqsRealMessage.ReceivedWith(("SeValue", "0")) },
+        { "a status contradiction", NayaxSqsRealMessage.ReceivedWith(("Cancel Type", "3")) },
+        { "a void transaction", NayaxSqsRealMessage.ReceivedWithRoot("Void", "true") },
+        { "a failed settlement", NayaxSqsRealMessage.ReceivedWith(("Settlment Failed", "true")) },
+        { "a message whose amount is text", NayaxSqsRealMessage.ReceivedWith(("SeValue", "\"3.50\"")) },
+        { "a message whose identifiers disagree", NayaxSqsRealMessage.ReceivedWith(("Transaction ID", "4100000002")) },
+        { "a truncated message", NayaxSqsRealMessage.Received[..600] },
+    };
+
+    /// <summary>The fixture guard, as above: the forbidden values really are in the document.</summary>
+    [Fact]
+    public void The_real_message_fixture_really_carries_the_card_and_customer_values()
+    {
+        foreach (var value in NayaxSqsRealMessage.CardAndCustomerValues)
+            Assert.Contains(value, NayaxSqsRealMessage.Received, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(RealMessageOutcomes))]
+    public void No_card_customer_or_processor_value_of_the_real_message_reaches_an_outcome(
+        string because, string body)
+    {
+        var outcome = NayaxSqsTransactionParser.Parse(body);
+
+        var text = string.Join(
+            " ",
+            outcome.ToString(),
+            outcome.Reason.ToString(),
+            JsonSerializer.Serialize(outcome),
+            outcome.Report is null ? string.Empty : JsonSerializer.Serialize(outcome.Report));
+
+        foreach (var value in NayaxSqsRealMessage.CardAndCustomerValues)
+            Assert.False(
+                text.Contains(value, StringComparison.Ordinal),
+                $"The outcome of {because} contains the card, customer or processor value '{value}'.");
+    }
+
+    /// <summary>
+    /// And no single field of the real document arriving as the wrong type can make the parser
+    /// throw, so there is no exception text for a payload fragment to leak through.
+    /// </summary>
+    [Fact]
+    public void No_single_malformed_field_of_the_real_message_can_make_the_parser_throw()
+    {
+        var data = JsonNode.Parse(NayaxSqsRealMessage.Received)!.AsObject()["Data"]!.AsObject();
+
+        foreach (var key in data.Select(field => field.Key).ToList())
+        {
+            var outcome = NayaxSqsTransactionParser.Parse(
+                NayaxSqsRealMessage.ReceivedWith((key, """{ "unexpected": [1, 2, 3] }""")));
 
             Assert.True(
                 Enum.IsDefined(outcome.Kind),
