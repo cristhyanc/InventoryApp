@@ -191,8 +191,8 @@ internal sealed class FakeNayaxSqsReaderLog : INayaxSqsReaderLog
 
     public List<(string FailureType, int ConsecutiveFailures, TimeSpan Backoff)> PollFailures { get; } = [];
 
-    public List<(string MessageId, int? BusinessId, NayaxSqsDisposition Disposition, NayaxSqsProcessingReason Reason)>
-        Handled { get; } = [];
+    /// <summary>Every message the reader finished with, in order, with the codes it reported.</summary>
+    public List<HandledMessage> Handled { get; } = [];
 
     public List<string> ExtensionFailures { get; } = [];
 
@@ -218,7 +218,14 @@ internal sealed class FakeNayaxSqsReaderLog : INayaxSqsReaderLog
         int? businessId,
         NayaxSqsDisposition disposition,
         NayaxSqsProcessingReason reason) =>
-        Handled.Add((messageId, businessId, disposition, reason));
+        Handled.Add(new HandledMessage(messageId, businessId, disposition, reason));
+
+    /// <summary>One line the reader said about one message.</summary>
+    internal sealed record HandledMessage(
+        string MessageId,
+        int? BusinessId,
+        NayaxSqsDisposition Disposition,
+        NayaxSqsProcessingReason Reason);
 
     public void VisibilityExtensionFailed(string messageId, string failureType) =>
         ExtensionFailures.Add(messageId);
