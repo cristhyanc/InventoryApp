@@ -8498,9 +8498,10 @@ Current product cost and selling price are never substitutes for historical cost
 its cost replay is a longer step afterwards, so the same transaction that stores the sale writes a
 `PendingInventoryCostRebuilds` row for every product it affected — one row per
 `(BusinessId, ProductId)`, whose `FromInstantUtc` only ever moves *earlier* — and the replay removes
-each row in the same transaction as the costs it rebuilt, and only while that row still names the
-instant it replayed from: the replay itself runs outside the write lock, so a sale another writer
-recorded meanwhile is replayed by the next drain instead of being cleared by this one (see
+each row in the same transaction as the costs it rebuilt, and only while that row still holds the
+`Revision` it replayed: the replay itself runs outside the write lock, so a sale another writer
+recorded meanwhile — at *any* instant, which is why the comparison is a revision and not the instant —
+is replayed by the next drain instead of being cleared by this one (see
 [Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). A replay that fails keeps its
 row with its attempt count and a short failure code and is retried by the next run of either sales
 path. That
@@ -17196,9 +17197,9 @@ the enrich-only path, so a concurrent insert is never surfaced as a failure and 
 #### Pending inventory-cost rebuilds
 
 `PendingInventoryCostRebuilds` is a tenant-owned table holding `BusinessId`, `ProductId`,
-`FromInstantUtc` (the earliest instant still to replay), `CreatedAtUtc`, `AttemptCount`,
-`LastAttemptAtUtc` and `LastFailureCode`, with a unique index on `(BusinessId, ProductId)` and an
-oldest-first index on `(BusinessId, CreatedAtUtc)`.
+`FromInstantUtc` (the earliest instant still to replay), `Revision` (the version of the work),
+`CreatedAtUtc`, `AttemptCount`, `LastAttemptAtUtc` and `LastFailureCode`, with a unique index on
+`(BusinessId, ProductId)` and an oldest-first index on `(BusinessId, CreatedAtUtc)`.
 
 It exists because the replay was remembered rather than written down. A sale was saved and the replay
 ran afterwards from a dictionary; if the replay failed, the sale stayed saved and the work was simply
@@ -17211,17 +17212,29 @@ that product's costing position stayed stale until its next sale. A queue reader
   disagree.
 - **A drain acknowledges only the work it actually replayed.** The replay runs *outside* the write
   lock on purpose (step 8 above), so another writer — the other sales path, or a second drain, since
-  both drain every pending row of the business — can record an earlier sale for the same product and
-  commit while it is running, and recording one only ever moves that row's instant earlier. The drain
-  therefore reads the row again *inside* the write-locked transaction that removes it, where no other
-  writer can commit between the read and the removal, and removes it only while it still names the
-  instant that was replayed from. When it does not, the transaction commits nothing at all: the costs
-  that replay staged were computed before the earlier sale existed, so they are discarded rather than
-  written over what the drain replaying from the earlier instant will write, the product is reported
-  as still pending — which it is — and the row stays as the standing record of what has to be
-  replayed. Removing it by key instead would have thrown the newly arrived earlier replay away for
-  good, which is the one failure this table exists to prevent. `NayaxSqsConcurrencyTests` covers both
-  interleavings against a real database **file** with two connections.
+  both drain every pending row of the business — can record another sale for the same product and
+  commit while it is running, *after* the replay has already read the costing inputs it is computing
+  from. The drain therefore reads the row again *inside* the write-locked transaction that removes it,
+  where no other writer can commit between the read and the removal, and removes it only while it
+  still holds the `Revision` that was replayed. When it does not, the transaction commits nothing at
+  all: the costs that replay staged were computed before the newer sale existed, so they are discarded
+  rather than written over what the next drain will write, the product is reported as still pending —
+  which it is — and the row stays as the standing record of what has to be replayed. Removing it by
+  key instead would have thrown the newly arrived work away for good, which is the one failure this
+  table exists to prevent. `NayaxSqsConcurrencyTests` covers the interleavings against a real database
+  **file** with two connections: an earlier sale, a sale at or after the replayed instant, and two
+  drains of one row.
+- **`Revision` is the comparison, and the instant cannot be.** Recording a pending rebuild only ever
+  moves `FromInstantUtc` earlier, so a sale at or after the instant the row already holds adds work
+  without changing any other column — an acknowledgement that compared the instant would succeed,
+  write costs computed without that sale in them and delete the work recorded for it, leaving the newer
+  sale replayed by nobody. Every enqueue therefore moves `Revision` on by one whether or not it moves
+  the instant, and the removal is conditional on that alone. Both conditions are in the query's own
+  `WHERE` clause and any instance of the row the context tracked earlier is detached first, so the
+  stored revision answers the comparison and never one read before another writer moved it. Recording
+  a *failed attempt* deliberately moves neither the instant nor the revision: an attempt is evidence
+  about a replay, not new work, and invalidating another drain's claim for it would discard a replay
+  that is still correct.
 - A second sale of the same product moves `FromInstantUtc` **earlier** and never later: a replay from
   the earlier instant covers the later one, and the other way round would silently skip a sale's effect
   on cost.

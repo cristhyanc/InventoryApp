@@ -3161,6 +3161,11 @@ public class AppDbContext : DbContext
     /// <para>The second index is <c>(BusinessId, CreatedAtUtc)</c>, because the drain reads "this
     /// business's pending replays, oldest first": replaying in the order the work arrived is what
     /// keeps a product that has been waiting since yesterday from being starved by today's sales.</para>
+    ///
+    /// <para><c>Revision</c> needs no mapping of its own and is listed here because of what it is
+    /// for: it is the version of the work a replay's acknowledgement is conditional on, moved on
+    /// every enqueue, because <c>FromInstantUtc</c> only ever moves earlier and therefore cannot say
+    /// that a sale at or after it added work (see <c>PendingInventoryCostRebuild.Revision</c>).</para>
     /// </summary>
     private static void ConfigurePendingInventoryCostRebuilds(ModelBuilder modelBuilder)
     {

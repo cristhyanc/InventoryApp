@@ -1790,6 +1790,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<long>("ProductId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<long>("Revision")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
 
                     b.HasIndex("BusinessId");

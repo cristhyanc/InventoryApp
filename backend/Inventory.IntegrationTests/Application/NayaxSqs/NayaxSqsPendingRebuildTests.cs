@@ -187,6 +187,11 @@ public class NayaxSqsPendingRebuildTests
     /// A second sale of the same product moves the instant <em>earlier</em> and never later: a replay
     /// from the earlier instant covers the later one, and the other way round would silently skip a
     /// sale's effect on cost. One row per product either way.
+    ///
+    /// <para>And the row's <c>Revision</c> moves on <em>every</em> sale, including the later one the
+    /// instant does not notice. That is what lets a replay already in flight tell that work was added
+    /// under it; <c>NayaxSqsConcurrencyTests</c> covers what the acknowledgement then does with
+    /// it.</para>
     /// </summary>
     [Fact]
     public async Task A_second_sale_only_ever_moves_the_pending_instant_earlier()
@@ -208,11 +213,13 @@ public class NayaxSqsPendingRebuildTests
         {
             var store = NayaxSqsSaleFixture.Store(db, AlwaysFailingReplay(db));
 
-            // A later sale leaves the instant where it is...
+            // A later sale leaves the instant where it is - and says so in the revision, which is the
+            // only place that sale is visible at all.
             await store.PersistSqsSaleAsync(SaleAt(later, 2), CancellationToken.None);
-            Assert.Equal(
-                NayaxSqsSaleFixture.SaleInstant,
-                (await db.PendingInventoryCostRebuilds.AsNoTracking().SingleAsync()).FromInstantUtc);
+            var afterTheLaterSale =
+                await db.PendingInventoryCostRebuilds.AsNoTracking().SingleAsync();
+            Assert.Equal(NayaxSqsSaleFixture.SaleInstant, afterTheLaterSale.FromInstantUtc);
+            Assert.Equal(2, afterTheLaterSale.Revision);
 
             // ... and an earlier one moves it back.
             await store.PersistSqsSaleAsync(SaleAt(earlier, 3), CancellationToken.None);
@@ -221,6 +228,7 @@ public class NayaxSqsPendingRebuildTests
         await using var read = fixture.Context();
         var pending = await read.PendingInventoryCostRebuilds.AsNoTracking().SingleAsync();
         Assert.Equal(earlier, pending.FromInstantUtc);
+        Assert.Equal(3, pending.Revision);
     }
 
     /// <summary>
@@ -293,6 +301,7 @@ public class NayaxSqsPendingRebuildTests
             {
                 ProductId = NayaxSqsSaleFixture.ProductA,
                 FromInstantUtc = NayaxSqsSaleFixture.CutoffAt.AddDays(-1),
+                Revision = 1,
                 CreatedAtUtc = NayaxSqsSaleFixture.ReceivedAtUtc,
             });
             await db.SaveChangesAsync();

@@ -109,7 +109,10 @@ public class AddNayaxSqsSaleProvenanceAndPendingRebuildsMigrationTests
     /// The table arrives tenant-owned, with the per-business uniqueness that makes "one row per
     /// product" a database rule rather than a convention, and the oldest-first index the drain reads
     /// by. It carries a <c>BusinessId</c> because a pending replay is a fact about one business's own
-    /// product - it is not a platform table (AGENTS.md § Tenant ownership and data isolation).
+    /// product - it is not a platform table (AGENTS.md § Tenant ownership and data isolation). It also
+    /// carries <c>Revision</c>, the version of the work an in-flight replay's acknowledgement is
+    /// conditional on, which exists because <c>FromInstantUtc</c> only ever moves earlier and so
+    /// cannot say that a sale at or after it added work.
     /// </summary>
     [Fact]
     public async Task The_migration_creates_the_tenant_owned_pending_rebuild_table()
@@ -138,6 +141,7 @@ public class AddNayaxSqsSaleProvenanceAndPendingRebuildsMigrationTests
                 "LastAttemptAtUtc",
                 "LastFailureCode",
                 "ProductId",
+                "Revision",
             ],
             (await MigrationSchemaProbe.ColumnNamesAsync(connection, "PendingInventoryCostRebuilds"))
                 .Order(StringComparer.Ordinal));
@@ -166,14 +170,14 @@ public class AddNayaxSqsSaleProvenanceAndPendingRebuildsMigrationTests
         await ExecuteAsync(
             connection,
             "INSERT INTO PendingInventoryCostRebuilds "
-                + "(BusinessId, ProductId, FromInstantUtc, CreatedAtUtc, AttemptCount) "
-                + "VALUES (1, 55, '2026-11-06 00:00:00', '2026-11-06 00:00:00', 0);");
+                + "(BusinessId, ProductId, FromInstantUtc, Revision, CreatedAtUtc, AttemptCount) "
+                + "VALUES (1, 55, '2026-11-06 00:00:00', 1, '2026-11-06 00:00:00', 0);");
 
         var duplicate = await Assert.ThrowsAsync<SqliteException>(() => ExecuteAsync(
             connection,
             "INSERT INTO PendingInventoryCostRebuilds "
-                + "(BusinessId, ProductId, FromInstantUtc, CreatedAtUtc, AttemptCount) "
-                + "VALUES (1, 55, '2026-11-05 00:00:00', '2026-11-06 00:00:00', 0);"));
+                + "(BusinessId, ProductId, FromInstantUtc, Revision, CreatedAtUtc, AttemptCount) "
+                + "VALUES (1, 55, '2026-11-05 00:00:00', 1, '2026-11-06 00:00:00', 0);"));
 
         Assert.Contains("UNIQUE", duplicate.Message, StringComparison.OrdinalIgnoreCase);
 
@@ -182,8 +186,8 @@ public class AddNayaxSqsSaleProvenanceAndPendingRebuildsMigrationTests
         await ExecuteAsync(
             connection,
             "INSERT INTO PendingInventoryCostRebuilds "
-                + "(BusinessId, ProductId, FromInstantUtc, CreatedAtUtc, AttemptCount) "
-                + "VALUES (2, 55, '2026-11-06 00:00:00', '2026-11-06 00:00:00', 0);");
+                + "(BusinessId, ProductId, FromInstantUtc, Revision, CreatedAtUtc, AttemptCount) "
+                + "VALUES (2, 55, '2026-11-06 00:00:00', 1, '2026-11-06 00:00:00', 0);");
 
         Assert.Equal(
             2, await MigrationSchemaProbe.RowCountAsync(connection, "PendingInventoryCostRebuilds"));

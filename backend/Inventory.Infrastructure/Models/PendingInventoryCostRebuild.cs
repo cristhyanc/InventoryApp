@@ -20,6 +20,12 @@ namespace Inventory.Infrastructure.Models;
 /// because a replay from the earlier instant covers the later one and a replay from the later one
 /// does not cover the earlier. Moving it later could silently skip a sale's effect on cost.</para>
 ///
+/// <para><strong><see cref="Revision"/> is what says the work changed.</strong> Because the instant
+/// only moves earlier, a sale recorded at or after the instant the row already holds leaves every
+/// other column exactly as it was - so the instant cannot be read as a version of the work, and a
+/// replay already in flight would acknowledge work it never saw. The revision moves on
+/// <em>every</em> enqueue, and it is what the acknowledgement compares.</para>
+///
 /// <para><strong>It records nothing financial.</strong> No quantity, no cost, no value and no sale:
 /// it is a note that says "replay this product from here". Deleting a row changes no stored cost, and
 /// a row that is lost would only mean a replay is not retried - never a wrong number.</para>
@@ -48,6 +54,22 @@ public class PendingInventoryCostRebuild : IBusinessOwned
     /// whose effect on this product's cost has not been applied yet.
     /// </summary>
     public DateTime FromInstantUtc { get; set; }
+
+    /// <summary>
+    /// The version of the work this row describes: <c>1</c> when it is first recorded, and one higher
+    /// every time a sale adds work to it - whether or not that moves <see cref="FromInstantUtc"/>.
+    ///
+    /// <para>It is the whole of what a replay's acknowledgement compares. The instant cannot do that
+    /// job: it only ever moves <em>earlier</em>, so a sale at or after the instant the row holds
+    /// changes nothing visible, and a replay that had already read its costing inputs would delete
+    /// that sale's recorded work while saving figures computed without it. A revision that moves on
+    /// every enqueue is what makes "this is still the work I replayed" answerable at all.</para>
+    ///
+    /// <para>Recording a failed attempt deliberately does <em>not</em> move it: an attempt is
+    /// evidence about a replay, not new work, and invalidating another drain's claim for it would
+    /// discard a replay that is still correct.</para>
+    /// </summary>
+    public long Revision { get; set; }
 
     /// <summary>When this row was first recorded. It is not moved by a later sale.</summary>
     public DateTime CreatedAtUtc { get; set; }

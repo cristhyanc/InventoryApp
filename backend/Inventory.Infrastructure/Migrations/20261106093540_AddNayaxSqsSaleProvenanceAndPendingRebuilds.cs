@@ -9,7 +9,8 @@ namespace Inventory.Infrastructure.Migrations
     /// Issue #1103. Two additive changes and <strong>no backfill of any kind</strong>: three nullable
     /// columns on <c>NayaxSales</c> that say a sale arrived from the shared Nayax SQS queue, and the
     /// tenant-owned <c>PendingInventoryCostRebuilds</c> table that records which products still have
-    /// to have their inventory cost replayed.
+    /// to have their inventory cost replayed, with the <c>Revision</c> an in-flight replay's
+    /// acknowledgement is conditional on.
     ///
     /// <para>Every sale this database already holds keeps <c>NULL</c> in all three columns, which is
     /// exactly what keeps "did not arrive from the queue" and "arrived from the queue" apart. No
@@ -53,6 +54,7 @@ namespace Inventory.Infrastructure.Migrations
                     BusinessId = table.Column<int>(type: "INTEGER", nullable: false),
                     ProductId = table.Column<long>(type: "INTEGER", nullable: false),
                     FromInstantUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    Revision = table.Column<long>(type: "INTEGER", nullable: false),
                     CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
                     AttemptCount = table.Column<int>(type: "INTEGER", nullable: false),
                     LastAttemptAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),

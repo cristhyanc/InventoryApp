@@ -40,9 +40,9 @@ namespace Inventory.Infrastructure.Persistence;
 /// consumes stock. Second, what has to be replayed is written down: the same save that stores a sale
 /// records a <see cref="PendingInventoryCostRebuild"/> for every product it affected, and
 /// <see cref="RebuildInventoryCostsAsync"/> drains those rows and removes each one in the same
-/// transaction as the costs it rebuilt - and only while the row still names the instant that was
-/// replayed, because the replay itself runs outside the write lock and a writer that recorded an
-/// earlier sale meanwhile has recorded work no acknowledgement of the older claim may clear. Before
+/// transaction as the costs it rebuilt - and only while the row still holds the revision that was
+/// replayed, because the replay itself runs outside the write lock and a writer that recorded another
+/// sale meanwhile has recorded work no acknowledgement of the older claim may clear. Before
 /// that, a failed replay was simply forgotten - the sale
 /// was already stored, so the next import reported no affected products and never retried - and a
 /// queue reader deleting a message on "already stored" would have lost it for good. Third,
@@ -92,6 +92,12 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         /// </summary>
         public const string ProductMissing = "product_missing";
     }
+
+    /// <summary>
+    /// The revision a <see cref="PendingInventoryCostRebuild"/> is first recorded at. Every later
+    /// enqueue for the same product moves it on by one, which is what an acknowledgement compares.
+    /// </summary>
+    private const long FirstPendingRebuildRevision = 1;
 
     private readonly AppDbContext _db;
     private readonly ICostSale _saleCosting;
@@ -169,20 +175,20 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         // Oldest work first, so a product that has been waiting since yesterday is not starved by
         // today's sales. Read as plain values rather than as tracked rows, deliberately: a replay
         // takes as long as the product's history, and a row tracked across it is both a stale
-        // FromInstantUtc that a later SaveChanges could write back over a newer one and shared state
-        // two drains of the same business can stage changes to. What makes an acknowledgement safe is
-        // the write-locked re-read in AcknowledgeAsync, never this read.
+        // FromInstantUtc or revision that a later SaveChanges could write back over a newer one and
+        // shared state two drains of the same business can stage changes to. What makes an
+        // acknowledgement safe is the write-locked re-read in AcknowledgeAsync, never this read.
         var pending = await _db.PendingInventoryCostRebuilds.AsNoTracking()
             .OrderBy(row => row.CreatedAtUtc)
             .ThenBy(row => row.Id)
-            .Select(row => new { row.Id, row.ProductId, row.FromInstantUtc })
+            .Select(row => new { row.Id, row.ProductId, row.FromInstantUtc, row.Revision })
             .ToListAsync(cancellationToken);
 
         if (pending.Count == 0)
             return new InventoryCostRebuildDrainResult([], []);
 
         var claims = pending.ConvertAll(
-            row => new PendingRebuildClaim(row.Id, row.ProductId, row.FromInstantUtc));
+            row => new PendingRebuildClaim(row.Id, row.ProductId, row.FromInstantUtc, row.Revision));
 
         var productIds = claims.ConvertAll(claim => claim.ProductId);
         var baselines = await _db.InventoryCostTransitionBaselines.AsNoTracking()
@@ -205,8 +211,8 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 // Nothing to replay: there is no transition baseline for this product, or the
                 // instant is at or before the cutoff the baseline fixed. That is the baseline doing
                 // its job, so the work is done rather than failed and the row goes - and goes only
-                // while it still names the instant that was judged, because a writer that has since
-                // recorded an earlier sale has recorded work this claim says nothing about.
+                // while it is still the revision that was judged, because a writer that has since
+                // recorded another sale has recorded work this claim says nothing about.
                 if (!await AcknowledgeAsync(claim, cancellationToken))
                     stillPending.Add(claim.ProductId);
 
@@ -239,8 +245,8 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             {
                 // The work moved while this replay was running, so the replay that just finished is
                 // not the work that is pending now: nothing of it was saved, and the product is
-                // reported as still pending because it is. The next drain replays from the newer,
-                // earlier instant - which is the whole point of the row having survived.
+                // reported as still pending because it is. The next drain replays the work as it
+                // stands now - which is the whole point of the row having survived.
                 stillPending.Add(claim.ProductId);
             }
         }
@@ -249,34 +255,49 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     }
 
     /// <summary>
-    /// One row of pending work as this drain read it. The instant is the <em>claim</em>: the
-    /// acknowledgement removes the row only while the row still holds it, which is what makes
-    /// replaying outside the write lock safe (see <see cref="AcknowledgeAsync"/>).
+    /// One row of pending work as this drain read it. The <em>claim</em> is
+    /// <see cref="Revision"/>: the acknowledgement removes the row only while the row still holds
+    /// that revision, which is what makes replaying outside the write lock safe (see
+    /// <see cref="AcknowledgeAsync"/>). The instant travels with it because it is what the replay
+    /// runs from, not because it decides anything.
     /// </summary>
-    private readonly record struct PendingRebuildClaim(long Id, long ProductId, DateTime FromInstantUtc);
+    private readonly record struct PendingRebuildClaim(
+        long Id, long ProductId, DateTime FromInstantUtc, long Revision);
 
     /// <summary>
     /// Removes the row a claim was read from and saves whatever the replay staged, in one
-    /// <c>BEGIN IMMEDIATE</c> transaction - but only while the row still holds the instant that was
-    /// replayed from. Answers whether it did.
+    /// <c>BEGIN IMMEDIATE</c> transaction - but only while the row still holds the revision that was
+    /// replayed. Answers whether it did.
     ///
     /// <para><strong>Why the re-read decides, and not the read the replay started from.</strong> The
     /// replay is deliberately <em>outside</em> the write lock: it is a long chronological
     /// read-and-write over a product's whole history, and holding SQLite's one write lock for it would
     /// block every interactive request. Another writer - the queue reader, the request-driven sync, or
-    /// a second drain - can therefore record an earlier sale for the same product and commit while
-    /// this replay is running, and recording one only ever moves <c>FromInstantUtc</c> earlier.
-    /// Removing the row by key would throw that newly arrived work away for good: the row would say
-    /// "replay from the earlier instant", only the later span was replayed, and nothing would be left
-    /// to say so. So the row is read again <em>inside</em> the lock - where no other writer can commit
-    /// between the read and the removal - and removed only while it still says what was replayed.</para>
+    /// a second drain - can therefore record another sale for the same product and commit while this
+    /// replay is running, after it has already read the costing inputs it is computing from. Removing
+    /// the row by key would throw that newly arrived work away for good: nothing would be left to say
+    /// it has still to be replayed. So the row is read again <em>inside</em> the lock - where no other
+    /// writer can commit between the read and the removal - and removed only while it is still the
+    /// work that was replayed.</para>
+    ///
+    /// <para><strong>The revision is the comparison, and the instant cannot be.</strong> Recording a
+    /// pending rebuild only ever moves <c>FromInstantUtc</c> <em>earlier</em>, so a sale at or after
+    /// the instant the row already holds leaves the row looking untouched - and an acknowledgement
+    /// that compared the instant would succeed, write costs computed without that sale in them and
+    /// delete the work recorded for it, leaving the newer sale replayed by nobody.
+    /// <see cref="RecordPendingRebuildsAsync"/> therefore moves <see cref="PendingInventoryCostRebuild.Revision"/>
+    /// on <em>every</em> enqueue, and this is the only thing the removal is conditional on.</para>
+    ///
+    /// <para><strong>The database answers the comparison, never the change tracker.</strong> Both
+    /// conditions are part of the query's own <c>WHERE</c> clause rather than compared in memory
+    /// afterwards, and any instance of the row this context tracked earlier is detached first, so a
+    /// revision read before another writer moved it cannot stand in for the stored one.</para>
     ///
     /// <para><strong>A claim that has gone stale commits nothing at all.</strong> The costs the replay
-    /// staged were computed before the earlier sale existed, so saving them would let a stale replay
-    /// overwrite what the drain replaying from the earlier instant writes. The staged changes are
-    /// therefore discarded rather than saved: nothing of this product's replay is persisted, and the
-    /// row - whichever instant it now holds - stays the standing record of what still has to be
-    /// replayed.</para>
+    /// staged were computed before the newer sale existed, so saving them would let a superseded
+    /// replay overwrite what the next drain writes. The staged changes are therefore discarded rather
+    /// than saved: nothing of this product's replay is persisted, and the row - whatever it now holds
+    /// - stays the standing record of what still has to be replayed.</para>
     /// </summary>
     private async Task<bool> AcknowledgeAsync(
         PendingRebuildClaim claim, CancellationToken cancellationToken)
@@ -285,9 +306,11 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             .BeginAsync(_db, cancellationToken)
             .ConfigureAwait(false);
 
+        ForgetTrackedPendingRebuilds();
+
         var current = await _db.PendingInventoryCostRebuilds
             .FirstOrDefaultAsync(
-                row => row.Id == claim.Id && row.FromInstantUtc == claim.FromInstantUtc,
+                row => row.Id == claim.Id && row.Revision == claim.Revision,
                 cancellationToken);
 
         if (current is null)
@@ -312,11 +335,30 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     }
 
     /// <summary>
+    /// Detaches every <see cref="PendingInventoryCostRebuild"/> this context is tracking, so the read
+    /// that follows is answered by the database rather than by an instance read before another writer
+    /// moved the row - and so nothing of that instance can be written back over the stored revision
+    /// or instant.
+    ///
+    /// <para>Nothing is lost by it: both callers run inside their own write-locked transaction and
+    /// stage and save a pending row within the same call, so this context never holds an unsaved
+    /// pending row at either point. The sales, the costs and everything else this context is tracking
+    /// are untouched - it is deliberately not a <c>ChangeTracker.Clear()</c>.</para>
+    /// </summary>
+    private void ForgetTrackedPendingRebuilds()
+    {
+        foreach (var tracked in _db.ChangeTracker.Entries<PendingInventoryCostRebuild>().ToList())
+            tracked.State = EntityState.Detached;
+    }
+
+    /// <summary>
     /// Records one failed attempt on the row a claim was read from: the attempt count, the instant and
-    /// the short failure code, and never its <c>FromInstantUtc</c> - another writer may have moved
-    /// that earlier while the replay was failing, and operational evidence about an attempt must not
-    /// carry a stale instant back over newly recorded work. A row that is no longer there is left
-    /// alone, because the work it described has been acknowledged by somebody else.
+    /// the short failure code, and never its <c>FromInstantUtc</c> or its
+    /// <see cref="PendingInventoryCostRebuild.Revision"/> - another writer may have moved both while
+    /// the replay was failing, operational evidence about an attempt must not carry a stale instant
+    /// back over newly recorded work, and an attempt is not new work, so it must not invalidate
+    /// another drain's claim either. A row that is no longer there is left alone, because the work it
+    /// described has been acknowledged by somebody else.
     /// </summary>
     private async Task RecordFailedAttemptAsync(
         PendingRebuildClaim claim,
@@ -610,12 +652,26 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     /// replay from the earlier instant covers the later one and not the other way round. Moving it
     /// later would silently skip a sale's effect on cost. The unique index on
     /// <c>(BusinessId, ProductId)</c> is the database's backstop under this read.</para>
+    ///
+    /// <para><strong>The revision moves on every enqueue, including one the instant does not
+    /// notice.</strong> That is exactly why it exists: a sale at or after the instant the row already
+    /// holds adds work without changing any other column, so without the revision a replay already in
+    /// flight - one that has read its costing inputs and not yet acknowledged - would find its claim
+    /// intact, save figures computed without that sale and delete the work recorded for it, and the
+    /// newer sale would be replayed by nobody. See <see cref="AcknowledgeAsync"/>.</para>
+    ///
+    /// <para>The read is answered by the database rather than by a row this context tracked earlier,
+    /// and it sits inside the caller's <c>BEGIN IMMEDIATE</c> transaction, so the revision this
+    /// increments from is the stored one and no other writer can commit between the read and the
+    /// save.</para>
     /// </summary>
     private async Task RecordPendingRebuildsAsync(
         IReadOnlyDictionary<long, DateTime> affected, CancellationToken cancellationToken)
     {
         if (affected.Count == 0)
             return;
+
+        ForgetTrackedPendingRebuilds();
 
         var productIds = affected.Keys.ToList();
         var existing = await _db.PendingInventoryCostRebuilds
@@ -634,6 +690,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     ProductId = productId,
                     FromInstantUtc = fromInstantUtc,
                     CreatedAtUtc = createdAtUtc,
+                    Revision = FirstPendingRebuildRevision,
 
                     // BusinessId is deliberately left unset: BusinessOwnershipEnforcer stamps it from
                     // the resolved scope on SaveChanges, exactly as it does for every other
@@ -641,6 +698,10 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 });
                 continue;
             }
+
+            // Before the instant, and whatever the instant does: this sale is work the row did not
+            // describe a moment ago, and saying so is the only way a replay in flight can tell.
+            row.Revision++;
 
             if (fromInstantUtc < row.FromInstantUtc)
                 row.FromInstantUtc = fromInstantUtc;
