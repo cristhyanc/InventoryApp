@@ -66,6 +66,23 @@ public sealed class NayaxSqsTransactionMessage
 public sealed class NayaxSqsTransactionData
 {
     /// <summary>
+    /// <c>Transaction ID</c>, documented as "Transaction ID (Nayax Internal Identifier)" - the same
+    /// identifier the root carries, repeated inside <c>Data</c> as the first real message repeats
+    /// it. It is read for one purpose only: a message whose two copies disagree is not a message
+    /// about one transaction, and is refused rather than saved under either value.
+    /// </summary>
+    [JsonPropertyName("Transaction ID")]
+    public JsonElement? TransactionId { get; set; }
+
+    /// <summary>
+    /// <c>Machine ID</c>, documented as "Machine ID, automatically generated Nayax internal ID for
+    /// machine", repeated inside <c>Data</c> like the transaction id above and read on the same
+    /// terms.
+    /// </summary>
+    [JsonPropertyName("Machine ID")]
+    public JsonElement? MachineId { get; set; }
+
+    /// <summary>
     /// <c>SeValue</c>, documented as "Settlement Value, the amount charged". The amount is the one
     /// field a missing or malformed value may never default: an absent, null or non-numeric
     /// settlement value makes the whole message invalid, and never a sale of <c>0</c>.
@@ -166,20 +183,31 @@ public sealed class NayaxSqsTransactionData
 /// <summary>
 /// The allow-listed fields of one entry of a message's <c>Data.Products</c> array. The entry also
 /// carries the PA code, the product group, the catalogue number and the per-item prices; none of
-/// them is declared, because nothing in this application reads them. The array deliberately does
-/// <strong>not</strong> carry Nayax's own product id, which is why the slot below exists.
+/// them is declared, because nothing in this application reads them.
 /// </summary>
 public sealed class NayaxSqsTransactionProduct
 {
+    /// <summary>
+    /// <c>Product ID</c>, documented as "Product ID (Nayax Internal Identifier)" and carried by the
+    /// first real message inside the product entry (the reference's one flat field table documents
+    /// the field but not which layer it arrives at). It is the identifier the application's product
+    /// links are keyed by, so a usable value is used as it is; a value that is not a positive
+    /// integer is no identifier, and the slot below is then the only thing the message says about
+    /// which product was vended besides its name.
+    /// </summary>
+    [JsonPropertyName("Product ID")]
+    public JsonElement? ProductId { get; set; }
+
     /// <summary><c>Product Name</c>, documented as the product's configured name.</summary>
     [JsonPropertyName("Product Name")]
     public JsonElement? ProductName { get; set; }
 
     /// <summary>
     /// <c>Product Code in Map</c>, documented as "Product Selection Item Number (MDB Code)" - the
-    /// machine's slot, and the only thing an SQS message says about which product was vended
-    /// besides its name. The reader resolves it to a Nayax product id through the machine's product
-    /// map (<see cref="NayaxSqsSlotProductResolver"/>).
+    /// machine's slot. It travels beside every saved report, and the reader resolves it to a Nayax
+    /// product id through the machine's product map
+    /// (<see cref="NayaxSqsSlotProductResolver"/>) when the message carried no usable
+    /// <c>Product ID</c>.
     /// </summary>
     [JsonPropertyName("Product Code in Map")]
     public JsonElement? ProductCodeInMap { get; set; }

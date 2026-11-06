@@ -97,6 +97,20 @@ public enum NayaxSqsRejectionReason
     /// <summary><c>Data.Products</c> is missing, null, not an array, or empty.</summary>
     ProductsMissing,
 
+    /// <summary>
+    /// <c>Data."Transaction ID"</c> is present and is not the root <c>TransactionId</c>. The two
+    /// copies of one identifier cannot disagree about which transaction the message is, and a
+    /// present but unreadable copy cannot be shown to agree.
+    /// </summary>
+    TransactionIdMismatch,
+
+    /// <summary>
+    /// <c>Data."Machine ID"</c> is present and is not the root <c>MachineId</c>, on the same terms
+    /// as <see cref="TransactionIdMismatch"/>. Saving a sale against the wrong machine would move
+    /// stock and revenue between two machines' figures.
+    /// </summary>
+    MachineIdMismatch,
+
     /// <summary>The root <c>Void</c> flag is true, and the reference does not describe it.</summary>
     VoidTransaction,
 
@@ -138,10 +152,10 @@ public enum NayaxSqsRejectionReason
 /// <see cref="NayaxSqsOutcomeKind.CompletedSale"/> and
 /// <see cref="NayaxSqsOutcomeKind.CancelledOrDeclined"/> - the two kinds that are saved. The slot
 /// travels beside the report rather than inside it because <see cref="NayaxLastSalesReport"/> models
-/// the <c>lastSales</c> payload, which has no slot: an SQS message carries the machine's MDB code
-/// instead of Nayax's product id, and resolving one to the other needs the machine's product map
-/// (<see cref="NayaxSqsSlotProductResolver"/>), which is a read this parser deliberately does not
-/// make.</para>
+/// the <c>lastSales</c> payload, which has no slot: an SQS message carries the machine's MDB code as
+/// well as Nayax's product id, and turning the slot into a product id when the message stated no
+/// usable one needs the machine's product map (<see cref="NayaxSqsSlotProductResolver"/>), which is
+/// a read this parser deliberately does not make.</para>
 /// </summary>
 public sealed record NayaxSqsTransactionOutcome
 {
@@ -165,7 +179,8 @@ public sealed record NayaxSqsTransactionOutcome
 
     /// <summary>
     /// The sale record to save, for the two saved kinds; <see langword="null"/> for every other kind.
-    /// Its <c>NayaxProductId</c> is deliberately never set here.
+    /// Its <c>NayaxProductId</c> is set only from a usable <c>Product ID</c> the message itself
+    /// stated, and is otherwise left for the reader to resolve from <see cref="ProductSlot"/>.
     /// </summary>
     public NayaxLastSalesReport? Report { get; }
 

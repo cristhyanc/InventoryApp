@@ -35,6 +35,8 @@ public class NayaxSqsTransactionParserOutcomeTests
     private static string Message(
         string? transactionId = "3804536984",
         string? machineId = "54265",
+        string? dataTransactionId = "3804536984",
+        string? dataMachineId = "54265",
         string? isVoid = "false",
         string? transactionStatusId = "12",
         string? settlementValue = "1.0000",
@@ -51,6 +53,9 @@ public class NayaxSqsTransactionParserOutcomeTests
             ("MachineId", machineId),
             ("Void", isVoid),
             ("Data", JsonObject(
+                // The Data object repeats both root identifiers, as the first real message does.
+                ("Transaction ID", dataTransactionId),
+                ("Machine ID", dataMachineId),
                 ("SeValue", settlementValue),
                 ("Transaction Status ID", transactionStatusId),
                 ("Authorization Time", authorizationTime),
@@ -119,6 +124,15 @@ public class NayaxSqsTransactionParserOutcomeTests
         { "a null Products", Message(products: "null"), NayaxSqsRejectionReason.ProductsMissing },
         { "an empty Products", Message(products: "[]"), NayaxSqsRejectionReason.ProductsMissing },
         { "a Products that is not an array", Message(products: """{ "Product Name": "Bounty" }"""), NayaxSqsRejectionReason.ProductsMissing },
+
+        // The last clause of rule 1: the Data object repeats both root identifiers, and a message
+        // whose two copies disagree is not a message about one transaction. A present but
+        // unreadable copy is a disagreement too - the fail-closed reading - because an identifier
+        // that does not round-trip cannot be shown to be the same one.
+        { "a Data Transaction ID that disagrees with the root", Message(dataTransactionId: "3804536985"), NayaxSqsRejectionReason.TransactionIdMismatch },
+        { "a Data Transaction ID sent as text", Message(dataTransactionId: "\"3804536984\""), NayaxSqsRejectionReason.TransactionIdMismatch },
+        { "a Data Machine ID that disagrees with the root", Message(dataMachineId: "54266"), NayaxSqsRejectionReason.MachineIdMismatch },
+        { "a Data Machine ID sent as text", Message(dataMachineId: "\"54265\""), NayaxSqsRejectionReason.MachineIdMismatch },
     };
 
     [Theory]
@@ -200,6 +214,8 @@ public class NayaxSqsTransactionParserOutcomeTests
         { "an approved sale with a null cancel type", Message(cancelType: "null"), NayaxSqsOutcomeKind.CompletedSale, NayaxSqsRejectionReason.None },
         { "an approved sale settled successfully", Message(cancelType: "255"), NayaxSqsOutcomeKind.CompletedSale, NayaxSqsRejectionReason.None },
         { "an approved sale on a Nayax refund card", Message(isRefundCard: "true"), NayaxSqsOutcomeKind.CompletedSale, NayaxSqsRejectionReason.None },
+        { "an approved sale carrying no Data copy of its identifiers", Message(dataTransactionId: null, dataMachineId: null), NayaxSqsOutcomeKind.CompletedSale, NayaxSqsRejectionReason.None },
+        { "an approved sale whose Data copies of its identifiers are null", Message(dataTransactionId: "null", dataMachineId: "null"), NayaxSqsOutcomeKind.CompletedSale, NayaxSqsRejectionReason.None },
 
         // Rule 8: the contradiction.
         { "an approved sale cancelled for another reason", Message(cancelType: "3"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.StatusContradiction },

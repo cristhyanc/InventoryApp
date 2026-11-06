@@ -16672,13 +16672,28 @@ place and none of it is spread across the reader (#1103), the reconciliation (#1
 
 **The message is not a `lastSales` item.** The Lynx `lastSales` payload the sales synchronization
 reads is a flat item carrying `NayaxProductID` and `AuthorizationDateTimeGMT`. An SQS message is two
-layers — root fields (`TransactionId`, `MachineId`, `SiteId`, `MachineTime`, `Void`) and a `Data`
-object whose keys contain spaces — and the products are nested at **`Data.Products`**, an array. It
-carries **no Nayax product id at all**: each `Data.Products[i]` names the machine slot
-(`"Product Code in Map"`, the MDB code), the PA code, the product name and the catalogue number. The
-field names, types and meanings below were read from the Nayax developer portal's Transaction JSON
-reference on 5 November 2026 before any of them was accepted (AGENTS.md § Nayax contract
-verification); nothing here is inferred from a field name.
+layers — root fields (`TransactionId`, `MachineId`, `SiteId`, `MachineTime`, `PaymentMethodId`,
+`Void`) and a `Data` object whose keys contain spaces — and the products are nested at
+**`Data.Products`**, an array. Each `Data.Products[i]` carries Nayax's own product id
+(`"Product ID"`), the machine slot (`"Product Code in Map"`, the MDB code), the PA code, the product
+name, the product group and the catalogue number, and `Data` repeats both root identifiers as
+`"Transaction ID"` and `"Machine ID"`. The field names, types and meanings below were read from the
+Nayax developer portal's Transaction JSON reference before any of them was accepted — the mapping and
+classification fields on 5 November 2026, and `"Product ID"` ("Product ID (Nayax Internal
+Identifier)", `Integer`), `"Transaction ID"` and `"Machine ID"` on 6 November 2026 (AGENTS.md
+§ Nayax contract verification); nothing here is inferred from a field name. The reference's field
+table is one flat list that does not say which layer a field arrives at, so the nesting above is
+what the **first real message** (the owner's queue, 5 November 2026, recorded on #1102 as field
+names and classifying values only) shows.
+
+**Null means false, and never a contradiction.** That first real message is why this is written
+down: on a perfectly ordinary settled card vend it sends `"Settlment Failed"` and
+`"Is Revalue Reward Transaction"` as `null` rather than `false`, and `"Cancel Type"` as `null`
+rather than the documented `255`. Every boolean flag the parser reads (root `Void`,
+`Settlment Failed`, `Is Revalue Transaction`, `Is Revalue Reward Transaction`, `Is Multivend`) is
+false unless the message says `true`, because each of them diverts a message away from being saved
+and reading "not set" as "set" would discard real sales; and an absent or `null` `Cancel Type` means
+"no cancel reason", so it contradicts nothing.
 
 **One message gets one outcome, chosen by the first rule that applies.** The order is part of the
 rule, not an implementation detail: a revalue that is also a multivend is a revalue, and a free vend
@@ -16686,14 +16701,20 @@ whose cancel type contradicts its status is a free vend.
 
 | # | Outcome | Rule | What #1103 does with it |
 |---|---|---|---|
-| 1 | **Invalid** (reason code) | Not JSON; `TransactionId` or `MachineId` missing or not an integer; `Data` missing; `Data.SeValue` missing, null or not a number; `Data."Transaction Status ID"` missing or not an integer; `Data."Authorization Time"` missing or unreadable; `Data.Products` missing or empty | Permanent failure |
+| 1 | **Invalid** (reason code) | Not JSON; `TransactionId` or `MachineId` missing or not an integer; `Data` missing; `Data.SeValue` missing, null or not a number; `Data."Transaction Status ID"` missing or not an integer; `Data."Authorization Time"` missing or unreadable; `Data.Products` missing or empty; `Data."Transaction ID"` or `Data."Machine ID"` present and different from the root value | Permanent failure |
 | 2 | **Revalue** | `Is Revalue Transaction` or `Is Revalue Reward Transaction` is true | Acknowledged and deleted; a prepaid credit top-up is not a product sale |
 | 3 | **Multivend** | `Is Multivend` is true, or `Data.Products` holds more than one item | Deleted; the hourly `lastSales` run imports it |
 | 4 | **Unsupported** (reason code) | Root `Void` true; `Settlment Failed` true; status `62` (refunded); status pending (`55`, `80`); status not in `NayaxTransactionStatusIds`; `SeValue` negative | Permanent failure; kept in the dead-letter queue as a sample |
 | 5 | **CancelledOrDeclined** | Status `26`, `28`, `31` or `250` | Saved as a non-completed row with that status, visible in status reporting |
 | 6 | **FreeVend** | Status `12` and `SeValue` exactly `0` | Permanent failure, until a real free vend sample exists |
-| 7 | **CompletedSale** | Status `12`, `SeValue` > 0, and `Cancel Type` `255` or absent | Saved as a completed sale |
-| 8 | **Unsupported** (`StatusContradiction`) | Status `12` but `Cancel Type` present and not `255` | Permanent failure |
+| 7 | **CompletedSale** | Status `12`, `SeValue` > 0, and `Cancel Type` `255`, null or absent | Saved as a completed sale |
+| 8 | **Unsupported** (`StatusContradiction`) | Status `12` but `Cancel Type` a non-null value other than `255` | Permanent failure |
+
+The last clause of rule 1 is the one duplicated-identity check: `Data` repeats both root
+identifiers, and two copies of one identifier may not disagree about which transaction or which
+machine the message is, because saving it would attribute a sale to whichever copy the code happened
+to read. An absent or `null` copy says nothing and is no contradiction; a copy that is present but
+unreadable cannot be shown to agree and is refused, which is the fail-closed reading.
 
 **The status is the message's own `Transaction Status ID`, never its amount.** This is the one
 substantive difference from the `lastSales` path, where `EfLatestNayaxSalesStore` ignores any
@@ -16710,9 +16731,11 @@ delivery setup page states one. The parser therefore classifies the id through t
 every report already uses (`12` approved, `55`/`80` pending, `62` refunded, `26`/`28`/`31`/`250`
 cancelled or declined; AGENTS.md § Sales, payment methods, and statuses), rather than restating the
 ids. Any other value is **Unsupported**, so an unexpected status can never become a completed sale.
-Before production consumption is switched on, parent #1100's rollout rule has the owner read the
-first real messages in the AWS console and record the field names, the status ids and names, and the
-payment descriptions on #1102; a mismatch is fixed before any message is consumed.
+The first real message **confirms `12`** for an ordinary card vend, where it arrives beside
+`"Transaction Status Name": "Settled"`. The remaining values are still unconfirmed, so parent
+#1100's rollout rule stands: before production consumption is switched on, the owner records the
+status ids and names of a declined or cancelled sale, a cash sale and the other payment types from
+real messages on #1102, and a mismatch is fixed before any message is consumed.
 
 **A malformed amount is invalid and never becomes zero.** An absent, null or non-numeric `SeValue`
 makes the whole message invalid. Binding it to `0` would hand the sale paths a zero-value
@@ -16720,7 +16743,11 @@ transaction, which the amount rule above reads as cancelled — a silent, plausi
 revenue. The same fail-closed reading applies to `Data."Authorization Time"`: it is read through the
 one GMT rule (`NayaxGmtTimestamp`, issue #471), so an offset-free value is UTC because the field
 contract says GMT and not because of the host's time zone, and a value that is absent or is not a
-documented date-time shape has no instant at all rather than a defaulted one.
+documented date-time shape has no instant at all rather than a defaulted one. The first real message
+is exactly the shape that rule exists for: its `"Authorization Time"`, `"Settlement Time"` and
+`"Updated DT"` carry **no `Z` designator** and sit eleven hours behind `"Machine AuTime"`, the
+machine's Sydney wall clock — which is kept as the raw imported fact it is and never read as an
+instant.
 
 **`Is Refund Card` is not read, because it is not refund evidence.** The reference documents it as
 "Bit indicating if this is a Nayax Refund Card" — the instrument, not the transaction. An otherwise
@@ -16744,18 +16771,24 @@ CancelledOrDeclined outcome both carry a `NayaxLastSalesReport`, which is the ty
 | `PaymentMethod` | `Data."Payment Method Description"` |
 | `ProductCostPrice` | `Data.Products[0]."Cost Price"` if present, else `Data."Cost Price"`, else null |
 | `MachineName` | `Data."Machine Name"` |
-| `NayaxProductId` | not set by the parser |
+| `NayaxProductId` | `Data.Products[0]."Product ID"` when it is a positive integer; otherwise null, and resolved by the reader from the slot |
 | (the slot, returned beside the report) | `Data.Products[0]."Product Code in Map"` |
 
-A missing optional column — currency, payment method, machine name, cost price, slot — is `null`
-rather than a default, so nothing downstream reads a blank currency or a cost of zero as a fact. The
-cost price is read in both places because the reference lists `Cost Price` among the product fields
-while the published example message carries it under `Data`; the item's own value wins.
+A missing optional column — currency, payment method, machine name, cost price, slot, product id —
+is `null` rather than a default, so nothing downstream reads a blank currency or a cost of zero as a
+fact. The cost price is read in both places because the reference lists `Cost Price` among the
+product fields while both the published example and the first real message carry it under `Data`;
+the item's own value wins. A `"Product ID"` that is not a positive integer is no identifier at all —
+`0` is a real slot but never a real product id — so it leaves the field unset instead of attaching
+the sale to a product id that cannot exist.
 
 **Deserialisation is an allow-list, and that is a security boundary rather than tidiness.** The
-message carries the consumer's card and identity — `Card String`, the card digit fields,
-`Card Type`, `Display Card Number`, `Card Holder Name`, `Consumer ID`, `Token`, `Zip Code`,
-`User Password` and the discount card fields — and this application has no use for any of it.
+message carries the consumer's card and identity — `Card String`, the card digit fields, `Card BIN`,
+`Card Type`, `Display Card Number`, `Card Holder Name`, `Card ID`, `Consumer ID`, `Token`,
+`Zip Code`, `User Password` and the discount card fields — and the payment processor's own
+references — `Merchant ID`, `Terminal ID`, `Authorization Code`, `Authorization RRN`,
+`PayServTransid`, `Device Number` and the device transaction id — and this application has no use
+for any of it.
 `NayaxSqsTransactionMessage`, `NayaxSqsTransactionData` and `NayaxSqsTransactionProduct` declare
 **only** the fields in the tables above, so nothing else is ever bound to a model and cannot reach
 an outcome, a reason, a log or an exception message later. Unknown extra keys are ignored, which is
@@ -16764,10 +16797,13 @@ a `JsonElement` read through `NayaxSqsJsonValues`, which answers a value only fo
 contract documents: a wrong type becomes a stated reason code rather than a thrown `JsonException`
 whose text quotes a position inside a card transaction, and the reason codes are fixed enum members
 that never carry a fragment of the payload. A unit test asserts the declared field set exactly, and
-another parses the published example message — whose card and consumer values are fictional but
-genuinely present — and asserts that none of those values appears in any outcome.
+two more parse the published example message and a fixture with the first real message's shape —
+whose card, consumer, merchant and terminal values are fictional but genuinely present — and assert
+that none of those values appears in any outcome. The owner's Nayax Core does currently send the
+card and customer columns (they should be switched off in the Transactions Report tab); the parser
+ignores them either way.
 
-**The slot becomes a product id through the machine's product map.**
+**The slot becomes a product id through the machine's product map, when the message stated none.**
 `Inventory.Application.NayaxSqs.INayaxSqsSlotProductResolver` maps `(MachineId, slot)` to a
 `NayaxProductID` through `NayaxMachineProduct.MDBCode`, using the **cached** 60-second
 machine-products read ([issue #842](#the-machine-products-cache-issue-842)) rather than the fresh
@@ -16777,7 +16813,12 @@ transactions in the same minute. It answers nothing — a missing slot, a machin
 a slot the map does not hold, a map entry carrying no product id, or two entries claiming the same
 slot — and a missing slot reads nothing at all. `NayaxProductId` is then left unset and the existing
 unambiguous-name fallback in `ProductMatcher.MatchLinked` applies exactly as it does today for a
-`lastSales` item whose provider id this business has recorded on no product.
+`lastSales` item whose provider id this business has recorded on no product. This lookup is the
+**fallback**: a message that states a usable `"Product ID"` is mapped straight onto that id, since
+it is the provider's own answer to the same question and the identifier the stored product links are
+keyed by. Before production consumption is switched on, parent #1100's rollout check also confirms
+that the same transaction imported by `lastSales` (Refresh) stores the same `NayaxProductID`; if the
+two differ, the parser stops reading `"Product ID"` and relies on this resolver alone.
 
 **The payment method is classified by the one classifier.** The mapped
 `Data."Payment Method Description"` goes to
@@ -16787,7 +16828,8 @@ matching). **No
 translation table exists, because none is needed**: the field is documented as "Payment Method Name",
 the same meaning as the `lastSales` payment method, and the descriptions the reference shows
 (`Prepaid Credit`, and the `Cash` and `Credit Card` values the application already knows) are
-already the ones the classifier recognises, so the mapping carries the string through unchanged. If
+already the ones the classifier recognises, so the mapping carries the string through unchanged. The
+first real message's `"Credit Card"` is one of those, and is already classified as card. If
 the real messages the rollout check records carry a description the classifier does not know, the
 translation belongs at this mapping — never in another report.
 

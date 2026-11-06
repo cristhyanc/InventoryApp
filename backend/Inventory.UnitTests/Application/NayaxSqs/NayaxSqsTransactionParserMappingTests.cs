@@ -64,8 +64,10 @@ public class NayaxSqsTransactionParserMappingTests
         // rather than becoming zero.
         Assert.Null(report.ProductCostPrice);
 
-        // The machine's slot, which is the only thing the message says about which product was
-        // vended besides its name. The reader resolves it; the parser never sets a product id.
+        // The published example's product entry carries no "Product ID", so the slot is the only
+        // thing it says about which product was vended besides its name, and the reader resolves
+        // that through the machine's product map. The real message's own id is covered by
+        // NayaxSqsRealMessageTests.
         Assert.Equal(0, outcome.ProductSlot);
         Assert.Null(report.NayaxProductId);
     }
