@@ -336,61 +336,89 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         var existing = await _db.NayaxSales
             .FirstOrDefaultAsync(x => x.TransactionID == sale.TransactionID, cancellationToken);
 
-        if (existing is null)
+        return existing is null
+            ? await InsertSaleAsync(sale, suppliedStatusId, provenance, matchedProductId, affected, cancellationToken)
+            : await EnrichExistingSaleAsync(
+                existing, sale, suppliedStatusId, context, matchedProductId, affected, cancellationToken);
+    }
+
+    /// <summary>
+    /// The insert half of <see cref="ApplySaleAsync"/>: a transaction not seen before.
+    /// </summary>
+    private async Task<SaleApplication> InsertSaleAsync(
+        NayaxLastSalesReport sale,
+        int? suppliedStatusId,
+        SqsProvenance? provenance,
+        long? matchedProductId,
+        Dictionary<long, DateTime> affected,
+        CancellationToken cancellationToken)
+    {
+        // The sale instant is the payload's authoritative AuthorizationDateTimeGMT, normalized
+        // once at the integration boundary (NayaxLastSalesReport.AuthorizationInstantUtc,
+        // issue #380) - never the machine-local MachineAuthorizationTime wall clock, whose
+        // ticks are up to eleven hours away from the instant they would be stored as. A payload
+        // item carrying no authoritative instant is not imported at a guessed time; the rolling
+        // last-sales window returns the transaction again on the next refresh.
+        if (sale.AuthorizationInstantUtc is not { } authorizedUtc)
+            return new SaleApplication(Stored: false, Inserted: false, CompletedSaleProductId: null);
+
+        var added = new NayaxSales
         {
-            // The sale instant is the payload's authoritative AuthorizationDateTimeGMT, normalized
-            // once at the integration boundary (NayaxLastSalesReport.AuthorizationInstantUtc,
-            // issue #380) - never the machine-local MachineAuthorizationTime wall clock, whose
-            // ticks are up to eleven hours away from the instant they would be stored as. A payload
-            // item carrying no authoritative instant is not imported at a guessed time; the rolling
-            // last-sales window returns the transaction again on the next refresh.
-            if (sale.AuthorizationInstantUtc is not { } authorizedUtc)
-                return new SaleApplication(Stored: false, Inserted: false, CompletedSaleProductId: null);
+            TransactionID = sale.TransactionID,
+            TransactionStatusId = suppliedStatusId ?? StatusFromSettlementValue(sale),
+            MachineID = sale.MachineID,
+            // The local product this synchronization matched, and separately the provider's
+            // own product id exactly as the payload carried it (issue #758). The column that
+            // used to hold either one now holds only the latter, and says so.
+            ProductId = matchedProductId,
+            Provider = ExternalProvider.Nayax,
+            NayaxProductId = sale.NayaxProductId,
+            ProviderProductIdIsRaw = true,
+            MachineName = sale.MachineName,
+            SettlementValue = sale.SettlementValue,
+            PaymentMethod = sale.PaymentMethod,
+            ProductName = sale.ProductName,
+            NayaxProductCostPrice = sale.ProductCostPrice,
+            MachineAuthorizationTime = authorizedUtc
+        };
 
-            var added = new NayaxSales
-            {
-                TransactionID = sale.TransactionID,
-                TransactionStatusId = suppliedStatusId ?? StatusFromSettlementValue(sale),
-                MachineID = sale.MachineID,
-                // The local product this synchronization matched, and separately the provider's
-                // own product id exactly as the payload carried it (issue #758). The column that
-                // used to hold either one now holds only the latter, and says so.
-                ProductId = matchedProductId,
-                Provider = ExternalProvider.Nayax,
-                NayaxProductId = sale.NayaxProductId,
-                ProviderProductIdIsRaw = true,
-                MachineName = sale.MachineName,
-                SettlementValue = sale.SettlementValue,
-                PaymentMethod = sale.PaymentMethod,
-                ProductName = sale.ProductName,
-                NayaxProductCostPrice = sale.ProductCostPrice,
-                MachineAuthorizationTime = authorizedUtc
-            };
-
-            if (provenance is { } sqs)
-            {
-                // On the same insert as the row, which is what "its provenance arrives with it"
-                // means: there is no moment at which a queue-sourced sale exists without saying so.
-                added.ReceivedViaSqsAtUtc = sqs.ReceivedAtUtc;
-                added.SqsFirstMessageId = sqs.MessageId;
-                added.SqsVerification = NayaxSqsVerification.Unverified;
-            }
-
-            _db.NayaxSales.Add(added);
-            await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);
-
-            var insertedCompleted =
-                NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId);
-
-            if (insertedCompleted && matchedProductId is not null)
-                RecordAffected(affected, matchedProductId.Value, added.MachineAuthorizationTime);
-
-            return new SaleApplication(
-                Stored: true,
-                Inserted: true,
-                CompletedSaleProductId: insertedCompleted ? matchedProductId : null);
+        if (provenance is { } sqs)
+        {
+            // On the same insert as the row, which is what "its provenance arrives with it"
+            // means: there is no moment at which a queue-sourced sale exists without saying so.
+            added.ReceivedViaSqsAtUtc = sqs.ReceivedAtUtc;
+            added.SqsFirstMessageId = sqs.MessageId;
+            added.SqsVerification = NayaxSqsVerification.Unverified;
         }
 
+        _db.NayaxSales.Add(added);
+        await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);
+
+        var insertedCompleted =
+            NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId);
+
+        if (insertedCompleted && matchedProductId is not null)
+            RecordAffected(affected, matchedProductId.Value, added.MachineAuthorizationTime);
+
+        return new SaleApplication(
+            Stored: true,
+            Inserted: true,
+            CompletedSaleProductId: insertedCompleted ? matchedProductId : null);
+    }
+
+    /// <summary>
+    /// The enrichment half of <see cref="ApplySaleAsync"/>: a transaction already stored, filled in
+    /// only where it is still missing its product match or status.
+    /// </summary>
+    private async Task<SaleApplication> EnrichExistingSaleAsync(
+        NayaxSales existing,
+        NayaxLastSalesReport sale,
+        int? suppliedStatusId,
+        MatchingContext context,
+        long? matchedProductId,
+        Dictionary<long, DateTime> affected,
+        CancellationToken cancellationToken)
+    {
         var enriched = false;
         if (!existing.ProductId.HasValue && !context.ConflictingSaleIds.Contains(existing.Id))
         {
