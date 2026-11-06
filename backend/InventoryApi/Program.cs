@@ -24,6 +24,7 @@ using InventoryApi.Adapters.Products;
 using InventoryApi.Adapters.Subscriptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
 using Inventory.Application.SupportSessions;
@@ -349,6 +350,11 @@ builder.Services.AddScoped<IPriceCatalogueReviewAudit, LoggingPriceCatalogueRevi
 // type has no field for the administrator's reason text or for any name, so the reason stays in the
 // database row the decision wrote in its own transaction and never reaches a log.
 builder.Services.AddScoped<IPlatformPlanGrantAudit, LoggingPlatformPlanGrantAudit>();
+// The Nayax SQS sender trail (issue #1101): one event per committed recording, change, switch or
+// removal. A separate port again, on the same terms, and its entry type has no field for the AWS
+// sender id on either side or for any name - so both sides stay in the database row the decision
+// wrote in its own transaction and no AWS identifier ever reaches a log.
+builder.Services.AddScoped<IPlatformNayaxSqsSenderAudit, LoggingPlatformNayaxSqsSenderAudit>();
 // What else happens when a business is deactivated (issue #545's hook point): since issue #550, every
 // active support session for that business ends. It is the single registration #545 declared this
 // hook for, replaced here rather than by editing that transition - the hook runs inside the
