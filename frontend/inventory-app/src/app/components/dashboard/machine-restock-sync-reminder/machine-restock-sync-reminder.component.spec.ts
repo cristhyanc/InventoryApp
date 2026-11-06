@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Observable, Subject, of, throwError } from 'rxjs';
+import { NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import {
@@ -51,6 +51,8 @@ function reminder(
 
 interface RenderOptions {
   response?: Observable<MachineRestockSyncReminderResponse>;
+  /** The hourly Nayax fetch's answer (issue #1122); by default it never answers. */
+  refreshResponse?: Observable<MachineRestockSyncReminderResponse>;
   capabilities?: Record<string, boolean>;
   sessionActive$?: Observable<boolean>;
 }
@@ -59,13 +61,14 @@ async function render(options: RenderOptions = {}) {
   const getRestockSyncReminder = jest.fn(
     () => options.response ?? of<MachineRestockSyncReminderResponse>(reminder([machine()]))
   );
+  const refreshRestockSyncReminder = jest.fn(() => options.refreshResponse ?? NEVER);
   const capabilities = options.capabilities ?? { 'Inventory.Operate': true, 'Integration.Manage': true };
 
   await TestBed.configureTestingModule({
     imports: [MachineRestockSyncReminderComponent],
     providers: [
       provideRouter([]),
-      { provide: MachineService, useValue: { getRestockSyncReminder } },
+      { provide: MachineService, useValue: { getRestockSyncReminder, refreshRestockSyncReminder } },
       { provide: AccessService, useValue: { allows: (c: string) => of(capabilities[c] ?? false) } },
       { provide: SupportSessionService, useValue: { active$: options.sessionActive$ ?? of(false) } },
       { provide: BusinessTimeZoneService, useValue: { timeZoneId: 'Australia/Sydney' } }
@@ -79,7 +82,8 @@ async function render(options: RenderOptions = {}) {
     fixture,
     host: fixture.nativeElement as HTMLElement,
     component: fixture.componentInstance,
-    getRestockSyncReminder
+    getRestockSyncReminder,
+    refreshRestockSyncReminder
   };
 }
 
@@ -388,5 +392,78 @@ describe('MachineRestockSyncReminderComponent (issue #891)', () => {
     const { getRestockSyncReminder } = await render();
 
     expect(getRestockSyncReminder).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Issue #1122: the Dashboard shows the reminder from local data first, then asks the API to fetch
+ * every machine's new Nayax restock events (at most once per hour, decided by the server) and shows
+ * the reminder that answers. A failed fetch never takes away what is already shown.
+ */
+describe('MachineRestockSyncReminderComponent hourly Nayax fetch (issue #1122)', () => {
+  it('shows the local reminder first, then the one answered after the fetch', async () => {
+    const refreshed = new Subject<MachineRestockSyncReminderResponse>();
+    const { fixture, host, refreshRestockSyncReminder } = await render({ refreshResponse: refreshed });
+
+    expect(refreshRestockSyncReminder).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[data-testid="restock-sync-reminder-check-due"]')).not.toBeNull();
+
+    refreshed.next(reminder([machine({ knownPendingEventCount: 2 })]));
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="restock-sync-reminder-check-due"]')).toBeNull();
+    expect(host.querySelector('[data-testid="restock-sync-reminder-pending"]')?.textContent).toContain(
+      '2 known pending restock events'
+    );
+  });
+
+  it('hides the alert when the fetch finds nothing left to sync', async () => {
+    const { fixture, host, component } = await render({ refreshResponse: of(reminder([])) });
+    fixture.detectChanges();
+
+    expect(banner(host)).toBeNull();
+    expect(component.state).toBe('loaded');
+    expect(component.isShown).toBe(false);
+  });
+
+  it('keeps the reminder already shown when the fetch request fails', async () => {
+    const { fixture, host, component } = await render({
+      refreshResponse: throwError(() => new Error('502'))
+    });
+    fixture.detectChanges();
+
+    expect(component.state).toBe('loaded');
+    expect(banner(host)?.textContent).toContain('Avenue Hotel');
+    expect(unavailable(host)).toBeNull();
+  });
+
+  it('does not ask for a fetch when the reminder does not apply or the read failed', async () => {
+    const hidden = await render({ response: of({ applicable: false, reason: 'NayaxNotConnected' } as MachineRestockSyncReminderResponse) });
+    expect(hidden.refreshRestockSyncReminder).not.toHaveBeenCalled();
+    TestBed.resetTestingModule();
+
+    const failed = await render({ response: throwError(() => new Error('500')) });
+    expect(failed.refreshRestockSyncReminder).not.toHaveBeenCalled();
+  });
+
+  it('asks for no fetch inside a support session', async () => {
+    const { refreshRestockSyncReminder } = await render({ sessionActive$: of(true) });
+
+    expect(refreshRestockSyncReminder).not.toHaveBeenCalled();
+  });
+
+  it('cancels a fetch still running when a support session starts', async () => {
+    const session = new Subject<boolean>();
+    const refreshed = new Subject<MachineRestockSyncReminderResponse>();
+    const { fixture, host } = await render({ sessionActive$: session, refreshResponse: refreshed });
+    session.next(false);
+    fixture.detectChanges();
+
+    session.next(true);
+    refreshed.next(reminder([machine({ knownPendingEventCount: 1 })]));
+    fixture.detectChanges();
+
+    expect(banner(host)).toBeNull();
+    expect(refreshed.observed).toBe(false);
   });
 });

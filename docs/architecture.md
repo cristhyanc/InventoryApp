@@ -1675,6 +1675,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Home Dashboard → machine restock-sync reminder (issue #891) | `GET api/machine-restock-sync/reminder` | `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Home Dashboard → hourly machine restock fetch (issue #1122) | `POST api/machine-restock-sync/reminder/refresh` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Pick List → record a refill (issue #743) | `POST api/pick-list/refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List → record a multi-machine run (issue #897) | `POST api/pick-list/multi-machine-refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
@@ -8936,7 +8937,8 @@ Dashboard's reminder banner reads `GET /api/machine-restock-sync/reminder`, its 
 its own capability, because it answers a different question from a different source: it is a purely
 local aggregate over the business's machines and their imported restock events, it needs
 `Inventory.Operate` rather than `Dashboard.View`, and its failure must leave every card below it
-usable. Adding it to this summary would have coupled a local read to the live fleet read, and
+usable (since issue #1122 the component follows that read with an hourly restock fetch from Nayax,
+`POST /api/machine-restock-sync/reminder/refresh`, still outside this summary). Adding it to this summary would have coupled a local read to the live fleet read, and
 widened who sees restock work to every role that may open the Dashboard. See
 [Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891).
 
@@ -16306,10 +16308,11 @@ explicit action above is waiting for them.
 
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 
-Sync Restock above is explicit: nothing imports a machine's stock-adjustment alerts until an
-operator asks for that machine — by pressing Sync Restock on its page or, since issue #1011, by
-following the reminder's "Open Sync Restock" link, which opens that same dialog. Forgetting it is
-therefore silent, and the storage inventory drifts in exactly the way that looks like missing
+Sync Restock above was explicit until issue #1122: nothing imported a machine's stock-adjustment
+alerts until an operator asked for that machine — by pressing Sync Restock on its page or, since
+issue #1011, by following the reminder's "Open Sync Restock" link, which opens that same dialog.
+Since #1122 opening the Dashboard also fetches them, at most once per business per hour (see
+**The Dashboard's hourly restock fetch** below). Forgetting it was therefore silent, and the storage inventory drifts in exactly the way that looks like missing
 product rather than missing bookkeeping — an inventory count found restocks that had not been synced
 for a week. This feature is the reminder, and only the reminder: its own read never syncs, applies
 an event, resolves a duplicate or changes an inventory quantity, and opening the Dashboard
@@ -16467,7 +16470,37 @@ see sales already imported, so a machine whose recent sales have not been import
 a trade-off the owner accepted. Each row publishes `hasSalesSinceLastSync`; the client groups rows by
 `knownPendingEventCount` alone and derives nothing else.
 
-**The Dashboard read is local, and it is read-only.**
+**The Dashboard's hourly restock fetch (issue #1122, by the owner's decision of 7 November
+2026).** Since #1090 a machine with nothing pending was listed as "Restock check due" whenever it
+had sold since a sync three or more days old, because nothing fetched restock alerts except an
+operator; the alert was therefore a guess. The reminder component now shows the reminder from the
+read-only `GET` first and then calls `POST api/machine-restock-sync/reminder/refresh`
+(`Inventory.Operate`), which runs `Inventory.Application.MachineStockSync.RefreshMachineRestockEvents`
+and answers the same reminder, read after the fetch. The use case:
+
+- answers `NotApplicable` without a Nayax call and without taking the hour in a support session,
+  for a plan without the sales provider and for a connection `NayaxConnectionStatusGate` refuses -
+  the reminder's own gates;
+- claims the hour in `MachineRestockFetchThrottle` (a singleton keyed by business and credential
+  revision, in memory per API instance, `Window` one hour) *before* the first Nayax call, so a
+  concurrent visit starts no second fetch, a credential save allows an immediate fetch, and a
+  restart allows one extra; only a cancelled fetch (the visitor left) gives its claim back;
+- fetches every provider-named machine through `IMachineRestockEventFetch`, which
+  `SyncMachineStockFromNayax` implements — the Sync Restock import itself, so the same dedupe,
+  classification and product mapping apply and nothing is applied to inventory — and coverage keeps
+  the #1018 rule, so a machine whose fetch leaves nothing pending is recorded as synced and drops off
+  the reminder, while one with new events is listed under "Restock sync pending";
+- stops the run on a refusal of the whole business (`NayaxNotConnectedException`, which a 401
+  becomes; `NayaxPermissionNotGrantedException`; `SupportSessionNayaxUnavailableException`) and
+  otherwise skips a machine that fails on its own. A machine that could not be fetched keeps its
+  local answer, which is the "Restock check due" fallback.
+
+Nayax call volume per business per hour is at most one `lastAlerts` call per provider machine, plus
+one fresh `machineProducts` call for each machine that had new alerts. A failed `POST` leaves the
+reminder already on screen unchanged.
+
+**The Dashboard read is local, and it is read-only.** (The `GET`; the hourly fetch above is the
+separate `POST`.)
 `Inventory.Application.MachineStockSync.GetMachineRestockSyncReminder` makes exactly two local
 reads — the business's own connection record without its token, and one aggregate read over the
 machines, their imported events and their imported sales (`IMachineRestockSyncCoverageStore.GetProviderMachineCoverageAsync`)
@@ -16527,7 +16560,10 @@ banner itself offers no action, and the component derives no date, threshold or 
 the three-day rule, the sales-since rule, the business dates, the day counts and the pending
 definition are all the server's. Since issue #1090 it splits the listed rows by
 `knownPendingEventCount` into a "Restock sync pending" group and a "Restock check due" group inside
-the one alert, so the Needs attention panel still counts it once.
+the one alert, so the Needs attention panel still counts it once. Since issue #1122, once a
+loaded reminder is on screen it calls the hourly fetch and shows the reminder that answers; it asks
+for no fetch when the reminder is hidden, failed or inside a support session, ignores a failed or
+empty answer, and cancels a fetch still running when a support session starts or the page closes.
 
 ### Machine latest sales (issue #768)
 

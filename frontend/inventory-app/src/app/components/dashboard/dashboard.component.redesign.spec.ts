@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { NEVER, Observable, of, throwError } from 'rxjs';
 import { AccessService } from '../../access/access.service';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import {
@@ -138,7 +138,10 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
         provide: MachineService,
         useValue: {
           getAll: () => of(options.machines ?? [MACHINE]),
-          getRestockSyncReminder: () => options.reminder ?? of(NOT_APPLICABLE)
+          getRestockSyncReminder: () => options.reminder ?? of(NOT_APPLICABLE),
+          // Issue #1122: the hourly Nayax fetch after the first read; never answering keeps the
+          // reminder these cases arranged on screen.
+          refreshRestockSyncReminder: () => NEVER
         }
       },
       { provide: SiteService, useValue: { getAll: () => of(options.sites ?? [SITE]) } },

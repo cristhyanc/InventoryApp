@@ -83,6 +83,10 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // points at - reconciling restocks - rather than the Dashboard's own: a role that may not
         // run Sync Restock has nothing to do with a reminder to go and run it.
         { "Inventory.Operate", "GET", "/api/machine-restock-sync/reminder", "Operator,Manager,Owner" },
+        // Issue #1122: the Dashboard's hourly restock fetch is the import half of Sync Restock, so it
+        // declares the same capability. This business stores no Nayax connection, so the call fetches
+        // nothing and answers the reminder.
+        { "Inventory.Operate", "POST", "/api/machine-restock-sync/reminder/refresh", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/stock-history", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/products/1/stock", "Operator,Manager,Owner" },
         { "Inventory.Operate", "POST", "/api/products/1/inventory-count/apply", "Operator,Manager,Owner" },
