@@ -17005,7 +17005,11 @@ and error, composed through `[businessId]`/`[businessName]` per
 "None"), On/Off, and the last message received in **Sydney time** (or "Never"), offers Set/Change,
 Turn off and Remove, and sends the revision it was loaded with — or `null` when the `GET` answered
 `404`, which is how the first row is created. Remove asks for confirmation and says plainly that the
-id becomes free for another business. A `409` reloads the card and reports the server's own sentence;
+id becomes free for another business, and **every path that would remove the id reaches that one
+confirmation**: submitting a cleared field over a recorded sender is a removal, so it shows the same
+confirmation instead of committing one, and cancelling it restores the field. With nothing recorded
+a cleared field has nothing to remove, so the card asks for an id rather than writing an empty row.
+A `409` reloads the card and reports the server's own sentence;
 a `400` shows that sentence and keeps what was typed. The card decides nothing: every rule above is
 the server's, and the businesses table itself carries no sender, because the mapping is read through
 its own endpoint rather than by widening the directory.

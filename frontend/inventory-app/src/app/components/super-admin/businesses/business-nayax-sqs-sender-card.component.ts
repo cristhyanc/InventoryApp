@@ -25,7 +25,8 @@ import {
  *
  * **Remove is not a delete.** The server keeps the row and its audit history and clears the id; the
  * confirmation says so, and says that the id becomes free for another business, because that is the
- * consequence an administrator has to weigh.
+ * consequence an administrator has to weigh. Every path that would remove the id reaches that one
+ * confirmation - the Remove button, and submitting a cleared field over a recorded sender.
  *
  * **No AWS credential is ever asked for.** The one field here is an IAM user *id*, which AWS
  * publishes; there is no field for an access key or a secret anywhere in this application.
@@ -256,12 +257,34 @@ export class BusinessNayaxSqsSenderCardComponent implements OnInit {
     }
     this.errorMessage = null;
     this.confirmingRemove = false;
+    // Nothing was written, so the card goes back to showing the recorded id - including when the
+    // confirmation was reached by clearing the field, which must not leave the form contradicting
+    // the mapping it reports above it.
+    this.awsSenderId = this.sender?.awsSenderId ?? '';
   }
 
-  /** Records or changes the sender, and turns the mapping on - the only action that does. */
+  /**
+   * Records or changes the sender, and turns the mapping on - the only action that does.
+   *
+   * **A cleared field is not a change.** With an id recorded, submitting nothing is a removal: it
+   * would clear the mapping and release its globally unique id for another business. That is the
+   * decision the issue requires a confirmation for, so this path shows the same confirmation the
+   * Remove button shows rather than committing it on one click. With nothing recorded there is
+   * nothing to remove, so the card asks for an id instead of writing an empty row.
+   */
   save(): void {
     const submitted = this.awsSenderId.trim();
-    this.submit(submitted === '' ? null : submitted, submitted !== '');
+    if (submitted === '') {
+      if (this.sender?.awsSenderId) {
+        this.requestRemove();
+        return;
+      }
+
+      this.errorMessage = 'Enter an AWS sender ID, or close this card to leave this business without one.';
+      return;
+    }
+
+    this.submit(submitted, true);
   }
 
   /** Turns the mapping off and keeps the recorded id, which is a different decision from removing it. */

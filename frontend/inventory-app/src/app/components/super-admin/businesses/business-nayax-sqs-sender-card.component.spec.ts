@@ -161,6 +161,58 @@ describe('BusinessNayaxSqsSenderCardComponent (issue #1101)', () => {
     expect(text(host, 'current-sender')).toBe('AIDAEXAMPLEUSERID123');
   });
 
+  /**
+   * Clearing the field and pressing Change is a removal: it releases a globally unique sender id and
+   * (once #1103 reads the queue) stops that business's sales being attributed. It therefore reaches
+   * the same confirmation the Remove button does, and sends nothing before it is accepted.
+   */
+  it('asks for the removal confirmation when a cleared field is submitted over a recorded sender', async () => {
+    const set = jest.fn().mockReturnValue(of(removed));
+    const { host, fixture } = await render({ get: () => of(recorded), set });
+
+    type(host, '   ', fixture);
+    click(host, 'save-sender');
+    fixture.detectChanges();
+
+    expect(set).not.toHaveBeenCalled();
+    expect(text(host, 'remove-confirmation')).toContain('free for another business');
+
+    click(host, 'confirm-remove');
+    expect(set).toHaveBeenCalledWith(9, null, false, 3);
+  });
+
+  it('cancelling that confirmation leaves the recorded sender and the field untouched', async () => {
+    const set = jest.fn();
+    const { host, fixture } = await render({ get: () => of(recorded), set });
+
+    type(host, '', fixture);
+    click(host, 'save-sender');
+    fixture.detectChanges();
+    click(host, 'cancel-remove');
+    fixture.detectChanges();
+    // `ngModel` writes the restored value into the field on a microtask, so the field is read after
+    // the fixture settles rather than in the same turn as the click.
+    await fixture.whenStable();
+
+    expect(set).not.toHaveBeenCalled();
+    expect(text(host, 'current-sender')).toBe('AIDAEXAMPLEUSERID123');
+    expect((host.querySelector('#aws-sender-id') as HTMLInputElement).value).toBe('AIDAEXAMPLEUSERID123');
+  });
+
+  /** With nothing recorded there is nothing to remove, so an empty submission writes no empty row. */
+  it('asks for an ID instead of writing when a cleared field is submitted with nothing recorded', async () => {
+    const set = jest.fn();
+    const { host, fixture } = await render({ get: () => throwError(() => notFound()), set });
+
+    click(host, 'save-sender');
+    fixture.detectChanges();
+
+    expect(set).not.toHaveBeenCalled();
+    expect(host.textContent).toContain('Enter an AWS sender ID');
+    expect(host.querySelector('[data-testid="remove-confirmation"]')).toBeNull();
+    expect(text(host, 'current-sender')).toBe('None');
+  });
+
   it('takes the new state and the new revision from the server’s answer', async () => {
     const set = jest.fn().mockReturnValue(of(removed));
     const { host, fixture } = await render({ get: () => of(recorded), set });
