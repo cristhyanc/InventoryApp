@@ -252,7 +252,11 @@ public class NayaxSaleMixedPathTimestampTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return new EfLatestNayaxSalesStore(
-            db, TestCostingUseCases.CostSale(db, rebuild), rebuild, IdentityLinks());
+            db,
+            TestCostingUseCases.CostSale(db, rebuild),
+            rebuild,
+            IdentityLinks(),
+            TestClocks.Fixed);
     }
 
     private static ImportNayaxSales Import(AppDbContext db, IRebuildProductCost? rebuild = null)

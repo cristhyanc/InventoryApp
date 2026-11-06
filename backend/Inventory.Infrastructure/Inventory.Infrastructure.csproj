@@ -7,6 +7,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Receiving each business's Nayax sales from the one shared Restockroo SQS queue (issue
+         #1103). It stays behind the Application port Inventory.Application.NayaxSqs
+         .INayaxSqsQueueClient, satisfied by exactly one adapter
+         (Inventory.Infrastructure.NayaxSqs.AwsNayaxSqsQueueClient), so no AWS type reaches
+         Inventory.Application or Inventory.Domain - which CleanArchitectureDependencyTests
+         enforces - and no other type in this assembly holds a queue URL or an AWS credential. -->
+    <PackageReference Include="AWSSDK.SQS" Version="4.0.100.24" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.29.2" />
     <!-- Reading an uploaded Nayax transaction export (issue #301) and writing report XLSX exports

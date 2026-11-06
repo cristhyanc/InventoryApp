@@ -1641,8 +1641,18 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<bool>("ProviderProductIdIsRaw")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("ReceivedViaSqsAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("SettlementValue")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("SqsFirstMessageId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("SqsVerification")
+                        .HasColumnType("INTEGER");
 
                     b.Property<long>("TransactionID")
                         .HasColumnType("INTEGER");
@@ -1747,6 +1757,46 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "MachineId");
 
                     b.ToTable("OperatingExpenses");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PendingInventoryCostRebuild", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("FromInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastAttemptAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastFailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "CreatedAtUtc");
+
+                    b.HasIndex("BusinessId", "ProductId")
+                        .IsUnique();
+
+                    b.ToTable("PendingInventoryCostRebuilds");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>

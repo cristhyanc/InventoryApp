@@ -411,6 +411,12 @@ public static class ApplicationServiceCollectionExtensions
         // support-session refusal behind INayaxLynxClient belong to one caller's business. Its own
         // message parser is a pure function and is registered nowhere.
         services.AddScoped<INayaxSqsSlotProductResolver, NayaxSqsSlotProductResolver>();
+        // Everything one queued Nayax SQS message causes inside one business (issue #1103). Scoped,
+        // and resolved from the per-message service scope the reader opens: the gates, the save and
+        // the rebuild drain all belong to the one business that scope resolved, exactly as they would
+        // to a member of it. The reader's own loop is a singleton registered with the queue client in
+        // Inventory.Infrastructure, because it is about the process rather than about one message.
+        services.AddScoped<ProcessNayaxSqsSale>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();
         services.AddScoped<ListPurchases>();
