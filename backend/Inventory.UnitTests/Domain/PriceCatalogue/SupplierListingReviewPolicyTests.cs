@@ -184,6 +184,35 @@ public class SupplierListingReviewPolicyTests
     }
 
     /// <summary>
+    /// A variant or size the reading leaves out is not reported, so it does not stop the reading
+    /// being this pack's price (owner decision, 6 November 2026): approving such a held reading
+    /// prices the listing at once instead of dropping the reading until the next run.
+    /// </summary>
+    [Theory]
+    [InlineData(null, 375, MasterProductSizeUnit.Millilitre)]
+    [InlineData("Classic", null, null)]
+    [InlineData(null, null, null)]
+    public void A_reading_that_leaves_out_the_variant_or_size_is_still_this_packs_price(
+        string? variant,
+        int? size,
+        MasterProductSizeUnit? unit)
+    {
+        var read = new SupplierListingIdentity(variant, size, unit, null, null, 30);
+
+        Assert.True(SupplierListingReviewPolicy.ReadingDescribesConfirmedPack(Confirmed, read));
+
+        var decision = SupplierListingReviewPolicy.DecidePendingPrice(
+            Confirmed,
+            new ReviewedPendingReading(read, 42.50m, Observed),
+            lastAcceptedPackPrice: null,
+            SupplierPriceFreshnessPolicy.DailyCheckLimitHours,
+            Observed.AddHours(1),
+            priceExceptionApproved: false);
+
+        Assert.True(decision.AcceptsPrice);
+    }
+
+    /// <summary>
     /// The variant is the supplier's own wording, so a restyled page is not a new product: it is
     /// compared trimmed and without regard to case, which is #937's own rule reused rather than
     /// restated.

@@ -311,6 +311,41 @@ public static class PriceCollectorResultPolicy
     }
 
     /// <summary>
+    /// Whether a <em>reading</em> disagrees with the identity the catalogue holds, in the fields the
+    /// reading actually reports (owner decision, 6 November 2026).
+    ///
+    /// <para><strong>A value the reading leaves out is "not reported", never "changed".</strong> A
+    /// supplier page or a collector row that states no variant, no individual size or no pack count
+    /// says nothing about it, so it cannot contradict what somebody confirmed: production run
+    /// 42128721044 sent 82 confirmed listings to review with their prices held, and approving them
+    /// confirmed the stored identity and dropped the readings, so the price came back only on the next
+    /// run. A field the reading <em>does</em> report is compared exactly as
+    /// <see cref="HasIdentityChanged"/> compares it, so a 46 g bag read as 180 g, or a 24-pack read as
+    /// a 36-pack, is still a change. The size is reported only with both its value and its unit.</para>
+    ///
+    /// <para>This is the comparison for a reading against a decision. Comparing two complete
+    /// identities - what a confirmation sets against what the listing held - stays
+    /// <see cref="HasIdentityChanged"/>, where a missing value is a real one.</para>
+    /// </summary>
+    public static bool ReadingDisagrees(SupplierListingIdentity stored, SupplierListingIdentity reading)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        ArgumentNullException.ThrowIfNull(reading);
+
+        var sizeReported = reading.SizeValue is not null && reading.SizeUnit is not null;
+
+        return HasIdentityChanged(
+            stored,
+            reading with
+            {
+                Variant = string.IsNullOrWhiteSpace(reading.Variant) ? stored.Variant : reading.Variant,
+                SizeValue = sizeReported ? reading.SizeValue : stored.SizeValue,
+                SizeUnit = sizeReported ? reading.SizeUnit : stored.SizeUnit,
+                UnitsPerPack = reading.UnitsPerPack ?? stored.UnitsPerPack,
+            });
+    }
+
+    /// <summary>
     /// The match status a listing held when the current run started, recovered from the status it
     /// holds now and from whether this run has already sent it to review.
     ///
@@ -383,7 +418,8 @@ public static class PriceCollectorResultPolicy
         decimal packPrice,
         decimal? lastAcceptedPackPrice)
     {
-        var identityChanged = HasIdentityChanged(stored, observed);
+        // Only what the reading reports can disagree with a decision (owner decision, 6 November 2026).
+        var identityChanged = ReadingDisagrees(stored, observed);
 
         switch (currentStatus)
         {
