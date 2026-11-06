@@ -24,6 +24,7 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
+using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
 using Inventory.Application.PriceCatalogue;
@@ -199,6 +200,13 @@ public static class ApplicationServiceCollectionExtensions
         // one BEGIN IMMEDIATE transaction on that same context, and the business it decides about is
         // named by the route - the subject of the decision rather than a tenancy scope.
         services.AddScoped<ManageBusinessPlanGrant>();
+
+        // And the Super Admin's Nayax SQS sender identity on one business (issue #1101). Scoped for
+        // exactly the reasons the grant above is: the business read, the lifecycle gate, the revision
+        // comparison and the sender and audit write all run on the request's own AppDbContext, inside
+        // one BEGIN IMMEDIATE transaction on that same context, and the business it records is named
+        // by the route - the subject of the decision rather than a tenancy scope.
+        services.AddScoped<ManageBusinessNayaxSqsSender>();
 
         // The attachment storage quota of issue #968, which reads the entitlement above for its
         // allowance. Scoped for the same reason: both the guard every upload path reserves through

@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Stock;
@@ -112,10 +113,12 @@ public class AppDbContext : DbContext
                     + "already names a business must write through the ordinary tenant path.");
         }
 
-        if (SupplierProvisioningBusinessId is not null)
+        if (SupplierProvisioningBusinessId is not null
+            || NayaxSqsSenderWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A supplier provisioning lease is already open on this context.");
+                "A supplier provisioning or Nayax SQS sender write lease is already open on this "
+                    + "context.");
         }
 
         SupplierProvisioningBusinessId = businessId;
@@ -200,11 +203,12 @@ public class AppDbContext : DbContext
         if (PriceCatalogueMatchingLeased
             || PriceCatalogueReviewLeased
             || SupplierProvisioningBusinessId is not null
-            || PlanGrantWriteBusinessId is not null)
+            || PlanGrantWriteBusinessId is not null
+            || NayaxSqsSenderWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A price catalogue matching, price catalogue review, supplier provisioning or plan "
-                    + "grant write lease is already open on this context.");
+                "A price catalogue matching, price catalogue review, supplier provisioning, plan "
+                    + "grant write or Nayax SQS sender write lease is already open on this context.");
         }
 
         PriceCatalogueMatchingLeased = true;
@@ -292,11 +296,12 @@ public class AppDbContext : DbContext
         if (PriceCatalogueReviewLeased
             || PriceCatalogueMatchingLeased
             || SupplierProvisioningBusinessId is not null
-            || PlanGrantWriteBusinessId is not null)
+            || PlanGrantWriteBusinessId is not null
+            || NayaxSqsSenderWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A price catalogue review, price catalogue matching, supplier provisioning or plan "
-                    + "grant write lease is already open on this context.");
+                "A price catalogue review, price catalogue matching, supplier provisioning, plan "
+                    + "grant write or Nayax SQS sender write lease is already open on this context.");
         }
 
         PriceCatalogueReviewLeased = true;
@@ -386,11 +391,12 @@ public class AppDbContext : DbContext
         if (PlanGrantWriteBusinessId is not null
             || PriceCatalogueMatchingLeased
             || PriceCatalogueReviewLeased
-            || SupplierProvisioningBusinessId is not null)
+            || SupplierProvisioningBusinessId is not null
+            || NayaxSqsSenderWriteBusinessId is not null)
         {
             throw new InvalidOperationException(
-                "A plan grant write, price catalogue matching, price catalogue review or supplier "
-                    + "provisioning lease is already open on this context.");
+                "A plan grant write, price catalogue matching, price catalogue review, supplier "
+                    + "provisioning or Nayax SQS sender write lease is already open on this context.");
         }
 
         PlanGrantWriteBusinessId = businessId;
@@ -419,6 +425,104 @@ public class AppDbContext : DbContext
             }
 
             _context.PlanGrantWriteBusinessId = null;
+            _context = null;
+        }
+    }
+
+    /// <summary>
+    /// The business a <see cref="BeginNayaxSqsSenderWrite"/> lease is currently open for, and
+    /// <c>null</c> - which is every other moment of this context's life - when none is (issue #1101).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope. Like the three leases above it is deliberately not read by
+    /// <see cref="CurrentBusinessId"/> or <see cref="TenantFilteringEnabled"/>: a lease grants a
+    /// write and never a read, so while one is open every tenant-owned query still matches nothing
+    /// and the one adapter that reads these two tables under a denied scope does so through explicit,
+    /// business-pinned <c>IgnoreQueryFilters</c> statements a reviewer can see.</para>
+    /// </summary>
+    internal int? NayaxSqsSenderWriteBusinessId { get; private set; }
+
+    /// <summary>
+    /// Opens the Nayax SQS sender window: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>that one business's
+    /// <see cref="BusinessNayaxSqsSender"/> row and the <see cref="BusinessNayaxSqsSenderAudit"/>
+    /// row beside it, and nothing else</em> on an otherwise denied scope (issue #1101, the
+    /// owner-approved exceptions of 5 and 6 November 2026).
+    ///
+    /// <para><strong>Why a window exists at all.</strong> Which AWS IAM user sends a business's sales
+    /// is the Super Admin's decision about a business they are not a member of - a business that
+    /// could choose its own sender id could claim another business's sales - so the request carries a
+    /// denied <see cref="BusinessScope"/> and the enforcer refuses every tenant-owned write. The
+    /// mapping is nevertheless a fact about one business and is therefore tenant-owned. This is the
+    /// narrow, reviewed exception rather than a relaxation of the rule: see docs/architecture.md
+    /// § Nayax SQS sender identity.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and the only caller is <c>EfPlatformNayaxSqsSenderStore</c>, which takes it around
+    /// one <c>SaveChanges</c>; two entity types and no other; an insert and - for the sender row
+    /// alone - an update, <strong>never a delete of either</strong>, because removing a sender is an
+    /// audited update that clears the id and an audit trail that could be removed is not one; the
+    /// business id is the key of the row the decision's own write transaction read, never a value a
+    /// request supplied; a lease may be taken only while this context's own scope is
+    /// <see cref="BusinessScopeState.Denied"/>, so neither an ordinary member's request nor a support
+    /// session can open one; and only one may be open at a time, never beside a provisioning,
+    /// matching, review or plan-grant lease.</para>
+    /// </summary>
+    /// <param name="businessId">The business whose sender and audit rows may be written.</param>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginNayaxSqsSenderWrite(int businessId)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(businessId, 0);
+
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "A Nayax SQS sender is only written by a request that resolved no business of its "
+                    + "own - the platform administrator recording it. A scope that already names a "
+                    + "business must not write any business's sender identity at all.");
+        }
+
+        if (NayaxSqsSenderWriteBusinessId is not null
+            || PlanGrantWriteBusinessId is not null
+            || PriceCatalogueMatchingLeased
+            || PriceCatalogueReviewLeased
+            || SupplierProvisioningBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A Nayax SQS sender write, plan grant write, price catalogue matching, price "
+                    + "catalogue review or supplier provisioning lease is already open on this "
+                    + "context.");
+        }
+
+        NayaxSqsSenderWriteBusinessId = businessId;
+        return new NayaxSqsSenderWriteLease(this);
+    }
+
+    /// <summary>
+    /// Closes the window of <see cref="BeginNayaxSqsSenderWrite"/>. A sealed class with one field,
+    /// for the reason <see cref="PlanGrantWriteLease"/> is one: a struct would be copied by the
+    /// <c>using</c> statement.
+    /// </summary>
+    private sealed class NayaxSqsSenderWriteLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public NayaxSqsSenderWriteLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.NayaxSqsSenderWriteBusinessId = null;
             _context = null;
         }
     }
@@ -678,6 +782,24 @@ public class AppDbContext : DbContext
     /// gave it commit together or not at all. See <see cref="BusinessPlanGrantAudit"/>.
     /// </summary>
     public DbSet<BusinessPlanGrantAudit> BusinessPlanGrantAudits => Set<BusinessPlanGrantAudit>();
+
+    /// <summary>
+    /// Which AWS IAM user sends each business's Nayax sales to the shared SQS queue (issue #1101).
+    /// Ordinary tenant-owned data, with at most one row per business and - the one declared exception
+    /// to "uniqueness is per business" - at most one business per non-null sender id, enforced by a
+    /// filtered global unique index. See <see cref="BusinessNayaxSqsSender"/>.
+    /// </summary>
+    public DbSet<BusinessNayaxSqsSender> BusinessNayaxSqsSenders => Set<BusinessNayaxSqsSender>();
+
+    /// <summary>
+    /// Every decision a Super Admin has made about a business's Nayax SQS sender (issue #1101): who
+    /// recorded, changed, switched or removed what. Ordinary tenant-owned data, append-only, and
+    /// written in the same <c>SaveChanges</c> as the row it is about - so the mapping and the record
+    /// of who decided it commit together or not at all. See
+    /// <see cref="BusinessNayaxSqsSenderAudit"/>.
+    /// </summary>
+    public DbSet<BusinessNayaxSqsSenderAudit> BusinessNayaxSqsSenderAudits =>
+        Set<BusinessNayaxSqsSenderAudit>();
 
     /// <summary>
     /// The single shared row holding the grandfathering step's fixed cutoff and its completion marker
@@ -1907,6 +2029,8 @@ public class AppDbContext : DbContext
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
 
+        ConfigureNayaxSqsSenders(modelBuilder);
+
         var grandfathering = modelBuilder.Entity<SubscriptionGrandfathering>();
 
         // The key is not generated: the step is one answer for the whole application, so two
@@ -1923,6 +2047,85 @@ public class AppDbContext : DbContext
                 : fromProvider);
 
         ConfigureConnectedMachineSnapshots(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps the Nayax SQS sender identities of issue #1101: one tenant-owned row per business saying
+    /// which AWS IAM user sends that business's sales to the shared queue, and the append-only trail
+    /// of the decisions that produced it.
+    ///
+    /// <para>Both tables are ordinary tenant-owned data:
+    /// <see cref="ConfigureBusinessOwnership"/> gives each the business key, its index, the query
+    /// filter and the ownership stamp, and nothing here replaces any of that. Neither is a platform
+    /// table, and neither holds a credential: a sender id is an identifier AWS publishes about an IAM
+    /// user, and no access key, secret or session token is stored anywhere in this schema.</para>
+    ///
+    /// <para><strong>Two uniqueness rules, and they are deliberately different.</strong> One row per
+    /// business is the ordinary per-business rule, led by the business key. One business per sender id
+    /// is the <strong>one declared exception</strong> to "uniqueness is per business" (AGENTS.md
+    /// § Tenant ownership and data isolation, the owner's approval of 6 November 2026): the index is
+    /// over <see cref="BusinessNayaxSqsSender.AwsSenderId"/> <em>alone</em>, filtered to non-null
+    /// values, on exactly the reasoning the support session's global id-hash index carries - the value
+    /// is set by a platform administrator and never by a business, so it cannot be used by one
+    /// business to deny another, and the queue reader matches it with no business to narrow the lookup
+    /// by, so it must have exactly one answer. Filtering out nulls is what makes a removed sender id
+    /// immediately free for another business.</para>
+    ///
+    /// <para><strong>An enabled mapping always has something to match on.</strong> The check
+    /// constraint is the database's half of
+    /// <c>Inventory.Domain.NayaxSqs.NayaxSqsSenderPolicy.EnabledNeedsSenderIdMessage</c>: no path,
+    /// including a future one, can leave a row switched on with no sender id, which would claim a
+    /// business's queue is attributed when it is not.</para>
+    ///
+    /// <para>Every instant is persisted UTC and marked UTC on the way out, for the reason the
+    /// subscription records' are: the SQLite provider returns an unspecified kind otherwise, and the
+    /// last-message instant is reported to the Super Admin's page.</para>
+    /// </summary>
+    private static void ConfigureNayaxSqsSenders(ModelBuilder modelBuilder)
+    {
+        var sender = modelBuilder.Entity<BusinessNayaxSqsSender>();
+
+        // At most one row per business: the mapping is one answer about one business, and a second
+        // row would make "which sender is this business's?" ambiguous rather than wrong.
+        sender.HasIndex(x => x.BusinessId).IsUnique();
+
+        // The declared global exception, filtered to the values that exist. SQLite needs the quoted
+        // column name in the filter expression, and the shape is pinned by
+        // `The_nayax_sqs_sender_id_is_unique_globally_rather_than_per_business`.
+        sender.HasIndex(x => x.AwsSenderId)
+            .IsUnique()
+            .HasFilter(@"""AwsSenderId"" IS NOT NULL");
+
+        sender.Property(x => x.AwsSenderId).HasMaxLength(NayaxSqsSenderPolicy.MaxSenderIdLength);
+
+        sender.ToTable(table => table.HasCheckConstraint(
+            "CK_BusinessNayaxSqsSenders_EnabledNeedsSenderId",
+            @"""IsEnabled"" = 0 OR ""AwsSenderId"" IS NOT NULL"));
+
+        sender.Property(x => x.LastMessageReceivedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        sender.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        sender.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        var audit = modelBuilder.Entity<BusinessNayaxSqsSenderAudit>();
+
+        // The one index this table needs: a business's decisions in the order they happened, which is
+        // how the trail is read. The business key alone is already indexed centrally.
+        audit.HasIndex(x => new { x.BusinessId, x.OccurredAtUtc });
+        audit.Property(x => x.FromAwsSenderId).HasMaxLength(NayaxSqsSenderPolicy.MaxSenderIdLength);
+        audit.Property(x => x.ToAwsSenderId).HasMaxLength(NayaxSqsSenderPolicy.MaxSenderIdLength);
+        audit.Property(x => x.ActorDirectoryTenantId).HasMaxLength(100);
+        audit.Property(x => x.ActorObjectId).HasMaxLength(100);
+        audit.Property(x => x.OccurredAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>

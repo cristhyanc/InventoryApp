@@ -751,6 +751,11 @@ public class EndpointAuthorizationClassificationTests
     // second and last writer of MasterProducts, beside the review above, and no sixth class.
     [InlineData("api/super-admin/master-products", "POST")]
     [InlineData("api/super-admin/master-products/{id:long}", "PUT")]
+    // Issue #1101's Nayax SQS sender identity: which AWS IAM user sends one business's sales to the
+    // shared queue. Class 2 again - the same marker and the same policy - and deliberately only two
+    // routes, because removing a sender is the PUT's own audited update rather than a DELETE.
+    [InlineData("api/super-admin/businesses/{businessId:int}/nayax-sqs-sender", "GET")]
+    [InlineData("api/super-admin/businesses/{businessId:int}/nayax-sqs-sender", "PUT")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);

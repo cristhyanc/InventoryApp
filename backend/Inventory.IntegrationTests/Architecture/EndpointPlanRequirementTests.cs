@@ -341,6 +341,12 @@ public class EndpointPlanRequirementTests
         new("SuperAdminBusinessesController.Reactivate", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reactivate
         new("SuperAdminBusinessesController.Reject", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reject
         new("SuperAdminBusinessesController.ReleaseMember", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/members/{membershipId:int}/release
+        // Issue #1101's Nayax SQS sender identity. No plan requirement, for the reason no
+        // platform-admin endpoint has one: which AWS IAM user sends a business's sales is the
+        // platform's own record about that business, and a plan a business holds cannot decide
+        // whether the Super Admin may correct it.
+        new("SuperAdminNayaxSqsSenderController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/nayax-sqs-sender
+        new("SuperAdminNayaxSqsSenderController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/nayax-sqs-sender
         new("SuperAdminMasterProductsController.Create", PlanRequirementKind.None), // POST api/super-admin/master-products
         new("SuperAdminMasterProductsController.Get", PlanRequirementKind.None), // GET api/super-admin/master-products/{id:long}
         new("SuperAdminMasterProductsController.List", PlanRequirementKind.None), // GET api/super-admin/master-products

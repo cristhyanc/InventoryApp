@@ -2213,7 +2213,7 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 Until this slice the platform administrator could only *look* (the read-only diagnostics API above), and nobody could decide a business application at all: issue #541 creates a `Pending` business and leaves it waiting. Issue #544, one slice of #509 under #328, is the first write-capable platform-admin path — the Super Admin sees every business and approves or refuses an application — and the whole design is about keeping "write-capable" from meaning "unrestricted".
 
-**What this surface writes, and what it deliberately does not.** A business's lifecycle status, one of its memberships' activation, and — on an approval alone — that business's own copies of the enabled supplier presets. The business's *plan* is **not** on this surface and `IPlatformBusinessDirectoryStore` was not widened to write one: the manual plan grant a Super Admin may decide (issue #982) is its own controller, its own narrow port and its own reviewed write, described in [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982).
+**What this surface writes, and what it deliberately does not.** A business's lifecycle status, one of its memberships' activation, and — on an approval alone — that business's own copies of the enabled supplier presets. The business's *plan* is **not** on this surface and `IPlatformBusinessDirectoryStore` was not widened to write one: the manual plan grant a Super Admin may decide (issue #982) is its own controller, its own narrow port and its own reviewed write, described in [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982). The business's *Nayax SQS sender identity* is not on this surface either, and that store was not widened for it: which AWS IAM user sends that business's Nayax sales (issue #1101) is its own controller, its own narrow port and its own reviewed write and read, described in [Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101).
 
 **Who, and how it is enforced. Exactly the diagnostics surface's answer, reused rather than re-invented.** `SuperAdminBusinessesController` carries `[Authorize]`, `[Authorize(Policy = PlatformAdminPolicy.Name)]`, `[RequiredScope("access_as_user")]` and `PlatformDiagnosticsEndpointAttribute`. That is class 2 of the four [endpoint authorization classes](#capability-authorization-issue-525) — **not** a fifth class and **not** a second marker, which is the point: a platform surface that writes must not also be a new mechanism to review. Authority is the separately configured Entra `(tid, oid)` pair, held outside the database, and both values empty — the shipped state — means nobody reaches this controller at all. An Owner holds the strongest business role there is and is refused here exactly as any other member is, because this controller declares no capability any role could satisfy. Both policies are enforced, and both attributes are needed: the named policy *replaces* the default one rather than adding to it, so a controller with only `[Authorize(Policy = …)]` would leave the delegated scope undemanded — platform authority is an additional requirement on a delegated API call, never a replacement for one.
 
@@ -2228,6 +2228,23 @@ POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active, + Dec
 POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + reason, + DecidedAtUtc,
                                                         and the applicant's membership released
 ```
+
+**Two more routes hang off the same `{businessId}` path and belong to other surfaces** — they are
+listed here so the route space is readable in one place, and described where their own rules are:
+
+```text
+GET  /api/super-admin/businesses/{businessId}/plan-grant           issue #982, the manual plan grant
+PUT  /api/super-admin/businesses/{businessId}/plan-grant
+POST /api/super-admin/businesses/{businessId}/plan-grant/end
+GET  /api/super-admin/businesses/{businessId}/nayax-sqs-sender     issue #1101, the SQS sender identity
+PUT  /api/super-admin/businesses/{businessId}/nayax-sqs-sender
+```
+
+Each pair is its own controller, its own narrow Application port and its own reviewed denied-scope
+write — class 2 under this surface's own marker and policy, with no new class and no new marker — and
+neither is reachable through `IPlatformBusinessDirectoryStore`. See
+[Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982) and
+[Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101).
 
 **The business id in a route is the subject of a decision, not a tenancy scope.** Every other endpoint in this application resolves its business from the authenticated actor's membership and accepts no owner from a request ([Tenant ownership](#tenant-ownership-issue-64)). A platform decision has to name the application it is about, so these two routes carry the id — and that is the whole of what it does: it resolves no business for the request, which still runs with a **denied** `BusinessScope`; it is never stamped on a row; it cannot reach a tenant-owned table; and it is checked against the stored rows on every call, so an unknown id is `404` and an already-decided one is `409`. The directory response carries the id for the same reason, and it is the only response in the application that carries a tenant key. Neither shape may be copied onto a business endpoint.
 
@@ -16844,6 +16861,186 @@ nor the delivery setup page says how a free transaction is marked — today's `l
 a zero-value vend as cancelled (`250`), so it already consumes no stock, and a follow-up decides
 stock handling once a real sample exists. Pending-to-final updates (`55` or `80` followed by `12`)
 are unsupported until a sample shows whether Nayax sends a second message. Refunds are issue #1107.
+
+### Nayax SQS sender identity (issue #1101)
+
+The section above is the *meaning* of one SQS message. This one is the question a shared queue has to
+answer before any message may be saved: **whose sale is this?** Parent #1100's owner decision of
+5 November 2026 is one shared Restockroo queue, one send-only AWS IAM user per business, and messages
+attributed by the SQS `SenderId` system attribute. This issue records that mapping; the queue reader
+that uses it is issue #1103, and nothing here reads the queue or adds an AWS SDK package.
+
+**Only a Super Admin may set it, and no business may see its own.** A business that could choose its
+own sender id could claim another business's sales — which is the whole reason this record is on the
+platform-admin surface and on no member-facing one. It is read and written through two endpoints:
+
+```text
+GET /api/super-admin/businesses/{businessId}/nayax-sqs-sender   the recorded sender, or 404
+PUT /api/super-admin/businesses/{businessId}/nayax-sqs-sender   record, change, switch or remove it
+```
+
+They sit on `SuperAdminNayaxSqsSenderController` behind `[Authorize]`,
+`[Authorize(Policy = PlatformAdminPolicy.Name)]`, `[RequiredScope("access_as_user")]` and
+`PlatformDiagnosticsEndpointAttribute` — class 2 of the five
+[endpoint authorization classes](#capability-authorization-issue-525), the same marker and the same
+policy as every other Super Admin surface, **not** a sixth class and **not** a second marker. An
+Owner, Manager or Operator is refused here exactly as a stranger is, because a business role is not
+platform authority; a role preview is refused by `RolePreviewMiddleware` like every other write; and a
+read-only support session is refused by its own HTTP-method rule and again by
+`BusinessOwnershipEnforcer`. **There is no `DELETE` route** — see Remove, below.
+
+**The table, and why it is tenant-owned.** `BusinessNayaxSqsSender` carries `BusinessId`,
+`AwsSenderId` (nullable), `IsEnabled`, `LastMessageReceivedAtUtc`, `Revision`, `CreatedAtUtc` and
+`UpdatedAtUtc`; `BusinessNayaxSqsSenderAudit` beside it carries the business key, both sides of the
+sender id, both sides of the enabled flag, the revision, the acting administrator's Entra
+`(tid, oid)` pair and the instant. Which AWS user sends a business's sales, and each decision about
+it, are facts about *that one business* — whose sales these are — so both are ordinary tenant-owned
+data: `ConfigureBusinessOwnership` gives each the business key, its index, the central query filter
+and the ownership stamp, `BusinessOwnershipCoverageTests` asserts both as owned, and **neither is a
+platform table**. Issue #1104's `LastReconciliationSucceededAtUtc` is deliberately *not* added by
+this migration; the migration test asserts its absence, so the next issue's column arrives with the
+issue that needs it.
+
+**Two uniqueness rules, and they are deliberately different.** One row per business is the ordinary
+per-business rule, a unique index led by the business key. One business per sender id is the **single
+declared exception** to "uniqueness is per business" (AGENTS.md § Tenant ownership and data isolation,
+the owner's approval of 6 November 2026): the index is over `AwsSenderId` **alone**, unique, and
+filtered to non-null values. The reasoning is the support session's own global id-hash index's —
+the value is set by a platform administrator and never by a business, so no business can take one to
+deny it to another, and the reader of #1103 matches a message's `SenderId` with no business to narrow
+the lookup by, so the question must have exactly one answer. The filter is load-bearing twice over: it
+frees a removed sender id for another business, and it lets any number of businesses hold no sender at
+all. `The_nayax_sqs_sender_id_is_unique_globally_rather_than_per_business` pins the shape and
+`The_global_uniqueness_rule_exempts_exactly_one_index` keeps the allowlist from growing.
+
+**An enabled mapping always has something to match on.** `IsEnabled` may be true only while
+`AwsSenderId` is not null. `Inventory.Domain.NayaxSqs.NayaxSqsSenderPolicy` refuses the request, and a
+check constraint (`CK_BusinessNayaxSqsSenders_EnabledNeedsSenderId`) refuses the row — so no path,
+including a future one, can leave a business's queue looking attributed when it is not.
+
+**What a sender id has to be.** 16 to 128 characters, **ASCII** letters and digits only, trimmed and
+otherwise stored exactly as entered and matched exactly. ASCII rather than Unicode on purpose: an AWS
+unique id is `[A-Z0-9]`, and `char.IsLetterOrDigit` would accept a Devanagari digit or a Cyrillic
+letter that looks Latin — which is how two visually identical ids could be recorded for two
+businesses with the global index right to allow both. Anything else is `400` with the policy's own
+sentence, which names the rule and never the value.
+
+**The two openings this surface needs, and nothing wider.** A platform-admin request carries a
+**denied** `BusinessScope`, so the central filter matches none of a business's sender rows and the
+central enforcer refuses every tenant-owned write. `IPlatformNayaxSqsSenderStore` is therefore backed
+by exactly two reviewed openings, each described in AGENTS.md § Tenant ownership and data isolation:
+
+- **the fifth denied-scope write lease.** `AppDbContext.BeginNayaxSqsSenderWrite(businessId)` lets
+  `BusinessOwnershipEnforcer` accept that one business's sender row and the audit row beside it, and
+  nothing else — an insert, and an update of the sender row, **never a delete of either**. The method
+  is `internal`, its only caller is `EfPlatformNayaxSqsSenderStore`, it can be taken only while the
+  scope is `Denied`, and only one lease may be open at a time, never beside a provisioning, matching,
+  review or plan-grant lease.
+- **the seventh reviewed `IgnoreQueryFilters` read.** `EfPlatformNayaxSqsSenderStore` reads
+  `BusinessNayaxSqsSenders` through one statement, in one place (`SendersOf`), pinned to the single
+  business id the route named, projecting that row's sender id, enabled flag, last-message instant,
+  revision and instants. No method takes a predicate, a column list, a page, a sort or **a sender id
+  to look up by**: "which business does this sender belong to?" is #1103's question and that issue
+  adds its own narrow lookup as the eighth reviewed path. The `Businesses` row read beside it is
+  structurally non-tenant-owned and is projected to its key and lifecycle status alone.
+
+`IPlatformBusinessDirectoryStore` is **not** widened, no unscoped `AppDbContext` and no
+`UnscopedBusinessScope` is introduced, and `BusinessScopeCompositionTests` still pass.
+
+**The expected-revision guard, including the first creation.** `PUT` takes
+`{ awsSenderId, isEnabled, expectedRevision }`, and `expectedRevision` is required in the body —
+`[JsonRequired]` — so an omitted field is refused rather than silently read as "create". The rule is
+one comparison against the row read inside the write transaction:
+
+- `null` succeeds only when no row exists for that business, and the new row gets `Revision = 1`;
+- otherwise the call must present the row's exact current revision, and on success the revision is
+  incremented;
+- anything else is `409` with `NayaxSqsSenderPolicy.StaleRevisionMessage` and **nothing is written** —
+  which covers `null` when a row already exists, a number when none does, and a different number.
+
+The read, the comparison and the write happen inside one `SqliteWriteLockTransaction`
+(`BEGIN IMMEDIATE`), so the write lock is held before the read the decision is made on. The read the
+use case takes *before* the transaction decides nothing: it exists to answer "no such business" with a
+`404` without taking a write lock on the caller's behalf. `NayaxSqsSenderConcurrencyTests` runs two
+writers on two connections to one real SQLite file and asserts the state they leave rather than which
+one won.
+
+**The lifecycle gate.** Only an `Active` business may have the answer to "whose sales are these?"
+changed. The status is re-read inside the write transaction and checked with the shared
+`ActiveBusinessWritePolicy.AllowsWrite`, so a business deactivated while the lock was awaited is
+refused too; the refusal is `409` with this surface's own sentence. It gates the **write**: the `GET`
+reports what is recorded for any business the route names, because reading the platform's own record
+changes nothing and withholding it would hide the evidence an administrator is looking for.
+
+**A duplicate is the index's answer, reported with no leak.** A sender id another business already
+holds is detected by the unique-index violation and surfaced as `409` with
+`NayaxSqsSenderPolicy.DuplicateSenderIdMessage`, which names and hints at **no** other business.
+There is deliberately no "is this id taken?" pre-check: that would be a cross-business read from the
+platform-admin surface, and the index answers the question without one.
+
+**Remove is an audited update, and nothing is deleted.** The plan-grant lease allows inserts and
+updates only, because an audit trail that can be removed is not one, and this surface keeps that rule.
+"Remove" is `PUT` with a null `awsSenderId` and `isEnabled: false`: it clears the id, switches the
+mapping off, increments the revision and appends an audit row. The row survives with its whole
+history, the cleared id is immediately free for another business because the unique index ignores
+nulls, and a later "Set" reuses the same row — its revision series continuing rather than restarting.
+
+**Every write is audited, in the same transaction.** The audit row — who, when, the old and new sender
+id, the old and new enabled flag, and the revision — is written in the **same `SaveChanges`** as the
+change, so a database never says whose sales may be attributed to an IAM user with no record of who
+said so, and never holds a record of a decision that rolled back. One structured `ILogger` event is
+emitted after the commit as every platform action emits one, and
+`PlatformNayaxSqsSenderAuditEntry` has **no field for the sender id on either side** and no field for
+a name of any kind — so even a sink that printed the whole entry could not emit an AWS identifier.
+
+**The sender id is an identifier, never a secret.** AWS publishes it about an IAM user, and an
+administrator reads it with `aws iam get-user --user-name <user> --query User.UserId` in AWS
+CloudShell. No AWS **access key**, secret or session token is entered, stored or logged anywhere in
+this application or this repository, and this table has no column for one.
+
+**The screen.** Super Admin → Businesses offers **Nayax SQS sender** on an `Active` business's row,
+which opens `BusinessNayaxSqsSenderCardComponent` — its own load, field, revision, remove confirmation
+and error, composed through `[businessId]`/`[businessName]` per
+[Page composition boundary](#page-composition-boundary). The card shows the recorded sender id (or
+"None"), On/Off, and the last message received in **Sydney time** (or "Never"), offers Set/Change,
+Turn off and Remove, and sends the revision it was loaded with — or `null` when the `GET` answered
+`404`, which is how the first row is created. Remove asks for confirmation and says plainly that the
+id becomes free for another business. A `409` reloads the card and reports the server's own sentence;
+a `400` shows that sentence and keeps what was typed. The card decides nothing: every rule above is
+the server's, and the businesses table itself carries no sender, because the mapping is read through
+its own endpoint rather than by widening the directory.
+
+**What is deliberately not here.** The sender → business lookup, the queue reader, the AWS SDK and
+the App Service settings (#1103); the eligible-business list and `LastReconciliationSucceededAtUtc`
+(#1104); any route that deletes a sender or an audit row; creating IAM users or access keys from the
+application; letting a business view or edit its own sender id; and any change to
+`BusinessNayaxConnection`, the Nayax Lynx credentials, sales, costing or the Dashboard.
+
+**No Nayax API contract is touched by this issue.** Nothing here reads the queue, calls Nayax or
+models a Nayax request or response: an AWS IAM user id is AWS's identifier, not a Nayax field. The
+meaning of a message's own fields is the section above, where each one was verified against the Nayax
+developer portal.
+
+**What proves it.** `Inventory.UnitTests/Domain/NayaxSqs/NayaxSqsSenderPolicyTests` covers the id
+bounds, the ASCII rule with its confusable cases, the normalisation and the refusal wording.
+`Inventory.UnitTests/Application/PlatformNayaxSqs/ManageBusinessNayaxSqsSenderTests` covers the frame:
+the two reads, the lifecycle gate, every branch of the revision guard including a decision committed
+while the lock was awaited, remove-then-set, and what each refusal leaves unwritten and unaudited.
+`Inventory.IntegrationTests/Adapters/Persistence/EfPlatformNayaxSqsSenderStoreTests` is the relational
+half over two businesses and a denied scope: the pinned read and its projection, the ordinary read
+still matching nothing, the sender and audit rows committing together, the duplicate refused by the
+index, a removed id reused by another business, the check constraint, and everything the lease
+refuses — another tenant-owned row riding along, another business's row, a delete of either table, an
+audit update, a write with no lease, and a lease taken on a member's or a support session's scope or
+beside another lease. `AddBusinessNayaxSqsSendersMigrationTests` is the schema, both indexes, the
+check constraint and `Down`. `NayaxSqsSenderConcurrencyTests` is the race.
+`SuperAdminNayaxSqsSenderApiTests` is the HTTP boundary: both endpoints refused for an Owner, a
+Manager, an Operator, a stranger, an anonymous caller, a caller without the delegated scope and a
+member presenting a support-session id; the role preview refused the write; the first create, the
+revision refusals, Remove and the reuse of the id it freed, the duplicate with nothing leaked, the
+lifecycle gate, the audit rows, the log without the id, and the response's exactly seven declared
+properties. The Angular card and service have their own specs, and the Businesses page's spec pins the
+action and the toast.
 
 ## Incremental migration plan
 

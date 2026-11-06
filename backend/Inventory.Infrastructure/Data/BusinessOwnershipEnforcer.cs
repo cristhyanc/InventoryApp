@@ -74,6 +74,13 @@ public sealed class CrossBusinessAccessException : Exception
 /// <em>one business's <see cref="BusinessPlanGrant"/> row</em> and append the
 /// <see cref="BusinessPlanGrantAudit"/> row beside it - the Super Admin's manual plan grant - and
 /// nothing else. See <see cref="EnforcePlanGrantWrite"/>.
+///
+/// Since issue #1101 there is a fifth, on exactly the third's terms: while
+/// <c>AppDbContext.BeginNayaxSqsSenderWrite</c> holds a lease, a denied scope may create or change
+/// <em>one business's <see cref="BusinessNayaxSqsSender"/> row</em> and append the
+/// <see cref="BusinessNayaxSqsSenderAudit"/> row beside it - which AWS IAM user sends that
+/// business's Nayax sales - and nothing else, a delete of either included. See
+/// <see cref="EnforceNayaxSqsSenderWrite"/>.
 /// </summary>
 internal static class BusinessOwnershipEnforcer
 {
@@ -136,12 +143,12 @@ internal static class BusinessOwnershipEnforcer
 
     /// <summary>
     /// The denied-scope branch of <see cref="Enforce"/>: a request that resolved no business writes
-    /// nothing tenant-owned, except through one of the four reviewed leases.
+    /// nothing tenant-owned, except through one of the five reviewed leases.
     /// </summary>
     private static void EnforceDeniedScope(AppDbContext context)
     {
         // Denied scope. Reads already return nothing; writes must not be the way around it -
-        // with four reviewed exceptions, below, each narrower than this branch rather than a
+        // with five reviewed exceptions, below, each narrower than this branch rather than a
         // way out of it.
         if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
         {
@@ -164,6 +171,12 @@ internal static class BusinessOwnershipEnforcer
         if (context.PlanGrantWriteBusinessId is { } grantedBusinessId)
         {
             EnforcePlanGrantWrite(context, grantedBusinessId);
+            return;
+        }
+
+        if (context.NayaxSqsSenderWriteBusinessId is { } senderBusinessId)
+        {
+            EnforceNayaxSqsSenderWrite(context, senderBusinessId);
             return;
         }
 
@@ -379,6 +392,57 @@ internal static class BusinessOwnershipEnforcer
                         $"{entry.Metadata.ClrType.Name} cannot be written while deciding a business's "
                             + "plan grant: that path may only create or change that business's own "
                             + "plan grant and append its audit row.");
+
+                default:
+                    break;
+            }
+        }
+
+        EnforceRelationships(context, businessId);
+    }
+
+    /// <summary>
+    /// The Nayax SQS sender window of <c>AppDbContext.BeginNayaxSqsSenderWrite</c> (issue #1101): on
+    /// a denied scope, <em>one business's <see cref="BusinessNayaxSqsSender"/> row and the
+    /// <see cref="BusinessNayaxSqsSenderAudit"/> row beside it</em> may be written, and every other
+    /// tenant-owned write is refused exactly as it is without a lease.
+    ///
+    /// <para>It is the fifth exception to "a denied scope writes nothing tenant-owned", reviewed on
+    /// its own issue, and it is the third one's shape exactly: two entity types, two states (an
+    /// insert, and an update of the sender row - <strong>never a delete of either</strong>, because
+    /// removing a sender is an update that clears its id and an audit trail that could be removed is
+    /// not one), and one business, whose id the decision's own write transaction read rather than a
+    /// request supplying it. The audit row may only be inserted: an audit trail that could be updated
+    /// is not one.</para>
+    ///
+    /// <para>Stamping and ownership go through the same <see cref="StampOrVerifyNewRow"/> and
+    /// <see cref="VerifyUnchangedOwnership"/> every ordinary write uses, so a row carrying some
+    /// <em>other</em> business's key is refused here too rather than silently re-owned, and
+    /// <see cref="EnforceRelationships"/> still runs.</para>
+    /// </summary>
+    private static void EnforceNayaxSqsSenderWrite(AppDbContext context, int businessId)
+    {
+        foreach (var entry in context.ChangeTracker.Entries<IBusinessOwned>().ToList())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added
+                    when entry.Entity is BusinessNayaxSqsSender or BusinessNayaxSqsSenderAudit:
+                    StampOrVerifyNewRow(entry, businessId);
+                    break;
+
+                case EntityState.Modified when entry.Entity is BusinessNayaxSqsSender:
+                    VerifyUnchangedOwnership(entry, businessId);
+                    break;
+
+                case EntityState.Added:
+                case EntityState.Modified:
+                case EntityState.Deleted:
+                    throw new CrossBusinessAccessException(
+                        $"{entry.Metadata.ClrType.Name} cannot be written while recording a "
+                            + "business's Nayax SQS sender: that path may only create or change that "
+                            + "business's own sender row and append its audit row, and may delete "
+                            + "neither.");
 
                 default:
                     break;

@@ -24,6 +24,7 @@ using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
 using Inventory.Application.PriceCatalogue;
@@ -241,6 +242,15 @@ public static class InfrastructureServiceCollectionExtensions
         // request's own context and inside the decision's transaction on it, which is also the only
         // way that lease can be taken at all.
         services.AddScoped<IPlatformPlanGrantStore, EfPlatformPlanGrantStore>();
+
+        // The Super Admin's Nayax SQS sender identity (issue #1101). A separate adapter again, and
+        // for the grant adapter's reason: the business is the subject of a platform decision rather
+        // than the caller's own resolved scope, so this is the one path that reads and writes a
+        // business's sender row under a denied scope - through business-pinned IgnoreQueryFilters
+        // reads and the narrow write lease of AppDbContext.BeginNayaxSqsSenderWrite. Scoped like
+        // every adapter here, so it runs on the request's own context and inside the decision's
+        // transaction on it, which is also the only way that lease can be taken at all.
+        services.AddScoped<IPlatformNayaxSqsSenderStore, EfPlatformNayaxSqsSenderStore>();
 
         // The attachment storage accounting of issue #968: the business's own usage, and the
         // reservation an upload takes before it writes a byte. Scoped like every adapter here, so
