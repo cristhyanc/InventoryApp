@@ -16661,6 +16661,146 @@ nor the UI states one: the panel says it is Nayax's rolling latest-sales window 
 the machine's complete sales history. Historical report redesign, automatic sales sync or import, and
 any stock or costing change are out of scope for this feature.
 
+### Nayax SQS transaction messages (issue #1102)
+
+Nayax Core can deliver every transaction to an Amazon SQS queue within seconds of the vend, which is
+what parent #1100 makes the main source of sales. This section is the **meaning** of one such
+message, and only that: `Inventory.Application.NayaxSqs.NayaxSqsTransactionParser` takes the raw
+message body as a string and returns exactly one `NayaxSqsTransactionOutcome`. It holds no AWS SDK,
+no EF Core and makes no Nayax call, so every "what does this message mean" rule is in one tested
+place and none of it is spread across the reader (#1103), the reconciliation (#1104) or a report.
+
+**The message is not a `lastSales` item.** The Lynx `lastSales` payload the sales synchronization
+reads is a flat item carrying `NayaxProductID` and `AuthorizationDateTimeGMT`. An SQS message is two
+layers — root fields (`TransactionId`, `MachineId`, `SiteId`, `MachineTime`, `Void`) and a `Data`
+object whose keys contain spaces — and the products are nested at **`Data.Products`**, an array. It
+carries **no Nayax product id at all**: each `Data.Products[i]` names the machine slot
+(`"Product Code in Map"`, the MDB code), the PA code, the product name and the catalogue number. The
+field names, types and meanings below were read from the Nayax developer portal's Transaction JSON
+reference on 5 November 2026 before any of them was accepted (AGENTS.md § Nayax contract
+verification); nothing here is inferred from a field name.
+
+**One message gets one outcome, chosen by the first rule that applies.** The order is part of the
+rule, not an implementation detail: a revalue that is also a multivend is a revalue, and a free vend
+whose cancel type contradicts its status is a free vend.
+
+| # | Outcome | Rule | What #1103 does with it |
+|---|---|---|---|
+| 1 | **Invalid** (reason code) | Not JSON; `TransactionId` or `MachineId` missing or not an integer; `Data` missing; `Data.SeValue` missing, null or not a number; `Data."Transaction Status ID"` missing or not an integer; `Data."Authorization Time"` missing or unreadable; `Data.Products` missing or empty | Permanent failure |
+| 2 | **Revalue** | `Is Revalue Transaction` or `Is Revalue Reward Transaction` is true | Acknowledged and deleted; a prepaid credit top-up is not a product sale |
+| 3 | **Multivend** | `Is Multivend` is true, or `Data.Products` holds more than one item | Deleted; the hourly `lastSales` run imports it |
+| 4 | **Unsupported** (reason code) | Root `Void` true; `Settlment Failed` true; status `62` (refunded); status pending (`55`, `80`); status not in `NayaxTransactionStatusIds`; `SeValue` negative | Permanent failure; kept in the dead-letter queue as a sample |
+| 5 | **CancelledOrDeclined** | Status `26`, `28`, `31` or `250` | Saved as a non-completed row with that status, visible in status reporting |
+| 6 | **FreeVend** | Status `12` and `SeValue` exactly `0` | Permanent failure, until a real free vend sample exists |
+| 7 | **CompletedSale** | Status `12`, `SeValue` > 0, and `Cancel Type` `255` or absent | Saved as a completed sale |
+| 8 | **Unsupported** (`StatusContradiction`) | Status `12` but `Cancel Type` present and not `255` | Permanent failure |
+
+**The status is the message's own `Transaction Status ID`, never its amount.** This is the one
+substantive difference from the `lastSales` path, where `EfLatestNayaxSalesStore` ignores any
+supplied status and derives one from the settlement value — a positive amount is completed and
+anything else is cancelled (`250`). A declined transaction that charged money is exactly the case
+those two rules disagree about, so an SQS row's status comes from the message. The parser only
+*reports* the status on the record; **#1103 changes the store** to save a supplied SQS status as
+given while keeping the amount rule for `lastSales`, and this issue touches the store not at all.
+
+**The status ids are the application's established ones, and verification moves to rollout.** Nayax
+publishes no list of `Transaction Status ID` values: neither the Transaction JSON reference nor the
+delivery setup page states one. The parser therefore classifies the id through the single
+`Inventory.Domain.FinancialConfiguration.NayaxTransactionStatusClassifier` that every import and
+every report already uses (`12` approved, `55`/`80` pending, `62` refunded, `26`/`28`/`31`/`250`
+cancelled or declined; AGENTS.md § Sales, payment methods, and statuses), rather than restating the
+ids. Any other value is **Unsupported**, so an unexpected status can never become a completed sale.
+Before production consumption is switched on, parent #1100's rollout rule has the owner read the
+first real messages in the AWS console and record the field names, the status ids and names, and the
+payment descriptions on #1102; a mismatch is fixed before any message is consumed.
+
+**A malformed amount is invalid and never becomes zero.** An absent, null or non-numeric `SeValue`
+makes the whole message invalid. Binding it to `0` would hand the sale paths a zero-value
+transaction, which the amount rule above reads as cancelled — a silent, plausible-looking loss of
+revenue. The same fail-closed reading applies to `Data."Authorization Time"`: it is read through the
+one GMT rule (`NayaxGmtTimestamp`, issue #471), so an offset-free value is UTC because the field
+contract says GMT and not because of the host's time zone, and a value that is absent or is not a
+documented date-time shape has no instant at all rather than a defaulted one.
+
+**`Is Refund Card` is not read, because it is not refund evidence.** The reference documents it as
+"Bit indicating if this is a Nayax Refund Card" — the instrument, not the transaction. An otherwise
+completed sale paid for with one is a completed sale. A refund is recognised by status `62` and by
+nothing else, and stays unsupported here; reversing money without returning stock is issue #1107.
+
+**The mapping onto the record the application already saves.** A CompletedSale and a
+CancelledOrDeclined outcome both carry a `NayaxLastSalesReport`, which is the type
+`ILatestNayaxSalesStore` already persists, plus the slot beside it:
+
+| `NayaxLastSalesReport` | SQS message |
+|---|---|
+| `TransactionID` | root `TransactionId` |
+| `MachineID` | root `MachineId` |
+| `TransactionStatusId` | `Data."Transaction Status ID"` (the supplied status #1103's store honours) |
+| `AuthorizationDateTimeGmt` | `Data."Authorization Time"`, through the `NayaxGmtTimestamp` GMT rule |
+| `MachineAuthorizationTime` | `Data."Machine AuTime"`, the raw machine wall clock, never read as an instant |
+| `SettlementValue` | `Data.SeValue` |
+| `ProductName` | `Data.Products[0]."Product Name"` |
+| `CurrencyCode` | `Data.Currency` |
+| `PaymentMethod` | `Data."Payment Method Description"` |
+| `ProductCostPrice` | `Data.Products[0]."Cost Price"` if present, else `Data."Cost Price"`, else null |
+| `MachineName` | `Data."Machine Name"` |
+| `NayaxProductId` | not set by the parser |
+| (the slot, returned beside the report) | `Data.Products[0]."Product Code in Map"` |
+
+A missing optional column — currency, payment method, machine name, cost price, slot — is `null`
+rather than a default, so nothing downstream reads a blank currency or a cost of zero as a fact. The
+cost price is read in both places because the reference lists `Cost Price` among the product fields
+while the published example message carries it under `Data`; the item's own value wins.
+
+**Deserialisation is an allow-list, and that is a security boundary rather than tidiness.** The
+message carries the consumer's card and identity — `Card String`, the card digit fields,
+`Card Type`, `Display Card Number`, `Card Holder Name`, `Consumer ID`, `Token`, `Zip Code`,
+`User Password` and the discount card fields — and this application has no use for any of it.
+`NayaxSqsTransactionMessage`, `NayaxSqsTransactionData` and `NayaxSqsTransactionProduct` declare
+**only** the fields in the tables above, so nothing else is ever bound to a model and cannot reach
+an outcome, a reason, a log or an exception message later. Unknown extra keys are ignored, which is
+also what lets Nayax Core's selectable columns arrive without a code change. Every scalar member is
+a `JsonElement` read through `NayaxSqsJsonValues`, which answers a value only for the JSON kind the
+contract documents: a wrong type becomes a stated reason code rather than a thrown `JsonException`
+whose text quotes a position inside a card transaction, and the reason codes are fixed enum members
+that never carry a fragment of the payload. A unit test asserts the declared field set exactly, and
+another parses the published example message — whose card and consumer values are fictional but
+genuinely present — and asserts that none of those values appears in any outcome.
+
+**The slot becomes a product id through the machine's product map.**
+`Inventory.Application.NayaxSqs.INayaxSqsSlotProductResolver` maps `(MachineId, slot)` to a
+`NayaxProductID` through `NayaxMachineProduct.MDBCode`, using the **cached** 60-second
+machine-products read ([issue #842](#the-machine-products-cache-issue-842)) rather than the fresh
+one, so a queue draining a hundred messages for one machine makes one Nayax call rather than a
+hundred — a product map changes when an operator reconfigures a machine, not between two
+transactions in the same minute. It answers nothing — a missing slot, a machine with no product map,
+a slot the map does not hold, a map entry carrying no product id, or two entries claiming the same
+slot — and a missing slot reads nothing at all. `NayaxProductId` is then left unset and the existing
+unambiguous-name fallback in `ProductMatcher.MatchLinked` applies exactly as it does today for a
+`lastSales` item whose provider id this business has recorded on no product.
+
+**The payment method is classified by the one classifier.** The mapped
+`Data."Payment Method Description"` goes to
+`Inventory.Domain.FinancialConfiguration.PaymentMethodClassifier`, which is where the
+card/cash/unknown decision is made for every path (AGENTS.md: no report-specific string
+matching). **No
+translation table exists, because none is needed**: the field is documented as "Payment Method Name",
+the same meaning as the `lastSales` payment method, and the descriptions the reference shows
+(`Prepaid Credit`, and the `Cash` and `Credit Card` values the application already knows) are
+already the ones the classifier recognises, so the mapping carries the string through unchanged. If
+the real messages the rollout check records carry a description the classifier does not know, the
+translation belongs at this mapping — never in another report.
+
+**What is deliberately not supported here, and why.** `Void` is unsupported because the reference's
+field table does not describe it, so a message carrying `true` is refused rather than interpreted.
+Multivend is deferred by parent #1100: the existing store keeps one product per `TransactionID` and
+does not guarantee multivend quantities, so leaving these to the hourly `lastSales` run keeps that
+existing limitation rather than fixing it. Free vends are unsupported because neither the reference
+nor the delivery setup page says how a free transaction is marked — today's `lastSales` path imports
+a zero-value vend as cancelled (`250`), so it already consumes no stock, and a follow-up decides
+stock handling once a real sample exists. Pending-to-final updates (`55` or `80` followed by `12`)
+are unsupported until a sample shows whether Nayax sends a second message. Refunds are issue #1107.
+
 ## Incremental migration plan
 
 Each step is a separate, passing pull request. Existing endpoints stay operational throughout.
