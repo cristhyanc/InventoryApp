@@ -40,7 +40,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// consumes stock. Second, what has to be replayed is written down: the same save that stores a sale
 /// records a <see cref="PendingInventoryCostRebuild"/> for every product it affected, and
 /// <see cref="RebuildInventoryCostsAsync"/> drains those rows and removes each one in the same
-/// transaction as the costs it rebuilt. Before that, a failed replay was simply forgotten - the sale
+/// transaction as the costs it rebuilt - and only while the row still names the instant that was
+/// replayed, because the replay itself runs outside the write lock and a writer that recorded an
+/// earlier sale meanwhile has recorded work no acknowledgement of the older claim may clear. Before
+/// that, a failed replay was simply forgotten - the sale
 /// was already stored, so the next import reported no affected products and never retried - and a
 /// queue reader deleting a message on "already stored" would have lost it for good. Third,
 /// <see cref="PersistSqsSaleAsync"/> saves one message inside one <c>BEGIN IMMEDIATE</c> transaction;
@@ -164,17 +167,24 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         CancellationToken cancellationToken)
     {
         // Oldest work first, so a product that has been waiting since yesterday is not starved by
-        // today's sales. Tracked, because a row that succeeds is removed and a row that fails is
-        // updated, both through this context's one SaveChanges below.
-        var pending = await _db.PendingInventoryCostRebuilds
+        // today's sales. Read as plain values rather than as tracked rows, deliberately: a replay
+        // takes as long as the product's history, and a row tracked across it is both a stale
+        // FromInstantUtc that a later SaveChanges could write back over a newer one and shared state
+        // two drains of the same business can stage changes to. What makes an acknowledgement safe is
+        // the write-locked re-read in AcknowledgeAsync, never this read.
+        var pending = await _db.PendingInventoryCostRebuilds.AsNoTracking()
             .OrderBy(row => row.CreatedAtUtc)
             .ThenBy(row => row.Id)
+            .Select(row => new { row.Id, row.ProductId, row.FromInstantUtc })
             .ToListAsync(cancellationToken);
 
         if (pending.Count == 0)
             return new InventoryCostRebuildDrainResult([], []);
 
-        var productIds = pending.ConvertAll(row => row.ProductId);
+        var claims = pending.ConvertAll(
+            row => new PendingRebuildClaim(row.Id, row.ProductId, row.FromInstantUtc));
+
+        var productIds = claims.ConvertAll(claim => claim.ProductId);
         var baselines = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Where(x => productIds.Contains(x.ProductId))
             .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt, cancellationToken);
@@ -188,52 +198,153 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         var stillPending = new List<long>();
         var attemptedAtUtc = _clock.UtcNow;
 
-        foreach (var row in pending)
+        foreach (var claim in claims)
         {
-            if (!baselines.TryGetValue(row.ProductId, out var cutoff) || row.FromInstantUtc <= cutoff)
+            if (!baselines.TryGetValue(claim.ProductId, out var cutoff) || claim.FromInstantUtc <= cutoff)
             {
                 // Nothing to replay: there is no transition baseline for this product, or the
                 // instant is at or before the cutoff the baseline fixed. That is the baseline doing
-                // its job, so the work is done rather than failed and the row goes.
-                _db.PendingInventoryCostRebuilds.Remove(row);
+                // its job, so the work is done rather than failed and the row goes - and goes only
+                // while it still names the instant that was judged, because a writer that has since
+                // recorded an earlier sale has recorded work this claim says nothing about.
+                if (!await AcknowledgeAsync(claim, cancellationToken))
+                    stillPending.Add(claim.ProductId);
+
                 continue;
             }
 
             try
             {
                 await _inventoryCostRebuild.RebuildAsync(
-                    row.ProductId, row.FromInstantUtc, cancellationToken: cancellationToken);
-
-                // Removed in the same SaveChanges - and therefore the same transaction - as the costs
-                // the rebuild just staged, so "the costs are rebuilt" and "there is nothing left to
-                // rebuild" can never disagree.
-                _db.PendingInventoryCostRebuilds.Remove(row);
+                    claim.ProductId, claim.FromInstantUtc, cancellationToken: cancellationToken);
             }
             catch (InventoryCostDataQualityException ex)
             {
-                RecordFailedAttempt(row, PendingRebuildFailureCodes.DataQuality, attemptedAtUtc);
-                stillPending.Add(row.ProductId);
-                failures.Add($"Product {row.ProductId}: {ex.Message}");
+                await RecordFailedAttemptAsync(
+                    claim, PendingRebuildFailureCodes.DataQuality, attemptedAtUtc, cancellationToken);
+                stillPending.Add(claim.ProductId);
+                failures.Add($"Product {claim.ProductId}: {ex.Message}");
+                continue;
             }
             catch (InvalidOperationException ex)
             {
-                RecordFailedAttempt(row, PendingRebuildFailureCodes.ProductMissing, attemptedAtUtc);
-                stillPending.Add(row.ProductId);
-                failures.Add($"Product {row.ProductId}: {ex.Message}");
+                await RecordFailedAttemptAsync(
+                    claim, PendingRebuildFailureCodes.ProductMissing, attemptedAtUtc, cancellationToken);
+                stillPending.Add(claim.ProductId);
+                failures.Add($"Product {claim.ProductId}: {ex.Message}");
+                continue;
+            }
+
+            if (!await AcknowledgeAsync(claim, cancellationToken))
+            {
+                // The work moved while this replay was running, so the replay that just finished is
+                // not the work that is pending now: nothing of it was saved, and the product is
+                // reported as still pending because it is. The next drain replays from the newer,
+                // earlier instant - which is the whole point of the row having survived.
+                stillPending.Add(claim.ProductId);
             }
         }
-
-        await _db.SaveChangesAsync(cancellationToken);
 
         return new InventoryCostRebuildDrainResult(stillPending, failures);
     }
 
-    private static void RecordFailedAttempt(
-        PendingInventoryCostRebuild row, string failureCode, DateTime attemptedAtUtc)
+    /// <summary>
+    /// One row of pending work as this drain read it. The instant is the <em>claim</em>: the
+    /// acknowledgement removes the row only while the row still holds it, which is what makes
+    /// replaying outside the write lock safe (see <see cref="AcknowledgeAsync"/>).
+    /// </summary>
+    private readonly record struct PendingRebuildClaim(long Id, long ProductId, DateTime FromInstantUtc);
+
+    /// <summary>
+    /// Removes the row a claim was read from and saves whatever the replay staged, in one
+    /// <c>BEGIN IMMEDIATE</c> transaction - but only while the row still holds the instant that was
+    /// replayed from. Answers whether it did.
+    ///
+    /// <para><strong>Why the re-read decides, and not the read the replay started from.</strong> The
+    /// replay is deliberately <em>outside</em> the write lock: it is a long chronological
+    /// read-and-write over a product's whole history, and holding SQLite's one write lock for it would
+    /// block every interactive request. Another writer - the queue reader, the request-driven sync, or
+    /// a second drain - can therefore record an earlier sale for the same product and commit while
+    /// this replay is running, and recording one only ever moves <c>FromInstantUtc</c> earlier.
+    /// Removing the row by key would throw that newly arrived work away for good: the row would say
+    /// "replay from the earlier instant", only the later span was replayed, and nothing would be left
+    /// to say so. So the row is read again <em>inside</em> the lock - where no other writer can commit
+    /// between the read and the removal - and removed only while it still says what was replayed.</para>
+    ///
+    /// <para><strong>A claim that has gone stale commits nothing at all.</strong> The costs the replay
+    /// staged were computed before the earlier sale existed, so saving them would let a stale replay
+    /// overwrite what the drain replaying from the earlier instant writes. The staged changes are
+    /// therefore discarded rather than saved: nothing of this product's replay is persisted, and the
+    /// row - whichever instant it now holds - stays the standing record of what still has to be
+    /// replayed.</para>
+    /// </summary>
+    private async Task<bool> AcknowledgeAsync(
+        PendingRebuildClaim claim, CancellationToken cancellationToken)
     {
+        await using var transaction = await SqliteWriteLockTransaction
+            .BeginAsync(_db, cancellationToken)
+            .ConfigureAwait(false);
+
+        var current = await _db.PendingInventoryCostRebuilds
+            .FirstOrDefaultAsync(
+                row => row.Id == claim.Id && row.FromInstantUtc == claim.FromInstantUtc,
+                cancellationToken);
+
+        if (current is null)
+        {
+            // Nothing is written and nothing is removed, and the staged costs go with it: this
+            // context belongs to one message's scope or one synchronization's request, and what it
+            // holds at this point is this product's abandoned rebuild. The sales and the earlier
+            // products' costs are already committed by their own saves.
+            _db.ChangeTracker.Clear();
+            return false;
+        }
+
+        _db.PendingInventoryCostRebuilds.Remove(current);
+
+        // The removal and the costs the replay staged in one SaveChanges - and therefore in the one
+        // transaction this method opened - so "the costs are rebuilt" and "there is nothing left to
+        // rebuild" can never disagree (AGENTS.md § Inventory and historical costing invariants).
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Records one failed attempt on the row a claim was read from: the attempt count, the instant and
+    /// the short failure code, and never its <c>FromInstantUtc</c> - another writer may have moved
+    /// that earlier while the replay was failing, and operational evidence about an attempt must not
+    /// carry a stale instant back over newly recorded work. A row that is no longer there is left
+    /// alone, because the work it described has been acknowledged by somebody else.
+    /// </summary>
+    private async Task RecordFailedAttemptAsync(
+        PendingRebuildClaim claim,
+        string failureCode,
+        DateTime attemptedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        // A fatal rebuild stages nothing at all before it throws (issue #362), so there is nothing of
+        // it to keep; anything else it left behind describes a rebuild that did not happen, and this
+        // save is about the attempt and nothing else.
+        _db.ChangeTracker.Clear();
+
+        await using var transaction = await SqliteWriteLockTransaction
+            .BeginAsync(_db, cancellationToken)
+            .ConfigureAwait(false);
+
+        var row = await _db.PendingInventoryCostRebuilds
+            .FirstOrDefaultAsync(candidate => candidate.Id == claim.Id, cancellationToken);
+
+        if (row is null)
+            return;
+
         row.AttemptCount++;
         row.LastAttemptAtUtc = attemptedAtUtc;
         row.LastFailureCode = failureCode;
+
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

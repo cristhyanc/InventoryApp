@@ -2,6 +2,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxSqs;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
@@ -205,6 +206,146 @@ public class NayaxSqsConcurrencyTests
         Assert.Equal(NayaxTransactionStatusIds.CancelledOrDeclined26, sale.TransactionStatusId);
     }
 
+    #region The pending replay a drain is working on
+
+    /// <summary>
+    /// <strong>A sale recorded while a drain is replaying is never cleared by that drain.</strong>
+    ///
+    /// <para>The replay is deliberately outside the write lock - it reads and rewrites a product's
+    /// whole history, and holding SQLite's one write lock for it would block every interactive
+    /// request - so another writer can record an earlier sale for the same product and commit while
+    /// it runs, which only ever moves that row's instant earlier. A drain that then removed the row
+    /// by key would lose that earlier replay for good: the row said "replay from T1", only the span
+    /// from T2 was replayed, and nothing would be left to say so.</para>
+    ///
+    /// <para>Two connections to one file, with the interleaving inside the replay itself, so the
+    /// order is the one this is about rather than one the scheduler chose.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_sale_recorded_while_a_drain_replays_is_replayed_later_and_never_cleared()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+
+        var later = NayaxSqsSaleFixture.SaleInstant;
+        var earlier = NayaxSqsSaleFixture.SaleInstant.AddHours(-2);
+
+        // The work the drain will read: one sale at T2, saved with its pending replay and not yet
+        // replayed.
+        await using (var seed = fixture.Context())
+        {
+            await NayaxSqsSaleFixture.Store(seed).PersistSqsSaleAsync(
+                NayaxSqsSaleFixture.SqsSale(
+                    NayaxTransactionStatusIds.Completed, transactionId: 4100000001, saleInstant: later),
+                CancellationToken.None);
+        }
+
+        await using var drainContext = fixture.Context();
+        await using var otherWriter = fixture.SecondWriter();
+
+        var replay = new InterleavingReplay(
+            drainContext,
+            interleave: () => NayaxSqsSaleFixture.Store(otherWriter).PersistSqsSaleAsync(
+                NayaxSqsSaleFixture.SqsSale(
+                    NayaxTransactionStatusIds.Completed,
+                    messageId: "message-2",
+                    transactionId: 4100000002,
+                    saleInstant: earlier),
+                CancellationToken.None));
+
+        var drained = await NayaxSqsSaleFixture.Store(drainContext, replay)
+            .RebuildInventoryCostsAsync(CancellationToken.None);
+
+        // The replay that ran is not the work that is pending now, so the product is reported as
+        // still pending - because it is.
+        Assert.Equal([NayaxSqsSaleFixture.ProductA], drained.StillPendingProductIds);
+        Assert.Empty(drained.Failures);
+
+        await using (var read = fixture.Context())
+        {
+            // The row is still there, at the earlier instant the other writer recorded.
+            var pending = await read.PendingInventoryCostRebuilds.AsNoTracking().SingleAsync();
+            Assert.Equal(earlier, pending.FromInstantUtc);
+
+            // And nothing the abandoned replay staged was saved: costs computed before the earlier
+            // sale existed must not stand as that product's position.
+            Assert.NotEqual(
+                InterleavingReplay.StaleCost,
+                (await read.Products.AsNoTracking()
+                    .SingleAsync(row => row.Id == NayaxSqsSaleFixture.ProductA)).AverageUnitCost);
+        }
+
+        // The next drain replays from the earlier instant and clears it: the work was preserved and
+        // then done, which is the whole point of the row having survived.
+        await using (var next = fixture.Context())
+        {
+            var again = await NayaxSqsSaleFixture.Store(next)
+                .RebuildInventoryCostsAsync(CancellationToken.None);
+
+            Assert.Empty(again.StillPendingProductIds);
+            Assert.Empty(again.Failures);
+        }
+
+        await using var final = fixture.Context();
+        Assert.Empty(await final.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+
+        // Two completed sales, two units consumed, from the baseline's own opening position.
+        var product = await final.Products.AsNoTracking()
+            .SingleAsync(row => row.Id == NayaxSqsSaleFixture.ProductA);
+        Assert.Equal(8, product.CostingQuantity);
+        Assert.Equal(16m, product.InventoryValue);
+    }
+
+    /// <summary>
+    /// <strong>Two drains of the same pending row leave one replay standing, and it is not the stale
+    /// one.</strong> The queue reader and the request-driven synchronization both drain every pending
+    /// row of the business, so two of them can hold the same work: one acknowledges it, and the other
+    /// finishes a replay of work that is no longer pending. The second one's costs are discarded
+    /// rather than written over the first one's, and it removes nothing it did not claim.
+    /// </summary>
+    [Fact]
+    public async Task Two_drains_of_one_pending_row_keep_the_replay_that_acknowledged_it()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+
+        await using (var seed = fixture.Context())
+        {
+            await NayaxSqsSaleFixture.Store(seed).PersistSqsSaleAsync(
+                NayaxSqsSaleFixture.SqsSale(NayaxTransactionStatusIds.Completed),
+                CancellationToken.None);
+        }
+
+        await using var firstContext = fixture.Context();
+        await using var secondContext = fixture.SecondWriter();
+
+        // The second drain runs to completion - the real replay, on its own connection - inside the
+        // first one's replay, so the first one finishes holding work somebody else has acknowledged.
+        var replay = new InterleavingReplay(
+            firstContext,
+            interleave: () => NayaxSqsSaleFixture.Store(secondContext)
+                .RebuildInventoryCostsAsync(CancellationToken.None));
+
+        var drained = await NayaxSqsSaleFixture.Store(firstContext, replay)
+            .RebuildInventoryCostsAsync(CancellationToken.None);
+
+        Assert.Equal([NayaxSqsSaleFixture.ProductA], drained.StillPendingProductIds);
+        Assert.Empty(drained.Failures);
+
+        await using var read = fixture.Context();
+
+        // The row the other drain acknowledged is gone, and this one removed nothing of its own.
+        Assert.Empty(await read.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
+
+        // What stands is the replay that acknowledged the work: one sale, one unit consumed, and not
+        // a figure from the drain whose claim had gone.
+        var product = await read.Products.AsNoTracking()
+            .SingleAsync(row => row.Id == NayaxSqsSaleFixture.ProductA);
+        Assert.Equal(9, product.CostingQuantity);
+        Assert.Equal(18m, product.InventoryValue);
+        Assert.Equal(2m, product.AverageUnitCost);
+    }
+
+    #endregion
+
     private static async Task<NayaxSqsProcessingOutcome> ProcessAsync(NayaxSqsSaleFixture fixture)
     {
         await using var db = fixture.Context();
@@ -221,6 +362,70 @@ public class NayaxSqsConcurrencyTests
                 new EfNayaxSqsSenderActivityStore(db),
                 new FakeClock(NayaxSqsSaleFixture.ReceivedAtUtc))
             .Handle("message-1", NayaxSqsRealMessage.Received, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// A replay with the interleaving the two cases above are about placed <em>inside</em> it: the
+    /// other writer's work happens while this replay is running, which is exactly the window a drain
+    /// cannot hold the write lock across.
+    ///
+    /// <para>What it then stages is a recognisable cost rather than a real rebuild, and that is the
+    /// point of the double: a real replay stages the product's rebuilt costing position without
+    /// saving it, so whether <see cref="StaleCost"/> is in the database afterwards says whether the
+    /// drain saved or discarded a replay whose claim had gone. The value is one nothing legitimate
+    /// produces.</para>
+    /// </summary>
+    private sealed class InterleavingReplay : IRebuildProductCost
+    {
+        /// <summary>The average unit cost this replay stages; nothing real ever produces it.</summary>
+        public const decimal StaleCost = 999.99m;
+
+        private readonly AppDbContext _db;
+        private readonly Func<Task> _interleave;
+        private bool _interleaved;
+
+        public InterleavingReplay(AppDbContext db, Func<Task> interleave)
+        {
+            _db = db;
+            _interleave = interleave;
+        }
+
+        public async Task<InventoryCostRebuildResult> RebuildAsync(
+            long productId,
+            DateTime? recostCompletedSalesFrom = null,
+            bool dryRun = false,
+            CancellationToken cancellationToken = default)
+        {
+            if (!_interleaved)
+            {
+                _interleaved = true;
+                await _interleave();
+            }
+
+            var product = await _db.Products.SingleAsync(row => row.Id == productId, cancellationToken);
+            product.AverageUnitCost = StaleCost;
+
+            return new InventoryCostRebuildResult
+            {
+                ProductId = productId,
+                CostingQuantity = product.CostingQuantity ?? 0,
+                InventoryValue = product.InventoryValue ?? 0m,
+                AverageUnitCost = StaleCost,
+            };
+        }
+
+        public Task<InventoryCostRebuildResult> RebuildCostingOnlyAsync(
+            long productId,
+            DateTime recostCompletedSalesFrom,
+            CancellationToken cancellationToken = default) =>
+            RebuildAsync(productId, recostCompletedSalesFrom, dryRun: false, cancellationToken);
+
+        public Task<decimal?> GetAverageUnitCostAtAsync(
+            long productId,
+            DateTime saleTime,
+            long? saleTransactionId = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<decimal?>(null);
     }
 
     /// <summary>

@@ -188,7 +188,11 @@ internal sealed class NayaxSqsSaleFixture : IAsyncDisposable
             clock ?? new FakeClock(ReceivedAtUtc));
     }
 
-    /// <summary>One queued message, as the store is asked to save it.</summary>
+    /// <summary>
+    /// One queued message, as the store is asked to save it. <c>saleInstant</c> is when the sale was
+    /// authorised, for the cases about a second sale arriving <em>earlier</em> than one already
+    /// recorded - the only direction a pending replay's instant ever moves.
+    /// </summary>
     public static NayaxSqsSaleInput SqsSale(
         int suppliedStatusId,
         decimal settlementValue = 3.5m,
@@ -196,7 +200,8 @@ internal sealed class NayaxSqsSaleFixture : IAsyncDisposable
         long transactionId = TransactionId,
         long? nayaxProductId = NayaxProductId,
         DateTime? receivedAtUtc = null,
-        string productName = "Fictional Spring Water 600ml") =>
+        string productName = "Fictional Spring Water 600ml",
+        DateTime? saleInstant = null) =>
         new(
             new Inventory.Application.Nayax.NayaxLastSalesReport
             {
@@ -208,7 +213,7 @@ internal sealed class NayaxSqsSaleFixture : IAsyncDisposable
                 ProductName = productName,
                 NayaxProductId = nayaxProductId,
                 TransactionStatusId = suppliedStatusId,
-                AuthorizationDateTimeGmt = new DateTimeOffset(SaleInstant, TimeSpan.Zero),
+                AuthorizationDateTimeGmt = new DateTimeOffset(saleInstant ?? SaleInstant, TimeSpan.Zero),
                 ProductCostPrice = 1.2m,
             },
             suppliedStatusId,

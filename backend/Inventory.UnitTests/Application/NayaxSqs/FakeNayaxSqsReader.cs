@@ -123,6 +123,14 @@ internal sealed class FakeNayaxSqsReaderScopes : INayaxSqsReaderScopes
     public Func<string, NayaxSqsProcessingOutcome> Outcome { get; set; } =
         _ => NayaxSqsProcessingOutcome.Done(NayaxSqsProcessingReason.Saved);
 
+    /// <summary>
+    /// What processing answers when it does not answer at once, which <see cref="Outcome"/> cannot
+    /// express: a message still in flight is the state the reader's visibility renewal exists for, so
+    /// a case about it has to hand back a task it finishes itself. A message this answers with a task
+    /// that is already completed is processed exactly as <see cref="Outcome"/>'s are.
+    /// </summary>
+    public Func<string, Task<NayaxSqsProcessingOutcome>>? SlowOutcome { get; set; }
+
     /// <summary>Set to make the sender lookup itself fail.</summary>
     public Exception? LookupFailure { get; set; }
 
@@ -166,7 +174,10 @@ internal sealed class FakeNayaxSqsReaderScopes : INayaxSqsReaderScopes
             string messageId, string? messageBody, CancellationToken cancellationToken)
         {
             _owner.Processed.Add((_businessId, messageId));
-            return Task.FromResult(_owner.Outcome(messageId));
+
+            return _owner.SlowOutcome is { } slow
+                ? slow(messageId)
+                : Task.FromResult(_owner.Outcome(messageId));
         }
 
         public ValueTask DisposeAsync()
@@ -259,11 +270,51 @@ internal sealed class FakeNayaxSqsReaderPacing : INayaxSqsReaderPacing
     /// </summary>
     public Action<TimeSpan>? OnDelay { get; set; }
 
+    /// <summary>Every renewal wait asked for while a message was in flight, in order.</summary>
+    public List<TimeSpan> RenewalWaits { get; } = [];
+
+    /// <summary>
+    /// What a renewal wait does. The case advances the clock by the duration it was asked to wait and
+    /// answers the task the wait ends with: <see cref="Task.CompletedTask"/> for "the interval is up,
+    /// renew again", and the in-flight work it has just finished for "the wait ended with the
+    /// message" - which is what makes the renewals one slow message causes countable rather than a
+    /// race with the thread that finished it.
+    ///
+    /// <para>With no behaviour scripted a renewal wait ends with the work, which is what a message
+    /// that is not deliberately held open does.</para>
+    /// </summary>
+    public Func<TimeSpan, Task, Task>? OnRenewalWait { get; set; }
+
     public Task DelayAsync(TimeSpan duration, CancellationToken cancellationToken)
     {
         Delays.Add(duration);
         OnDelay?.Invoke(duration);
         return Task.CompletedTask;
+    }
+
+    public Task WaitForRenewalAsync(TimeSpan duration, Task inFlight, CancellationToken cancellationToken)
+    {
+        RenewalWaits.Add(duration);
+
+        return OnRenewalWait is { } behaviour
+            ? EndQuietlyAsync(behaviour(duration, inFlight))
+            : EndQuietlyAsync(inFlight);
+    }
+
+    /// <summary>
+    /// Ends when <paramref name="wait"/> does and reports nothing of what it ended with, exactly as
+    /// the real pacing does: the work's own outcome belongs to the reader, which awaits it itself.
+    /// </summary>
+    private static async Task EndQuietlyAsync(Task wait)
+    {
+        try
+        {
+            await wait.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Deliberately ignored; see the summary.
+        }
     }
 
     public double NextJitterSample() => JitterSample;

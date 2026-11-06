@@ -13,6 +13,11 @@ namespace Inventory.Application.NayaxSqs;
 /// <param name="MessagesSkipped">
 /// How many messages this poll deliberately left alone because their visibility could not be
 /// extended, so another receiver may hold them.
+///
+/// <para>A message whose extension failed <em>while it was being processed</em> is counted here too,
+/// and not in <paramref name="MessagesHandled"/>: its work was done and durably saved, but the
+/// reader no longer holds a lease it could acknowledge under, so the message was deliberately left
+/// for redelivery.</para>
 /// </param>
 /// <param name="FailureType">
 /// The <em>type name</em> of the failure a receive ended on, or <see langword="null"/> when it
@@ -49,9 +54,15 @@ public sealed record NayaxSqsPollResult(
 /// processed one at a time - the production store is a single SQLite file with one writer - so the
 /// tenth message of a batch may wait a long time behind the first nine. The reader therefore extends
 /// the visibility of every <em>not-yet-finished</em> message immediately after the receive and again
-/// whenever half the timeout has elapsed, waiting ones included. A message whose extension failed is
+/// whenever half the timeout has elapsed, waiting ones included - <strong>including while one message
+/// is in flight</strong>, because one message can take longer than the whole timeout on its own (a slow
+/// Nayax call, a wait for SQLite's write lock, a cost replay over a product's whole history) and that
+/// is precisely when nothing else would renew it. A message whose extension failed is
 /// not processed in this batch at all: the failure means another receiver may now hold it, and two
-/// readers working on one transaction is the race the extension exists to prevent.</para>
+/// readers working on one transaction is the race the extension exists to prevent. A message whose
+/// extension failed while it was <em>already</em> being processed is not acknowledged either - its
+/// save is durable and a redelivery finishes it - because acknowledging under a lease this reader may
+/// no longer hold is the same race one step later.</para>
 ///
 /// <para><strong>Nothing it does can crash the host.</strong> A failed receive is counted, logged by
 /// type and backed off with jitter up to a minute; every per-message failure becomes a disposition.
@@ -229,8 +240,8 @@ public sealed class NayaxSqsSalesReader
     private async Task<(int Handled, int Skipped)> ProcessBatchAsync(
         IReadOnlyList<NayaxSqsReceivedMessage> received, CancellationToken cancellationToken)
     {
-        var batch = Deduplicate(received);
-        if (batch.Count == 0)
+        var batch = new Batch(Deduplicate(received));
+        if (batch.Items.Count == 0)
         {
             return (0, 0);
         }
@@ -240,12 +251,11 @@ public sealed class NayaxSqsSalesReader
 
         // Immediately after the receive, before the first message is touched: the clock on every
         // message in this batch started when SQS handed it over, including the ones that will wait.
-        var extendedAtUtc = await ExtendUnfinishedAsync(batch, visibility, cancellationToken)
-            .ConfigureAwait(false);
+        await ExtendUnfinishedAsync(batch, visibility, cancellationToken).ConfigureAwait(false);
 
         var handled = 0;
 
-        foreach (var item in batch)
+        foreach (var item in batch.Items)
         {
             // Shutdown stops the batch rather than rushing it: the messages not reached keep their
             // extended visibility and are redelivered.
@@ -256,10 +266,9 @@ public sealed class NayaxSqsSalesReader
                 continue;
             }
 
-            if (_clock.UtcNow - extendedAtUtc >= extensionInterval)
+            if (_clock.UtcNow - batch.ExtendedAtUtc >= extensionInterval)
             {
-                extendedAtUtc = await ExtendUnfinishedAsync(batch, visibility, cancellationToken)
-                    .ConfigureAwait(false);
+                await ExtendUnfinishedAsync(batch, visibility, cancellationToken).ConfigureAwait(false);
 
                 if (item.Skipped)
                 {
@@ -267,28 +276,142 @@ public sealed class NayaxSqsSalesReader
                 }
             }
 
-            await HandleOneAsync(item, visibility, cancellationToken).ConfigureAwait(false);
+            var processed = await ProcessWhileRenewingAsync(
+                    batch, item, extensionInterval, visibility, cancellationToken)
+                .ConfigureAwait(false);
+
+            // This reader's own work on the message is over, so it no longer needs renewing - whether
+            // or not the acknowledgement below happens.
             item.Finished = true;
+
+            _health.RecordMessageProcessed(_clock.UtcNow);
+            _log.MessageHandled(
+                item.Message.MessageId,
+                processed.BusinessId,
+                processed.Outcome.Disposition,
+                processed.Outcome.Reason);
+
+            if (item.Skipped)
+            {
+                // A renewal failed while this message was in flight, so another receiver may already
+                // hold it. Nothing is acknowledged: deleting it - or setting a visibility - under a
+                // lease this reader may have lost is exactly the race the renewal exists to prevent.
+                // What it saved is durable and idempotent, so the redelivery finds the sale stored,
+                // retries whatever is still pending for it, and acknowledges it then.
+                continue;
+            }
+
+            await AcknowledgeAsync(item.Message, processed.Outcome, visibility, cancellationToken)
+                .ConfigureAwait(false);
+
             handled++;
         }
 
-        return (handled, batch.Count(item => item.Skipped));
+        return (handled, batch.Items.Count(item => item.Skipped));
+    }
+
+    /// <summary>
+    /// Processes one message while keeping every unfinished message's visibility window open - this
+    /// one's own and every message still waiting behind it.
+    ///
+    /// <para><strong>Why a renewal here and not only between messages.</strong> One message can take
+    /// longer than the whole visibility timeout by itself: a slow Nayax call, a wait for SQLite's
+    /// write lock, a cost replay over a product's whole history. A check that only runs before the
+    /// next message therefore renews nothing during the one operation that needs it, and a window
+    /// that ran out while it was working hands that message - and every message waiting behind it,
+    /// whose receive count climbs towards the dead-letter queue for nothing - to a second receiver.</para>
+    ///
+    /// <para><strong>Nothing runs beside the business's own work.</strong> The renewal is this
+    /// method's own await rather than a task of its own: the processing is started and this loop waits
+    /// for whichever comes first, the next renewal falling due or the processing finishing. The only
+    /// calls it makes are to the queue, so the business's <c>AppDbContext</c> - which supports one
+    /// operation at a time (docs/architecture.md § Concurrency inside one request) - is never touched
+    /// from two places, and the batch's own finished/skipped state is only ever read and written
+    /// here.</para>
+    /// </summary>
+    private async Task<(int? BusinessId, NayaxSqsProcessingOutcome Outcome)> ProcessWhileRenewingAsync(
+        Batch batch,
+        BatchItem item,
+        TimeSpan extensionInterval,
+        TimeSpan visibility,
+        CancellationToken cancellationToken)
+    {
+        var processing = ProcessOneAsync(item.Message, cancellationToken);
+
+        try
+        {
+            while (!processing.IsCompleted)
+            {
+                var dueIn = batch.ExtendedAtUtc + extensionInterval - _clock.UtcNow;
+                if (dueIn > TimeSpan.Zero)
+                {
+                    // Whichever comes first: the renewal falling due, or this message finishing.
+                    await _pacing
+                        .WaitForRenewalAsync(dueIn, processing, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (processing.IsCompleted)
+                    {
+                        break;
+                    }
+                }
+
+                await ExtendUnfinishedAsync(batch, visibility, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown while this message was in flight. Its own task is still waited for rather than
+            // abandoned - a failure nobody observes is a failure nobody reports - and the cancellation
+            // then ends the batch: the message is left for redelivery, which is safe precisely because
+            // nothing is deleted before it is durably done.
+            await WaitForAbandonedAsync(processing).ConfigureAwait(false);
+            throw;
+        }
+
+        return await processing.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits for a message's processing whose answer can no longer be used, so that whatever it ends
+    /// with is observed here instead of resurfacing as an unobserved task exception - and never
+    /// replaces the cancellation that is ending the batch.
+    /// </summary>
+    private static async Task WaitForAbandonedAsync(Task processing)
+    {
+        try
+        {
+            await processing.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // Deliberately ignored; see the summary. The reader is shutting down and this message is
+            // left for redelivery either way.
+        }
     }
 
     /// <summary>
     /// Resets every message of the batch that is neither finished nor skipped to the full visibility
-    /// timeout, and answers the instant the extension was made at.
+    /// timeout, and records the instant the extension was made at as the one the next renewal is
+    /// measured from.
     ///
     /// <para>A message whose extension failed is marked skipped and is not processed in this batch:
     /// the failure means this reader can no longer be sure it still holds the message, and the one
-    /// thing worse than processing it late is processing it beside another receiver.</para>
+    /// thing worse than processing it late is processing it beside another receiver. A message that is
+    /// already in flight when its own extension fails is marked the same way, which is what stops it
+    /// being acknowledged.</para>
     /// </summary>
-    private async Task<DateTime> ExtendUnfinishedAsync(
-        List<BatchItem> batch, TimeSpan visibility, CancellationToken cancellationToken)
+    private async Task ExtendUnfinishedAsync(
+        Batch batch, TimeSpan visibility, CancellationToken cancellationToken)
     {
-        var extendedAtUtc = _clock.UtcNow;
+        // Stamped before the calls, not after: the next renewal is due half a timeout after the
+        // window was known to be open, and counting from the end of a slow round of extensions would
+        // give away exactly the time those extensions took.
+        batch.ExtendedAtUtc = _clock.UtcNow;
 
-        foreach (var item in batch.Where(candidate => !candidate.Finished && !candidate.Skipped))
+        foreach (var item in batch.Items.Where(candidate => !candidate.Finished && !candidate.Skipped))
         {
             try
             {
@@ -302,30 +425,34 @@ public sealed class NayaxSqsSalesReader
                 _log.VisibilityExtensionFailed(item.Message.MessageId, exception.GetType().Name);
             }
         }
-
-        return extendedAtUtc;
     }
 
     /// <summary>
-    /// Attributes one message to a business, processes it in that business's own scope, and then does
-    /// exactly one of the three things the outcome table allows: delete it, back it off, or release it
-    /// towards the dead-letter queue.
+    /// Attributes one message to a business and processes it in that business's own scope, answering
+    /// the business it was attributed to - for the log line - and the outcome the reader acts on.
     /// </summary>
-    private async Task HandleOneAsync(
-        BatchItem item, TimeSpan visibility, CancellationToken cancellationToken)
+    private async Task<(int? BusinessId, NayaxSqsProcessingOutcome Outcome)> ProcessOneAsync(
+        NayaxSqsReceivedMessage message, CancellationToken cancellationToken)
     {
-        var message = item.Message;
-
         var attribution = await AttributeAsync(message.SenderId, cancellationToken).ConfigureAwait(false);
 
         var outcome = attribution.Refusal
             ?? await ProcessInBusinessScopeAsync(attribution.BusinessId!.Value, message, cancellationToken)
                 .ConfigureAwait(false);
 
-        _health.RecordMessageProcessed(_clock.UtcNow);
-        _log.MessageHandled(
-            message.MessageId, attribution.BusinessId, outcome.Disposition, outcome.Reason);
+        return (attribution.BusinessId, outcome);
+    }
 
+    /// <summary>
+    /// Does exactly one of the three things the outcome table allows with a message this reader still
+    /// holds: delete it, back it off, or release it towards the dead-letter queue.
+    /// </summary>
+    private async Task AcknowledgeAsync(
+        NayaxSqsReceivedMessage message,
+        NayaxSqsProcessingOutcome outcome,
+        TimeSpan visibility,
+        CancellationToken cancellationToken)
+    {
         switch (outcome.Disposition)
         {
             case NayaxSqsDisposition.Done:
@@ -472,6 +599,25 @@ public sealed class NayaxSqsSalesReader
     private static bool NotCancellation(Exception exception, CancellationToken cancellationToken) =>
         exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested;
 
+    /// <summary>
+    /// One received batch, and the instant its unfinished messages were last extended at.
+    ///
+    /// <para>That instant belongs to the batch rather than to any one message, because it is what
+    /// both the check between two messages and the renewal during one message's flight measure the
+    /// next renewal from: a message that has just been renewed in flight must not be renewed again
+    /// immediately because the next message happened to start.</para>
+    /// </summary>
+    private sealed class Batch
+    {
+        public Batch(List<BatchItem> items) => Items = items;
+
+        /// <summary>The batch's messages, de-duplicated, in the order the queue returned them.</summary>
+        public List<BatchItem> Items { get; }
+
+        /// <summary>When the unfinished messages were last reset to the full visibility timeout.</summary>
+        public DateTime ExtendedAtUtc { get; set; }
+    }
+
     /// <summary>One message of the batch and where the reader has got to with it.</summary>
     private sealed class BatchItem
     {
@@ -483,7 +629,11 @@ public sealed class NayaxSqsSalesReader
         /// <summary>The reader has finished with it, so it no longer needs extending.</summary>
         public bool Finished { get; set; }
 
-        /// <summary>Its visibility could not be extended, so it is left entirely alone this batch.</summary>
+        /// <summary>
+        /// Its visibility could not be extended, so it is left alone: not processed at all when the
+        /// failure happened before its turn, and processed but deliberately not acknowledged when the
+        /// failure happened while it was already in flight.
+        /// </summary>
         public bool Skipped { get; set; }
     }
 }

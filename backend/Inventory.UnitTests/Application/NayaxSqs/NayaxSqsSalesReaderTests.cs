@@ -230,6 +230,119 @@ public class NayaxSqsSalesReaderTests
     }
 
     /// <summary>
+    /// <strong>And while one message is in flight.</strong> A single message can take longer than the
+    /// whole visibility timeout - a slow Nayax call, a wait for SQLite's write lock, a cost replay
+    /// over a product's whole history - and the check between two messages renews nothing during the
+    /// one operation that needs it. This case spans three extension intervals, one and a half
+    /// visibility timeouts, inside which an unrenewed batch would have been handed to another
+    /// receiver twice over: the message in flight and the one waiting behind it are both still being
+    /// renewed, and both before the slow message returns.
+    /// </summary>
+    [Fact]
+    public async Task A_message_in_flight_keeps_itself_and_the_waiting_ones_renewed_while_it_runs()
+    {
+        var harness = new Harness();
+        harness.Queue.Returns(Message("m1", "rh-1"), Message("m2", "rh-2"));
+        harness.Scopes.WithSender(Sender, BusinessId);
+
+        var fullTimeout = harness.Settings.VisibilityTimeout;
+        var interval = NayaxSqsQueuePolicy.ExtensionInterval(fullTimeout);
+
+        // The first message's own processing, held open by this case rather than by a real slow
+        // store, and finished when enough renewal intervals have been spent on it.
+        var inFlight = new TaskCompletionSource<NayaxSqsProcessingOutcome>();
+        harness.Scopes.SlowOutcome = messageId =>
+            string.Equals(messageId, "m1", StringComparison.Ordinal)
+                ? inFlight.Task
+                : Task.FromResult(NayaxSqsProcessingOutcome.Done(NayaxSqsProcessingReason.Saved));
+
+        List<(string ReceiptHandle, TimeSpan Visibility)> whenItReturned = [];
+        var renewals = 0;
+
+        // Every wait the reader asks for is really spent: the clock moves by exactly the duration it
+        // asked to wait, which is what makes the renewals fall due one interval apart.
+        harness.Pacing.OnRenewalWait = (waited, work) =>
+        {
+            harness.Clock.UtcNow = harness.Clock.UtcNow.Add(waited);
+
+            if (++renewals < 3)
+                return Task.CompletedTask;
+
+            // Recorded before the message is finished, so what is asserted below is what the reader
+            // did to the queue *while* it was in flight and not afterwards.
+            whenItReturned = [.. harness.Queue.VisibilityChanges];
+            inFlight.SetResult(NayaxSqsProcessingOutcome.Done(NayaxSqsProcessingReason.Saved));
+
+            // And this wait is the one that ends with the message rather than with the interval.
+            return work;
+        };
+
+        await harness.Reader.PollOnceAsync(CancellationToken.None);
+
+        // Three waits, each of one extension interval, during the one message.
+        Assert.Equal([interval, interval, interval], harness.Pacing.RenewalWaits);
+
+        // And three resets to the full timeout for each of the two messages before it returned: the
+        // one immediately after the receive, and one for each renewal that fell due while it worked.
+        Assert.Equal(3, Resets(whenItReturned, "rh-1", fullTimeout));
+        Assert.Equal(3, Resets(whenItReturned, "rh-2", fullTimeout));
+
+        Assert.Equal(["rh-1", "rh-2"], harness.Queue.Deleted);
+    }
+
+    /// <summary>
+    /// A renewal that fails while the message is <em>already</em> in flight is the lost lease: another
+    /// receiver may now hold the message, so it is not acknowledged - not deleted, and not given a
+    /// visibility this reader has no standing to set. That costs nothing, because the save it made is
+    /// durable and the redelivery finds the sale stored, retries whatever is pending for it, and
+    /// acknowledges it then; deleting under a lease that is not ours is what could not be undone.
+    /// </summary>
+    [Fact]
+    public async Task A_message_whose_lease_is_lost_while_it_is_processed_is_not_acknowledged()
+    {
+        var harness = new Harness();
+        harness.Queue.Returns(Message("m1", "rh-1"));
+        harness.Scopes.WithSender(Sender, BusinessId);
+
+        var inFlight = new TaskCompletionSource<NayaxSqsProcessingOutcome>();
+        harness.Scopes.SlowOutcome = _ => inFlight.Task;
+
+        var renewals = 0;
+
+        harness.Pacing.OnRenewalWait = (waited, work) =>
+        {
+            harness.Clock.UtcNow = harness.Clock.UtcNow.Add(waited);
+
+            if (++renewals == 1)
+            {
+                // The renewal that is about to be attempted is refused, which is how "another
+                // receiver may now hold this message" reaches a reader already working on it.
+                harness.Queue.VisibilityFailures.Add("rh-1");
+                return Task.CompletedTask;
+            }
+
+            // And only then does the message finish, so the lease was lost while it was still
+            // working - the state the reader has to refuse to acknowledge from.
+            inFlight.SetResult(NayaxSqsProcessingOutcome.Done(NayaxSqsProcessingReason.Saved));
+            return work;
+        };
+
+        var result = await harness.Reader.PollOnceAsync(CancellationToken.None);
+
+        // It was processed, and the outcome it reached is reported...
+        Assert.Equal([(BusinessId, "m1")], harness.Scopes.Processed);
+        Assert.Equal(NayaxSqsDisposition.Done, harness.Log.Handled.Single().Disposition);
+        Assert.Equal(["m1"], harness.Log.ExtensionFailures);
+
+        // ... and nothing was done to the queue after the lease was lost: no delete, and no
+        // visibility change beyond the extension made immediately after the receive.
+        Assert.Empty(harness.Queue.Deleted);
+        Assert.Single(harness.Queue.VisibilityChanges);
+        Assert.Equal(0, result.MessagesHandled);
+        Assert.Equal(1, result.MessagesSkipped);
+    }
+
+    /// <summary>
     /// A message whose visibility could not be extended is not processed in this batch at all: the
     /// failure means another receiver may now hold it, and two readers working on one transaction is
     /// the race the extension exists to prevent. The rest of the batch carries on.
@@ -492,6 +605,15 @@ public class NayaxSqsSalesReaderTests
         string? senderId = Sender,
         int receiveCount = 1) =>
         new(messageId, receiptHandle, "{}", senderId, receiveCount);
+
+    /// <summary>How many times one handle was reset to the full visibility timeout.</summary>
+    private static int Resets(
+        IEnumerable<(string ReceiptHandle, TimeSpan Visibility)> changes,
+        string receiptHandle,
+        TimeSpan fullTimeout) =>
+        changes.Count(change =>
+            string.Equals(change.ReceiptHandle, receiptHandle, StringComparison.Ordinal)
+            && change.Visibility == fullTimeout);
 
     /// <summary>
     /// The reader with every port faked, and the pieces a case needs to drive or read exposed.

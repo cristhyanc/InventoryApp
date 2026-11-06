@@ -164,6 +164,15 @@ public interface ILatestNayaxSalesStore
     /// history is unreplayable (issue #362), and the collected failures are reported rather than
     /// raised - see <see cref="InventoryCostRebuildDrainResult.Failures"/> for why that matters to
     /// both callers. Already persisted sales stay intact either way.</para>
+    ///
+    /// <para><strong>Newly arrived work is never cleared by a replay that predates it.</strong> A
+    /// replay reads a product's whole history and runs outside any write lock, so another writer -
+    /// the other sales path, or a second drain - can record an earlier sale for the same product and
+    /// commit while it is running, which only ever moves that row's instant earlier. An
+    /// acknowledgement therefore removes the row only while it still names the instant that was
+    /// replayed; when it does not, nothing of that replay is saved and the product is reported as
+    /// still pending, so the newly recorded earlier replay is done by the next drain instead of being
+    /// silently lost or overwritten by costs computed before it existed.</para>
     /// </summary>
     Task<InventoryCostRebuildDrainResult> RebuildInventoryCostsAsync(CancellationToken cancellationToken);
 }

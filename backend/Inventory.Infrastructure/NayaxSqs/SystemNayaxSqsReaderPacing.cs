@@ -20,5 +20,32 @@ public sealed class SystemNayaxSqsReaderPacing : INayaxSqsReaderPacing
             : Task.Delay(duration, cancellationToken);
 
     /// <inheritdoc />
+    public async Task WaitForRenewalAsync(
+        TimeSpan duration, Task inFlight, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(inFlight);
+
+        if (duration <= TimeSpan.Zero || inFlight.IsCompleted)
+        {
+            return;
+        }
+
+        // Linked and cancelled as soon as the wait is over, so the timer of a message that finished
+        // after a second is released then rather than held for the rest of the renewal interval - a
+        // batch of ten messages would otherwise leave ten of them pending at once.
+        using var over = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        var waiting = Task.Delay(duration, over.Token);
+
+        await Task.WhenAny(inFlight, waiting).ConfigureAwait(false);
+
+        await over.CancelAsync().ConfigureAwait(false);
+
+        // Neither task is awaited here: the delay's own cancellation is this method's doing and says
+        // nothing, and what the work ended with belongs to the caller that owns it. The cancellation
+        // the caller passed in is answered by it too, on the task it awaits.
+    }
+
+    /// <inheritdoc />
     public double NextJitterSample() => Random.Shared.NextDouble();
 }

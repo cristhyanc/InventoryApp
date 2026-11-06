@@ -8498,8 +8498,12 @@ Current product cost and selling price are never substitutes for historical cost
 its cost replay is a longer step afterwards, so the same transaction that stores the sale writes a
 `PendingInventoryCostRebuilds` row for every product it affected — one row per
 `(BusinessId, ProductId)`, whose `FromInstantUtc` only ever moves *earlier* — and the replay removes
-each row in the same transaction as the costs it rebuilt. A replay that fails keeps its row with its
-attempt count and a short failure code and is retried by the next run of either sales path. That
+each row in the same transaction as the costs it rebuilt, and only while that row still names the
+instant it replayed from: the replay itself runs outside the write lock, so a sale another writer
+recorded meanwhile is replayed by the next drain instead of being cleared by this one (see
+[Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). A replay that fails keeps its
+row with its attempt count and a short failure code and is retried by the next run of either sales
+path. That
 applies to **both** paths and the request-driven one needed it as much as the queue: before this, a
 replay that failed was simply forgotten, because the sale was already stored and the next
 synchronization therefore reported no affected products and never came back to it, leaving that
@@ -17117,9 +17121,20 @@ exception ever prints a URL, a key id or a secret.
 2. **Extend.** Immediately after the receive, every message in the batch has its visibility reset to
    the full timeout, and again whenever half the timeout has elapsed — **including the ones still
    waiting** behind earlier messages, because messages are processed one at a time on a single-writer
-   store and the tenth can wait a long time. A message whose extension *failed* is not processed in
+   store and the tenth can wait a long time, and **including while one message is in flight**. That
+   last one is not a refinement: a single message can outlast the whole timeout by itself — a slow
+   Nayax call, a wait for SQLite's write lock, a cost replay over a product's whole history — and a
+   renewal that only ran between messages would renew nothing during the one operation that needs it,
+   exposing that message *and* every message waiting behind it to redelivery and climbing their
+   receive counts towards the dead-letter queue for nothing. The renewal is the reader's own await
+   (`INayaxSqsReaderPacing.WaitForRenewalAsync` waits for the renewal falling due or the message
+   finishing, whichever comes first), so nothing runs beside the business's own `AppDbContext` and the
+   only calls it makes are to the queue. A message whose extension *failed* is not processed in
    this batch at all: the failure means another receiver may now hold it, and two readers working on
-   one transaction is the race the extension exists to prevent.
+   one transaction is the race the extension exists to prevent. A message whose extension failed while
+   it was **already in flight** is processed but deliberately **not acknowledged** — not deleted, and
+   not given a visibility this reader may have no standing to set — because its save is durable and
+   idempotent and the redelivery finishes it, while acknowledging under a lost lease cannot be undone.
 3. **Attribute.** The SQS `SenderId` is matched against the mapping a Super Admin recorded, through the
    one reviewed cross-business lookup ([Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101),
    AGENTS.md § Tenant ownership and data isolation). It runs in a scope that has resolved **no**
@@ -17194,6 +17209,19 @@ that product's costing position stayed stale until its next sale. A queue reader
 - The row is written in the **same transaction as the sale**, and removed in the **same transaction as
   the rebuilt costs**, so "the costs are rebuilt" and "there is nothing left to rebuild" cannot
   disagree.
+- **A drain acknowledges only the work it actually replayed.** The replay runs *outside* the write
+  lock on purpose (step 8 above), so another writer — the other sales path, or a second drain, since
+  both drain every pending row of the business — can record an earlier sale for the same product and
+  commit while it is running, and recording one only ever moves that row's instant earlier. The drain
+  therefore reads the row again *inside* the write-locked transaction that removes it, where no other
+  writer can commit between the read and the removal, and removes it only while it still names the
+  instant that was replayed from. When it does not, the transaction commits nothing at all: the costs
+  that replay staged were computed before the earlier sale existed, so they are discarded rather than
+  written over what the drain replaying from the earlier instant will write, the product is reported
+  as still pending — which it is — and the row stays as the standing record of what has to be
+  replayed. Removing it by key instead would have thrown the newly arrived earlier replay away for
+  good, which is the one failure this table exists to prevent. `NayaxSqsConcurrencyTests` covers both
+  interleavings against a real database **file** with two connections.
 - A second sale of the same product moves `FromInstantUtc` **earlier** and never later: a replay from
   the earlier instant covers the later one, and the other way round would silently skip a sale's effect
   on cost.
