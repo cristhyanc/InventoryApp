@@ -149,8 +149,13 @@ public class RemoveProductUnitPriceMigrationTests
         Assert.Equal((7L, 12, 1.10m, 13.20m), (movement.ProductId, movement.QuantityChange,
             movement.UnitCost, movement.TotalCost));
 
-        // The recorded sale keeps its amount, its product and its historical cost.
-        var sale = await after.NayaxSales.SingleAsync();
+        // The recorded sale keeps its amount, its product and its historical cost. Projected rather
+        // than materialised, for the reason the supplier order line above is read with SQL: this test
+        // stops at an older schema and the model has moved on since (issue #1103 added three nullable
+        // provenance columns to NayaxSales).
+        var sale = await after.NayaxSales
+            .Select(row => new { row.SettlementValue, row.ProductId, row.UnitCostAtSale, row.CostOfGoodsSold })
+            .SingleAsync();
         Assert.Equal((3.50m, 7L, 1.10m, 1.10m),
             (sale.SettlementValue, sale.ProductId, sale.UnitCostAtSale, sale.CostOfGoodsSold));
 
