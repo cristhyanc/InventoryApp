@@ -115,8 +115,14 @@ public interface ILatestNayaxSalesStore
     /// settlement-value rule it always has: a positive amount is completed, anything else is
     /// cancelled. The documented <c>lastSales</c> response carries no status field at all.</para>
     ///
-    /// <para>Since issue #1103 the same save also records a <strong>pending inventory-cost
-    /// rebuild</strong> for every product a completed sale in this batch affected, so a rebuild that
+    /// <para>Since issue #1103 it is also <strong>one write-locked transaction</strong>, for the
+    /// reason <see cref="PersistSqsSaleAsync"/> is: this path reads "is this transaction stored?" and
+    /// then inserts, the queue reader does the same thing at the same time, and without the lock both
+    /// read "not stored" and the loser's whole save is refused by the unique index on
+    /// <c>(BusinessId, TransactionID)</c>. With it the second writer waits and then takes the enrich
+    /// path, which is a deliberate outcome rather than a lock error.</para>
+    ///
+    /// <para>The same save also records a <strong>pending inventory-cost rebuild</strong> for every product a completed sale in this batch affected, so a rebuild that
     /// fails afterwards is remembered rather than lost - which is the failure this path had too: the
     /// sales were already stored, so the next sync found no affected products and never retried.</para>
     /// </summary>

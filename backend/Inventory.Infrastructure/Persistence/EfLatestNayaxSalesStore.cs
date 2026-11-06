@@ -120,6 +120,18 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         if (sales.Count == 0)
             return new LatestNayaxSalesPersistResult(affected);
 
+        // One BEGIN IMMEDIATE transaction around the reads and the writes, for the reason
+        // PersistSqsSaleAsync takes one (issue #1103): this path reads "is this transaction stored?"
+        // and then inserts, and the queue reader does the same thing at the same time. Without the
+        // write lock both read "not stored" and the loser's whole save is refused by the unique index
+        // on (BusinessId, TransactionID) - a failed Dashboard refresh over a sale the other path had
+        // just stored. With it the second writer waits, then reads the first one's committed state and
+        // takes the enrich path, which is a deliberate outcome instead of a lock error. The batch was
+        // already one save, so what changes is where the reads sit, not how much is committed at once.
+        await using var transaction = await SqliteWriteLockTransaction
+            .BeginAsync(_db, cancellationToken)
+            .ConfigureAwait(false);
+
         var context = await ReadMatchingContextAsync(sales, cancellationToken);
 
         foreach (var sale in sales)
@@ -142,6 +154,8 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         await RecordPendingRebuildsAsync(affected, cancellationToken);
 
         await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
         return new LatestNayaxSalesPersistResult(affected);
     }
 
