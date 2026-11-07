@@ -1,13 +1,15 @@
 using Inventory.Application.NayaxSqs;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// The EF Core implementation of <see cref="INayaxSqsSenderDirectory"/> (issue #1103, under the
-/// repository owner's approval of 5 November 2026): <strong>one read-only statement</strong> that
-/// answers which business an AWS IAM user sends Nayax sales for.
+/// The EF Core implementation of <see cref="INayaxSqsSenderDirectory"/> (issue #1103, extended by
+/// issue #1104, both under the repository owner's approval of 5 November 2026):
+/// <strong>two read-only statements</strong> that answer which business an AWS IAM user sends Nayax
+/// sales for, and which businesses are on the queue at all.
 ///
 /// <para><strong>Why it has to ignore the tenant query filters.</strong> It runs before any business
 /// scope exists, because the business it is looking for is the answer rather than the input: a
@@ -41,6 +43,17 @@ namespace Inventory.Infrastructure.Persistence;
 /// <para><strong>An unknown sender is <c>null</c>, never a guess.</strong> No fuzzy match, no case
 /// folding, no prefix: the id is stored exactly as a Super Admin entered it and is compared exactly.
 /// A sender nothing has recorded is a message this application must not attribute to anybody.</para>
+///
+/// <para><strong>The second statement is issue #1104's eligibility read, and it is narrower than the
+/// first.</strong> The hourly reconciliation has to know whose <c>lastSales</c> to compare, and that
+/// answer is a <em>set of businesses</em> with nothing to narrow it by either - so it ignores the
+/// filters for the same reason, in the same adapter, and projects <strong>only the ownership
+/// key</strong>: not the sender id, not the enabled flag, not an instant, not a revision, not a name.
+/// It takes no predicate, no page, no sort and no argument of any kind, so there is no input a caller
+/// could widen it with, and its rule is the one the message path already applies - an enabled
+/// mapping on an active business - so "whose sales do we accept?" and "whose sales do we verify?"
+/// cannot drift apart. It is reached only from the in-process reconciliation runner's own loop, which
+/// is not a request and resolves no actor.</para>
 /// </summary>
 public sealed class EfNayaxSqsSenderDirectory : INayaxSqsSenderDirectory
 {
@@ -77,6 +90,28 @@ public sealed class EfNayaxSqsSenderDirectory : INayaxSqsSenderDirectory
                 (sender, business) => new NayaxSqsSenderAttribution(
                     sender.BusinessId, sender.IsEnabled, business.Status))
             .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<int>> ListEligibleBusinessIdsAsync(
+        CancellationToken cancellationToken)
+    {
+        // The second statement, and the whole of it. One projection - the ownership key - from one
+        // tenant-owned table, joined to the structurally non-tenant-owned Businesses row for the
+        // lifecycle status alone, and ordered by the key so a sweep's order is the same every time
+        // rather than whatever the query plan produced.
+        return await _db.BusinessNayaxSqsSenders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(sender => sender.IsEnabled)
+            .Join(
+                _db.Businesses.AsNoTracking().Where(business => business.Status == BusinessStatus.Active),
+                sender => sender.BusinessId,
+                business => business.Id,
+                (sender, _) => sender.BusinessId)
+            .OrderBy(businessId => businessId)
+            .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
     }
 }

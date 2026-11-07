@@ -28,7 +28,11 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  * carrying no instant of its own. The recent-sync skip and the Refresh control are
  * `dashboard.component.sales-freshness.spec.ts`'s subject.
  */
-const SYNC_RAN: NayaxSalesSyncResult = { wasRecentlySynced: false, lastSyncedAtUtc: null };
+const SYNC_RAN: NayaxSalesSyncResult = {
+  wasRecentlySynced: false,
+  wasBusy: false,
+  lastSyncedAtUtc: null
+};
 
 /**
  * Declared on its own rather than inline, because `DashboardSummary.salesThisWeek` is optional

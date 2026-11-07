@@ -73,6 +73,27 @@ public class BusinessNayaxSqsSender : IBusinessOwned
     public DateTime? LastMessageReceivedAtUtc { get; set; }
 
     /// <summary>
+    /// When this business's hourly <c>lastSales</c> reconciliation last <strong>fully</strong>
+    /// succeeded, or <c>null</c> for one whose reconciliation has never completed in full (issue
+    /// #1104).
+    ///
+    /// <para><strong>"Fully" is the whole meaning of the column.</strong> It is set to the run's own
+    /// start instant only when the machine list and <c>lastSales</c> for <em>every</em> machine were
+    /// read without error, persistence committed, every comparison and absence observation was
+    /// recorded, and no pending inventory-cost rebuild was left behind. A run that was skipped - the
+    /// sync lock was held, the run allowance was spent, a gate refused it - or that failed anywhere
+    /// leaves it exactly as it was, and a successful Nayax read on its own never sets it. Issue #1106
+    /// reads it to decide whether the Dashboard may skip syncing, so a value that moved on a partial
+    /// run would be a promise nothing kept.</para>
+    ///
+    /// <para>It lives here rather than in its own table for the reason
+    /// <see cref="LastMessageReceivedAtUtc"/> does: it is one instant about this business's queue
+    /// participation, and this row is the record of that. Like that column it is written by the
+    /// in-process worker and never by the Super Admin surface, which only reports it.</para>
+    /// </summary>
+    public DateTime? LastReconciliationSucceededAtUtc { get; set; }
+
+    /// <summary>
     /// How many times this surface has written the row, starting at <c>1</c> for the write that
     /// created it.
     ///

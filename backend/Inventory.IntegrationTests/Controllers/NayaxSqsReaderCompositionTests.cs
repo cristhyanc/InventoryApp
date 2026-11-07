@@ -103,13 +103,14 @@ public sealed class NayaxSqsReaderCompositionTests
     }
 
     /// <summary>
-    /// The reader is started by a hosted service, and it is the second one this application runs -
-    /// beside the member display-details drain of issue #524. Asserted as a set, because "what
-    /// background work does this application run?" has to be answerable from the composition root and
-    /// a third one appearing is a decision rather than a detail.
+    /// The reader is started by a hosted service, and it is the second of the three this application
+    /// runs - beside the member display-details drain of issue #524 and the hourly Nayax sales
+    /// reconciliation of issue #1104. Asserted as a set, because "what background work does this
+    /// application run?" has to be answerable from the composition root and a fourth one appearing is
+    /// a decision rather than a detail.
     /// </summary>
     [Fact]
-    public void The_application_runs_exactly_two_hosted_background_services()
+    public void The_application_runs_exactly_three_hosted_background_services()
     {
         var hosted = _factory.Services.GetServices<IHostedService>()
             .Select(service => service.GetType().Name)
@@ -117,7 +118,13 @@ public sealed class NayaxSqsReaderCompositionTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(["MemberProfileRefreshWorker", "NayaxSqsSalesReaderWorker"], hosted);
+        Assert.Equal(
+            [
+                "MemberProfileRefreshWorker",
+                "NayaxSalesReconciliationWorker",
+                "NayaxSqsSalesReaderWorker",
+            ],
+            hosted);
     }
 
     /// <summary>

@@ -166,7 +166,8 @@ public class SyncLatestNayaxSalesTests
         var store = TestSalesSync.StoreMock();
         store.Setup(x => x.PersistLatestSalesAsync(
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+            .ReturnsAsync(new LatestNayaxSalesPersistResult(
+                new Dictionary<long, DateTime>(), InsertedCount: 0));
 
         await TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object).Handle();
 

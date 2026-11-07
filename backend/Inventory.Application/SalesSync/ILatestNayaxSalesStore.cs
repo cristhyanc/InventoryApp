@@ -13,9 +13,16 @@ namespace Inventory.Application.SalesSync;
 /// the same save that stored the sales also recorded a durable pending rebuild per affected product,
 /// so what has to be replayed survives a crash, a failed rebuild and a restart instead of living in
 /// this record for the length of one call.</para>
+///
+/// <para><see cref="InsertedCount"/> is how many of the batch's transactions this save
+/// <em>created</em> (issue #1104). It is the "added" count the hourly reconciliation's one log line
+/// carries - sales the queue never delivered and only <c>lastSales</c> did - and it is a count and
+/// nothing more: no transaction id, no amount and no machine, because a log line is not where a
+/// business's sales belong.</para>
 /// </summary>
 public sealed record LatestNayaxSalesPersistResult(
-    IReadOnlyDictionary<long, DateTime> EarliestCompletedSaleByProductId);
+    IReadOnlyDictionary<long, DateTime> EarliestCompletedSaleByProductId,
+    int InsertedCount);
 
 /// <summary>
 /// One Nayax SQS transaction message, as the store is asked to save it (issue #1103).

@@ -350,6 +350,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime?>("LastMessageReceivedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("LastReconciliationSucceededAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("Revision")
                         .HasColumnType("INTEGER");
 
@@ -1505,6 +1508,99 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId", "NayaxSaleId");
 
                     b.ToTable("NayaxSaleProductResolutions");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleProviderEvidence", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("AmountComparison")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("Bracketed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("CurrencyComparison")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("InstantComparison")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("MachineComparison")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("NayaxSaleId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ObservedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool?>("OutsideReceiptGrace")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ProductComparison")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("ProviderAuthorizationInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderCurrencyCode")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ProviderMachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("ProviderNayaxProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProviderProductName")
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("ProviderSettlementValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ReadMachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ResultingState")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("ReturnedEarliestInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("ReturnedItemCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("ReturnedLatestInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SaleAuthorizationInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SaleReceivedViaSqsAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "NayaxSaleId", "Kind", "Id")
+                        .IsDescending(false, false, false, true);
+
+                    b.ToTable("NayaxSaleProviderEvidences");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleTimestampRepair", b =>

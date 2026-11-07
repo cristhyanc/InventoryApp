@@ -1115,6 +1115,66 @@ Messages that are genuinely not sales this application consumes — a free vend,
 dead-letter queue as the sample that decides what to do about them. Deleting them is a decision, not
 housekeeping.
 
+## The hourly Nayax sales reconciliation (issue #1104)
+
+Every hour, for each business whose SQS sender is recorded and switched on and whose own account is
+approved and active, the application reads that business's Nayax `lastSales` with that business's own
+credentials and compares it with the sales the queue delivered. A sale the two agree about is marked
+verified; a contradiction and a sale `lastSales` did not return are recorded with the evidence behind
+them. The design is [docs/architecture.md § Hourly Nayax sales
+reconciliation](docs/architecture.md#hourly-nayax-sales-reconciliation-issue-1104).
+
+**There is nothing to configure.** It has no settings of its own: a business is reconciled because a
+Super Admin recorded and enabled its [Nayax SQS sender](#super-admin-businesses-api), so a deployment
+with no senders recorded sweeps nobody and makes no Nayax call. It runs about five minutes after a
+restart and then every 60 minutes, one business at a time. **Always On** is the same prerequisite the
+queue reader has, and for the same reason: an idled process runs nothing.
+
+**It changes no figure.** A verified, conflicting or flagged sale still counts exactly as it did
+before — stock, costs and reports follow the sale's own status, not its verification state. Acting on
+a conflict is issue #1105's work.
+
+**Nothing is proved by a sale being missing.** Nayax documents `lastSales` as "the most recent sales"
+for a machine, with no stated count and no promised window, so a transaction the response did not
+include is flagged for a person at most, together with a record of what the response *did* include.
+It is never treated as evidence that the sale did not happen.
+
+### What you will see
+
+One log line per business per hour, with that business's key, the run's outcome and counts only —
+read, added, verified, conflict, needs investigation, absence rows, skipped, and whether the run
+counted as succeeded. **No line carries a transaction id, an amount, a currency, a machine or a
+product**: those belong in the business's own records, not in an operator's log.
+
+```kql
+// What did the last sweep do, per business?
+traces
+| where timestamp > ago(2h)
+| where message has "Reconciled Nayax sales for business"
+| project timestamp, message
+| order by timestamp desc
+```
+
+A run is counted as *succeeded* only when it did everything: every machine read without error,
+persistence committed, every observation recorded and no cost rebuild left behind. A run that was
+skipped or that failed anywhere simply leaves the business's last success instant where it was, and
+the next hour tries again — there is no state to repair by hand.
+
+### What a person pressing Refresh sees
+
+The hourly run and the Dashboard's own sync share one lock per business, so they never run at once. A
+Dashboard load or Refresh that arrives while a run is in progress waits up to a minute and then gets
+**`409 Conflict`** from `POST /api/nayax-sales-sync` — "A sync for this business is already running.
+Try again shortly." The Angular app treats that as a skip rather than an error: no message is shown
+and nothing is retried, because the run in progress is already producing exactly the data the page
+wanted. The attempt costs the business **none** of its refresh allowance, so a person who presses
+Refresh again a moment later is not told they have refreshed too often.
+
+That `409` is distinct from the endpoint's other answers and each keeps its own meaning: `204` the
+sync ran, `200` it was skipped because the sales were synchronized in the last three minutes, `429`
+the business has refreshed too many times too recently (with `Retry-After`), and `409` a sync for this
+business is already running (with no `Retry-After` — the wait is however long that run still needs).
+
 ## Platform diagnostics API
 
 The tenant boundary fails closed, which is what makes a problem *in* it hard to see: a row assigned to the wrong business, or a child row whose parent belongs to another business, is invisible to the only person who would notice. The platform diagnostics API is one narrowly bounded, read-only, audited path for that investigation and nothing else. See [docs/architecture.md](docs/architecture.md#platform-diagnostics-issue-336) for the complete design.

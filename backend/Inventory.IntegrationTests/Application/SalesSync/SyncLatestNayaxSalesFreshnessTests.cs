@@ -246,6 +246,7 @@ public class SyncLatestNayaxSalesFreshnessTests
             EmptyStore().Object,
             new NayaxSalesSyncRateLimiter(clock),
             freshness,
+            new NayaxSalesSyncLock(),
             new FakeNayaxOperationCredentials(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestSalesSync.BusinessId + 1),
             new FakeProviderDataCoverageStore(),
@@ -329,7 +330,8 @@ public class SyncLatestNayaxSalesFreshnessTests
         NayaxSalesSyncFreshness? freshness = null,
         FakeProviderDataCoverageStore? coverage = null,
         FakeNayaxOperationCredentials? credentials = null,
-        NayaxSalesSyncRateLimiter? limiter = null)
+        NayaxSalesSyncRateLimiter? limiter = null,
+        NayaxSalesSyncLock? syncLock = null)
     {
         var sharedClock = clock ?? new FakeClock(Now);
         return new SyncLatestNayaxSales(
@@ -337,6 +339,7 @@ public class SyncLatestNayaxSalesFreshnessTests
             store.Object,
             limiter ?? new NayaxSalesSyncRateLimiter(sharedClock),
             freshness ?? new NayaxSalesSyncFreshness(sharedClock),
+            syncLock ?? new NayaxSalesSyncLock(),
             credentials ?? new FakeNayaxOperationCredentials(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestSalesSync.BusinessId),
             coverage ?? new FakeProviderDataCoverageStore(),

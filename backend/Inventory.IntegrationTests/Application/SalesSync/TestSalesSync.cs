@@ -39,7 +39,8 @@ internal static class TestSalesSync
         FakeClock? clock = null,
         FakeProviderDataCoverageStore? coverage = null,
         NayaxSalesSyncFreshness? freshness = null,
-        FakeNayaxOperationCredentials? credentials = null)
+        FakeNayaxOperationCredentials? credentials = null,
+        NayaxSalesSyncLock? syncLock = null)
     {
         var sharedClock = clock ?? new FakeClock(FixedNow);
         return new SyncLatestNayaxSales(
@@ -47,6 +48,10 @@ internal static class TestSalesSync
             store,
             new NayaxSalesSyncRateLimiter(sharedClock),
             freshness ?? new NayaxSalesSyncFreshness(sharedClock),
+            // Real, and - unless the caller supplies one - private to each use case this builds, so a
+            // test that is not about the lock never waits for another test's run. The tests that are
+            // about it share one on purpose (issue #1104).
+            syncLock ?? new NayaxSalesSyncLock(),
             credentials ?? new FakeNayaxOperationCredentials(),
             new FakeCurrentBusinessProvider(BusinessId),
             coverage ?? new FakeProviderDataCoverageStore(),
@@ -69,7 +74,8 @@ internal static class TestSalesSync
         store.Setup(x => x.PersistLatestSalesAsync(
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new LatestNayaxSalesPersistResult(
-                new Dictionary<long, DateTime> { [10] = new(2026, 9, 2, 14, 30, 0, DateTimeKind.Utc) }));
+                new Dictionary<long, DateTime> { [10] = new(2026, 9, 2, 14, 30, 0, DateTimeKind.Utc) },
+                InsertedCount: 1));
 
         store.Setup(x => x.RebuildInventoryCostsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new InventoryCostRebuildDrainResult([], []));
@@ -87,7 +93,8 @@ internal static class TestSalesSync
 
         store.Setup(x => x.PersistLatestSalesAsync(
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+            .ReturnsAsync(new LatestNayaxSalesPersistResult(
+                new Dictionary<long, DateTime>(), InsertedCount: 0));
 
         return store;
     }
