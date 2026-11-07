@@ -28,7 +28,9 @@ namespace Inventory.Infrastructure.Persistence;
 /// sender rows, and <c>BusinessOwnershipEnforcer</c> refuses every tenant-owned write. This adapter
 /// therefore does two things explicitly, and nothing more. Its statements over
 /// <c>BusinessNayaxSqsSenders</c> use <c>IgnoreQueryFilters</c>, each pinned to the single business id
-/// the decision named, projecting that row's sender id, enabled flag, last-message instant, revision
+/// the decision named, projecting that row's sender id, enabled flag, last-message instant,
+/// last-reconciliation-success instant (issue #1106's one widening, required by its acceptance
+/// criteria so the Super Admin's card reports whether the business's queue is verified), revision
 /// and instants - this is the <strong>seventh</strong> reviewed <c>IgnoreQueryFilters</c> path in a
 /// request (AGENTS.md § There are exactly seven reviewed IgnoreQueryFilters paths), and the
 /// alternatives were the ones issue #544 already rejected: an unscoped context in a request path
@@ -99,6 +101,10 @@ public sealed class EfPlatformNayaxSqsSenderStore : IPlatformNayaxSqsSenderStore
                 row.AwsSenderId,
                 row.IsEnabled,
                 row.LastMessageReceivedAtUtc,
+                // Issue #1106's one widening of this projection, required by its acceptance criteria
+                // so the Super Admin's card can report whether a business's queue is verified. One
+                // column, written by the hourly run (issue #1104) and reported nowhere else.
+                row.LastReconciliationSucceededAtUtc,
                 row.Revision,
                 row.CreatedAtUtc,
                 row.UpdatedAtUtc))

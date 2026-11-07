@@ -16,9 +16,12 @@ public interface IPlatformNayaxSqsSenderWriteTransaction : IAsyncDisposable
 }
 
 /// <summary>
-/// One business's recorded Nayax SQS sender, as this surface reads it (issue #1101). These five
-/// values plus the two instants are the whole of the projection the business-pinned read is allowed
-/// to make (AGENTS.md § Tenant ownership and data isolation).
+/// One business's recorded Nayax SQS sender, as this surface reads it (issue #1101). These values
+/// are the whole of the projection the business-pinned read is allowed to make (AGENTS.md § Tenant
+/// ownership and data isolation): the five of issue #1101 plus the two instants, and - as issue
+/// #1106's acceptance criteria require, so a platform administrator can see whether a business's
+/// queue is verified - <see cref="LastReconciliationSucceededAtUtc"/>. Any further widening is a
+/// boundary change needing its own reviewed issue.
 /// </summary>
 /// <param name="AwsSenderId">
 /// The AWS IAM user id SQS reports as a message's <c>SenderId</c>, exactly as stored, or
@@ -29,6 +32,12 @@ public interface IPlatformNayaxSqsSenderWriteTransaction : IAsyncDisposable
 /// <param name="LastMessageReceivedAtUtc">
 /// When a message from this sender was last accepted, or <see langword="null"/> for one that has
 /// never sent anything. Written by the queue reader of issue #1103 and only reported here.
+/// </param>
+/// <param name="LastReconciliationSucceededAtUtc">
+/// When this business's hourly reconciliation last <strong>fully</strong> succeeded, or
+/// <see langword="null"/> when it never has. Written by the hourly run of issue #1104 and only
+/// reported here - the Super Admin's card shows it beside the reader's health (issue #1106) because
+/// it is half of what decides whether a business's Dashboard may stop reading Nayax.
 /// </param>
 /// <param name="Revision">
 /// How many times this surface has written the row. It is the value a write has to present, and the
@@ -41,6 +50,7 @@ public sealed record PlatformNayaxSqsSenderState(
     string? AwsSenderId,
     bool IsEnabled,
     DateTime? LastMessageReceivedAtUtc,
+    DateTime? LastReconciliationSucceededAtUtc,
     int Revision,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc);

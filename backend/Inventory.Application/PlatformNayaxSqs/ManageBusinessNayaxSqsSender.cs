@@ -1,3 +1,4 @@
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
@@ -7,13 +8,21 @@ using Inventory.Domain.Tenancy;
 namespace Inventory.Application.PlatformNayaxSqs;
 
 /// <summary>
-/// One business's Nayax SQS sender identity, as the Super Admin reads it (issue #1101).
+/// One business's Nayax SQS sender identity, as the Super Admin reads it (issue #1101), with how the
+/// queue reader itself is getting on (issue #1106).
 /// </summary>
 /// <param name="BusinessId">The business, from the stored row the read found.</param>
 /// <param name="Sender">Its recorded sender, with the revision the next write must present.</param>
+/// <param name="ReaderHealth">
+/// The queue reader's own process-wide health (issue #1103), reported here because a recorded sender
+/// with a reader that is not polling delivers nothing, and the administrator looking at this card is
+/// the person who would otherwise have no way to see it. It is a fact about the <em>reader</em> and
+/// about no business: no business id, transaction, machine or count of sales is in it.
+/// </param>
 public sealed record BusinessNayaxSqsSenderView(
     int BusinessId,
-    PlatformNayaxSqsSenderState Sender);
+    PlatformNayaxSqsSenderState Sender,
+    NayaxSqsReaderHealthReading ReaderHealth);
 
 /// <summary>
 /// The Super Admin's Nayax SQS sender identity on one business (issue #1101, child of #1100): read
@@ -68,17 +77,20 @@ public sealed class ManageBusinessNayaxSqsSender
     private readonly IAuthenticatedActorAccessor _actorAccessor;
     private readonly IPlatformNayaxSqsSenderStore _store;
     private readonly IPlatformNayaxSqsSenderAudit _audit;
+    private readonly NayaxSqsReaderHealth _readerHealth;
     private readonly IClock _clock;
 
     public ManageBusinessNayaxSqsSender(
         IAuthenticatedActorAccessor actorAccessor,
         IPlatformNayaxSqsSenderStore store,
         IPlatformNayaxSqsSenderAudit audit,
+        NayaxSqsReaderHealth readerHealth,
         IClock clock)
     {
         _actorAccessor = actorAccessor;
         _store = store;
         _audit = audit;
+        _readerHealth = readerHealth;
         _clock = clock;
     }
 
@@ -96,7 +108,9 @@ public sealed class ManageBusinessNayaxSqsSender
     {
         var target = await _store.FindAsync(businessId, cancellationToken).ConfigureAwait(false);
 
-        return target?.Sender is null ? null : new BusinessNayaxSqsSenderView(target.BusinessId, target.Sender);
+        return target?.Sender is null
+            ? null
+            : new BusinessNayaxSqsSenderView(target.BusinessId, target.Sender, _readerHealth.Current());
     }
 
     /// <summary>
@@ -217,12 +231,15 @@ public sealed class ManageBusinessNayaxSqsSender
                 new PlatformNayaxSqsSenderState(
                     senderId,
                     isEnabled,
-                    // Reported from the stored row rather than written: when a message was last
-                    // received is issue #1103's fact and this decision changes none of it.
+                    // Both reported from the stored row rather than written: when a message was last
+                    // received is issue #1103's fact and when the reconciliation last fully
+                    // succeeded is issue #1104's, and this decision changes neither.
                     sender?.LastMessageReceivedAtUtc,
+                    sender?.LastReconciliationSucceededAtUtc,
                     write.Revision,
                     CreatedAtUtc: sender?.CreatedAtUtc ?? occurredAtUtc,
-                    UpdatedAtUtc: occurredAtUtc));
+                    UpdatedAtUtc: occurredAtUtc),
+                _readerHealth.Current());
 
             _audit.Record(new PlatformNayaxSqsSenderAuditEntry(
                 actor.DirectoryTenantId,
