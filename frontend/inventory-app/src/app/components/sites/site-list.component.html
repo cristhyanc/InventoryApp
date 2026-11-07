@@ -1,76 +1,252 @@
-<div class="page">
-  <header class="page-header">
-    <h1 class="page-title">Sites</h1>
-    <div class="page-actions">
-      <input
-        class="max-w-xs"
-        [(ngModel)]="search"
-        name="siteSearch"
-        placeholder="Search by site name"
-        aria-label="Search by site name" />
-    </div>
+<!--
+  The Sites overview (issue #1128), on the Products page's `rr` scale: the title with a site and
+  machine count, then one card holding the toolbar and the table (or, below `md`, the site cards).
+  The table and the cards render the same `filteredSites`, from the same search, filter and order,
+  so the two layouts can never show different sites or different values.
+-->
+<div class="page font-rr text-rr-navy">
+  <header class="flex flex-col gap-1">
+    <h1 class="page-title m-0 text-2xl font-bold tracking-tight text-rr-navy sm:text-3xl">Sites</h1>
+    @if (loadState.loaded && !loadState.loadFailed && sites.length > 0) {
+      <p class="m-0 text-sm text-rr-muted" data-testid="sites-summary">{{ summaryLine }}</p>
+    }
   </header>
 
   <app-nayax-status-banner></app-nayax-status-banner>
 
-  <section class="card">
-    <div class="card-body">
-      @if (loadState.loadFailed) {
-        <p class="text-md-body text-md-danger-text">Failed to load sites. Reload the page to try again.</p>
-      } @else if (!loadState.loaded) {
-        <div class="space-y-3">
-          <div class="h-4 w-32 animate-pulse rounded bg-md-gray-200"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-          <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
-        </div>
-      } @else if (sites.length === 0) {
-        <p class="text-md-body value-muted">No sites available yet.</p>
-      } @else if (filteredSites.length === 0) {
-        <p class="text-md-body value-muted">No sites match "{{ search }}".</p>
-      } @else {
-        <div class="overflow-x-auto">
-          <table class="table">
-            <thead class="table-head">
-              <tr>
-                <th scope="col" class="table-cell">Site</th>
-                <th scope="col" class="table-cell">Machines</th>
-                <th scope="col" class="table-cell">Stock</th>
-                <th scope="col" class="table-cell">Low / Empty</th>
-                @if (canViewFinancials) {
-                  <th scope="col" class="table-cell table-num">Today</th>
-                  <th scope="col" class="table-cell table-num">This Week</th>
-                  <th scope="col" class="table-cell table-num">vs Last Week</th>
-                }
-              </tr>
-            </thead>
-            <tbody>
-              @for (site of filteredSites; track site.siteId) {
-                <tr class="table-row table-row-link" (click)="followRowLink($event)" (keydown.enter)="followRowLink($event)">
-                  <td class="table-cell">
-                    <a
-                      class="table-row-anchor"
-                      [routerLink]="['/sites', site.siteId, 'products']"
-                      [attr.aria-label]="'View products for ' + site.siteName">{{ site.siteName }}</a>
-                  </td>
-                  <td class="table-cell">{{ site.machineCount }}</td>
-                  <td class="table-cell">
-                    <span class="badge" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}%</span>
-                  </td>
-                  <td class="table-cell">{{ site.lowProductCount }} low · {{ site.emptyProductCount }} empty</td>
-                  @if (canViewFinancials) {
-                    <td class="table-cell table-num">{{ site.todayRevenue == null ? 'Unavailable' : ('$' + site.todayRevenue.toFixed(2)) }}</td>
-                    <td class="table-cell table-num">{{ site.currentWeekRevenue == null ? 'Unavailable' : ('$' + site.currentWeekRevenue.toFixed(2)) }}</td>
-                    <td class="table-cell table-num" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
-                      {{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
-                    </td>
-                  }
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
+  <section class="card overflow-hidden rounded-xl border-rr-line font-rr text-rr-navy" aria-label="Sites overview">
+    <div class="flex flex-wrap items-center gap-2 border-b border-rr-line p-3 sm:gap-3 sm:p-4" data-testid="sites-toolbar">
+      <label class="relative flex min-w-0 basis-full items-center sm:basis-64 sm:flex-1 lg:max-w-xs">
+        <span class="sr-only">Search by site name</span>
+        <span class="pointer-events-none absolute left-3 text-rr-caption" aria-hidden="true"><app-icon name="search" [size]="18" /></span>
+        <input
+          class="min-h-11 w-full rounded-lg border border-rr-line bg-white pl-9 pr-11 text-sm text-rr-navy placeholder:text-rr-caption md:min-h-10"
+          data-testid="sites-search"
+          name="siteSearch"
+          [(ngModel)]="search"
+          placeholder="Search by site name" />
+        @if (search) {
+          <button
+            type="button"
+            class="absolute right-0.5 inline-flex h-10 w-10 items-center justify-center rounded-md text-rr-caption hover:bg-rr-canvas hover:text-rr-navy md:h-9 md:w-9"
+            aria-label="Clear search"
+            data-testid="sites-search-clear"
+            (click)="clearSearch()"><app-icon name="close" [size]="16" /></button>
+        }
+      </label>
+
+      <!-- The selected view is the white segment, announced through aria-pressed. -->
+      <fieldset
+        class="m-0 grid basis-full grid-cols-2 rounded-lg border border-rr-line bg-rr-surface p-1 text-sm font-semibold sm:inline-grid sm:basis-auto"
+        data-testid="sites-filter">
+        <legend class="sr-only">Filter sites</legend>
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-md px-3 md:min-h-9"
+          [ngClass]="filter === 'all' ? 'bg-white text-rr-teal shadow-sm' : 'text-rr-muted hover:text-rr-navy'"
+          [attr.aria-pressed]="filter === 'all'"
+          data-testid="sites-filter-all"
+          (click)="setFilter('all')">All sites ({{ sites.length }})</button>
+        <button
+          type="button"
+          class="inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-md px-3 md:min-h-9"
+          [ngClass]="filter === 'needsRefill' ? 'bg-white text-rr-teal shadow-sm' : 'text-rr-muted hover:text-rr-navy'"
+          [attr.aria-pressed]="filter === 'needsRefill'"
+          data-testid="sites-filter-needs-refill"
+          (click)="setFilter('needsRefill')">Needs refill ({{ needsRefillCount }})</button>
+      </fieldset>
+
+      <label class="flex min-h-11 basis-full items-center gap-1 rounded-lg border border-rr-line bg-white pl-3 text-sm sm:basis-auto md:min-h-10">
+        <span class="whitespace-nowrap text-rr-caption">Sort:</span>
+        <select
+          class="min-h-10 w-full min-w-0 border-0 bg-transparent pr-8 text-[13px] font-semibold text-rr-navy sm:text-sm md:min-h-9"
+          name="siteSort"
+          data-testid="sites-sort"
+          [(ngModel)]="sort">
+          <option value="refillPriority">Refill priority (empty, then low)</option>
+          <option value="name">Site name (A to Z)</option>
+        </select>
+      </label>
+
+      @if (canViewFinancials) {
+        <!--
+          GET /api/sites carries no period dates, and the frontend has no canonical copy of the
+          backend's dashboard window, so the rule is stated here rather than guessed dates
+          (issue #1128 asks for the dependency to be flagged instead).
+        -->
+        <p class="m-0 basis-full text-xs text-rr-caption lg:ml-auto lg:basis-auto lg:text-right" data-testid="sites-period-note">
+          This week runs from Monday to now in your business's time zone, compared with the same point last week.
+        </p>
       }
     </div>
+
+    @if (loadState.loadFailed) {
+      <p class="p-4 text-md-body value-negative">Failed to load sites. Reload the page to try again.</p>
+    } @else if (!loadState.loaded) {
+      <div class="space-y-3 p-4" data-testid="sites-loading">
+        <div class="h-4 w-32 animate-pulse rounded bg-md-gray-200"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+        <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
+      </div>
+    } @else if (sites.length === 0) {
+      <p class="p-4 text-md-body value-muted">No sites available yet.</p>
+    } @else if (filteredSites.length === 0) {
+      <div class="flex flex-col items-center gap-2 p-8 text-center" data-testid="sites-no-results">
+        <p class="m-0 font-semibold text-rr-navy">
+          @if (hasSearch) {
+            No sites match "{{ search.trim() }}"{{ filter === 'needsRefill' ? ' with a known low or empty slot' : '' }}.
+          } @else {
+            No site has a known low or empty slot.
+          }
+        </p>
+        <button type="button" class="rr-button-secondary min-h-11 px-4 md:min-h-10" data-testid="sites-reset" (click)="resetSearchAndFilter()">Clear search and filter</button>
+      </div>
+    } @else {
+      <div class="hidden overflow-x-auto md:block" data-testid="sites-table">
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell min-w-[11rem]">Site</th>
+              <th scope="col" class="table-cell">Machines</th>
+              <th scope="col" class="table-cell">Stock level</th>
+              <th scope="col" class="table-cell">Refill status</th>
+              @if (canViewFinancials) {
+                <th scope="col" class="table-cell whitespace-nowrap text-right">Sales today</th>
+                <th scope="col" class="table-cell whitespace-nowrap text-right">Sales this week</th>
+                <th scope="col" class="table-cell whitespace-nowrap text-right">vs last week</th>
+              }
+            </tr>
+          </thead>
+          <tbody>
+            @for (site of filteredSites; track site.siteId) {
+              <tr class="table-row table-row-link" data-testid="site-row" (click)="followRowLink($event)" (keydown.enter)="followRowLink($event)">
+                <td class="table-cell">
+                  <a
+                    class="table-row-anchor inline-block py-2 font-semibold text-rr-teal"
+                    [routerLink]="['/sites', site.siteId, 'products']"
+                    [attr.aria-label]="'View products for ' + site.siteName">@let desktopName = nameParts(site);{{ desktopName.head }}<span class="whitespace-nowrap">{{ desktopName.tail }}&nbsp;<app-icon class="inline-block align-[-2px]" name="arrow_forward" [size]="15" /></span></a>
+                </td>
+                <td class="table-cell whitespace-nowrap text-rr-muted">{{ machineLabel(site) }}</td>
+                <td class="table-cell">
+                  <ng-container *ngTemplateOutlet="stockLevel; context: { $implicit: site, wide: false }"></ng-container>
+                </td>
+                <td class="table-cell">
+                  <ng-container *ngTemplateOutlet="refillStatusChips; context: { $implicit: site }"></ng-container>
+                </td>
+                @if (canViewFinancials) {
+                  <td class="table-cell whitespace-nowrap text-right tabular-nums" [class.value-muted]="site.todayRevenue == null">{{ money(site.todayRevenue) }}</td>
+                  <td class="table-cell whitespace-nowrap text-right font-semibold tabular-nums" [class.value-muted]="site.currentWeekRevenue == null">{{ money(site.currentWeekRevenue) }}</td>
+                  <td class="table-cell whitespace-nowrap text-right font-semibold tabular-nums" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
+                    {{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
+                  </td>
+                }
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <!--
+        Below `md` the same sites as compact cards: the linked name and machine count with the refill
+        status first, then the stock level, then today's and this week's sales side by side with the
+        weekly change beside the weekly figure.
+      -->
+      <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="site-cards">
+        @for (site of filteredSites; track site.siteId) {
+          <li class="flex flex-col gap-3 rounded-xl border border-rr-line bg-white p-3" data-testid="site-card">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+              <a
+                class="flex min-h-11 min-w-[9rem] flex-1 flex-col justify-center no-underline"
+                [routerLink]="['/sites', site.siteId, 'products']"
+                [attr.aria-label]="'View products for ' + site.siteName">
+                @let cardName = nameParts(site);
+                <span class="break-words font-bold text-rr-teal">{{ cardName.head }}<span class="whitespace-nowrap">{{ cardName.tail }}&nbsp;<app-icon class="inline-block align-[-3px]" name="arrow_forward" [size]="16" /></span></span>
+                <span class="text-xs text-rr-muted">{{ machineLabel(site) }}</span>
+              </a>
+              <div class="flex max-w-full justify-end pt-1">
+                <ng-container *ngTemplateOutlet="refillStatusChips; context: { $implicit: site }"></ng-container>
+              </div>
+            </div>
+            <div class="rounded-lg bg-rr-surface p-2.5">
+              <ng-container *ngTemplateOutlet="stockLevel; context: { $implicit: site, wide: true }"></ng-container>
+            </div>
+            @if (canViewFinancials) {
+              <dl class="m-0 grid grid-cols-2 gap-2 text-sm">
+                <div class="rounded-lg bg-rr-surface p-2.5">
+                  <dt class="text-xs text-rr-muted">Sales today</dt>
+                  <dd class="m-0 mt-0.5 font-bold tabular-nums" [class.value-muted]="site.todayRevenue == null">{{ money(site.todayRevenue) }}</dd>
+                </div>
+                <div class="rounded-lg bg-rr-surface p-2.5">
+                  <dt class="text-xs text-rr-muted">Sales this week</dt>
+                  <dd class="m-0 mt-0.5 flex flex-wrap items-baseline justify-between gap-x-2">
+                    <span class="font-bold tabular-nums" [class.value-muted]="site.currentWeekRevenue == null">{{ money(site.currentWeekRevenue) }}</span>
+                    <span class="text-xs font-bold tabular-nums" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
+                      <span class="sr-only">vs last week </span>{{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
+                    </span>
+                  </dd>
+                </div>
+              </dl>
+            }
+          </li>
+        }
+      </ul>
+    }
   </section>
 </div>
+
+<!--
+  A site's stock level: a neutral bar and the backend's percentage, kept quieter than the refill
+  status so a high overall figure cannot hide low or empty slots. An unknown percentage has no fill.
+-->
+<ng-template #stockLevel let-site let-wide="wide">
+  @let percentage = stockPercentage(site);
+  <div class="flex items-center gap-2.5" data-testid="site-stock-level">
+    @if (wide) {
+      <span class="text-xs text-rr-muted">Stock level</span>
+    }
+    <div class="h-1.5 overflow-hidden rounded-full bg-rr-line" [ngClass]="wide ? 'flex-1' : 'w-16'" aria-hidden="true">
+      @if (percentage !== null) {
+        <div class="h-full rounded-full bg-rr-caption" data-testid="site-stock-fill" [style.width]="stockBarWidth(percentage)"></div>
+      }
+    </div>
+    @if (percentage !== null) {
+      <span class="text-sm tabular-nums text-rr-muted">{{ percentage.toFixed(0) }}%</span>
+    } @else {
+      <span class="text-sm text-rr-muted">Unavailable</span>
+    }
+  </div>
+</ng-template>
+
+<!--
+  A site's refill status: explicit counts in text, red for empty slots and amber for low ones, plus
+  which count is missing when only one is known. Stock OK only when both counts are known zeros.
+-->
+<ng-template #refillStatusChips let-site>
+  @let status = refillStatus(site);
+  <div class="flex flex-wrap items-center justify-end gap-1 md:justify-start" data-testid="site-refill-status" [attr.data-tone]="status.tone">
+    @switch (status.tone) {
+      @case ('ok') {
+        <span class="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-rr-ok-bg px-2 py-0.5 text-xs font-bold text-rr-ok-text"><app-icon name="check_circle" [size]="14" />Stock OK</span>
+      }
+      @case ('unavailable') {
+        <span class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-rr-line bg-rr-surface px-2 py-0.5 text-xs font-bold text-rr-muted"><app-icon name="info" [size]="14" />Stock unavailable</span>
+      }
+      @default {
+        @for (chip of status.chips; track chip.text) {
+          @switch (chip.kind) {
+            @case ('empty') {
+              <span class="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-rr-danger-bg px-2 py-0.5 text-xs font-bold text-rr-danger-text"><app-icon name="error" [size]="14" />{{ chip.text }}</span>
+            }
+            @case ('low') {
+              <span class="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-rr-warn-bg px-2 py-0.5 text-xs font-bold text-rr-warn-text"><app-icon name="warning" [size]="14" />{{ chip.text }}</span>
+            }
+            @default {
+              <span class="inline-flex items-center whitespace-nowrap rounded-full border border-rr-line bg-rr-surface px-2 py-0.5 text-xs font-semibold text-rr-muted">{{ chip.text }}</span>
+            }
+          }
+        }
+      }
+    }
+  </div>
+</ng-template>
