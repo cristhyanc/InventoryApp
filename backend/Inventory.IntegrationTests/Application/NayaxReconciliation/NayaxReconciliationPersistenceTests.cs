@@ -69,19 +69,17 @@ public class NayaxReconciliationPersistenceTests
         Assert.Equal(9, costedQuantityBefore);
         Assert.Equal(18m, inventoryValueBefore);
 
+        // The provider's own record is what decides the state: a different amount is an authoritative
+        // contradiction, and an instant more than the tolerance away is something to look at.
+        var provider = state is NayaxSqsVerification.Conflict
+            ? Provider() with { SettlementValue = 9.99m }
+            : Provider() with { AuthorizationInstantUtc = NayaxSqsSaleFixture.SaleInstant.AddSeconds(5) };
+
         await using (var evidence = fixture.Context())
         {
             var written = await new EfNayaxSaleProviderEvidenceStore(evidence)
                 .RecordComparisonAsync(
-                    new NayaxSaleComparisonEvidence(
-                        saleId,
-                        RunId,
-                        RunStarted,
-                        Provider(),
-                        state is NayaxSqsVerification.Conflict
-                            ? Fields(amount: NayaxSaleFieldComparison.Mismatch)
-                            : Fields(instant: NayaxSaleFieldComparison.Mismatch),
-                        state),
+                    new NayaxSaleComparisonEvidence(saleId, RunId, RunStarted, provider),
                     CancellationToken.None);
 
             Assert.True(written.Written);
@@ -147,8 +145,7 @@ public class NayaxReconciliationPersistenceTests
         {
             await new EfNayaxSaleProviderEvidenceStore(evidence)
                 .RecordComparisonAsync(
-                    new NayaxSaleComparisonEvidence(
-                        saleId, RunId, RunStarted, Provider(), Fields(), NayaxSqsVerification.Verified),
+                    new NayaxSaleComparisonEvidence(saleId, RunId, RunStarted, Provider()),
                     CancellationToken.None);
         }
 
@@ -298,14 +295,4 @@ public class NayaxReconciliationPersistenceTests
         CurrencyCode: null,
         NayaxProductId: NayaxSqsSaleFixture.NayaxProductId,
         ProductName: "Fictional Spring Water 600ml");
-
-    private static NayaxSaleFieldComparisons Fields(
-        NayaxSaleFieldComparison amount = NayaxSaleFieldComparison.Match,
-        NayaxSaleFieldComparison instant = NayaxSaleFieldComparison.Match) =>
-        new(
-            Machine: NayaxSaleFieldComparison.Match,
-            Amount: amount,
-            Instant: instant,
-            Currency: NayaxSaleFieldComparison.NotCompared,
-            Product: NayaxSaleFieldComparison.Match);
 }

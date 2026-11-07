@@ -7,9 +7,11 @@ namespace InventoryApi.Tests.Application.NayaxReconciliation;
 /// An in-memory <see cref="INayaxSaleProviderEvidenceStore"/> for the cases that are about the
 /// reconciliation <em>use case</em> rather than about persistence (issue #1104).
 ///
-/// <para>It applies the real transitions and the real "a repeated identical observation writes
-/// nothing" rule, because both are what the use case's counts are derived from - a fake that recorded
-/// everything would make the counts meaningless. What it does not do is take a write lock or touch a
+/// <para>It applies the real comparison policy, the real transitions and the real "a repeated
+/// identical observation writes nothing" rule, because all three are what the use case's counts are
+/// derived from - a fake that recorded everything would make the counts meaningless. It applies the
+/// comparison where the real store applies it too: to the sale it holds at the moment of the write,
+/// not to a result the use case computed. What it does not do is take a write lock or touch a
 /// database; <c>EfNayaxSaleProviderEvidenceStoreTests</c> covers that on a real one.</para>
 /// </summary>
 internal sealed class FakeNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenceStore
@@ -17,6 +19,7 @@ internal sealed class FakeNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvi
     private readonly Dictionary<long, NayaxSqsVerification> _stateBySaleId = [];
     private readonly Dictionary<long, NayaxVerifiableSale> _salesById = [];
     private readonly Dictionary<(long SaleId, NayaxSaleProviderEvidenceKind Kind), object> _latest = [];
+    private readonly Dictionary<long, NayaxSaleFieldComparisons> _fieldsBySaleId = [];
 
     private long _nextEvidenceId = 1;
 
@@ -105,15 +108,39 @@ internal sealed class FakeNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvi
         return Task.FromResult(found);
     }
 
+    /// <summary>
+    /// The field results the real policy decided for a sale's latest comparison, which the real
+    /// store decides inside its own write and therefore nothing hands to it.
+    /// </summary>
+    public NayaxSaleFieldComparisons? FieldsOf(long saleId) =>
+        _fieldsBySaleId.TryGetValue(saleId, out var fields) ? fields : null;
+
     /// <inheritdoc />
     public Task<NayaxSaleEvidenceWriteResult> RecordComparisonAsync(
-        NayaxSaleComparisonEvidence evidence, CancellationToken cancellationToken) =>
-        RecordAsync(
+        NayaxSaleComparisonEvidence evidence, CancellationToken cancellationToken)
+    {
+        if (WriteFailure is { } failure)
+        {
+            throw failure;
+        }
+
+        if (!_salesById.TryGetValue(evidence.SaleId, out var sale))
+        {
+            return Task.FromResult(new NayaxSaleEvidenceWriteResult(false, null, null, false));
+        }
+
+        // The real policy, applied where the real store applies it: inside the write, to the sale
+        // the write itself reads, rather than to a result a caller computed earlier.
+        var comparison = NayaxSaleProviderComparisonPolicy.Compare(sale.Values, evidence.Provider);
+        _fieldsBySaleId[evidence.SaleId] = comparison.Fields;
+
+        return RecordAsync(
             evidence,
             evidence.SaleId,
             NayaxSaleProviderEvidenceKind.Comparison,
-            evidence.ObservedState,
-            (evidence.Provider, evidence.Fields));
+            comparison.ObservedState,
+            (evidence.Provider, comparison.Fields));
+    }
 
     /// <inheritdoc />
     public Task<NayaxSaleEvidenceWriteResult> RecordAbsenceAsync(

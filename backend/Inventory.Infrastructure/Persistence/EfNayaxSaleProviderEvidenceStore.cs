@@ -21,6 +21,25 @@ namespace Inventory.Infrastructure.Persistence;
 /// or not at all: a state no evidence supports, and evidence with no state beside it, are both
 /// impossible.</para>
 ///
+/// <para><strong>A tracking query is not an authoritative read, which is why that read reloads the
+/// row.</strong> The whole run - the save of issue #1103 and then this comparison - happens in one
+/// scoped <see cref="AppDbContext"/>, and <see cref="EfLatestNayaxSalesStore"/> has already loaded
+/// and tracked every sale the response spoke about. EF Core answers a later query for a key it
+/// already tracks with the instance it is already tracking and does <em>not</em> refresh that
+/// instance's values from the row the query returned, so a query alone would decide this write from
+/// values read minutes earlier - before this lock existed - which is exactly the race the lock is
+/// taken to prevent. Reloading inside the transaction replaces the tracked values <em>and</em> their
+/// original values with the committed row, so the comparison, the transition and the <c>UPDATE</c>
+/// this method emits are all decided from it. There is nothing unsaved for the reload to discard:
+/// both of <see cref="EfLatestNayaxSalesStore"/>'s save paths commit before returning.</para>
+///
+/// <para><strong>The comparison is decided here, not handed in.</strong> The five field results come
+/// from <see cref="NayaxSaleProviderComparisonPolicy"/> applied to the values that same authoritative
+/// read returned, for the reason the transition is decided here: a result computed before the lock
+/// was taken is a result about a sale that may since have changed. The policy stays the one place a
+/// comparison is made (AGENTS.md § Sales, payment methods, and statuses); only the moment it is
+/// applied belongs to this transaction.</para>
+///
 /// <para><strong>Nothing here takes a business id.</strong> Every statement runs in the service scope
 /// resolved to the one business being reconciled, so the central tenant query filters find the rows
 /// and <see cref="BusinessOwnershipEnforcer"/> stamps and checks the insert. There is no
@@ -90,26 +109,40 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
         return RecordAsync(
             new EvidenceWriteContext(evidence.SaleId, evidence.RunId, evidence.ObservedAtUtc),
             NayaxSaleProviderEvidenceKind.Comparison,
-            evidence.ObservedState,
+            sale => ComparisonOf(evidence.Provider, sale),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// What comparing the provider's item with <paramref name="sale"/> - the sale this write's own
+    /// authoritative read returned - observed: the state it is evidence for, whether it repeats the
+    /// sale's latest comparison, and the row it would append.
+    /// </summary>
+    private static EvidenceObservation ComparisonOf(
+        NayaxProviderSaleValues provider, NayaxSales sale)
+    {
+        var comparison = NayaxSaleProviderComparisonPolicy.Compare(StoredValuesOf(sale), provider);
+
+        return new EvidenceObservation(
+            comparison.ObservedState,
             // The observation this kind of row carries: what the provider sent, and what each field's
             // comparison answered. A later run that sees the same two things has learnt nothing.
             latest => ComparisonObservation(latest)
-                == new ComparisonObservationOf(evidence.Provider, evidence.Fields),
+                == new ComparisonObservationOf(provider, comparison.Fields),
             row =>
             {
-                row.ProviderMachineId = evidence.Provider.MachineId;
-                row.ProviderSettlementValue = evidence.Provider.SettlementValue;
-                row.ProviderAuthorizationInstantUtc = evidence.Provider.AuthorizationInstantUtc;
-                row.ProviderCurrencyCode = evidence.Provider.CurrencyCode;
-                row.ProviderNayaxProductId = evidence.Provider.NayaxProductId;
-                row.ProviderProductName = evidence.Provider.ProductName;
-                row.MachineComparison = evidence.Fields.Machine;
-                row.AmountComparison = evidence.Fields.Amount;
-                row.InstantComparison = evidence.Fields.Instant;
-                row.CurrencyComparison = evidence.Fields.Currency;
-                row.ProductComparison = evidence.Fields.Product;
-            },
-            cancellationToken);
+                row.ProviderMachineId = provider.MachineId;
+                row.ProviderSettlementValue = provider.SettlementValue;
+                row.ProviderAuthorizationInstantUtc = provider.AuthorizationInstantUtc;
+                row.ProviderCurrencyCode = provider.CurrencyCode;
+                row.ProviderNayaxProductId = provider.NayaxProductId;
+                row.ProviderProductName = provider.ProductName;
+                row.MachineComparison = comparison.Fields.Machine;
+                row.AmountComparison = comparison.Fields.Amount;
+                row.InstantComparison = comparison.Fields.Instant;
+                row.CurrencyComparison = comparison.Fields.Currency;
+                row.ProductComparison = comparison.Fields.Product;
+            });
     }
 
     /// <inheritdoc />
@@ -121,25 +154,26 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
         return RecordAsync(
             new EvidenceWriteContext(evidence.SaleId, evidence.RunId, evidence.ObservedAtUtc),
             NayaxSaleProviderEvidenceKind.Absence,
-            evidence.Observation.ObservedState,
-            latest => AbsenceObservation(latest)
-                == new AbsenceObservationOf(
-                    evidence.Window,
-                    evidence.SaleAuthorizationInstantUtc,
-                    evidence.SaleReceivedViaSqsAtUtc,
-                    evidence.Observation.Bracketed,
-                    evidence.Observation.OutsideReceiptGrace),
-            row =>
-            {
-                row.ReadMachineId = evidence.Window.MachineId;
-                row.ReturnedItemCount = evidence.Window.ReturnedItemCount;
-                row.ReturnedEarliestInstantUtc = evidence.Window.EarliestReturnedInstantUtc;
-                row.ReturnedLatestInstantUtc = evidence.Window.LatestReturnedInstantUtc;
-                row.SaleAuthorizationInstantUtc = evidence.SaleAuthorizationInstantUtc;
-                row.SaleReceivedViaSqsAtUtc = evidence.SaleReceivedViaSqsAtUtc;
-                row.Bracketed = evidence.Observation.Bracketed;
-                row.OutsideReceiptGrace = evidence.Observation.OutsideReceiptGrace;
-            },
+            _ => new EvidenceObservation(
+                evidence.Observation.ObservedState,
+                latest => AbsenceObservation(latest)
+                    == new AbsenceObservationOf(
+                        evidence.Window,
+                        evidence.SaleAuthorizationInstantUtc,
+                        evidence.SaleReceivedViaSqsAtUtc,
+                        evidence.Observation.Bracketed,
+                        evidence.Observation.OutsideReceiptGrace),
+                row =>
+                {
+                    row.ReadMachineId = evidence.Window.MachineId;
+                    row.ReturnedItemCount = evidence.Window.ReturnedItemCount;
+                    row.ReturnedEarliestInstantUtc = evidence.Window.EarliestReturnedInstantUtc;
+                    row.ReturnedLatestInstantUtc = evidence.Window.LatestReturnedInstantUtc;
+                    row.SaleAuthorizationInstantUtc = evidence.SaleAuthorizationInstantUtc;
+                    row.SaleReceivedViaSqsAtUtc = evidence.SaleReceivedViaSqsAtUtc;
+                    row.Bracketed = evidence.Observation.Bracketed;
+                    row.OutsideReceiptGrace = evidence.Observation.OutsideReceiptGrace;
+                }),
             cancellationToken);
     }
 
@@ -152,16 +186,24 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
     private readonly record struct EvidenceWriteContext(long SaleId, Guid RunId, DateTime ObservedAtUtc);
 
     /// <summary>
-    /// The one write path, shared by both kinds: take SQLite's write lock, re-read the sale's state,
-    /// apply whatever transition the observation permits, decide whether a row is worth appending,
-    /// and commit the row and the state together.
+    /// What one write learnt about a sale, every part of it decided from the authoritative read:
+    /// which state the observation is evidence for, whether it repeats that sale's latest row of the
+    /// same kind, and how it fills the row it would append.
+    /// </summary>
+    private sealed record EvidenceObservation(
+        NayaxSqsVerification? ObservedState,
+        Func<NayaxSaleProviderEvidence?, bool> RepeatsLatest,
+        Action<NayaxSaleProviderEvidence> Fill);
+
+    /// <summary>
+    /// The one write path, shared by both kinds: take SQLite's write lock, re-read the sale
+    /// authoritatively, decide the observation from <em>that</em> sale, apply whatever transition it
+    /// permits, decide whether a row is worth appending, and commit the row and the state together.
     /// </summary>
     private async Task<NayaxSaleEvidenceWriteResult> RecordAsync(
         EvidenceWriteContext context,
         NayaxSaleProviderEvidenceKind kind,
-        NayaxSqsVerification? observedState,
-        Func<NayaxSaleProviderEvidence?, bool> repeatsLatest,
-        Action<NayaxSaleProviderEvidence> fill,
+        Func<NayaxSales, EvidenceObservation> observe,
         CancellationToken cancellationToken)
     {
         // Before the reads, not at the first write: a deferred transaction would take the lock after
@@ -171,9 +213,7 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
             .BeginAsync(_db, cancellationToken)
             .ConfigureAwait(false);
 
-        // Tracked, because the state change goes through SaveChanges with the ownership enforcer.
-        var sale = await _db.NayaxSales
-            .FirstOrDefaultAsync(row => row.Id == context.SaleId, cancellationToken)
+        var sale = await AuthoritativeSaleAsync(context.SaleId, cancellationToken)
             .ConfigureAwait(false);
 
         if (sale?.SqsVerification is not { } current)
@@ -183,7 +223,11 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
             return new NayaxSaleEvidenceWriteResult(false, null, sale?.SqsVerification, false);
         }
 
-        var next = NayaxSqsVerificationTransitions.Apply(current, observedState);
+        // Only now, and only from the row this transaction just read: the comparison's own inputs
+        // are as much a part of the decision as the state it is applied to.
+        var observation = observe(sale);
+
+        var next = NayaxSqsVerificationTransitions.Apply(current, observation.ObservedState);
         var stateChanged = next != current;
 
         var latest = await _db.NayaxSaleProviderEvidences
@@ -193,7 +237,7 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        if (!stateChanged && repeatsLatest(latest))
+        if (!stateChanged && observation.RepeatsLatest(latest))
         {
             // Nothing learnt and nothing changed. An hourly run re-reading the same rolling window
             // would otherwise append an identical row every hour for every sale in it.
@@ -217,7 +261,7 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
             // so this adapter never assigns an owner itself.
         };
 
-        fill(evidence);
+        observation.Fill(evidence);
         _db.NayaxSaleProviderEvidences.Add(evidence);
 
         if (stateChanged)
@@ -230,6 +274,52 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
 
         return new NayaxSaleEvidenceWriteResult(true, evidence.Id, next, stateChanged);
     }
+
+    /// <summary>
+    /// The sale as it is committed <em>now</em>, inside this transaction's write lock, or
+    /// <see langword="null"/> when this business has no such row.
+    ///
+    /// <para>It is two steps because one would not be authoritative. The query is the ordinary
+    /// tenant-filtered, tracking one - the central filter is what finds the row, and the state change
+    /// goes through <c>SaveChanges</c> with <see cref="BusinessOwnershipEnforcer"/> - but EF Core
+    /// resolves it to an instance this context is already tracking, with the values that earlier read
+    /// saw, whenever an earlier step of the same run already loaded the row (which
+    /// <see cref="EfLatestNayaxSalesStore"/> does for every sale the response spoke about). The
+    /// reload is what makes the tracked instance, and its original values, the committed row.</para>
+    /// </summary>
+    private async Task<NayaxSales?> AuthoritativeSaleAsync(
+        long saleId, CancellationToken cancellationToken)
+    {
+        var sale = await _db.NayaxSales
+            .FirstOrDefaultAsync(row => row.Id == saleId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (sale is null)
+        {
+            return null;
+        }
+
+        var entry = _db.Entry(sale);
+        await entry.ReloadAsync(cancellationToken).ConfigureAwait(false);
+
+        // A reload detaches an entity whose row is gone, which is the one answer the query above
+        // cannot give on its own: it would have returned the tracked instance of a row somebody
+        // deleted before this lock was taken.
+        return entry.State is EntityState.Detached ? null : sale;
+    }
+
+    /// <summary>
+    /// The sale's own side of the comparison, read from the authoritative row: the same five values
+    /// <see cref="Projection"/> reads, including the currency that is always <see langword="null"/>
+    /// because no sale column holds one. The two must stay in step: this one decides what is
+    /// compared, <see cref="Projection"/> decides what the use case reads back.
+    /// </summary>
+    private static NayaxStoredSaleValues StoredValuesOf(NayaxSales sale) => new(
+        sale.MachineID,
+        sale.SettlementValue,
+        sale.MachineAuthorizationTime,
+        null,
+        sale.NayaxProductId);
 
     /// <summary>
     /// This business's queue-delivered sales: the rows that carry an <c>SqsVerification</c> value at

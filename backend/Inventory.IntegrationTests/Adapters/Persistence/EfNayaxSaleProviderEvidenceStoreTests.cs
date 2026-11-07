@@ -1,5 +1,6 @@
 using Inventory.Application.NayaxReconciliation;
 using Inventory.Domain.NayaxSqs;
+using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.NayaxSqs;
 using Microsoft.EntityFrameworkCore;
@@ -31,7 +32,7 @@ public class EfNayaxSaleProviderEvidenceStoreTests
 
         await using var db = fixture.Context();
         var written = await new EfNayaxSaleProviderEvidenceStore(db)
-            .RecordComparisonAsync(Comparison(saleId, Provider(), Matching()), CancellationToken.None);
+            .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None);
 
         Assert.True(written.Written);
         Assert.NotNull(written.EvidenceId);
@@ -86,8 +87,7 @@ public class EfNayaxSaleProviderEvidenceStoreTests
 
         await using var db = fixture.Context();
         await new EfNayaxSaleProviderEvidenceStore(db)
-            .RecordComparisonAsync(
-                Comparison(saleId, provider, Matching()), CancellationToken.None);
+            .RecordComparisonAsync(Comparison(saleId, provider), CancellationToken.None);
 
         await using var read = fixture.Context();
         var row = await read.NayaxSaleProviderEvidences.AsNoTracking().SingleAsync();
@@ -116,14 +116,14 @@ public class EfNayaxSaleProviderEvidenceStoreTests
         await using (var first = fixture.Context())
         {
             Assert.True((await new EfNayaxSaleProviderEvidenceStore(first)
-                .RecordComparisonAsync(Comparison(saleId, Provider(), Matching()), CancellationToken.None))
+                .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None))
                 .Written);
         }
 
         await using var db = fixture.Context();
         var second = await new EfNayaxSaleProviderEvidenceStore(db)
             .RecordComparisonAsync(
-                Comparison(saleId, Provider(), Matching(), new Guid("22222222-2222-2222-2222-222222222222")),
+                Comparison(saleId, Provider(), new Guid("22222222-2222-2222-2222-222222222222")),
                 CancellationToken.None);
 
         Assert.False(second.Written);
@@ -149,18 +149,14 @@ public class EfNayaxSaleProviderEvidenceStoreTests
         await using (var first = fixture.Context())
         {
             await new EfNayaxSaleProviderEvidenceStore(first)
-                .RecordComparisonAsync(Comparison(saleId, Provider(), Matching()), CancellationToken.None);
+                .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None);
         }
 
         await using (var second = fixture.Context())
         {
             var conflicting = await new EfNayaxSaleProviderEvidenceStore(second)
                 .RecordComparisonAsync(
-                    Comparison(
-                        saleId,
-                        Provider() with { SettlementValue = 9.99m },
-                        Matching() with { Amount = NayaxSaleFieldComparison.Mismatch },
-                        observedState: NayaxSqsVerification.Conflict),
+                    Comparison(saleId, Provider() with { SettlementValue = 9.99m }),
                     CancellationToken.None);
 
             Assert.True(conflicting.Written);
@@ -193,17 +189,13 @@ public class EfNayaxSaleProviderEvidenceStoreTests
         {
             await new EfNayaxSaleProviderEvidenceStore(conflicting)
                 .RecordComparisonAsync(
-                    Comparison(
-                        saleId,
-                        Provider() with { SettlementValue = 9.99m },
-                        Matching() with { Amount = NayaxSaleFieldComparison.Mismatch },
-                        observedState: NayaxSqsVerification.Conflict),
+                    Comparison(saleId, Provider() with { SettlementValue = 9.99m }),
                     CancellationToken.None);
         }
 
         await using var db = fixture.Context();
         var later = await new EfNayaxSaleProviderEvidenceStore(db)
-            .RecordComparisonAsync(Comparison(saleId, Provider(), Matching()), CancellationToken.None);
+            .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None);
 
         Assert.True(later.Written);
         Assert.False(later.StateChanged);
@@ -337,7 +329,7 @@ public class EfNayaxSaleProviderEvidenceStoreTests
 
         await using var writing = fixture.Context();
         var written = await new EfNayaxSaleProviderEvidenceStore(writing)
-            .RecordComparisonAsync(Comparison(saleId, Provider(), Matching()), CancellationToken.None);
+            .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None);
 
         Assert.False(written.Written);
         Assert.Null(written.State);
@@ -371,11 +363,11 @@ public class EfNayaxSaleProviderEvidenceStoreTests
         var only = Assert.Single(found);
         Assert.Equal(saleA, only.SaleId);
 
-        await store.RecordComparisonAsync(Comparison(saleA, Provider(), Matching()), CancellationToken.None);
+        await store.RecordComparisonAsync(Comparison(saleA, Provider()), CancellationToken.None);
 
         // Business B's sale was not read, and asking about it by key writes nothing either.
         var crossing = await store.RecordComparisonAsync(
-            Comparison(saleB, Provider(), Matching()), CancellationToken.None);
+            Comparison(saleB, Provider()), CancellationToken.None);
         Assert.False(crossing.Written);
 
         await using var read = fixture.Unrestricted();
@@ -488,7 +480,7 @@ public class EfNayaxSaleProviderEvidenceStoreTests
 
         await using var db = fixture.Context();
         var written = await new EfNayaxSaleProviderEvidenceStore(db)
-            .RecordComparisonAsync(Comparison(saleId, Provider(), Matching()), CancellationToken.None);
+            .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None);
 
         Assert.True(written.Written);
         Assert.False(written.StateChanged);
@@ -496,13 +488,125 @@ public class EfNayaxSaleProviderEvidenceStoreTests
         Assert.Equal(NayaxSqsVerification.Conflict, await VerificationOfAsync(fixture, saleId));
     }
 
+    /// <summary>
+    /// <strong>The same claim, through the pipeline that really runs it.</strong> One scoped
+    /// <c>AppDbContext</c> serves a whole business's reconciliation, and the run's own save
+    /// (<c>PersistLatestSalesAsync</c>, issue #1103) loads and <em>tracks</em> every sale the response
+    /// spoke about before anything is compared. EF Core answers a later query for a tracked key with
+    /// the instance it is already tracking, without refreshing it, so a "re-read" that is only a
+    /// query would decide this write from the values that earlier read saw - and the write lock would
+    /// be protecting nothing. Here the second writer commits an Owner decision's shape
+    /// (<c>Conflict</c>) in that exact window, and the write records and keeps the committed state
+    /// rather than the tracked <c>Unverified</c> one.
+    /// </summary>
+    [Fact]
+    public async Task The_write_decides_from_the_committed_state_even_when_the_run_already_tracked_the_sale()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+        var saleId = await StoreQueueSaleAsync(fixture);
+
+        // One context for the whole run, exactly as the reconciliation's own service scope gives it.
+        await using var db = fixture.Context();
+
+        // The run's save over the item it read, which is what leaves the sale tracked in it.
+        await NayaxSqsSaleFixture.Store(db)
+            .PersistLatestSalesAsync([NayaxSqsSaleFixture.LastSalesItem()], CancellationToken.None);
+
+        // The stale value the write must not decide from, named so this test says what it is about.
+        Assert.Equal(NayaxSqsVerification.Unverified, TrackedSale(db, saleId).SqsVerification);
+
+        // The competing writer, on its own connection: committed after that save and before the
+        // evidence write below.
+        await using (var other = fixture.SecondWriter())
+        {
+            var sale = await other.NayaxSales.SingleAsync(row => row.Id == saleId);
+            sale.SqsVerification = NayaxSqsVerification.Conflict;
+            await other.SaveChangesAsync();
+        }
+
+        var written = await new EfNayaxSaleProviderEvidenceStore(db)
+            .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None);
+
+        // Decided from Conflict, which is terminal: the matching evidence is appended beside it and
+        // moves nothing. Decided from the tracked Unverified, this run would instead have verified a
+        // sale somebody had just contradicted - and overwritten their decision.
+        Assert.True(written.Written);
+        Assert.False(written.StateChanged);
+        Assert.Equal(NayaxSqsVerification.Conflict, written.State);
+
+        await using var read = fixture.Context();
+        var row = await read.NayaxSaleProviderEvidences.AsNoTracking().SingleAsync();
+        Assert.Equal(NayaxSqsVerification.Conflict, row.ResultingState);
+        Assert.Equal(NayaxSqsVerification.Conflict, await VerificationOfAsync(fixture, saleId));
+    }
+
+    /// <summary>
+    /// <strong>And the comparison's own inputs are read in that same window.</strong> A field result
+    /// is a statement about the stored sale, so it has to be decided from the sale the write reads
+    /// rather than from the one the run read earlier. Here the second writer commits a different
+    /// settlement value while the run's save has the row tracked, and the provider's unchanged 3.50
+    /// is an authoritative contradiction instead of the match the stale values would have reported.
+    /// </summary>
+    [Fact]
+    public async Task The_comparison_is_decided_from_the_sale_values_the_write_lock_re_reads()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+        var saleId = await StoreQueueSaleAsync(fixture);
+
+        await using var db = fixture.Context();
+
+        await NayaxSqsSaleFixture.Store(db)
+            .PersistLatestSalesAsync([NayaxSqsSaleFixture.LastSalesItem()], CancellationToken.None);
+
+        Assert.Equal(3.5m, TrackedSale(db, saleId).SettlementValue);
+
+        await using (var other = fixture.SecondWriter())
+        {
+            var sale = await other.NayaxSales.SingleAsync(row => row.Id == saleId);
+            sale.SettlementValue = 9.99m;
+            await other.SaveChangesAsync();
+        }
+
+        var written = await new EfNayaxSaleProviderEvidenceStore(db)
+            .RecordComparisonAsync(Comparison(saleId, Provider()), CancellationToken.None);
+
+        Assert.True(written.Written);
+        Assert.True(written.StateChanged);
+        Assert.Equal(NayaxSqsVerification.Conflict, written.State);
+
+        await using var read = fixture.Context();
+        var row = await read.NayaxSaleProviderEvidences.AsNoTracking().SingleAsync();
+
+        // The amount was compared against the committed 9.99 and disagrees; everything else still
+        // agrees, and the provider's own value is recorded exactly as it was received.
+        Assert.Equal(NayaxSaleFieldComparison.Mismatch, row.AmountComparison);
+        Assert.Equal(NayaxSaleFieldComparison.Match, row.MachineComparison);
+        Assert.Equal(NayaxSaleFieldComparison.Match, row.InstantComparison);
+        Assert.Equal(3.5m, row.ProviderSettlementValue);
+        Assert.Equal(NayaxSqsVerification.Conflict, row.ResultingState);
+
+        Assert.Equal(NayaxSqsVerification.Conflict, await VerificationOfAsync(fixture, saleId));
+    }
+
+    /// <summary>
+    /// The sale as <paramref name="db"/> is tracking it: the instance a tracking query inside the
+    /// evidence write would be answered with, and therefore the values that write must not decide
+    /// from. Its presence is the precondition the two cases above are about.
+    /// </summary>
+    private static Inventory.Infrastructure.Models.NayaxSales TrackedSale(AppDbContext db, long saleId) =>
+        db.ChangeTracker
+            .Entries<Inventory.Infrastructure.Models.NayaxSales>()
+            .Single(entry => entry.Entity.Id == saleId)
+            .Entity;
+
+    /// <summary>
+    /// One comparison observation. It carries the provider's values and nothing of this
+    /// application's: the field results and the state they argue for are the store's own, decided
+    /// from the sale it re-reads inside its write lock.
+    /// </summary>
     private static NayaxSaleComparisonEvidence Comparison(
-        long saleId,
-        NayaxProviderSaleValues provider,
-        NayaxSaleFieldComparisons fields,
-        Guid? runId = null,
-        NayaxSqsVerification? observedState = NayaxSqsVerification.Verified) =>
-        new(saleId, runId ?? RunId, RunStarted, provider, fields, observedState);
+        long saleId, NayaxProviderSaleValues provider, Guid? runId = null) =>
+        new(saleId, runId ?? RunId, RunStarted, provider);
 
     private static NayaxProviderSaleValues Provider() => new(
         MachineId: NayaxSqsSaleFixture.MachineId,
@@ -511,13 +615,6 @@ public class EfNayaxSaleProviderEvidenceStoreTests
         CurrencyCode: null,
         NayaxProductId: NayaxSqsSaleFixture.NayaxProductId,
         ProductName: "Fictional Spring Water 600ml");
-
-    private static NayaxSaleFieldComparisons Matching() => new(
-        Machine: NayaxSaleFieldComparison.Match,
-        Amount: NayaxSaleFieldComparison.Match,
-        Instant: NayaxSaleFieldComparison.Match,
-        Currency: NayaxSaleFieldComparison.NotCompared,
-        Product: NayaxSaleFieldComparison.Match);
 
     /// <summary>
     /// One queue-delivered sale, saved through the real store so it carries the provenance and the

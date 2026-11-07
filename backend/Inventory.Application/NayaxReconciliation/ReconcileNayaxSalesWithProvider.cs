@@ -286,6 +286,11 @@ public sealed class ReconcileNayaxSalesWithProvider
     /// <summary>
     /// The comparison half, for one machine: every transaction the response returned that this
     /// business's queue also delivered.
+    ///
+    /// <para>This read finds <em>which</em> sales the response speaks about. What each of them is
+    /// compared against is not decided here: the evidence write re-reads the sale under SQLite's
+    /// write lock and compares that row, so the run's own earlier read cannot be what a recorded
+    /// field result was decided from (see <see cref="INayaxSaleProviderEvidenceStore"/>).</para>
     /// </summary>
     private async Task CompareReturnedAsync(
         MachineObservation machine,
@@ -310,17 +315,13 @@ public sealed class ReconcileNayaxSalesWithProvider
                 continue;
             }
 
-            var comparison = NayaxSaleProviderComparisonPolicy.Compare(sale.Values, provider);
-
+            // The provider's values, and not a comparison made from them: the five fields are
+            // compared against the sale inside the evidence write's own write-locked transaction,
+            // from the row that transaction re-reads. A result decided out here would be a result
+            // about the sale as this read saw it, which a commit in between could have moved.
             var written = await _evidence
                 .RecordComparisonAsync(
-                    new NayaxSaleComparisonEvidence(
-                        sale.SaleId,
-                        runId,
-                        observedAtUtc,
-                        provider,
-                        comparison.Fields,
-                        comparison.ObservedState),
+                    new NayaxSaleComparisonEvidence(sale.SaleId, runId, observedAtUtc, provider),
                     cancellationToken)
                 .ConfigureAwait(false);
 

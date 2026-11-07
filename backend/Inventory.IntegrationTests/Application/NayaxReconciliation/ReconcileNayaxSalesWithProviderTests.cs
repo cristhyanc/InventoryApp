@@ -64,7 +64,7 @@ public class ReconcileNayaxSalesWithProviderTests
         var comparison = Assert.Single(world.Evidence.Comparisons);
         Assert.Equal(10, comparison.SaleId);
         Assert.Equal(3.5m, comparison.Provider.SettlementValue);
-        Assert.Equal(NayaxSaleFieldComparison.Match, comparison.Fields.Amount);
+        Assert.Equal(NayaxSaleFieldComparison.Match, world.Evidence.FieldsOf(10)!.Amount);
 
         Assert.Equal([Now], world.Success.Recorded);
     }

@@ -27,7 +27,14 @@ public sealed record NayaxVerifiableSale(
 
 /// <summary>
 /// One <see cref="NayaxSaleProviderEvidenceKind.Comparison"/> observation, ready to be recorded
-/// (issue #1104).
+/// (issue #1104): the provider's half of it, and <strong>only</strong> the provider's half.
+///
+/// <para><strong>The comparison itself is deliberately not in here.</strong> It is decided by
+/// <see cref="NayaxSaleProviderComparisonPolicy"/> inside the write's own write-locked transaction,
+/// from the sale's values as that transaction's authoritative read returns them - so a field result
+/// and the state it argues for can never be a decision made from values read earlier, before the
+/// lock was taken and possibly before somebody else's commit. A caller that passed in field results
+/// would be passing in exactly such a decision, which is why it cannot.</para>
 /// </summary>
 /// <param name="SaleId">The sale this is evidence about.</param>
 /// <param name="RunId">The reconciliation run that observed it.</param>
@@ -37,17 +44,11 @@ public sealed record NayaxVerifiableSale(
 /// trimmed or upper-cased: the normalisation belongs to the comparison, and the row has to say what
 /// the provider actually sent.
 /// </param>
-/// <param name="Fields">Each field's own comparison result.</param>
-/// <param name="ObservedState">
-/// The state this comparison is evidence for, or <see langword="null"/> when it is evidence for none.
-/// </param>
 public sealed record NayaxSaleComparisonEvidence(
     long SaleId,
     Guid RunId,
     DateTime ObservedAtUtc,
-    NayaxProviderSaleValues Provider,
-    NayaxSaleFieldComparisons Fields,
-    NayaxSqsVerification? ObservedState);
+    NayaxProviderSaleValues Provider);
 
 /// <summary>
 /// One <see cref="NayaxSaleProviderEvidenceKind.Absence"/> observation, ready to be recorded (issue
@@ -102,6 +103,15 @@ public sealed record NayaxSaleEvidenceWriteResult(
 /// recording evidence is a method on a port rather than a state change the use case stages and saves
 /// later: the authoritative read, the comparison against it and the mutation are one operation.</para>
 ///
+/// <para><strong>That is why a comparison is passed in as the provider's values rather than as a
+/// result.</strong> "One operation" has to cover the comparison's own inputs too: the five fields are
+/// compared against the sale as the write's own read sees it, so a stored value that changed after
+/// this run read the sale cannot leave a recorded field result that was decided from the older one.
+/// An absence observation is passed in already decided, because the two sale values it rests on - the
+/// authorization instant and the queue-receipt instant - are written once when the sale is stored and
+/// are not what a concurrent decision moves; the state it is evidence for is still applied to the
+/// state this transaction re-reads.</para>
+///
 /// <para><strong>Nothing here takes a business id.</strong> Every method runs in the service scope
 /// resolved to the one business being reconciled, so the central tenant query filters find the rows
 /// and <c>BusinessOwnershipEnforcer</c> checks the writes - the ordinary mechanism, with nothing
@@ -136,9 +146,11 @@ public interface INayaxSaleProviderEvidenceStore
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Appends one comparison and applies the state transition it allows, in one write-locked
-    /// transaction with a re-read of the sale's current state - or writes nothing, when this run
-    /// changed no state and the observation is identical to that sale's latest comparison.
+    /// Compares the provider's values with the sale, appends what it saw and applies the state
+    /// transition it allows - all in one write-locked transaction with an authoritative re-read of
+    /// the sale, which is what both the comparison and the transition are decided from. Writes
+    /// nothing when this run changed no state and the observation is identical to that sale's latest
+    /// comparison.
     /// </summary>
     Task<NayaxSaleEvidenceWriteResult> RecordComparisonAsync(
         NayaxSaleComparisonEvidence evidence, CancellationToken cancellationToken);

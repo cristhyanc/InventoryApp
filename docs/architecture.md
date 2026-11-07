@@ -17440,6 +17440,28 @@ in it. **Every evidence write, and the state change it causes, happens in one
 authoritative read, the transition decided from it and the mutation are one operation — which is what
 will keep issue #1105's Owner decisions, which take the same write lock, from interleaving with a run.
 
+Two things make that re-read authoritative rather than nominal, and both are properties of
+`EfNayaxSaleProviderEvidenceStore.RecordAsync` rather than of its callers:
+
+- **The row is reloaded, not merely queried again.** One scoped `AppDbContext` serves a whole
+  business's run, and the save earlier in that same run (`EfLatestNayaxSalesStore`, issue #1103)
+  already loaded and tracked every sale the response spoke about. EF Core answers a later query for a
+  key it is already tracking with the instance it holds, without refreshing that instance's values
+  from the row the query returned, so a query alone would decide the write from values read before the
+  lock existed. The write therefore reloads the tracked entity inside the transaction, which replaces
+  its values *and its original values* with the committed row — and a row that has since been deleted
+  detaches, which the write reads as "nothing to say about this sale".
+- **The comparison is decided inside that transaction too**, by
+  `NayaxSaleProviderComparisonPolicy` applied to the values that reload returned. A field result is a
+  statement about the stored sale, so a result computed before the lock was taken would be a statement
+  about a sale that may have moved since. The use case therefore hands the write the `lastSales`
+  item's values and *no* field results; the policy remains the single place a comparison is made.
+
+An absence observation is decided before the write, because the two sale values it rests on — the
+authorization instant and `ReceivedViaSqsAtUtc` — are written once when the sale is stored and are not
+what a concurrent decision moves; the state it is evidence for is still applied to the state that
+transaction re-reads.
+
 #### States and transitions
 
 `NayaxSales.SqsVerification`:
@@ -17543,7 +17565,7 @@ all for a run that failed. **The hourly run does not claim to close every covera
 | `Inventory.Domain.NayaxSqs` | `NayaxSaleProviderComparisonPolicy` (the normalisations and the field results), `NayaxSaleProviderAbsencePolicy` (bracketing and the receipt grace), `NayaxSqsVerificationTransitions`, `NayaxSqsVerification`, `NayaxSaleProviderEvidenceKind`, `NayaxSaleFieldComparison` |
 | `Inventory.Application.NayaxReconciliation` | `ReconcileNayaxSalesWithProvider` (one business's run), `NayaxSalesReconciliationRunner` (the sweep and its cadence), and the ports: `INayaxSaleProviderEvidenceStore`, `INayaxReconciliationSuccessStore`, `INayaxSalesReconciliationScopes`, `INayaxSalesReconciliationSchedule`, `INayaxSalesReconciliationLog` |
 | `Inventory.Application.SalesSync` | `NayaxSalesSyncLock`/`NayaxSalesSyncLease`, the `Busy` outcome, `NayaxSalesSyncLockMode` and `INayaxLastSalesObserver` on `SyncLatestNayaxSales` |
-| `Inventory.Infrastructure.Persistence` | `EfNayaxSaleProviderEvidenceStore` (the write-locked evidence writes), `EfNayaxReconciliationSuccessStore`, the second statement in `EfNayaxSqsSenderDirectory` |
+| `Inventory.Infrastructure.Persistence` | `EfNayaxSaleProviderEvidenceStore` (the write-locked evidence writes, the authoritative reload of the sale and the comparison decided from it), `EfNayaxReconciliationSuccessStore`, the second statement in `EfNayaxSqsSenderDirectory` |
 | `Inventory.Infrastructure.NayaxReconciliation` | `SystemNayaxSalesReconciliationSchedule`, `LoggingNayaxSalesReconciliationLog` |
 | `InventoryApi.Adapters.NayaxReconciliation` | `NayaxSalesReconciliationWorker` (the hosted service), `ServiceScopeNayaxSalesReconciliationScopes` (the two scopes) |
 
