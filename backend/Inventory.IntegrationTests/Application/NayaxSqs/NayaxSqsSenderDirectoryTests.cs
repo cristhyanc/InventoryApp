@@ -162,19 +162,36 @@ public class NayaxSqsSenderDirectoryTests
     }
 
     /// <summary>
-    /// The port is one method and it takes a sender id and nothing else: no predicate, no column
-    /// list, no page, no sort and no business id. A method that took any of those would be a way to
-    /// ask this adapter a different question.
+    /// The port is <strong>exactly two</strong> methods: the lookup, which takes a sender id and
+    /// nothing else, and issue #1104's eligibility read, which takes <em>nothing at all</em>. Neither
+    /// takes a predicate, a column list, a page, a sort or a business id, and a third method - or a
+    /// parameter on either of these - would be a way to ask this adapter a different question.
     /// </summary>
     [Fact]
-    public void The_port_is_one_method_that_takes_a_sender_id_and_a_token()
+    public void The_port_is_two_methods_and_neither_takes_a_predicate_a_page_or_a_sort()
     {
-        var method = Assert.Single(typeof(INayaxSqsSenderDirectory).GetMethods());
+        var methods = typeof(INayaxSqsSenderDirectory)
+            .GetMethods()
+            .ToDictionary(method => method.Name, method => method);
 
-        Assert.Equal(nameof(INayaxSqsSenderDirectory.FindBusinessBySenderAsync), method.Name);
+        Assert.Equal(
+            [
+                nameof(INayaxSqsSenderDirectory.FindBusinessBySenderAsync),
+                nameof(INayaxSqsSenderDirectory.ListEligibleBusinessIdsAsync),
+            ],
+            methods.Keys.Order(StringComparer.Ordinal));
+
         Assert.Equal(
             [typeof(string), typeof(CancellationToken)],
-            method.GetParameters().Select(parameter => parameter.ParameterType));
+            methods[nameof(INayaxSqsSenderDirectory.FindBusinessBySenderAsync)]
+                .GetParameters()
+                .Select(parameter => parameter.ParameterType));
+
+        Assert.Equal(
+            [typeof(CancellationToken)],
+            methods[nameof(INayaxSqsSenderDirectory.ListEligibleBusinessIdsAsync)]
+                .GetParameters()
+                .Select(parameter => parameter.ParameterType));
     }
 
     /// <summary>
@@ -216,6 +233,129 @@ public class NayaxSqsSenderDirectoryTests
         Assert.Equal(SenderA, sender.AwsSenderId);
         Assert.True(sender.IsEnabled);
         Assert.Null(sender.LastMessageReceivedAtUtc);
+        Assert.Equal(1, sender.Revision);
+    }
+
+    #endregion
+
+    #region The eligibility read (issue #1104)
+
+    /// <summary>
+    /// Issue #1104's second statement in this same reviewed adapter: which businesses the hourly
+    /// reconciliation runs for. Like the lookup it runs on a context that has resolved
+    /// <strong>no business</strong> - the businesses are the answer rather than the input - and the
+    /// ordinary filtered read sees nothing, which is why it has to ignore them.
+    /// </summary>
+    [Fact]
+    public async Task The_eligible_businesses_are_those_with_an_enabled_sender_and_an_active_business()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        await fixture.RecordSenderAsync(NayaxSqsSaleFixture.BusinessA, SenderA);
+        await fixture.RecordSenderAsync(NayaxSqsSaleFixture.BusinessB, SenderB);
+
+        await using var denied = TestAppDbContext.Denied(fixture.Options);
+
+        Assert.Empty(await denied.BusinessNayaxSqsSenders.AsNoTracking().ToListAsync());
+
+        var eligible = await new EfNayaxSqsSenderDirectory(denied)
+            .ListEligibleBusinessIdsAsync(CancellationToken.None);
+
+        Assert.Equal([NayaxSqsSaleFixture.BusinessA, NayaxSqsSaleFixture.BusinessB], eligible);
+    }
+
+    /// <summary>
+    /// A mapping that is switched off is not eligible: a platform administrator has deliberately
+    /// stopped accepting that business's queue messages, so there is nothing to verify against.
+    /// </summary>
+    [Fact]
+    public async Task A_business_whose_sender_is_switched_off_is_not_eligible()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        await fixture.RecordSenderAsync(NayaxSqsSaleFixture.BusinessA, SenderA, isEnabled: false);
+        await fixture.RecordSenderAsync(NayaxSqsSaleFixture.BusinessB, SenderB);
+
+        await using var denied = TestAppDbContext.Denied(fixture.Options);
+
+        Assert.Equal(
+            [NayaxSqsSaleFixture.BusinessB],
+            await new EfNayaxSqsSenderDirectory(denied).ListEligibleBusinessIdsAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The lifecycle gate, which is the same one the message path applies: only an approved and
+    /// active business is eligible, so "whose sales do we accept?" and "whose sales do we verify?"
+    /// cannot drift apart.
+    /// </summary>
+    [Theory]
+    [InlineData(BusinessStatus.Pending)]
+    [InlineData(BusinessStatus.Rejected)]
+    [InlineData(BusinessStatus.Deactivated)]
+    public async Task A_business_that_is_not_active_is_not_eligible(BusinessStatus status)
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        await fixture.RecordSenderAsync(NayaxSqsSaleFixture.BusinessA, SenderA);
+        await fixture.RecordSenderAsync(NayaxSqsSaleFixture.BusinessB, SenderB);
+        await fixture.SetBusinessStatusAsync(NayaxSqsSaleFixture.BusinessA, status);
+
+        await using var denied = TestAppDbContext.Denied(fixture.Options);
+
+        Assert.Equal(
+            [NayaxSqsSaleFixture.BusinessB],
+            await new EfNayaxSqsSenderDirectory(denied).ListEligibleBusinessIdsAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// A business with no sender row at all is not eligible, and no sender rows at all is an empty
+    /// answer rather than every business: the fail-closed direction is the default here too.
+    /// </summary>
+    [Fact]
+    public async Task No_recorded_sender_makes_nobody_eligible()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+
+        await using var denied = TestAppDbContext.Denied(fixture.Options);
+
+        Assert.Empty(
+            await new EfNayaxSqsSenderDirectory(denied).ListEligibleBusinessIdsAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// <strong>Business ids and nothing else.</strong> The answer's element type is the ownership key
+    /// itself, so there is no field on it that could carry a sender id, an instant, a revision or
+    /// anything a business trades - the projection is the whole of what makes this statement safe.
+    /// </summary>
+    [Fact]
+    public void The_eligibility_answer_is_business_ids_only()
+    {
+        var answer = typeof(INayaxSqsSenderDirectory)
+            .GetMethod(nameof(INayaxSqsSenderDirectory.ListEligibleBusinessIdsAsync))!
+            .ReturnType;
+
+        Assert.Equal(typeof(Task<IReadOnlyList<int>>), answer);
+    }
+
+    /// <summary>
+    /// A read, and only a read: the sender rows - including the last-message instant the reader
+    /// writes elsewhere - are exactly as they were afterwards.
+    /// </summary>
+    [Fact]
+    public async Task The_eligibility_read_writes_nothing()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        await fixture.RecordSenderAsync(NayaxSqsSaleFixture.BusinessA, SenderA);
+
+        await using (var denied = TestAppDbContext.Denied(fixture.Options))
+        {
+            await new EfNayaxSqsSenderDirectory(denied).ListEligibleBusinessIdsAsync(CancellationToken.None);
+        }
+
+        await using var read = fixture.Unrestricted();
+        var sender = await read.BusinessNayaxSqsSenders.AsNoTracking().SingleAsync();
+
+        Assert.Equal(SenderA, sender.AwsSenderId);
+        Assert.True(sender.IsEnabled);
+        Assert.Null(sender.LastMessageReceivedAtUtc);
+        Assert.Null(sender.LastReconciliationSucceededAtUtc);
         Assert.Equal(1, sender.Revision);
     }
 

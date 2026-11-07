@@ -196,6 +196,77 @@ public class NayaxSalesSyncControllerTests
         nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
+    /// <summary>
+    /// The already-running answer at the HTTP boundary (issue #1104): <c>409 Conflict</c>, kept
+    /// distinct from <c>204</c>, <c>200</c> and <c>429</c> so each of those keeps exactly the meaning
+    /// every existing caller already has.
+    ///
+    /// <para>It carries <strong>no <c>Retry-After</c></strong>, deliberately: this is not a rationed
+    /// request, and the wait is however long the run in progress still needs. And it claims no
+    /// allowance - the two assertions at the end are what make the attempt free.</para>
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_answers_409_when_a_sync_for_the_business_is_already_running()
+    {
+        var clock = new FakeClock(Now);
+        var syncLock = new NayaxSalesSyncLock(TimeSpan.FromMilliseconds(20));
+        var nayax = SingleMachineNayax();
+        var store = EmptyStore();
+        var controller = Controller(
+            TestSalesSync.UseCase(nayax.Object, store.Object, clock, syncLock: syncLock));
+
+        using var held = await syncLock.TryAcquireAsync(
+            Inventory.Domain.Tenancy.BusinessId.From(TestSalesSync.BusinessId), CancellationToken.None);
+        Assert.True(held.Acquired);
+
+        var busy = Assert.IsType<ConflictObjectResult>(
+            await controller.SyncLatest(force: true, CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status409Conflict, busy.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(busy.Value);
+
+        // The fixed sentence the controller declares, asserted as text because the constant itself is
+        // internal to InventoryApi: a reader of this test should see what the caller is told.
+        Assert.Equal("A Nayax sales sync is already running", problem.Title);
+        Assert.Equal(
+            "A sync for this business is already running. Try again shortly.", problem.Detail);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.Status);
+
+        // Not a rationed request: no Retry-After, and nothing read or written.
+        Assert.Empty(controller.Response.Headers.RetryAfter.ToString());
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Never);
+        store.Verify(
+            x => x.PersistLatestSalesAsync(
+                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// And once the run in progress is finished the very next request answers the unchanged
+    /// <c>204</c>, having spent only one allowance for the whole exchange - so the busy attempt cost
+    /// the business nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task A_409_costs_the_business_none_of_its_run_allowance()
+    {
+        var clock = new FakeClock(Now);
+        var syncLock = new NayaxSalesSyncLock(TimeSpan.FromMilliseconds(20));
+        var controller = Controller(TestSalesSync.UseCase(
+            SingleMachineNayax().Object, EmptyStore().Object, clock, syncLock: syncLock));
+
+        using (var held = await syncLock.TryAcquireAsync(
+            Inventory.Domain.Tenancy.BusinessId.From(TestSalesSync.BusinessId), CancellationToken.None))
+        {
+            for (var attempt = 0; attempt < NayaxSalesSyncRateLimiter.MaxRunsPerWindow + 5; attempt++)
+            {
+                Assert.IsType<ConflictObjectResult>(
+                    await controller.SyncLatest(force: true, CancellationToken.None));
+            }
+        }
+
+        Assert.IsType<NoContentResult>(await controller.SyncLatest(force: true, CancellationToken.None));
+    }
+
     private static Mock<INayaxLynxClient> SingleMachineNayax()
     {
         var nayax = new Mock<INayaxLynxClient>();

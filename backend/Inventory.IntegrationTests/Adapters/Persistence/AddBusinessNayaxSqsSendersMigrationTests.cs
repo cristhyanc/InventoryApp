@@ -85,13 +85,20 @@ public class AddBusinessNayaxSqsSendersMigrationTests
     }
 
     /// <summary>
-    /// The sender table's columns, by name: the five the issue's acceptance criteria list, plus the
-    /// business key and the two instants. <c>LastReconciliationSucceededAtUtc</c> is deliberately
-    /// <em>absent</em> - it is issue #1104's migration to add, and asserting its absence is what
-    /// keeps this migration's scope honest.
+    /// The sender table's columns at the current head, by name: the five issue #1101's acceptance
+    /// criteria list, plus the business key, the two instants, and issue #1104's
+    /// <c>LastReconciliationSucceededAtUtc</c>.
+    ///
+    /// <para>That last column is the one this case was written to hold the line on: while it did not
+    /// exist, its absence was asserted to keep issue #1101's own migration honest. Issue #1104 added
+    /// it in <c>AddNayaxSaleProviderEvidence</c> - where
+    /// <c>AddNayaxSaleProviderEvidenceMigrationTests</c> proves it arrives nullable, backfilled with
+    /// nothing, and reversible - so the list here moves with it rather than being relaxed. Everything
+    /// else stays exactly as it was, including the rule that no AWS credential column of any kind
+    /// exists.</para>
     /// </summary>
     [Fact]
-    public async Task The_sender_table_has_the_declared_columns_and_not_the_next_issues()
+    public async Task The_sender_table_has_the_declared_columns_and_no_credential_of_any_kind()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -112,10 +119,11 @@ public class AddBusinessNayaxSqsSendersMigrationTests
                 "Revision",
                 "CreatedAtUtc",
                 "UpdatedAtUtc",
+
+                // Issue #1104's, added by AddNayaxSaleProviderEvidence and therefore last.
+                "LastReconciliationSucceededAtUtc",
             ],
             columns);
-
-        Assert.DoesNotContain("LastReconciliationSucceededAtUtc", columns);
 
         // No AWS credential column of any kind: the sender id is an identifier, and this application
         // stores no access key, secret or session token anywhere.
