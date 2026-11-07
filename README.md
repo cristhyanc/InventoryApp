@@ -15,6 +15,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
   or complete it](#receiving-a-supplier-order-keep-it-open-or-complete-it)).
 - Sites, vending machines, product assignments, and machine refills.
 - A **home dashboard reminder when machine restock sync is behind** (see [Machine restock sync reminder](#machine-restock-sync-reminder)): Sync Restock is something an operator asks for, so the dashboard says which Nayax-linked machines have not had a successful restock sync in the last three business days, or still have restock events waiting to be reviewed.
+- A **home dashboard alert when Nayax sales need the owner's review**, and a **Nayax sales to review** page (see [Nayax sales to review](#nayax-sales-to-review)): a sale delivered by Nayax's queue that the business's own Nayax sales list contradicts stops counting until the owner decides, and one that is only missing from it keeps counting while it waits.
 - Nayax product and transaction imports with explicit payment/status handling.
 - Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
@@ -2827,6 +2828,35 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
 - **Who sees it.** The same permission as Sync Restock itself, which every role holds (Operator,
   Manager and Owner). If your Nayax connection has not been confirmed for machine alerts, the
   reminder says the sync may be unavailable instead of sending you to an action that will refuse you.
+
+## Nayax sales to review
+
+Issue #1105. Sales that arrive from Nayax's queue are checked every hour against the business's own
+Nayax sales list (issue #1104). When the two disagree about the machine, amount or product, the sale
+is **contradicted by Nayax** and is not counted in sales, costing, machine stock or any report until
+the owner decides. When the sale simply is not in the list Nayax returned for its machine, it **needs
+review** but keeps counting, because a sale missing from that list is never proof that it was fake.
+
+While anything waits, the Dashboard's **Needs attention** panel says so - for example "3 Nayax sales
+need your review · 1 is not being counted" - and links to **Nayax sales to review**
+(`/nayax-sales-review`). Everyone who can see the Dashboard can open the page; only the business
+**Owner** can decide. Each sale shows the stored values beside Nayax's own record (or, for a missing
+sale, how many sales Nayax returned for the machine and between which times), and its decision history.
+
+The owner's decisions:
+
+- **Use Nayax's values** (contradicted sales): the stored machine, amount, time and product are
+  replaced from Nayax's record. The product is matched through the business's own product links, so
+  if Nayax's product is not linked to one of yours the page asks you to link it first.
+- **Keep the SQS values** (contradicted sales, reason required): the stored values stand and the sale
+  counts again.
+- **Don't count this sale** (either kind, reason required): the sale stays visible but is not counted.
+- **This sale is genuine** (sales needing review, reason required): the sale keeps counting.
+
+A decided sale shows as **Confirmed by owner**, never as verified by Nayax. Every decision is
+recorded with who made it, when, why, the evidence it relied on and the values before and after, and
+it rebuilds the inventory cost of the products it touched. If Nayax later reports something different
+that contradicts the decision, the sale returns to review and the alert shows again.
 
 ## Product and supplier GST rules
 
