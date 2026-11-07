@@ -30,6 +30,12 @@ import {
  *
  * **No AWS credential is ever asked for.** The one field here is an IAM user *id*, which AWS
  * publishes; there is no field for an access key or a secret anywhere in this application.
+ *
+ * **It also reports whether the queue is actually working** (issue #1106): the reader's last
+ * successful poll, its consecutive failures and the dead-letter queue's depth, which are facts about
+ * the one reader process, plus when *this* business's hourly reconciliation last fully succeeded.
+ * Together those are what decide whether that business's Dashboard stops calling Nayax on load, so
+ * an administrator looking at a recorded sender can see why it is or is not having that effect.
  */
 @Component({
   selector: 'app-business-nayax-sqs-sender-card',
@@ -89,6 +95,22 @@ import {
             <div class="flex gap-2">
               <dt class="font-medium">Last message received</dt>
               <dd data-testid="last-message">{{ lastMessage }}</dd>
+            </div>
+            <div class="flex gap-2">
+              <dt class="font-medium">Last reconciliation succeeded</dt>
+              <dd data-testid="last-reconciliation">{{ lastReconciliation }}</dd>
+            </div>
+            <div class="flex gap-2">
+              <dt class="font-medium">Reader last polled</dt>
+              <dd data-testid="reader-last-poll">{{ readerLastPoll }}</dd>
+            </div>
+            <div class="flex gap-2">
+              <dt class="font-medium">Reader failures in a row</dt>
+              <dd data-testid="reader-failures">{{ readerFailures }}</dd>
+            </div>
+            <div class="flex gap-2">
+              <dt class="font-medium">Dead-letter queue depth</dt>
+              <dd data-testid="dead-letter-depth">{{ deadLetterDepth }}</dd>
             </div>
           </dl>
 
@@ -217,26 +239,45 @@ export class BusinessNayaxSqsSenderCardComponent implements OnInit {
 
   /**
    * The last message in Sydney time, as the issue asks for it, or "Never" for a sender that has never
-   * sent anything. The zone is named explicitly rather than taken from the browser, because this page
-   * is the platform's own and resolves no business whose zone it could use.
+   * sent anything.
    */
   get lastMessage(): string {
-    const received = this.sender?.lastMessageReceivedAtUtc;
-    if (!received) {
-      return 'Never';
-    }
+    return sydneyTime(this.sender?.lastMessageReceivedAtUtc);
+  }
 
-    // dd/MM/yyyy with a four-digit year, matching how every other instant on the Super Admin pages
-    // is written. The fields are named rather than taken from a `dateStyle` preset, because a preset
-    // abbreviates the year.
-    return new Intl.DateTimeFormat('en-AU', {
-      timeZone: 'Australia/Sydney',
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(new Date(received));
+  /**
+   * When this business's hourly reconciliation last fully succeeded, in Sydney time, or "Never"
+   * (issue #1106). It is shown here because it is one of the three things that decide whether that
+   * business's Dashboard stops calling Nayax on load - and the only one of them that is about this
+   * business rather than about the reader.
+   */
+  get lastReconciliation(): string {
+    return sydneyTime(this.sender?.lastReconciliationSucceededAtUtc);
+  }
+
+  /**
+   * When the queue reader last polled successfully, in Sydney time, or "Never" - which is what a
+   * deployment with no queue configured, and an API that has just restarted, both read.
+   *
+   * <p>An <em>empty</em> poll counts: the queue answering with nothing to hand over is the normal
+   * state of a quiet fleet, so this is "is the reader working?" and not "are sales arriving?".</p>
+   */
+  get readerLastPoll(): string {
+    return sydneyTime(this.sender?.readerHealth?.lastSuccessfulPollUtc);
+  }
+
+  /** How many receives have failed in a row; the next successful poll resets it to zero. */
+  get readerFailures(): string {
+    return (this.sender?.readerHealth?.consecutivePollFailures ?? 0).toString();
+  }
+
+  /**
+   * The dead-letter queue's depth as the reader last read it, or "Unknown" when no dead-letter queue
+   * is configured or none has been read yet - never shown as zero, which would say the opposite.
+   */
+  get deadLetterDepth(): string {
+    const depth = this.sender?.readerHealth?.deadLetterQueueDepth;
+    return depth === null || depth === undefined ? 'Unknown' : depth.toString();
   }
 
   close(): void {
@@ -368,6 +409,29 @@ export class BusinessNayaxSqsSenderCardComponent implements OnInit {
     this.revision = sender.revision;
     this.awsSenderId = sender.awsSenderId ?? '';
   }
+}
+
+/**
+ * An instant as Sydney wall-clock time, or "Never" when there is none.
+ *
+ * The zone is named explicitly rather than taken from the browser, because this page is the
+ * platform's own and resolves no business whose zone it could use. `dd/MM/yyyy` with a four-digit
+ * year, matching how every other instant on the Super Admin pages is written; the fields are named
+ * rather than taken from a `dateStyle` preset, because a preset abbreviates the year.
+ */
+function sydneyTime(instant: string | null | undefined): string {
+  if (!instant) {
+    return 'Never';
+  }
+
+  return new Intl.DateTimeFormat('en-AU', {
+    timeZone: 'Australia/Sydney',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(new Date(instant));
 }
 
 function statusOf(err: unknown): number | null {

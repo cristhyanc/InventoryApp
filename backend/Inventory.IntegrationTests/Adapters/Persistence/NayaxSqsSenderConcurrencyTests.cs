@@ -149,6 +149,7 @@ public class NayaxSqsSenderConcurrencyTests : IAsyncDisposable
             FakeAuthenticatedActorAccessor.Identified(MembershipWriteRaceHarness.Actor(AdministratorOid)),
             new EfPlatformNayaxSqsSenderStore(db),
             new NoOpAudit(),
+            new Inventory.Application.NayaxSqs.NayaxSqsReaderHealth(),
             new FakeClock(Now));
 
         return RunAndDisposeAsync();

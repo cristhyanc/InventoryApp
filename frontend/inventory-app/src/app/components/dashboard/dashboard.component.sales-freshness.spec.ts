@@ -55,10 +55,41 @@ const NOT_CONNECTED_SUMMARY: DashboardSummary = {
   needsRefill: { available: false, reason: 'NayaxNotConnected' }
 };
 
-const RAN: NayaxSalesSyncResult = { wasRecentlySynced: false, wasBusy: false, lastSyncedAtUtc: null };
+/** The run that happened, for a business that is not live via SQS - today's ordinary answer. */
+const RAN: NayaxSalesSyncResult = {
+  wasRecentlySynced: false,
+  wasBusy: false,
+  lastSyncedAtUtc: null,
+  liveViaSqs: false,
+  lastSqsMessageReceivedAtUtc: null,
+  sqsNotLiveReason: 'NoSender'
+};
 
 function recentlySynced(lastSyncedAtUtc: string): NayaxSalesSyncResult {
-  return { wasRecentlySynced: true, wasBusy: false, lastSyncedAtUtc };
+  return {
+    wasRecentlySynced: true,
+    wasBusy: false,
+    lastSyncedAtUtc,
+    liveViaSqs: false,
+    lastSqsMessageReceivedAtUtc: null,
+    sqsNotLiveReason: 'NoSender'
+  };
+}
+
+/**
+ * The live-via-SQS answer (issue #1106): the server read nothing because this business's sales
+ * arrive from the queue. It carries no synced instant at all, which is the point - nothing was
+ * synchronized.
+ */
+function liveViaSqs(lastSqsMessageReceivedAtUtc: string | null): NayaxSalesSyncResult {
+  return {
+    wasRecentlySynced: false,
+    wasBusy: false,
+    lastSyncedAtUtc: null,
+    liveViaSqs: true,
+    lastSqsMessageReceivedAtUtc,
+    sqsNotLiveReason: null
+  };
 }
 
 const MACHINE: Machine = {
@@ -311,6 +342,97 @@ describe('DashboardComponent sales freshness rendering (issue #843)', () => {
     const syncLatest = jest.fn((_force?: boolean) => of(RAN));
     const host = await renderDashboard({ syncLatest });
 
+    refreshButton(host)?.click();
+
+    expect(syncLatest).toHaveBeenLastCalledWith(true);
+  });
+});
+
+/**
+ * The live-via-SQS freshness line (issue #1106, child of #1100).
+ *
+ * A business whose sales arrive from the shared Nayax SQS queue is not synchronized on load at all,
+ * so the page must not claim an age for figures no request produced. It says what is true instead -
+ * the sales are live, and when the queue last delivered one - and a quiet queue says so plainly
+ * rather than looking like a failure. Everything else on the page is unchanged: the persisted
+ * figures are loaded, no notice is shown, and Refresh still forces a full read.
+ */
+describe('DashboardComponent live from Nayax (issue #1106)', () => {
+  it('reports the sales as live and carries when the queue last delivered', () => {
+    const component = createComponent({ syncLatest: () => of(liveViaSqs('2026-11-07T08:55:00Z')) });
+
+    component.ngOnInit();
+
+    expect(component.isSalesLiveViaSqs).toBe(true);
+    expect(component.lastSqsMessageReceivedAtUtc).toBe('2026-11-07T08:55:00Z');
+    // And never an age: nothing was synchronized, so there is no instant to claim one from.
+    expect(component.salesSyncedAtUtc).toBeNull();
+    expect(component.salesSyncedLabel).toBeNull();
+    // Not a failure and not the run limit either.
+    expect(component.isSalesSyncFailed).toBe(false);
+    expect(component.isSalesSyncRecentlyRefreshed).toBe(false);
+  });
+
+  it('still loads the persisted Sites and Machines for a live business', () => {
+    const component = createComponent({ syncLatest: () => of(liveViaSqs(null)) });
+
+    component.ngOnInit();
+
+    expect(component.machines).toEqual([MACHINE]);
+    expect(component.sites).toEqual([SITE]);
+  });
+
+  it('stops claiming the sales are live once an answer says they are not', () => {
+    let answer: NayaxSalesSyncResult = liveViaSqs('2026-11-07T08:55:00Z');
+    const component = createComponent({ syncLatest: () => of(answer) });
+
+    component.ngOnInit();
+    expect(component.isSalesLiveViaSqs).toBe(true);
+
+    // The reader stopped polling, so the next load syncs: the live claim and its instant go with it.
+    answer = RAN;
+    component.refreshSales();
+
+    expect(component.isSalesLiveViaSqs).toBe(false);
+    expect(component.lastSqsMessageReceivedAtUtc).toBeNull();
+    expect(component.salesSyncedLabel).toBe('Sales synced just now');
+  });
+
+  it('renders the live line with the last sale in the business wall-clock time', async () => {
+    const host = await renderDashboard({ syncLatest: () => of(liveViaSqs('2026-11-07T08:55:00Z')) });
+
+    const line = host.querySelector('[data-testid="sales-live-from-nayax"]');
+    expect(line).not.toBeNull();
+    // 08:55 UTC is 19:55 on 07/11/2026 in Sydney (AEDT, UTC+11).
+    expect(line?.textContent).toContain('Live from Nayax · last sale received');
+    expect(line?.textContent).toContain('07/11/2026');
+    expect(line?.textContent).toContain('07:55 pm');
+
+    // The age label is not rendered beside it, and no notice is shown.
+    expect(host.querySelector('[data-testid="sales-synced-at"]')).toBeNull();
+    expect(host.textContent).not.toContain('Latest Nayax sales could not be synchronized.');
+  });
+
+  it('renders the live line for a queue that has delivered nothing yet', async () => {
+    const host = await renderDashboard({ syncLatest: () => of(liveViaSqs(null)) });
+
+    const line = host.querySelector('[data-testid="sales-live-from-nayax"]');
+    expect(line?.textContent).toContain('Live from Nayax · no sales received yet');
+    expect(line?.textContent).not.toContain('last sale received');
+  });
+
+  it('shows today wording for a business that is not live', async () => {
+    const host = await renderDashboard({ syncLatest: () => of(recentlySynced(minutesAgo(2))) });
+
+    expect(host.querySelector('[data-testid="sales-live-from-nayax"]')).toBeNull();
+    expect(host.textContent).toContain('Sales synced 2 min ago');
+  });
+
+  it('still offers Refresh to a live business, and forces the run', async () => {
+    const syncLatest = jest.fn((_force?: boolean) => of(liveViaSqs(null)));
+    const host = await renderDashboard({ syncLatest });
+
+    expect(refreshButton(host)).not.toBeNull();
     refreshButton(host)?.click();
 
     expect(syncLatest).toHaveBeenLastCalledWith(true);

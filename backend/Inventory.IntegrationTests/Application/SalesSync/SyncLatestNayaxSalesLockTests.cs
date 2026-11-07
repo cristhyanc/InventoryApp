@@ -254,6 +254,10 @@ public class SyncLatestNayaxSalesLockTests
             new FakeNayaxOperationCredentials(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestSalesSync.BusinessId),
             coverage ?? new FakeProviderDataCoverageStore(),
+            // Not live via SQS: these cases are about the lock, and a live business never reaches it
+            // (issue #1106).
+            new InventoryApi.Tests.Application.NayaxSqs.FakeNayaxSqsLiveStatusStore(),
+            new Inventory.Application.NayaxSqs.NayaxSqsReaderHealth(),
             clock);
 
     private static Mock<INayaxLynxClient> SingleMachine()

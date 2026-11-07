@@ -38,7 +38,10 @@ import { NayaxUnavailability, nayaxUnavailableMessage } from '../../provider/nay
 const SYNC_RAN: NayaxSalesSyncResult = {
   wasRecentlySynced: false,
   wasBusy: false,
-  lastSyncedAtUtc: null
+  lastSyncedAtUtc: null,
+  liveViaSqs: false,
+  lastSqsMessageReceivedAtUtc: null,
+  sqsNotLiveReason: 'NoSender'
 };
 
 const SALES_THIS_WEEK: DashboardSalesThisWeek = {
