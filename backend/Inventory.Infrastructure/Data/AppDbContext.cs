@@ -652,6 +652,16 @@ public class AppDbContext : DbContext
         Set<PendingInventoryCostRebuild>();
 
     /// <summary>
+    /// Append-only evidence of what each business's own Nayax <c>lastSales</c> said about a sale the
+    /// queue delivered (issue #1104). Nothing in the application updates or deletes a row in this
+    /// set: a later observation appends, so what a sale was verified by survives a later
+    /// contradiction. See <see cref="NayaxSaleProviderEvidence"/> and
+    /// <see cref="ConfigureNayaxSaleProviderEvidence"/>.
+    /// </summary>
+    public DbSet<NayaxSaleProviderEvidence> NayaxSaleProviderEvidences =>
+        Set<NayaxSaleProviderEvidence>();
+
+    /// <summary>
     /// Append-only records of stored Nayax sale instants repaired from authoritative source evidence
     /// (issue #472). Nothing in the application updates or deletes a row in this set; see
     /// <see cref="NayaxSaleTimestampRepair"/>.
@@ -913,6 +923,7 @@ public class AppDbContext : DbContext
         ConfigureSaleProductAssociation(modelBuilder);
         ConfigureSqsSaleProvenance(modelBuilder);
         ConfigurePendingInventoryCostRebuilds(modelBuilder);
+        ConfigureNayaxSaleProviderEvidence(modelBuilder);
         ConfigureProviderCatalogueReview(modelBuilder);
 
         modelBuilder.Entity<Product>()
@@ -2119,6 +2130,14 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+
+        // Issue #1104's column, on the same terms: the hourly reconciliation's last full success,
+        // which issue #1106 reads to decide whether the Dashboard may skip syncing.
+        sender.Property(x => x.LastReconciliationSucceededAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
         sender.Property(x => x.CreatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
@@ -3187,6 +3206,67 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+    }
+
+    /// <summary>
+    /// Maps the append-only record of what each business's own Nayax <c>lastSales</c> said about a
+    /// queue-delivered sale (issue #1104) - see <see cref="NayaxSaleProviderEvidence"/> for why the
+    /// observation is stored beside the conclusion rather than instead of it.
+    ///
+    /// <para><strong>One index, and it is the one every read uses.</strong>
+    /// <c>(BusinessId, NayaxSaleId, Kind, Id)</c> answers the only question anything asks of this
+    /// table in this issue: "what did the latest evidence of this kind about this sale say?", which is
+    /// what decides whether a repeated identical observation is worth another row. Descending on the
+    /// row key so the latest is the first row read rather than the last. The business key alone is
+    /// already indexed centrally.</para>
+    ///
+    /// <para><strong>No foreign key to <c>NayaxSales</c>, deliberately</strong>, for the reason
+    /// <see cref="ConfigurePendingInventoryCostRebuilds"/> declares none to <c>Products</c>: a
+    /// restricted key would make deleting a sale depend on its evidence, and a cascading one would
+    /// delete the evidence a financial decision was recorded against. Ownership is central, so the
+    /// sale the row names is this business's own by the key it is read under.</para>
+    ///
+    /// <para><strong>Nothing is unique.</strong> Several rows about one sale is the normal state -
+    /// that is what "append-only" means here - so there is no constraint to express, and the
+    /// deduplication is the write-locked comparison against the latest row rather than an index that
+    /// would have refused a genuinely new observation.</para>
+    ///
+    /// <para>Every instant is persisted UTC and marked UTC on the way out, for the reason the
+    /// sale's own are: the SQLite provider returns an unspecified kind otherwise, and these instants
+    /// are compared with provider instants.</para>
+    /// </summary>
+    private static void ConfigureNayaxSaleProviderEvidence(ModelBuilder modelBuilder)
+    {
+        var evidence = modelBuilder.Entity<NayaxSaleProviderEvidence>();
+
+        evidence
+            .HasIndex(x => new { x.BusinessId, x.NayaxSaleId, x.Kind, x.Id })
+            .IsDescending(false, false, false, true);
+
+        // A provider currency code is a short identifier and a product name is a label; both are
+        // bounded so a payload cannot store something unbounded under either name.
+        evidence.Property(x => x.ProviderCurrencyCode).HasMaxLength(16);
+        evidence.Property(x => x.ProviderProductName).HasMaxLength(512);
+
+        evidence.Property(x => x.ObservedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        foreach (var instant in new[]
+                 {
+                     nameof(NayaxSaleProviderEvidence.ProviderAuthorizationInstantUtc),
+                     nameof(NayaxSaleProviderEvidence.ReturnedEarliestInstantUtc),
+                     nameof(NayaxSaleProviderEvidence.ReturnedLatestInstantUtc),
+                     nameof(NayaxSaleProviderEvidence.SaleAuthorizationInstantUtc),
+                     nameof(NayaxSaleProviderEvidence.SaleReceivedViaSqsAtUtc),
+                 })
+        {
+            evidence.Property<DateTime?>(instant).HasConversion(
+                toProvider => toProvider,
+                fromProvider => fromProvider.HasValue
+                    ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                    : fromProvider);
+        }
     }
 
     /// <summary>

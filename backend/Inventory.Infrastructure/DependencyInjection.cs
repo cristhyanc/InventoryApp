@@ -21,6 +21,7 @@ using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.NayaxReconciliation;
 using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
@@ -425,6 +426,13 @@ public static class InfrastructureServiceCollectionExtensions
         // here, so each runs on the context of the scope the reader opened for it.
         services.AddScoped<INayaxSqsSenderDirectory, EfNayaxSqsSenderDirectory>();
         services.AddScoped<INayaxSqsSenderActivityStore, EfNayaxSqsSenderActivityStore>();
+        // The hourly reconciliation's two adapters (issue #1104), scoped for the same reason: both run
+        // on the context of the per-business scope the runner opened. The evidence store's writes each
+        // take SQLite's write lock before their own reads, which is what makes the sale's state and
+        // the evidence for it one operation - and what keeps issue #1105's Owner decisions from
+        // interleaving with a run. The success store is an ordinary tenant-owned update of one column.
+        services.AddScoped<INayaxSaleProviderEvidenceStore, EfNayaxSaleProviderEvidenceStore>();
+        services.AddScoped<INayaxReconciliationSuccessStore, EfNayaxReconciliationSuccessStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
         // The provider catalogue review (issue #738), the catalogue import's one persistence

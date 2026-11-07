@@ -127,7 +127,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
 
         var affected = new Dictionary<long, DateTime>();
         if (sales.Count == 0)
-            return new LatestNayaxSalesPersistResult(affected);
+            return new LatestNayaxSalesPersistResult(affected, InsertedCount: 0);
 
         // One BEGIN IMMEDIATE transaction around the reads and the writes, for the reason
         // PersistSqsSaleAsync takes one (issue #1103): this path reads "is this transaction stored?"
@@ -143,19 +143,23 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
 
         var context = await ReadMatchingContextAsync(sales, cancellationToken);
 
+        var inserted = 0;
         foreach (var sale in sales)
         {
             // No lastSales item supplies a status: the documented response for
             // GET /v1/machines/{MachineID}/lastSales has no status field at all, so every row this
             // path inserts takes the settlement-value rule it always has. Passing null here, rather
             // than reading a field that is always null, is what makes that true by construction.
-            await ApplySaleAsync(
+            var application = await ApplySaleAsync(
                 sale,
                 suppliedStatusId: null,
                 provenance: null,
                 context,
                 affected,
                 cancellationToken);
+
+            if (application.Inserted)
+                inserted++;
         }
 
         // In the same save as the sales, which is what makes "the sale is stored" and "its replay is
@@ -165,7 +169,10 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
-        return new LatestNayaxSalesPersistResult(affected);
+        // Counted from the applications rather than from the batch: a transaction already stored -
+        // by a redelivered queue message, by an earlier refresh of the same rolling window, or by the
+        // other sales path - took the enrich branch and added nothing.
+        return new LatestNayaxSalesPersistResult(affected, inserted);
     }
 
     /// <inheritdoc />
