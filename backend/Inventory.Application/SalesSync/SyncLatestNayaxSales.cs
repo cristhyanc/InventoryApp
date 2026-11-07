@@ -4,31 +4,33 @@ using Inventory.Application.Providers;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.SalesSync;
 
 /// <summary>
 /// The outcome of asking for a latest-sales synchronization: it ran, this business's sales were
-/// synchronized moments ago so there was nothing to read (issue #843), or it has run too many too
-/// recently (issue #681).
+/// synchronized moments ago so there was nothing to read (issue #843), a synchronization for this
+/// business is already running (issue #1104), or it has run too many too recently (issue #681).
 ///
-/// Neither bound is thrown as an exception, exactly as <c>NayaxConnectionTestOutcome</c> reports the
-/// connection test's rate limit: both are expected answers the HTTP boundary turns into a specific
-/// status, not failures any other caller would want to catch. A <em>refusal</em> - no usable Nayax
-/// connection, or a support session - is still an exception, because it is not an answer about this
-/// synchronization at all.
+/// None of the three bounds is thrown as an exception, exactly as <c>NayaxConnectionTestOutcome</c>
+/// reports the connection test's rate limit: each is an expected answer the HTTP boundary turns into a
+/// specific status, not a failure any other caller would want to catch. A <em>refusal</em> - no usable
+/// Nayax connection, or a support session - is still an exception, because it is not an answer about
+/// this synchronization at all.
 /// </summary>
 public sealed record NayaxSalesSyncOutcome
 {
-    private NayaxSalesSyncOutcome(TimeSpan? retryAfter, DateTime? recentlySyncedAtUtc)
+    private NayaxSalesSyncOutcome(TimeSpan? retryAfter, DateTime? recentlySyncedAtUtc, bool isBusy)
     {
         RetryAfter = retryAfter;
         RecentlySyncedAtUtc = recentlySyncedAtUtc;
+        IsBusy = isBusy;
     }
 
     /// <summary>
     /// How long until this business may synchronize again, or <see langword="null"/> when the
-    /// synchronization ran or was skipped as recent.
+    /// synchronization ran or was skipped as recent or busy.
     /// </summary>
     public TimeSpan? RetryAfter { get; }
 
@@ -39,14 +41,85 @@ public sealed record NayaxSalesSyncOutcome
     /// </summary>
     public DateTime? RecentlySyncedAtUtc { get; }
 
-    // Cast because a record's own copy constructor makes a bare `new(null, null)` ambiguous.
-    public static NayaxSalesSyncOutcome Completed { get; } = new((TimeSpan?)null, null);
+    /// <summary>
+    /// Whether a synchronization for this business was already running and this one gave up waiting
+    /// for it (issue #1104).
+    ///
+    /// <para><strong>It is a bounded answer and not a failure.</strong> The waiter made no Nayax
+    /// call, wrote nothing, recorded no coverage and claimed <em>no</em> rate-limit allowance - so an
+    /// attempt that only ever waited cannot spend the business's own Refresh budget. The endpoint
+    /// answers <c>409 Conflict</c>, kept distinct from <c>204</c>, <c>200</c> and <c>429</c> so each
+    /// of those keeps exactly the meaning it already has.</para>
+    /// </summary>
+    public bool IsBusy { get; }
 
-    public static NayaxSalesSyncOutcome RateLimited(TimeSpan retryAfter) => new(retryAfter, null);
+    // Cast because a record's own copy constructor makes a bare `new(null, null, false)` ambiguous.
+    public static NayaxSalesSyncOutcome Completed { get; } = new((TimeSpan?)null, null, false);
+
+    /// <summary>
+    /// A synchronization for this business is already running and the wait for it ran out (issue
+    /// #1104).
+    /// </summary>
+    public static NayaxSalesSyncOutcome Busy { get; } = new((TimeSpan?)null, null, true);
+
+    public static NayaxSalesSyncOutcome RateLimited(TimeSpan retryAfter) => new(retryAfter, null, false);
 
     /// <summary>The sales were synchronized at <paramref name="lastSyncedAtUtc"/>, so this run was skipped.</summary>
     public static NayaxSalesSyncOutcome RecentlySynced(DateTime lastSyncedAtUtc) =>
-        new(null, lastSyncedAtUtc);
+        new(null, lastSyncedAtUtc, false);
+}
+
+/// <summary>
+/// How a call to <see cref="SyncLatestNayaxSales"/> gets the business's synchronization lock (issue
+/// #1104).
+/// </summary>
+public enum NayaxSalesSyncLockMode
+{
+    /// <summary>
+    /// Take the lock here, waiting up to <see cref="NayaxSalesSyncLock.RequestWait"/> for a run
+    /// already in progress, and answer <see cref="NayaxSalesSyncOutcome.Busy"/> when it is still held.
+    /// This is every request-driven call: the Dashboard's load and its Refresh control.
+    /// </summary>
+    Acquire = 0,
+
+    /// <summary>
+    /// The caller already holds this business's lease and keeps it for longer than this call - which
+    /// is the hourly reconciliation of issue #1104, whose evidence writes and success record are part
+    /// of the same protected run. It is not a way past the lock: the caller took it with
+    /// <see cref="NayaxSalesSyncLock.TryAcquireAsync"/> and releases it in its own <c>finally</c>.
+    /// </summary>
+    AlreadyHeld = 1,
+}
+
+/// <summary>
+/// What one synchronization read, told to a caller that needs the payload itself rather than only
+/// whether the run succeeded (issue #1104).
+///
+/// <para><strong>It exists so the hourly reconciliation reads Nayax once.</strong> The comparison
+/// needs the <c>lastSales</c> items per machine, and the run already reads exactly those: one Nayax
+/// call per machine plus one. A reconciliation that read them a second time would double the most
+/// expensive call in the application against somebody else's API for no new information.</para>
+///
+/// <para>Every method is synchronous and does nothing but remember: this is called from inside the
+/// read loop, and an observer that could block, write or fail would make a sales synchronization
+/// depend on whoever was watching it.</para>
+/// </summary>
+public interface INayaxLastSalesObserver
+{
+    /// <summary>The instant the run began reading, before the first Nayax call.</summary>
+    void RunStarted(DateTime readStartedAtUtc);
+
+    /// <summary>
+    /// One machine's <c>lastSales</c> response, exactly as it was read and before anything is
+    /// persisted from it.
+    /// </summary>
+    void MachineRead(long machineId, IReadOnlyList<NayaxLastSalesReport> sales);
+
+    /// <summary>
+    /// How many of the batch's transactions this save created, once the whole batch has been
+    /// persisted.
+    /// </summary>
+    void SalesPersisted(int insertedCount);
 }
 
 /// <summary>
@@ -93,6 +166,18 @@ public sealed record NayaxSalesSyncOutcome
 /// is unusable gets exactly the refusal it got before and is never told its sales are current. The
 /// Refresh control on the Dashboard forces a run past the skip, and a forced run is still rationed
 /// by the limiter.</para>
+///
+/// <para><strong>Only one run per business at a time</strong> (issue #1104).
+/// <see cref="NayaxSalesSyncLock"/> is shared with the hourly reconciliation, so a Dashboard load
+/// cannot run beside an hourly run for the same business: each would spend the business's Nayax
+/// allowance on the same rolling window and replay the same products. A request waits up to
+/// <see cref="NayaxSalesSyncLock.DefaultRequestWait"/> and then answers
+/// <see cref="NayaxSalesSyncOutcome.Busy"/> having made <em>no</em> Nayax call, no write, no coverage
+/// record and - the part that matters most - no rate-limit claim, so an attempt that only ever waited
+/// does not cost the business one of its own refreshes. The order is asserted: the freshness skip
+/// still happens before the lock is awaited, because a run that has nothing to read must not wait a
+/// minute to say so, and the allowance is claimed after the lock is held, because that is the first
+/// moment a run is actually going to happen.</para>
 /// </summary>
 public sealed class SyncLatestNayaxSales
 {
@@ -100,6 +185,7 @@ public sealed class SyncLatestNayaxSales
     private readonly ILatestNayaxSalesStore _store;
     private readonly NayaxSalesSyncRateLimiter _rateLimiter;
     private readonly NayaxSalesSyncFreshness _freshness;
+    private readonly NayaxSalesSyncLock _syncLock;
     private readonly INayaxRequestCredentialProvider _credentials;
     private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IProviderDataCoverageStore _coverage;
@@ -110,6 +196,7 @@ public sealed class SyncLatestNayaxSales
         ILatestNayaxSalesStore store,
         NayaxSalesSyncRateLimiter rateLimiter,
         NayaxSalesSyncFreshness freshness,
+        NayaxSalesSyncLock syncLock,
         INayaxRequestCredentialProvider credentials,
         ICurrentBusinessProvider currentBusiness,
         IProviderDataCoverageStore coverage,
@@ -119,6 +206,7 @@ public sealed class SyncLatestNayaxSales
         _store = store;
         _rateLimiter = rateLimiter;
         _freshness = freshness;
+        _syncLock = syncLock;
         _credentials = credentials;
         _currentBusiness = currentBusiness;
         _coverage = coverage;
@@ -141,7 +229,30 @@ public sealed class SyncLatestNayaxSales
     /// is not a way past the connection refusals or the run limit, only past the freshness window.
     /// </param>
     /// <param name="cancellationToken">Cancels the reads, the persistence and the cost rebuild.</param>
-    public async Task<NayaxSalesSyncOutcome> Handle(bool force, CancellationToken cancellationToken = default)
+    public Task<NayaxSalesSyncOutcome> Handle(bool force, CancellationToken cancellationToken = default) =>
+        Handle(force, NayaxSalesSyncLockMode.Acquire, observer: null, cancellationToken);
+
+    /// <summary>
+    /// Synchronizes this business's latest Nayax sales, with the lock taken here or held by the
+    /// caller, and optionally reporting what was read.
+    /// </summary>
+    /// <param name="force">As above: past the freshness window and nothing else.</param>
+    /// <param name="lockMode">
+    /// Whether this call takes the business's synchronization lock (every request) or the caller
+    /// already holds it (the hourly reconciliation of issue #1104, whose evidence writes and success
+    /// record belong to the same protected run).
+    /// </param>
+    /// <param name="observer">
+    /// Told the run's start instant, each machine's <c>lastSales</c> response and how many
+    /// transactions the save created, so a caller that needs the payload does not read Nayax twice.
+    /// <see langword="null"/> for every request-driven call.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the reads, the persistence and the cost rebuild.</param>
+    public async Task<NayaxSalesSyncOutcome> Handle(
+        bool force,
+        NayaxSalesSyncLockMode lockMode,
+        INayaxLastSalesObserver? observer,
+        CancellationToken cancellationToken)
     {
         // Resolved before anything else, and never from the request: the allowance, the freshness
         // and the credentials all belong to the business whose Nayax account and rows a run spends.
@@ -165,6 +276,43 @@ public sealed class SyncLatestNayaxSales
             return NayaxSalesSyncOutcome.RecentlySynced(lastSyncedAtUtc);
         }
 
+        if (lockMode is NayaxSalesSyncLockMode.AlreadyHeld)
+        {
+            // The hourly reconciliation took this business's lease with TryAcquireAsync and keeps it
+            // across its own evidence writes and success record, so there is nothing to take here.
+            return await RunAsync(businessId, credential, observer, cancellationToken);
+        }
+
+        // After the freshness skip and before the allowance: a run that has nothing to read must not
+        // wait a minute to say so, and the allowance belongs to a run that is actually going to
+        // happen. The lease releases only if it was acquired, so a waiter that timed out never hands
+        // back the holder's lock (see NayaxSalesSyncLease).
+        using var lease = await _syncLock
+            .AcquireForRequestAsync(businessId, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!lease.Acquired)
+        {
+            // A synchronization for this business is still running. Nothing was read from Nayax,
+            // nothing was written, no coverage was recorded and - deliberately - no allowance was
+            // claimed: an attempt that only ever waited must not cost the business a refresh.
+            return NayaxSalesSyncOutcome.Busy;
+        }
+
+        return await RunAsync(businessId, credential, observer, cancellationToken);
+    }
+
+    /// <summary>
+    /// The run itself, with this business's synchronization lock held by this call or by its caller:
+    /// claim the allowance, read every machine, save the batch once, drain the pending rebuilds and
+    /// record what was covered.
+    /// </summary>
+    private async Task<NayaxSalesSyncOutcome> RunAsync(
+        BusinessId businessId,
+        NayaxRequestCredential credential,
+        INayaxLastSalesObserver? observer,
+        CancellationToken cancellationToken)
+    {
         if (!_rateLimiter.TryClaim(businessId, out var retryAfter))
         {
             // Refused before the first Nayax call, so a refused request reads nothing from the
@@ -175,6 +323,7 @@ public sealed class SyncLatestNayaxSales
         // Taken before the first read, so the range this run may claim never reaches past an instant
         // a sale could still have been authorized at while the run was reading.
         var readStartedAtUtc = _clock.UtcNow;
+        observer?.RunStarted(readStartedAtUtc);
 
         // Fresh, never the cached list (issue #840): a successful run records business-wide sales
         // coverage for the range it read (issue #730), and a machine missing from a ten-minute-old
@@ -194,6 +343,11 @@ public sealed class SyncLatestNayaxSales
             var machineSales = await _nayax.GetMachineLastSalesAsync(machine.MachineID, cancellationToken);
             sales.AddRange(machineSales);
 
+            // Exactly what this machine returned, before anything is persisted from it: the hourly
+            // reconciliation compares these items with the stored queue rows, and reading them a
+            // second time would double the most expensive call in the application.
+            observer?.MachineRead(machine.MachineID, machineSales);
+
             var instants = machineSales.Select(sale => sale.AuthorizationInstantUtc).ToList();
             everyReadSaleHasAnInstant &= instants.TrueForAll(instant => instant.HasValue);
 
@@ -206,7 +360,8 @@ public sealed class SyncLatestNayaxSales
                 windowStarts.Add(earliest.Min());
         }
 
-        await _store.PersistLatestSalesAsync(sales, cancellationToken);
+        var persisted = await _store.PersistLatestSalesAsync(sales, cancellationToken);
+        observer?.SalesPersisted(persisted.InsertedCount);
 
         // Unconditionally, and that is the change issue #1103 makes here. The save above recorded a
         // durable pending rebuild per affected product, and this drains every pending row this

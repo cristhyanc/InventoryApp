@@ -48,6 +48,13 @@ public sealed record NayaxSqsSenderAttribution(
 /// <para>Everything else a message needs - the connection, the plan, the machines, the sale and the
 /// rebuild - happens inside a service scope resolved to the one business this answered with, where
 /// the ordinary tenant query filters and <c>BusinessOwnershipEnforcer</c> are fully in force.</para>
+///
+/// <para><strong>Issue #1104 adds a second question to the same port, and it is the same question
+/// turned around:</strong> "which businesses are on the queue at all?", which the hourly
+/// reconciliation needs so it knows whose <c>lastSales</c> to compare. It is a second statement in
+/// this one reviewed adapter under the repository owner's approval of 5 November 2026, and it
+/// projects <strong>business ids only</strong> - see
+/// <see cref="ListEligibleBusinessIdsAsync"/>.</para>
 /// </summary>
 public interface INayaxSqsSenderDirectory
 {
@@ -58,4 +65,24 @@ public interface INayaxSqsSenderDirectory
     /// </summary>
     Task<NayaxSqsSenderAttribution?> FindBusinessBySenderAsync(
         string? senderId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The businesses whose Nayax SQS sender is switched on and whose own lifecycle is approved and
+    /// active - the businesses the hourly reconciliation of issue #1104 runs for.
+    ///
+    /// <para><strong>It projects business ids and nothing else at all.</strong> No sender id, no
+    /// enabled flag, no instant, no revision, no name and nothing a business trades. An ownership key
+    /// is not business data, and a list of keys is the whole of what a scheduler needs to open one
+    /// scope per business - which is the only thing the answer is used for.</para>
+    ///
+    /// <para><strong>It takes nothing.</strong> No predicate, no page, no sort, no business id and no
+    /// sender id: the answer is decided entirely by stored state, so there is no input a caller could
+    /// widen it with. The eligibility rule itself is the same one the queue reader already applies
+    /// per message - enabled mapping, active business - so "whose sales do we accept?" and "whose
+    /// sales do we verify?" cannot drift apart.</para>
+    ///
+    /// <para>Like <see cref="FindBusinessBySenderAsync"/> it runs in a scope that has resolved no
+    /// business, because the businesses are the answer rather than the input, and it is read-only.</para>
+    /// </summary>
+    Task<IReadOnlyList<int>> ListEligibleBusinessIdsAsync(CancellationToken cancellationToken);
 }

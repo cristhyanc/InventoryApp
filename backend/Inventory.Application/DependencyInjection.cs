@@ -19,6 +19,7 @@ using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.NayaxReconciliation;
 using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
@@ -408,7 +409,18 @@ public static class ApplicationServiceCollectionExtensions
         // sales finished synchronizing a minute ago, under the credentials it holds now" is a fact
         // about the process, and a per-request memory would remember nothing at all.
         services.AddSingleton<NayaxSalesSyncFreshness>();
+        // The per-business synchronization lock of issue #1104, shared by the Dashboard's sync and
+        // the hourly reconciliation. A singleton for the strongest version of the same reason: a
+        // mutual-exclusion primitive that was not shared would not exclude anything.
+        services.AddSingleton<NayaxSalesSyncLock>();
         services.AddScoped<SyncLatestNayaxSales>();
+        // One business's hourly reconciliation of what SQS delivered against its own lastSales
+        // (issue #1104). Scoped and resolved from the per-business service scope the runner opens, so
+        // the gates, the reads, the evidence writes and the success record all belong to the one
+        // business that scope resolved - exactly as they would to a member of it. The runner's own
+        // loop is a singleton registered in Inventory.Infrastructure with its schedule and log sink,
+        // because it is about the process rather than about one business.
+        services.AddScoped<ReconcileNayaxSalesWithProvider>();
         // The slot-to-product lookup a queued Nayax SQS message needs (issue #1102), which an SQS
         // message cannot answer itself: it reports the machine's MDB slot and no product id.
         // Scoped like every other Nayax consumer, because the credentials, status gate and
