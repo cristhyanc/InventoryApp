@@ -35,22 +35,21 @@ const OWNER_CAPABILITIES = [
 
 const OPERATOR_CAPABILITIES = ['Dashboard.View', 'PickList.View', 'Inventory.Operate'];
 
+/** `stock` is [percentage, low, empty]; `sales` is [today, this week, previous comparable week]. */
 function site(
   siteId: number,
   siteName: string,
   machineCount: number,
-  stock: number | null,
-  low: number | null,
-  empty: number | null,
-  today: number,
-  week: number,
-  previous: number
+  stock: [number | null, number | null, number | null],
+  sales: [number, number, number]
 ) {
+  const [percentage, low, empty] = stock;
+  const [today, week, previous] = sales;
   return {
     siteId,
     siteName,
     machineCount,
-    totalStockPercentage: stock,
+    totalStockPercentage: percentage,
     lowProductCount: low,
     emptyProductCount: empty,
     todayRevenue: today,
@@ -63,12 +62,12 @@ function site(
 }
 
 const sites = [
-  site(1, 'Sample Avenue', 1, 92, 4, 0, 36.7, 249.6, 221.87),
-  site(2, 'Sample Pavilion', 2, 94, 1, 2, 174.7, 823.2, 950.58),
-  site(3, 'Sample Central Hub', 1, 98, 0, 0, 48.2, 312, 299.42),
+  site(1, 'Sample Avenue', 1, [92, 4, 0], [36.7, 249.6, 221.87]),
+  site(2, 'Sample Pavilion', 2, [94, 1, 2], [174.7, 823.2, 950.58]),
+  site(3, 'Sample Central Hub', 1, [98, 0, 0], [48.2, 312, 299.42]),
   // Missing counts are not something today's API sends; they are here to show the defensive state.
-  site(4, 'Sample Metro Terminal', 1, null, null, null, 0, 0, 0),
-  site(5, 'Sample Harbour Kiosk With A Longer Name', 3, 71, 6, null, 12.4, 140.15, 0)
+  site(4, 'Sample Metro Terminal', 1, [null, null, null], [0, 0, 0]),
+  site(5, 'Sample Harbour Kiosk With A Longer Name', 3, [71, 6, null], [12.4, 140.15, 0])
 ];
 
 function json(route: Route, body: unknown): Promise<void> {
@@ -121,7 +120,7 @@ async function capture(page: Page, name: string, fullPage = true): Promise<void>
 }
 
 /** The minimum rendered height of each visible element the locator matches. */
-async function minHeight(page: Page, selector: string): Promise<number> {
+function minHeight(page: Page, selector: string): Promise<number> {
   return page.locator(selector).evaluateAll((elements) =>
     Math.min(...elements.filter((el) => (el as HTMLElement).offsetParent !== null).map((el) => el.getBoundingClientRect().height))
   );
@@ -178,14 +177,8 @@ test.describe('Sites overview redesign (issue #1128)', () => {
 
     await expect(page.locator('[data-testid="sites-table"]')).toBeHidden();
     await expect(page.locator('[data-testid="site-card"]')).toHaveCount(5);
-    for (const selector of [
-      '[data-testid="sites-search"]',
-      '[data-testid="sites-filter"] button',
-      '[data-testid="sites-sort"]',
-      '[data-testid="site-card"] a'
-    ]) {
-      expect(await minHeight(page, selector)).toBeGreaterThanOrEqual(40);
-    }
+    // The sort select itself is 40px inside its 44px labelled box.
+    expect(await minHeight(page, '[data-testid="sites-sort"]')).toBeGreaterThanOrEqual(40);
     // The whole sort control (its label box) and each card link reach 44px.
     expect(await minHeight(page, '[data-testid="site-card"] a')).toBeGreaterThanOrEqual(44);
     expect(await minHeight(page, '[data-testid="sites-filter"] button')).toBeGreaterThanOrEqual(44);

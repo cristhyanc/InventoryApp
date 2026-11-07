@@ -36,11 +36,10 @@
       </label>
 
       <!-- The selected view is the white segment, announced through aria-pressed. -->
-      <div
-        role="group"
-        aria-label="Filter sites"
-        class="grid basis-full grid-cols-2 rounded-lg border border-rr-line bg-rr-surface p-1 text-sm font-semibold sm:inline-grid sm:basis-auto"
+      <fieldset
+        class="m-0 grid basis-full grid-cols-2 rounded-lg border border-rr-line bg-rr-surface p-1 text-sm font-semibold sm:inline-grid sm:basis-auto"
         data-testid="sites-filter">
+        <legend class="sr-only">Filter sites</legend>
         <button
           type="button"
           class="inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-md px-3 md:min-h-9"
@@ -55,7 +54,7 @@
           [attr.aria-pressed]="filter === 'needsRefill'"
           data-testid="sites-filter-needs-refill"
           (click)="setFilter('needsRefill')">Needs refill ({{ needsRefillCount }})</button>
-      </div>
+      </fieldset>
 
       <label class="flex min-h-11 basis-full items-center gap-1 rounded-lg border border-rr-line bg-white pl-3 text-sm sm:basis-auto md:min-h-10">
         <span class="whitespace-nowrap text-rr-caption">Sort:</span>
