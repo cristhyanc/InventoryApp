@@ -8270,6 +8270,54 @@ page still authors no dialog markup itself (`page-composition.guard.ts`). Render
 `frontend/inventory-app/e2e/visual/products-redesign.visual.ts`, written to
 `docs/screenshots/issue-1093/`.
 
+### The Sites overview layout (issue #1128)
+
+**Sites** (`SiteListComponent`, route `/sites`) was redesigned on the Products page's `rr` scale. It
+is a presentation change: the page still makes exactly one `GET api/sites` per visit, keeps its
+route guards, the Nayax status banner, the `ListLoadState` loading/error lifecycle and the
+`Dashboard.ViewFinancials` gate on the sales figures, and no sales, stock or reporting-period
+calculation moved or changed.
+
+**Layout.** The title carries a count line ("2 sites · 3 machines") summed from the loaded rows
+themselves, shown only once a non-empty answer has loaded. One card holds the toolbar and the list.
+At `md` and wider the list is a table with the columns Site, Machines, Stock level, Refill status
+and - for a role with `Dashboard.ViewFinancials` - Sales today, Sales this week and vs last week,
+the sales figures right-aligned. Below `md` the same rows are compact cards: the linked site name
+and machine count with the refill status first, then the stock level, then Sales today and Sales
+this week side by side with the weekly change beside the weekly figure. Every card's link, the
+search box, the two filter buttons and the sort control are at least 44px tall below `md`. Each row
+or card has exactly one link, to the existing `/sites/:id/products` route; the desktop row still
+extends that one link's plain click to the rest of the row (`followRowLink`).
+
+**Search, filter and order.** The name search (trimmed, case-insensitive) and the *All sites* /
+*Needs refill* filter apply together over the loaded rows; each filter button shows its count and
+its selection through `aria-pressed`, and a search or filter that leaves nothing shows a no-results
+message with one *Clear search and filter* action. *Needs refill* keeps a site with a **known**
+positive low or empty count, even when its other count is unknown. The order defaults to **Refill
+priority** - sites with a known positive empty count first (more empty slots first, then more low
+slots), then sites with a known positive low count (more low slots first), then sites whose counts
+are unavailable, then sites known to be fine, with the site name (case-insensitive) and then the
+site id breaking every tie - and can be switched to *Site name (A to Z)*. The rules live in
+`frontend/inventory-app/src/app/formatting/site-refill-status.ts`.
+
+**Known versus unavailable stock.** The stock level is a neutral bar and the backend's
+`TotalStockPercentage`, deliberately quieter than the refill status, so a high overall percentage
+cannot hide low or empty slots. The refill status states each known positive count in text, red for
+empty slots and amber for low ones. *Stock OK* appears only when both counts are known zeros. *Stock
+unavailable* appears when neither count is known, or when no known count indicates a refill and the
+other is missing; when only one count is known and it is positive, that count is kept and the
+missing one is named ("Empty count unavailable"). A percentage that is not a finite number shows
+*Unavailable* with no bar fill. `GET api/sites` publishes both counts and the percentage as plain
+numbers today - a site whose stock read failed is not published at all - so these unknown states are
+defensive: the page reads a missing, `null`, negative or non-finite value as unknown rather than as
+a healthy zero.
+
+**Sales period wording, not dates.** `GET api/sites` carries no period boundaries, and the frontend
+has no copy of `MachineDashboardWindow`, so the page states the rule - this week runs from Monday to
+now in the business's time zone, compared with the same point last week - rather than computing
+dates of its own. Showing the actual dates would need the site read (or another existing read) to
+publish the window's business dates; that is a backend change outside issue #1128.
+
 ### A product carries no selling price (issue #792)
 
 **`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
