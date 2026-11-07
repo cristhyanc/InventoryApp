@@ -41,6 +41,20 @@ public class NayaxSalesSyncController : ControllerBase
 {
     internal const string TooManySyncsTitle = "Too many Nayax sales refreshes";
 
+    /// <summary>
+    /// The title of the <c>409</c> a request gets when a synchronization for its business is already
+    /// running (issue #1104).
+    /// </summary>
+    internal const string SyncAlreadyRunningTitle = "A Nayax sales sync is already running";
+
+    /// <summary>
+    /// The <c>409</c>'s sentence. It names no business, no run, no wait and no other member: that a
+    /// background reconciliation or somebody else's refresh is in progress is not something this
+    /// response needs to spell out, and "try again shortly" is the whole of what the caller can do.
+    /// </summary>
+    internal const string SyncAlreadyRunningDetail =
+        "A sync for this business is already running. Try again shortly.";
+
     private readonly SyncLatestNayaxSales _syncLatestSales;
 
     public NayaxSalesSyncController(SyncLatestNayaxSales syncLatestSales)
@@ -63,6 +77,13 @@ public class NayaxSalesSyncController : ControllerBase
     /// This business's sales were already synchronized less than three minutes ago, so nothing was
     /// read or written (issue #843). The body says when they were synchronized.
     /// </response>
+    /// <response code="409">
+    /// A synchronization for this business is already running - the hourly reconciliation of issue
+    /// #1104, or another member's refresh - and this request waited a minute for it without getting
+    /// in. Nothing was read from Nayax, nothing was written, no coverage was recorded and no run
+    /// allowance was claimed, so the attempt does not count against issue #681's limit. The Dashboard
+    /// treats it as a skip: the figures it loads next are the ones the run in progress is producing.
+    /// </response>
     /// <response code="429">
     /// This business has synchronized too many times too recently (issue #681). <c>Retry-After</c>
     /// carries the wait, in seconds. The Dashboard shows its persisted figures flagged as not
@@ -72,6 +93,7 @@ public class NayaxSalesSyncController : ControllerBase
     [RequireCapability(Capability.InventoryOperate)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(NayaxSalesRecentlySyncedResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> SyncLatest([FromQuery] bool force, CancellationToken ct)
     {
@@ -82,12 +104,32 @@ public class NayaxSalesSyncController : ControllerBase
             return TooManySyncs(retryAfter);
         }
 
+        if (outcome.IsBusy)
+        {
+            // Its own status, kept off 204, 200 and 429 so each of those keeps exactly the meaning
+            // every existing caller already has. It carries no Retry-After: this is not a rationed
+            // request and the wait is however long the run in progress still needs.
+            return SyncAlreadyRunning();
+        }
+
         // A skip is its own answer, kept off 204 and 429 so both of those keep exactly the meaning
         // every existing caller already has.
         return outcome.RecentlySyncedAtUtc is { } lastSyncedAtUtc
             ? Ok(new NayaxSalesRecentlySyncedResponse(true, lastSyncedAtUtc))
             : NoContent();
     }
+
+    /// <summary>
+    /// The already-running refusal (issue #1104). A fixed sentence with no business, no count and no
+    /// wait in it, exactly as the run limit's is.
+    /// </summary>
+    private ActionResult SyncAlreadyRunning() =>
+        Conflict(new ProblemDetails
+        {
+            Title = SyncAlreadyRunningTitle,
+            Detail = SyncAlreadyRunningDetail,
+            Status = StatusCodes.Status409Conflict,
+        });
 
     /// <summary>
     /// The per-business run limit's refusal. A fixed sentence with no count, no window and no

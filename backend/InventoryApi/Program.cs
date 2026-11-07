@@ -4,6 +4,7 @@ using Inventory.Application.Access;
 using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxReconciliation;
 using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
@@ -12,6 +13,7 @@ using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using Inventory.Infrastructure.NayaxReconciliation;
 using Inventory.Infrastructure.NayaxSqs;
 using Inventory.Application.Businesses;
 using Inventory.Application.Products;
@@ -19,6 +21,7 @@ using InventoryApi.Adapters.Businesses;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
+using InventoryApi.Adapters.NayaxReconciliation;
 using InventoryApi.Adapters.NayaxSqs;
 using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
@@ -509,6 +512,22 @@ builder.Services.AddNayaxSqsReader(
 // message's SenderId is, and one resolved to that business for everything the message then causes.
 builder.Services.AddSingleton<INayaxSqsReaderScopes, ServiceScopeNayaxSqsReaderScopes>();
 builder.Services.AddHostedService<NayaxSqsSalesReaderWorker>();
+
+// The third hosted background service (issue #1104): the hourly reconciliation of what SQS delivered
+// against each business's own Nayax lastSales. Its first sweep is about five minutes after startup
+// and then every sixty minutes; each eligible business is run one at a time, in its own service scope
+// resolved to that business, and one business's failure never stops the others.
+//
+// It is in-process for the reason the SQS reader is - one writer on one SQLite file, each business's
+// own credentials read exactly as a request reads them, no second identity or configuration surface -
+// and App Service Always On is the same human prerequisite. Unlike the reader it has no setting to
+// switch it on: a business is reconciled because a Super Admin recorded and enabled its SQS sender
+// (issue #1101), so an environment with no senders recorded sweeps nobody and makes no Nayax call.
+builder.Services.AddSingleton<INayaxSalesReconciliationSchedule, SystemNayaxSalesReconciliationSchedule>();
+builder.Services.AddSingleton<INayaxSalesReconciliationLog, LoggingNayaxSalesReconciliationLog>();
+builder.Services.AddSingleton<INayaxSalesReconciliationScopes, ServiceScopeNayaxSalesReconciliationScopes>();
+builder.Services.AddSingleton<NayaxSalesReconciliationRunner>();
+builder.Services.AddHostedService<NayaxSalesReconciliationWorker>();
 
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as

@@ -54,10 +54,10 @@ const NOT_CONNECTED_SUMMARY: DashboardSummary = {
   needsRefill: { available: false, reason: 'NayaxNotConnected' }
 };
 
-const RAN: NayaxSalesSyncResult = { wasRecentlySynced: false, lastSyncedAtUtc: null };
+const RAN: NayaxSalesSyncResult = { wasRecentlySynced: false, wasBusy: false, lastSyncedAtUtc: null };
 
 function recentlySynced(lastSyncedAtUtc: string): NayaxSalesSyncResult {
-  return { wasRecentlySynced: true, lastSyncedAtUtc };
+  return { wasRecentlySynced: true, wasBusy: false, lastSyncedAtUtc };
 }
 
 const MACHINE: Machine = {

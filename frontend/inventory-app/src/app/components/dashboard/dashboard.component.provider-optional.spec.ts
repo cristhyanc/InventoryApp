@@ -34,7 +34,11 @@ import { NayaxUnavailability, nayaxUnavailableMessage } from '../../provider/nay
  */
 
 /** What the synchronization answers when it ran: the `204` the service maps (issue #843). */
-const SYNC_RAN: NayaxSalesSyncResult = { wasRecentlySynced: false, lastSyncedAtUtc: null };
+const SYNC_RAN: NayaxSalesSyncResult = {
+  wasRecentlySynced: false,
+  wasBusy: false,
+  lastSyncedAtUtc: null
+};
 
 const SALES_THIS_WEEK: DashboardSalesThisWeek = {
   sales: 300,
