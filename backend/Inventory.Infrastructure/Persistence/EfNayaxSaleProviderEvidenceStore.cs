@@ -88,7 +88,7 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
         ArgumentNullException.ThrowIfNull(evidence);
 
         return RecordAsync(
-            evidence.SaleId,
+            new EvidenceWriteContext(evidence.SaleId, evidence.RunId, evidence.ObservedAtUtc),
             NayaxSaleProviderEvidenceKind.Comparison,
             evidence.ObservedState,
             // The observation this kind of row carries: what the provider sent, and what each field's
@@ -109,8 +109,6 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
                 row.CurrencyComparison = evidence.Fields.Currency;
                 row.ProductComparison = evidence.Fields.Product;
             },
-            evidence.RunId,
-            evidence.ObservedAtUtc,
             cancellationToken);
     }
 
@@ -121,7 +119,7 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
         ArgumentNullException.ThrowIfNull(evidence);
 
         return RecordAsync(
-            evidence.SaleId,
+            new EvidenceWriteContext(evidence.SaleId, evidence.RunId, evidence.ObservedAtUtc),
             NayaxSaleProviderEvidenceKind.Absence,
             evidence.Observation.ObservedState,
             latest => AbsenceObservation(latest)
@@ -142,10 +140,16 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
                 row.Bracketed = evidence.Observation.Bracketed;
                 row.OutsideReceiptGrace = evidence.Observation.OutsideReceiptGrace;
             },
-            evidence.RunId,
-            evidence.ObservedAtUtc,
             cancellationToken);
     }
+
+    /// <summary>
+    /// The identity of one evidence write - which sale, which run, and when it was observed - the
+    /// three values every evidence row carries regardless of its kind, exactly as
+    /// <see cref="NayaxSaleComparisonEvidence"/> and <see cref="NayaxSaleAbsenceEvidence"/> already
+    /// carry them.
+    /// </summary>
+    private readonly record struct EvidenceWriteContext(long SaleId, Guid RunId, DateTime ObservedAtUtc);
 
     /// <summary>
     /// The one write path, shared by both kinds: take SQLite's write lock, re-read the sale's state,
@@ -153,13 +157,11 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
     /// and commit the row and the state together.
     /// </summary>
     private async Task<NayaxSaleEvidenceWriteResult> RecordAsync(
-        long saleId,
+        EvidenceWriteContext context,
         NayaxSaleProviderEvidenceKind kind,
         NayaxSqsVerification? observedState,
         Func<NayaxSaleProviderEvidence?, bool> repeatsLatest,
         Action<NayaxSaleProviderEvidence> fill,
-        Guid runId,
-        DateTime observedAtUtc,
         CancellationToken cancellationToken)
     {
         // Before the reads, not at the first write: a deferred transaction would take the lock after
@@ -171,7 +173,7 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
 
         // Tracked, because the state change goes through SaveChanges with the ownership enforcer.
         var sale = await _db.NayaxSales
-            .FirstOrDefaultAsync(row => row.Id == saleId, cancellationToken)
+            .FirstOrDefaultAsync(row => row.Id == context.SaleId, cancellationToken)
             .ConfigureAwait(false);
 
         if (sale?.SqsVerification is not { } current)
@@ -186,7 +188,7 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
 
         var latest = await _db.NayaxSaleProviderEvidences
             .AsNoTracking()
-            .Where(row => row.NayaxSaleId == saleId && row.Kind == kind)
+            .Where(row => row.NayaxSaleId == context.SaleId && row.Kind == kind)
             .OrderByDescending(row => row.Id)
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -200,9 +202,9 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
 
         var evidence = new NayaxSaleProviderEvidence
         {
-            NayaxSaleId = saleId,
-            RunId = runId,
-            ObservedAtUtc = observedAtUtc,
+            NayaxSaleId = context.SaleId,
+            RunId = context.RunId,
+            ObservedAtUtc = context.ObservedAtUtc,
             Kind = kind,
 
             // The resulting state, which is not always the state the observation argued for: matching
