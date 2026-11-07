@@ -230,8 +230,13 @@ public class EfDailyReportFactsProviderTests
         {
             db.NayaxSales.Add(new NayaxSales
             {
-                TransactionID = id++, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card",
-                MachineAuthorizationTime = day, TransactionStatusId = NayaxTransactionStatusIds.Completed, SqsVerification = state,
+                TransactionID = id++,
+                MachineID = 10,
+                SettlementValue = 10m,
+                PaymentMethod = "Credit Card",
+                MachineAuthorizationTime = day,
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                SqsVerification = state,
             });
         }
 
@@ -258,8 +263,12 @@ public class EfDailyReportFactsProviderTests
         var day = new DateTime(2025, 8, 1);
         var sale = new NayaxSales
         {
-            TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card",
-            MachineAuthorizationTime = day, TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            TransactionID = 1,
+            MachineID = 10,
+            SettlementValue = 10m,
+            PaymentMethod = "Credit Card",
+            MachineAuthorizationTime = day,
+            TransactionStatusId = NayaxTransactionStatusIds.Completed,
             SqsVerification = Inventory.Domain.NayaxSqs.NayaxSqsVerification.Conflict,
         };
         db.NayaxSales.Add(sale);

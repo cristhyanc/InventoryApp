@@ -344,8 +344,12 @@ public class EfReconciliationReportFactsProviderTests
         {
             db.NayaxSales.Add(new NayaxSales
             {
-                TransactionID = id++, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card",
-                TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 10),
+                TransactionID = id++,
+                MachineID = 10,
+                SettlementValue = 10m,
+                PaymentMethod = "Credit Card",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2025, 8, 10),
                 SqsVerification = state,
             });
         }
