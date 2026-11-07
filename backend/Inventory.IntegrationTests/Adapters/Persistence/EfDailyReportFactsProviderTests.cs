@@ -214,4 +214,66 @@ public class EfDailyReportFactsProviderTests
         Assert.True(facts.Totals.IsCogsComplete);
         Assert.Equal(0m, facts.Totals.PartialCostOfGoods);
     }
+
+    /// <summary>
+    /// Issue #1105: only a contradicted (<c>Conflict</c>) or Owner-excluded sale leaves the daily
+    /// totals, and it is counted in data quality instead. Every other verification state counts.
+    /// </summary>
+    [Fact]
+    public async Task Leaves_out_only_contradicted_and_owner_excluded_sales_and_counts_them_as_data_quality()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var day = new DateTime(2025, 8, 1);
+        var id = 1L;
+        foreach (var state in Enum.GetValues<Inventory.Domain.NayaxSqs.NayaxSqsVerification>().Cast<Inventory.Domain.NayaxSqs.NayaxSqsVerification?>().Append(null))
+        {
+            db.NayaxSales.Add(new NayaxSales
+            {
+                TransactionID = id++, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card",
+                MachineAuthorizationTime = day, TransactionStatusId = NayaxTransactionStatusIds.Completed, SqsVerification = state,
+            });
+        }
+
+        await db.SaveChangesAsync();
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
+
+        var facts = await provider.GetFactsAsync(day, day, null, CancellationToken.None);
+
+        // Eight rows: null and the seven declared states. Conflict and OwnerExcluded are left out.
+        var row = Assert.Single(facts.Days);
+        Assert.Equal(60m, row.GrossSales);
+        Assert.Equal(6, row.CompletedTransactionCount);
+        Assert.Equal(2, row.ExcludedByReviewTransactionCount);
+        Assert.True(row.HasDataQualityWarning);
+        Assert.Equal(2, facts.Totals.ExcludedByReviewTransactionCount);
+    }
+
+    /// <summary>Issue #1105: an Owner's "Use Nayax's values" correction changes the period totals.</summary>
+    [Fact]
+    public async Task A_corrected_amount_changes_the_period_totals()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var day = new DateTime(2025, 8, 1);
+        var sale = new NayaxSales
+        {
+            TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card",
+            MachineAuthorizationTime = day, TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            SqsVerification = Inventory.Domain.NayaxSqs.NayaxSqsVerification.Conflict,
+        };
+        db.NayaxSales.Add(sale);
+        await db.SaveChangesAsync();
+        var provider = new EfDailyReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), TestFinancialUseCases.TrivialCalendar);
+
+        Assert.Equal(0m, (await provider.GetFactsAsync(day, day, null, CancellationToken.None)).Days.Sum(x => x.GrossSales));
+
+        sale.SettlementValue = 12.5m;
+        sale.SqsVerification = Inventory.Domain.NayaxSqs.NayaxSqsVerification.OwnerCorrected;
+        await db.SaveChangesAsync();
+
+        var corrected = Assert.Single((await provider.GetFactsAsync(day, day, null, CancellationToken.None)).Days);
+        Assert.Equal(12.5m, corrected.GrossSales);
+        Assert.Equal(0, corrected.ExcludedByReviewTransactionCount);
+    }
 }

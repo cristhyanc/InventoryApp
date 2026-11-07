@@ -221,6 +221,13 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // figures the plan page shows beside it, so it declares Dashboard.View rather than a
         // narrower capability.
         { "Dashboard.View", "GET", "/api/me/plan-catalogue", "Operator,Manager,Owner" },
+
+        // Issue #1105. Every member who sees the Dashboard sees the Nayax sales review and its
+        // needs-attention alert; only an Owner decides. The decision row names a sale that does not
+        // exist, so an Owner is answered 404 (or 400 for the empty body) and nothing is written.
+        { "Dashboard.View", "GET", "/api/nayax-sale-review", "Operator,Manager,Owner" },
+        { "Dashboard.View", "GET", "/api/nayax-sale-review/summary", "Operator,Manager,Owner" },
+        { "Data.Repair", "POST", $"/api/nayax-sale-review/{MissingId}/decision", "Owner" },
     };
 
     /// <summary>

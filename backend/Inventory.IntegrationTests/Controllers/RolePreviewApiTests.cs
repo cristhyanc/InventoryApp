@@ -204,6 +204,8 @@ public class RolePreviewApiTests : IClassFixture<RolePreviewApiTests.ApiFactory>
     [InlineData("POST", "/api/invites/redeem")]
     [InlineData("POST", "/api/onboarding/business-applications")]
     [InlineData("POST", "/api/nayax-sales-sync")]
+    // Issue #1105: an Owner previewing their own role cannot decide about a flagged Nayax sale.
+    [InlineData("POST", "/api/nayax-sale-review/999999/decision")]
     public async Task Every_method_that_is_not_a_read_is_refused_as_read_only(string method, string route)
     {
         var response = await _factory.Previewing("Owner").SendAsync(Request(method, route));
