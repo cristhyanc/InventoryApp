@@ -33,10 +33,11 @@ namespace InventoryApi.Tests.Application.MachineStockSync;
 /// matching, the apply/duplicate rulings, preview shape - uses the EF Core InMemory provider via
 /// <see cref="CreateInMemoryDb"/>. Behaviour that depends on a real transaction, on constraints, or
 /// on what is actually committed uses relational SQLite via <see cref="CreateSqliteDbAsync"/>,
-/// because InMemory is not relational: <see cref="EfMachineStockEventStore.ApplyRefillAsync"/> only
-/// opens a database transaction when <c>Database.IsRelational()</c>, so an InMemory test cannot
-/// prove that a movement and its event state commit or roll back together. See the "Transactional
-/// safety" and "Relational duplicate resolution" regions.
+/// because InMemory is not relational:
+/// <see cref="EfMachineStockEventStore.BeginRefillWriteTransactionAsync"/> only opens a database
+/// transaction on a relational provider, so an InMemory test cannot prove that a product's
+/// movements and its event states commit or roll back together. See the "Transactional safety",
+/// "Relational duplicate resolution" and "One transaction and one rebuild per product" regions.
 /// </summary>
 public class MachineStockSyncTests
 {
