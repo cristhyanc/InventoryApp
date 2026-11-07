@@ -13095,6 +13095,14 @@ nothing writes it (below): a transaction export declares neither.
   also records nothing, because the store does not import such a row and the run therefore did not
   account for its own range; so does a run in which no machine returned a single dated sale, which
   is evidence of nothing at all.
+  **The hourly reconciliation of issue #1104 claims through this same rule and adds none of its
+  own.** It is the same `SyncLatestNayaxSales` code path with the same bound, so an hourly run
+  records exactly what a Dashboard-triggered run over the same data would — and it does **not** claim
+  to close every coverage gap: a period `lastSales` did not demonstrably reach stays `Unverified`,
+  and a verification state is evidence about one sale rather than about a range. The SQS reader of
+  issue #1103 still records no coverage at all, for the reason it never could: a queue delivers the
+  transactions somebody sent, which says nothing about what was not sent. See [Hourly Nayax sales
+  reconciliation](#hourly-nayax-sales-reconciliation-issue-1104).
 - `ImportNayaxSales` claims **nothing at all**, however completely it imported. Importing every row
   of a workbook says what was stored; it does not say the workbook held every transaction of the
   span those rows cover. The upload is a file a person exported from Nayax Core and it declares
@@ -17354,11 +17362,194 @@ captured output.
 | `Inventory.Infrastructure.Persistence` | `EfNayaxSqsSenderDirectory` (the one cross-business lookup), `EfNayaxSqsSenderActivityStore`, `EfLatestNayaxSalesStore`(`.Sqs`) |
 | `InventoryApi.Adapters.NayaxSqs` | `NayaxSqsSalesReaderWorker` (the hosted service), `ServiceScopeNayaxSqsReaderScopes` (the two scopes) |
 
-**What is deliberately not here.** Verification, conflicts and flagged sales (#1104, #1105); the
-Dashboard and Refresh (#1106); refunds (#1107), multivend rows and free-vend stock handling; creating
-queues or IAM users, CloudWatch alarms and replaying the dead-letter queue from the application; and
-Nayax SQS encryption, events and DEX deliveries. Production consumption must not be switched on until
-#1104 and #1105 are deployed (#1100's rollout rule).
+**What is deliberately not here.** Verification, conflicts and flagged sales — issue #1104 adds the
+first of those and is described in [Hourly Nayax sales
+reconciliation](#hourly-nayax-sales-reconciliation-issue-1104); Owner decisions (#1105); the Dashboard
+and Refresh (#1106); refunds (#1107), multivend rows and free-vend stock handling; creating queues or
+IAM users, CloudWatch alarms and replaying the dead-letter queue from the application; and Nayax SQS
+encryption, events and DEX deliveries. Production consumption must not be switched on until #1104 and
+#1105 are deployed (#1100's rollout rule).
+
+### Hourly Nayax sales reconciliation (issue #1104)
+
+Every hour, for each business on the queue, the application compares the sales SQS delivered with
+that business's own Nayax `lastSales`, using that business's own credentials. It is the half of parent
+#1100 that makes a queue-delivered sale *checkable*: issue #1103 stores a sale and marks it
+`Unverified`, and nothing until now moved it.
+
+**It changes nothing about what counts.** A verification state is evidence about a sale, never a
+reason to include or exclude it: stock consumption, costing and revenue still follow the stored
+`TransactionStatusId` through `NayaxTransactionStatusClassifier`, so a conflicting or flagged row
+counts exactly as it did before. Excluding a row, the Owner decisions that could, and the Dashboard
+alert are issue #1105's.
+
+#### What is compared, and how
+
+When a `lastSales` item has the same `TransactionID` as a stored SQS row,
+`Inventory.Domain.NayaxSqs.NayaxSaleProviderComparisonPolicy` compares these fields and no others:
+
+| Field | Normalisation | Compared when |
+|---|---|---|
+| `MachineID` | exact integer | always |
+| Amount (`SettlementValue` vs the stored value) | decimal rounded to 2 places, half away from zero | always |
+| Authorization instant | both as UTC instants (the stored column vs `AuthorizationDateTimeGMT`); equal when no more than **1 second** apart | both present |
+| Currency | trimmed, upper-cased with the invariant culture | both present |
+| Product (`NayaxProductId`) | exact | both non-null |
+
+**A field that cannot be compared is recorded as *not compared*, and is never counted as a match.**
+That is the rule the whole model rests on: "verified" means *these specific fields were compared and
+were equal*, which is unanswerable if a missing value quietly reads as agreement. Two fields are
+normally not compared in practice, and both are honest rather than accidental. No sale column holds
+the currency the transaction was conducted in, so the stored side has none — issue #1104 adds no
+column to a sale. And the documented `lastSales` response
+(<https://devzone.nayax.com/reference/lynx/machines/get-last-sales-for-machine-by-machineid>) carries
+**no product identifier field** at all, so the provider side normally has none either; the comparison
+still compares both when a value is present, because this application's `lastSales` model has carried
+that property since before this issue. A product name is never compared: it is a label both sides may
+render differently, and the product identity is what the question is about.
+
+#### Evidence kept
+
+`NayaxSaleProviderEvidences` is a tenant-owned, **append-only** table of one row per observation, with
+its own `Id` — which is how issue #1105's Owner decision will name exactly the evidence it acted on —
+plus `BusinessId`, `NayaxSaleId`, `RunId`, `ObservedAtUtc`, the resulting state and a `Kind`:
+
+- **`Comparison`** — `lastSales` returned the same `TransactionID`. The row stores that item's values
+  **exactly as received** (machine, amount, authorization instant, currency, Nayax product id and
+  product name — not rounded, not trimmed, not upper-cased) and each field's own result: match,
+  mismatch or not compared. The normalisations belong to the comparison and are recorded as the
+  results beside the values, because a row that stored this application's own arithmetic would be
+  evidence about the wrong thing.
+- **`Absence`** — `lastSales` was read for the sale's machine and did not return the sale. The row
+  stores the machine that was read, the earliest and latest authorization instants among the items the
+  response returned for it and how many it returned, the sale's own authorization instant and its
+  `ReceivedViaSqsAtUtc`, the receipt-grace result, and whether the sale's instant lies strictly
+  between the earliest and latest returned instants (bracketed).
+
+**An `Absence` row records only what was observed, and no column says the provider's response was
+complete.** Nayax documents `lastSales` as "the most recent sales transactions for a specific
+machine": the contract states neither how many items it returns nor any authorization-time window it
+covers, so a transaction missing from it is **not** evidence that the transaction did not happen. No
+code treats it as completeness, and the absence of such a column is asserted rather than assumed.
+
+A row is written when a run changes a sale's state, or when its observation differs from that sale's
+latest evidence of the **same kind**. A repeated identical observation writes nothing — an hourly run
+re-reading the same rolling window would otherwise append an identical row every hour for every sale
+in it. **Every evidence write, and the state change it causes, happens in one
+`SqliteWriteLockTransaction` together with a re-read of the sale's current state**, so the
+authoritative read, the transition decided from it and the mutation are one operation — which is what
+will keep issue #1105's Owner decisions, which take the same write lock, from interleaving with a run.
+
+#### States and transitions
+
+`NayaxSales.SqsVerification`:
+
+| State | Meaning |
+|---|---|
+| `null` | Not delivered by SQS — rows that existed before, and rows only `lastSales` delivered |
+| `Unverified` | Delivered by SQS, not compared yet |
+| `Verified` | The machine, the amount and the instant were compared and are equal; the currency and the product are either equal or recorded as not compared |
+| `Conflict` | An **authoritative contradiction**: the business's own `lastSales` returned the same `TransactionID` with a different machine, amount or product, and both values were present |
+| `NeedsInvestigation` | The instant or the currency differs, **or** an `Absence` row shows the sale was bracketed and outside the receipt grace |
+
+`Inventory.Domain.NayaxSqs.NayaxSqsVerificationTransitions` is the whole of which moves are permitted,
+and it is an allowlist rather than a fall-through:
+
+- `Unverified` → `Verified`, `Conflict` or `NeedsInvestigation`.
+- `NeedsInvestigation` → `Verified` on later matching evidence, or `Conflict` on a later contradiction.
+- `Verified` → `Conflict` or `NeedsInvestigation` on later contradicting evidence. The earlier
+  evidence is kept, so what the sale was verified by stays readable.
+- `Conflict` stays `Conflict` and new evidence is appended. Only an Owner decision (#1105) moves a row
+  out of it.
+- `null` is never moved into the model: a sale the queue never delivered has no delivery to verify.
+- An observation that decides no state — a comparison whose instant could not be compared — leaves the
+  state exactly as it was, and the evidence is still recorded.
+- An `Absence` whose sale is not bracketed, or is inside the **10-minute** receipt grace, writes no row
+  and changes nothing; the sale stays `Unverified`.
+
+Sales that `lastSales` returns but SQS never delivered are added exactly as they are today, with
+`SqsVerification` left `null`.
+
+#### The per-business lock, and the Busy outcome
+
+`Inventory.Application.SalesSync.NayaxSalesSyncLock` is one in-process lock per business, **shared**
+by the hourly run and every request-driven sync. Two runs for the same business would read the same
+rolling window, spend the business's Nayax allowance twice, replay the same products twice and record
+two pieces of evidence about one observation.
+
+- The hourly run uses **try-acquire**. A business whose sync is already running is skipped for this
+  hour, with no Nayax call and no write.
+- A request-driven sync waits up to **60 seconds**. Past that the use case answers a new bounded
+  **Busy** outcome: **no Nayax call, no write, no coverage record and no rate-limit claim**, so an
+  attempt that only ever waited does not cost the business one of its own refreshes. The controller
+  answers **`409 Conflict`** with problem details ("A sync for this business is already running. Try
+  again shortly."), kept distinct from `204`, `200` and `429` so each keeps its meaning, and carrying
+  no `Retry-After` because this is not a rationed request. The Angular `NayaxSalesSyncService` turns
+  `409` into a skip: no error, no retry.
+- **The lock is released only by the caller that acquired it.** `NayaxSalesSyncLease` carries an
+  explicit acquired flag and its `Dispose` is conditional on it, so a timed-out or cancelled waiter
+  never hands back a lock the holder is still working under — which would let a second run start
+  beside the first.
+- The **#843 freshness skip still happens before the lock is awaited**: a run with nothing to read
+  must not wait a minute to say so.
+
+#### A successful reconciliation
+
+`BusinessNayaxSqsSender.LastReconciliationSucceededAtUtc` (issue #1101's row, this issue's column) is
+set to the run's **start** instant, and only when the whole run for that business succeeded: the
+machine list and `lastSales` for **every** machine were read without error, persistence committed, all
+comparisons and absence evidence were recorded, and no pending inventory-cost rebuild was left behind.
+A skipped run — the lock was held, the allowance was spent, a gate refused it — or a partly failed run
+leaves the value unchanged, and a successful API read on its own never sets it. Issue #1106 reads it
+to decide whether the Dashboard may skip syncing, so a value that moved on a partial run would be a
+promise nothing kept.
+
+#### Eligibility, scopes and the order of a run
+
+Eligible businesses come from one further statement in issue #1103's reviewed sender-directory
+adapter — `EfNayaxSqsSenderDirectory.ListEligibleBusinessIdsAsync`, under the owner's approval of
+5 November 2026. It is one `IgnoreQueryFilters` read that projects **only `BusinessId`**, returns the
+businesses whose sender is enabled and whose own lifecycle is approved and active, and takes no
+predicate, page or sort. The rule is the one the message path already applies, so "whose sales do we
+accept?" and "whose sales do we verify?" cannot drift apart.
+
+The runner opens two kinds of scope, exactly as the queue reader does: the eligibility read runs in a
+scope that has resolved **no** business — the businesses are the answer rather than the input — and
+each business's run happens in a scope resolved to that one business, with no signed-in user, where
+the ordinary tenant filters and `BusinessOwnershipEnforcer` are fully in force. Inside that scope the
+connection, support-session and `PlanFeature.SalesProviderIntegration` gates apply through
+`INayaxRequestCredentialProvider` exactly as they do for a request; a refused business is skipped and
+logged.
+
+One business's run, in order: try-acquire the lease → resolve the credential gate → drain every
+pending inventory-cost rebuild this business has (#1103 — recovery work that makes no Nayax call) →
+`SyncLatestNayaxSales` with `force: true` and the lease already held, observing what it read → compare
+and record the evidence → record the success instant. A failure anywhere after the lease is an
+outcome rather than an exception, so one business's trouble never stops the others.
+
+#### Coverage
+
+Coverage is recorded by the existing policy of issue #730 and by nothing else: the hourly run is the
+same `SyncLatestNayaxSales` code path, so it claims `[the latest per-machine window start, the instant
+reading began)`, claims nothing for a run with undated items or no dated sale, and records nothing at
+all for a run that failed. **The hourly run does not claim to close every coverage gap**: a period
+`lastSales` did not demonstrably reach stays unverified, and SQS itself still records no coverage. See
+[Report availability model](#report-availability-model-issue-730).
+
+#### Where the code is
+
+| Layer | What |
+|---|---|
+| `Inventory.Domain.NayaxSqs` | `NayaxSaleProviderComparisonPolicy` (the normalisations and the field results), `NayaxSaleProviderAbsencePolicy` (bracketing and the receipt grace), `NayaxSqsVerificationTransitions`, `NayaxSqsVerification`, `NayaxSaleProviderEvidenceKind`, `NayaxSaleFieldComparison` |
+| `Inventory.Application.NayaxReconciliation` | `ReconcileNayaxSalesWithProvider` (one business's run), `NayaxSalesReconciliationRunner` (the sweep and its cadence), and the ports: `INayaxSaleProviderEvidenceStore`, `INayaxReconciliationSuccessStore`, `INayaxSalesReconciliationScopes`, `INayaxSalesReconciliationSchedule`, `INayaxSalesReconciliationLog` |
+| `Inventory.Application.SalesSync` | `NayaxSalesSyncLock`/`NayaxSalesSyncLease`, the `Busy` outcome, `NayaxSalesSyncLockMode` and `INayaxLastSalesObserver` on `SyncLatestNayaxSales` |
+| `Inventory.Infrastructure.Persistence` | `EfNayaxSaleProviderEvidenceStore` (the write-locked evidence writes), `EfNayaxReconciliationSuccessStore`, the second statement in `EfNayaxSqsSenderDirectory` |
+| `Inventory.Infrastructure.NayaxReconciliation` | `SystemNayaxSalesReconciliationSchedule`, `LoggingNayaxSalesReconciliationLog` |
+| `InventoryApi.Adapters.NayaxReconciliation` | `NayaxSalesReconciliationWorker` (the hosted service), `ServiceScopeNayaxSalesReconciliationScopes` (the two scopes) |
+
+**What is deliberately not here.** Excluding any row from stock, costs or reports, Owner decisions and
+the Dashboard alert (#1105); the Dashboard "Live" state and how `LastReconciliationSucceededAtUtc` is
+read (#1106); refunds (#1107) and multivend; and a WebJob or CLI mode for this run.
 
 ## Incremental migration plan
 
@@ -18219,6 +18410,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Backup retention, alerting and restore runbook | No compute at all. Retention is an Azure Blob lifecycle policy executed by the storage service, the two alerts are Azure Monitor log search rules, and restore stays a deliberate, human-run procedure with a non-production rehearsal; all of it is applied by a human, and the uploader's seam (`IBackupBlobContainer`) still exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally | Designed and documented (#334); human Azure setup outstanding — see [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334) | No, and no compute host either. Retention turned out to be a storage-lifecycle question, which is why it needs neither a WebJob nor a Function. |
 | Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187) | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
 | Nayax SQS sales reader — `Inventory.Application.NayaxSqs.NayaxSqsSalesReader` | In-process, in a hosted long-poll loop over the one shared Restockroo SQS queue: it attributes each message to a business by the SQS `SenderId`, then saves the sale and drains that business's pending inventory-cost rebuilds in a service scope resolved to it, and deletes the message only once both are durably done | Implemented (#1103); the queues, the IAM user, the `NayaxSqs__*` settings, the CloudWatch alarm and App Service **Always On** are outstanding human work — see [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103) | No, and a Function is the thing it must not be. It writes the `/home` SQLite file, so an out-of-process reader is outside the single-writer envelope; it needs each business's own stored Nayax credentials, which the API already resolves per call; and this is the one workload in the table that is genuinely **event-driven** — which is exactly the condition the "what would change this decision" list names, except that the API *can* receive from the queue itself, so receiving it here costs no second host, identity, configuration surface or telemetry source. It is assessed explicitly under each criterion below. |
+| Hourly Nayax sales reconciliation — `Inventory.Application.NayaxReconciliation.ReconcileNayaxSalesWithProvider` | In-process, in a hosted loop: about five minutes after startup and then every 60 minutes it runs once for each business whose SQS sender is enabled and whose own lifecycle is active, one business at a time, in a service scope resolved to that business. Each run reuses `SyncLatestNayaxSales` with `force: true` under a shared per-business lock, then compares what `lastSales` returned with the sales SQS delivered and records the evidence | Implemented (#1104); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104) | No, for the queue reader's reasons exactly: it writes the `/home` SQLite file, so an out-of-process runner is outside the single-writer envelope, and it needs each business's own stored Nayax credentials, which the API already resolves per call. It is the **third** scheduled workload and the first that is scheduled *in-process* rather than by the WebJob of issue #333 — because unlike the backup and the connected-machine counts it has to serialise against request-driven synchronizations through an in-memory lock, which a separate process could not share. It is assessed explicitly under each criterion below. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
 | Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
@@ -18332,6 +18524,50 @@ answered here criterion by criterion rather than left to the general paragraphs 
    sample a person can look at. The one recovery step that is *not* automated is replaying the
    dead-letter queue, which is a human console procedure after the cause has been fixed, for the same
    reason a database restore is: see README.md § Nayax SQS sales reader.
+
+#### The hourly Nayax sales reconciliation against the seven criteria (issue #1104)
+
+The third scheduled workload, and the first scheduled one that is **not** a WebJob, so it is answered
+here criterion by criterion rather than left to the general paragraphs above.
+
+1. **Frequency.** Every 60 minutes, the repository owner's decision of 5 November 2026, with the first
+   sweep about five minutes after startup so a deployment restart is not also a burst of Nayax reads
+   while the API is serving the requests that were waiting for it. The interval is measured from the
+   *end* of the previous sweep rather than on a wall clock, so a long sweep delays the next one
+   instead of overlapping it — and inside a sweep the businesses run one at a time, which the
+   single-writer SQLite file requires anyway. Staleness is bounded by the hour: a contradiction
+   between what SQS delivered and what Nayax's own record says is surfaced within one.
+2. **Retries.** Nothing is retried inside a run: **the next hour is the retry**, and it is safe to be,
+   because every step is idempotent and a run that did not finish records no success. A business whose
+   run failed keeps its previous `LastReconciliationSucceededAtUtc`, so what the next run reconciles
+   from is the state that really exists. Nayax calls still pass through `NayaxResilienceHandler` as
+   every other caller's do, and the per-business run limit of issue #681 applies to this run too — a
+   business that has spent its allowance is skipped until the next hour rather than queued.
+3. **Idempotency.** Re-running an hour changes nothing: the save deduplicates by
+   `(BusinessId, TransactionID)` exactly as the Dashboard's own sync does, each evidence write is one
+   `BEGIN IMMEDIATE` transaction that re-reads the sale's state, and a repeated identical observation
+   writes **no row at all**. The state transitions are an allowlist, so a second run cannot move a
+   sale somewhere the first one could not. Nothing is upserted and no recorded amount is changed.
+4. **Secrets.** No new secret of any kind. It reads each business's own stored Nayax credentials
+   through `INayaxRequestCredentialProvider` in that business's own scope — the same read a request
+   makes, with the same connection, support-session and plan gates — and it holds no AWS credential,
+   because it does not touch the queue.
+5. **Observability.** One structured line per business per sweep, carrying that business's key, the
+   run's outcome and **counts only**: read, added, verified, conflict, needs investigation, absence
+   rows, skipped, and whether the run counted as succeeded. A transaction id, an amount, a currency, a
+   machine or a product cannot reach a sink, which the log port's own signatures enforce. Beside the
+   log, `BusinessNayaxSqsSender.LastReconciliationSucceededAtUtc` is the durable answer to "when did
+   this business's reconciliation last fully succeed?", which is what issue #1106 reads.
+6. **Cost.** One Nayax call per machine plus one, per eligible business, per hour — the same shape the
+   Dashboard's own sync already has, and bounded by the same per-business run limit. A business whose
+   sync is already running is skipped for the hour rather than waiting, so a sweep never multiplies
+   the upstream calls. Nothing about the host is new: no deployment unit, no runtime storage account,
+   no role assignment, no second telemetry source.
+7. **Failure recovery.** **Self-healing.** A failed, skipped or partial run leaves the success instant
+   exactly as it was and changes nothing it had not already committed; the next hour reconciles the
+   same window again, because `lastSales` is a rolling window rather than a cursor. A pending
+   inventory-cost rebuild left behind by any path is drained at the start of the next run. There is no
+   state a human has to repair, and no step that is unsafe to repeat.
 
 ### Why "no Functions yet" is the answer today
 
