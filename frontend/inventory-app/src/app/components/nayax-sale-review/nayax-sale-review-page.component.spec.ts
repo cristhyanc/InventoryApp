@@ -12,7 +12,9 @@ import {
   NayaxSaleOwnerDecision,
   NayaxSaleReviewEvidence,
   NayaxSaleReviewItem,
+  NayaxSaleReviewPage,
   NayaxSaleReviewService,
+  NayaxSaleReviewView,
   NayaxSqsVerification
 } from '../../services/nayax-sale-review.service';
 import { NayaxSaleReviewPageComponent } from './nayax-sale-review-page.component';
@@ -107,12 +109,19 @@ function investigationItem(): NayaxSaleReviewItem {
 
 interface RenderOptions {
   items?: NayaxSaleReviewItem[];
+  list?: (view: NayaxSaleReviewView, pageIndex: number, pageSize: number) => Observable<NayaxSaleReviewPage>;
   canDecide?: boolean;
   decide?: (saleId: number, body: NayaxSaleDecisionBody) => Observable<NayaxSaleDecisionApplied>;
 }
 
 async function render(options: RenderOptions = {}) {
-  const list = jest.fn(() => of(options.items ?? [conflictItem(), investigationItem()]));
+  const list = jest.fn(
+    options.list
+      ?? ((_view: NayaxSaleReviewView, pageIndex: number, pageSize: number) => {
+        const items = options.items ?? [conflictItem(), investigationItem()];
+        return of({ items, totalCount: items.length, pageIndex, pageSize });
+      })
+  );
   const decide = jest.fn(
     options.decide ?? (() => of({ saleId: 101, resultingState: NayaxSqsVerification.OwnerCorrected, auditId: 1 }))
   );
@@ -283,5 +292,54 @@ describe('NayaxSaleReviewPageComponent (issue #1105)', () => {
     const fixture = TestBed.createComponent(NayaxSaleReviewPageComponent);
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="nayax-sale-review-failed"]')).not.toBeNull();
+  });
+
+  it('reads the needs-review list first, one server page at a time', async () => {
+    const { list } = await render();
+
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list).toHaveBeenCalledWith(NayaxSaleReviewView.NeedsReview, 0, 25);
+  });
+
+  it('reaches every flagged sale by paging, however many there are', async () => {
+    const page = (pageIndex: number): NayaxSaleReviewPage => ({
+      items: [conflictItem({ saleId: 200 + pageIndex, transactionId: 6660000 + pageIndex })],
+      totalCount: 60,
+      pageIndex,
+      pageSize: 25
+    });
+    const { click, host, list } = await render({ list: (_view, pageIndex) => of(page(pageIndex)) });
+
+    expect(host.querySelector('[data-testid="list-pagination-range"]')?.textContent).toContain('60');
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toContain('Page 1 of 3');
+    click('[data-testid="list-pagination-next"]');
+    click('[data-testid="list-pagination-next"]');
+
+    expect(list).toHaveBeenLastCalledWith(NayaxSaleReviewView.NeedsReview, 2, 25);
+    expect(item(host, 202)).not.toBeNull();
+    expect(host.querySelector('[data-testid="list-pagination-page"]')?.textContent).toContain('Page 3 of 3');
+  });
+
+  it('switches to the decided list from its first page, and back', async () => {
+    const { click, list } = await render();
+
+    click('[data-testid="nayax-sale-review-view-decided"]');
+    expect(list).toHaveBeenLastCalledWith(NayaxSaleReviewView.Decided, 0, 25);
+
+    click('[data-testid="nayax-sale-review-view-needs-review"]');
+    expect(list).toHaveBeenLastCalledWith(NayaxSaleReviewView.NeedsReview, 0, 25);
+  });
+
+  it('steps back a page when a decision emptied the last one', async () => {
+    const { fixture, list } = await render({
+      list: (_view, pageIndex) =>
+        of({ items: pageIndex === 0 ? [conflictItem()] : [], totalCount: pageIndex === 0 ? 26 : 25, pageIndex, pageSize: 25 })
+    });
+
+    fixture.componentInstance.onPageIndexChange(1);
+    fixture.detectChanges();
+
+    expect(list).toHaveBeenLastCalledWith(NayaxSaleReviewView.NeedsReview, 0, 25);
+    expect(fixture.componentInstance.pageIndex).toBe(0);
   });
 });

@@ -1,4 +1,4 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { ConfigService } from './config.service';
@@ -98,6 +98,23 @@ export interface NayaxSaleReviewItem {
   availableDecisions: NayaxSaleAvailableDecision[];
 }
 
+/**
+ * The two lists the review page reads, paged separately on the server so decided sales never push a
+ * sale still waiting for the Owner out of reach. The API takes the enum's numeric value.
+ */
+export enum NayaxSaleReviewView {
+  NeedsReview = 10,
+  Decided = 20
+}
+
+/** One page of a review list, with the list's total. */
+export interface NayaxSaleReviewPage {
+  items: NayaxSaleReviewItem[];
+  totalCount: number;
+  pageIndex: number;
+  pageSize: number;
+}
+
 export interface NayaxSaleReviewSummary {
   needsReviewCount: number;
   notCountedCount: number;
@@ -126,8 +143,13 @@ export class NayaxSaleReviewService {
 
   constructor(private readonly http: HttpClient, private readonly config: ConfigService) {}
 
-  list(): Observable<NayaxSaleReviewItem[]> {
-    return this.http.get<NayaxSaleReviewItem[]>(this.baseUrl);
+  /** One page (from 0) of the flagged or decided sales, newest first. */
+  list(view: NayaxSaleReviewView, pageIndex: number, pageSize: number): Observable<NayaxSaleReviewPage> {
+    const params = new HttpParams()
+      .set('view', view)
+      .set('pageIndex', pageIndex)
+      .set('pageSize', pageSize);
+    return this.http.get<NayaxSaleReviewPage>(this.baseUrl, { params });
   }
 
   summary(): Observable<NayaxSaleReviewSummary> {

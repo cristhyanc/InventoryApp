@@ -41,13 +41,14 @@ public sealed class EfNayaxSaleReviewStore : INayaxSaleReviewStore
     public const string StaleEvidenceMessage =
         "The evidence this decision names is not this sale's latest. Refresh the page and decide again.";
 
-    /// <summary>The most rows the review page lists, newest first.</summary>
-    private const int MaxListed = 500;
-
-    private static readonly NayaxSqsVerification[] ReviewStates =
+    private static readonly NayaxSqsVerification[] NeedsReviewStates =
     [
         NayaxSqsVerification.Conflict,
         NayaxSqsVerification.NeedsInvestigation,
+    ];
+
+    private static readonly NayaxSqsVerification[] DecidedStates =
+    [
         NayaxSqsVerification.OwnerConfirmed,
         NayaxSqsVerification.OwnerCorrected,
         NayaxSqsVerification.OwnerExcluded,
@@ -80,16 +81,64 @@ public sealed class EfNayaxSaleReviewStore : INayaxSaleReviewStore
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<NayaxSaleReviewItem>> ListAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// The two views are paged separately, so a flagged sale is never pushed off the page by decided
+    /// ones: the needs-review view holds exactly the sales <see cref="SummaryAsync"/> counts, and every
+    /// one of them is reachable by paging.
+    /// </remarks>
+    public async Task<NayaxSaleReviewPage> ListAsync(NayaxSaleReviewQuery query, CancellationToken cancellationToken)
     {
-        var sales = await _db.NayaxSales.AsNoTracking()
-            .Where(sale => sale.SqsVerification != null && ReviewStates.Contains(sale.SqsVerification.Value))
+        ArgumentNullException.ThrowIfNull(query);
+
+        var states = query.View switch
+        {
+            NayaxSaleReviewView.NeedsReview => NeedsReviewStates,
+            NayaxSaleReviewView.Decided => DecidedStates,
+            _ => throw new DomainValidationException("Choose which Nayax sales to list."),
+        };
+
+        if (query.PageIndex < 0)
+        {
+            throw new DomainValidationException("The page can't be negative.");
+        }
+
+        if (query.PageSize is < 1 or > NayaxSaleReviewQuery.MaxPageSize)
+        {
+            throw new DomainValidationException(
+                $"A page lists between 1 and {NayaxSaleReviewQuery.MaxPageSize} sales.");
+        }
+
+        var inView = _db.NayaxSales.AsNoTracking()
+            .Where(sale => sale.SqsVerification != null && states.Contains(sale.SqsVerification.Value));
+
+        var total = await inView.CountAsync(cancellationToken).ConfigureAwait(false);
+
+        // Past the last page there is nothing to read, and a page index that large could not be
+        // turned into a row offset without overflowing.
+        var skip = (long)query.PageIndex * query.PageSize;
+        if (skip >= total)
+        {
+            return new NayaxSaleReviewPage([], total, query.PageIndex, query.PageSize);
+        }
+
+        var sales = await inView
             .OrderByDescending(sale => sale.MachineAuthorizationTime)
             .ThenByDescending(sale => sale.Id)
-            .Take(MaxListed)
+            .Skip((int)skip)
+            .Take(query.PageSize)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        return new NayaxSaleReviewPage(
+            await ItemsAsync(sales, cancellationToken).ConfigureAwait(false),
+            total,
+            query.PageIndex,
+            query.PageSize);
+    }
+
+    private async Task<IReadOnlyList<NayaxSaleReviewItem>> ItemsAsync(
+        List<NayaxSales> sales, CancellationToken cancellationToken)
+    {
         if (sales.Count == 0)
         {
             return [];

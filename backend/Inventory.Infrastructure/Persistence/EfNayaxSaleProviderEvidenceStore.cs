@@ -242,12 +242,16 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
             .ConfigureAwait(false);
 
         // An Owner decision (issue #1105) is superseded only by a comparison that contradicts the
-        // decided values and differs from the latest comparison - the one the decision relied on, or a
-        // later one that did not contradict it. An absence never supersedes a decision: a missing
-        // sale is never proof of anything, and the Owner has already looked at that question.
+        // decided values and differs from the comparison the decision relied on - not merely from the
+        // latest one, which a later matching comparison may have replaced: A, then the Owner's
+        // decision, then a matching B, then A again must leave the decision standing, because A is
+        // exactly what the Owner already considered. An absence never supersedes a decision: a
+        // missing sale is never proof of anything, and the Owner has already looked at that question.
         if (NayaxSqsVerificationTransitions.IsOwnerDecided(current)
             && next != current
-            && (kind is not NayaxSaleProviderEvidenceKind.Comparison || observation.RepeatsLatest(latest)))
+            && (kind is not NayaxSaleProviderEvidenceKind.Comparison
+                || observation.RepeatsLatest(
+                    await DecisionComparisonAsync(context.SaleId, latest, cancellationToken).ConfigureAwait(false))))
         {
             next = current;
         }
@@ -319,6 +323,41 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
         }
 
         return new NayaxSaleEvidenceWriteResult(true, evidence.Id, next, stateChanged);
+    }
+
+    /// <summary>
+    /// The comparison the sale's standing Owner decision had in front of it, read inside this
+    /// write's transaction: the latest comparison no newer than the evidence the decision relied on.
+    /// A "Use Nayax's values" or "Keep the SQS values" decision relies on the latest comparison
+    /// itself; the other two rely on the latest evidence of either kind, and every comparison the
+    /// Owner was shown is no newer than that row, because a decision is refused unless it presents
+    /// the sale's latest evidence. Only a sale with no decision audit at all (which an Owner state
+    /// cannot have) falls back to <paramref name="latestComparison"/>.
+    /// </summary>
+    private async Task<NayaxSaleProviderEvidence?> DecisionComparisonAsync(
+        long saleId, NayaxSaleProviderEvidence? latestComparison, CancellationToken cancellationToken)
+    {
+        var reliedOnId = await _db.NayaxSaleOwnerDecisionAudits
+            .AsNoTracking()
+            .Where(row => row.NayaxSaleId == saleId && row.Kind == NayaxSaleOwnerDecisionAuditKind.Decision)
+            .OrderByDescending(row => row.Id)
+            .Select(row => (long?)row.EvidenceId)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (reliedOnId is not { } evidenceId)
+        {
+            return latestComparison;
+        }
+
+        return await _db.NayaxSaleProviderEvidences
+            .AsNoTracking()
+            .Where(row => row.NayaxSaleId == saleId
+                && row.Kind == NayaxSaleProviderEvidenceKind.Comparison
+                && row.Id <= evidenceId)
+            .OrderByDescending(row => row.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

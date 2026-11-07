@@ -2842,6 +2842,8 @@ need your review · 1 is not being counted" - and links to **Nayax sales to revi
 (`/nayax-sales-review`). Everyone who can see the Dashboard can open the page; only the business
 **Owner** can decide. Each sale shows the stored values beside Nayax's own record (or, for a missing
 sale, how many sales Nayax returned for the machine and between which times), and its decision history.
+The page has two lists, **Needs review** (shown first) and **Decided**, each paged, so every sale
+waiting for the owner can be reached however many decided sales there are.
 
 The owner's decisions:
 
@@ -2856,7 +2858,8 @@ The owner's decisions:
 A decided sale shows as **Confirmed by owner**, never as verified by Nayax. Every decision is
 recorded with who made it, when, why, the evidence it relied on and the values before and after, and
 it rebuilds the inventory cost of the products it touched. If Nayax later reports something different
-that contradicts the decision, the sale returns to review and the alert shows again.
+that contradicts the decision, the sale returns to review and the alert shows again. Nayax repeating
+the record the owner already decided about never does, even after a matching record in between.
 
 ## Product and supplier GST rules
 

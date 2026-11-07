@@ -33,12 +33,22 @@ public sealed class NayaxSaleReviewController : ControllerBase
         _review = review;
     }
 
-    /// <summary>The business's flagged and Owner-decided queue sales, newest first.</summary>
+    /// <summary>
+    /// One page of the business's flagged (<c>view=10</c>, the default) or Owner-decided
+    /// (<c>view=20</c>) queue sales, newest first, with the view's total.
+    /// </summary>
+    /// <response code="200">The page.</response>
+    /// <response code="400">The page index is negative, or the page size is outside 1 to 100.</response>
     [HttpGet]
     [RequireCapability(Capability.DashboardView)]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<NayaxSaleReviewItem>>> List(CancellationToken cancellationToken) =>
-        Ok(await _review.ListAsync(cancellationToken));
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<NayaxSaleReviewPage>> List(
+        [FromQuery] NayaxSaleReviewView view = NayaxSaleReviewView.NeedsReview,
+        [FromQuery] int pageIndex = 0,
+        [FromQuery] int pageSize = NayaxSaleReviewQuery.DefaultPageSize,
+        CancellationToken cancellationToken = default) =>
+        Ok(await _review.ListAsync(new NayaxSaleReviewQuery(view, pageIndex, pageSize), cancellationToken));
 
     /// <summary>How many sales wait for the Owner, and how many of those are not being counted.</summary>
     [HttpGet("summary")]

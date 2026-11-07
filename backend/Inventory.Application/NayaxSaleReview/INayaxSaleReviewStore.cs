@@ -69,6 +69,37 @@ public sealed record NayaxSaleReviewItem(
     IReadOnlyList<NayaxSaleAvailableDecision> AvailableDecisions);
 
 /// <summary>
+/// Which part of the review the page asks for: the sales still waiting for the Owner
+/// (<see cref="NayaxSqsVerification.Conflict"/> or <see cref="NayaxSqsVerification.NeedsInvestigation"/>,
+/// exactly the sales the Dashboard summary counts), or the sales an Owner has decided.
+/// </summary>
+public enum NayaxSaleReviewView
+{
+    NeedsReview = 10,
+    Decided = 20,
+}
+
+/// <summary>
+/// One page of the review: <paramref name="PageIndex"/> counts from 0, and
+/// <paramref name="PageSize"/> is between 1 and <see cref="MaxPageSize"/>.
+/// </summary>
+public sealed record NayaxSaleReviewQuery(NayaxSaleReviewView View, int PageIndex, int PageSize)
+{
+    /// <summary>The most sales one page lists.</summary>
+    public const int MaxPageSize = 100;
+
+    /// <summary>The page size used when the request names none.</summary>
+    public const int DefaultPageSize = 25;
+}
+
+/// <summary>
+/// One page of the review, with the total in the view, so every sale the view holds is reachable
+/// by paging however many there are.
+/// </summary>
+public sealed record NayaxSaleReviewPage(
+    IReadOnlyList<NayaxSaleReviewItem> Items, int TotalCount, int PageIndex, int PageSize);
+
+/// <summary>
 /// The Dashboard's needs-attention figures: how many sales wait for the Owner
 /// (<see cref="NayaxSqsVerification.Conflict"/> or <see cref="NayaxSqsVerification.NeedsInvestigation"/>),
 /// and how many of those are not being counted (<see cref="NayaxSqsVerification.Conflict"/>).
@@ -100,8 +131,15 @@ public sealed record NayaxSaleDecisionApplied(long SaleId, NayaxSqsVerification 
 /// </summary>
 public interface INayaxSaleReviewStore
 {
-    /// <summary>The business's flagged and Owner-decided queue sales, newest first.</summary>
-    Task<IReadOnlyList<NayaxSaleReviewItem>> ListAsync(CancellationToken cancellationToken);
+    /// <summary>
+    /// One page of the business's flagged, or Owner-decided, queue sales, newest first, with the
+    /// view's total.
+    /// </summary>
+    /// <exception cref="Domain.Exceptions.DomainValidationException">
+    /// The page index is negative, the page size is outside 1 to
+    /// <see cref="NayaxSaleReviewQuery.MaxPageSize"/>, or the view is not one of the two.
+    /// </exception>
+    Task<NayaxSaleReviewPage> ListAsync(NayaxSaleReviewQuery query, CancellationToken cancellationToken);
 
     /// <summary>The Dashboard's needs-attention figures.</summary>
     Task<NayaxSaleReviewSummary> SummaryAsync(CancellationToken cancellationToken);

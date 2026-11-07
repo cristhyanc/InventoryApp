@@ -24,12 +24,31 @@
     <p class="rounded-lg border border-rr-line bg-rr-warn-bg p-3 text-sm text-rr-navy" role="alert" data-testid="nayax-sale-review-error">{{ error }}</p>
   }
 
+  <div class="flex flex-wrap gap-2" role="group" aria-label="Which sales to show" data-testid="nayax-sale-review-views">
+    <button
+      type="button"
+      [ngClass]="view === View.NeedsReview ? 'rr-button-primary' : 'rr-button-secondary'"
+      [attr.aria-pressed]="view === View.NeedsReview"
+      data-testid="nayax-sale-review-view-needs-review"
+      (click)="showView(View.NeedsReview)"
+    >Needs review</button>
+    <button
+      type="button"
+      [ngClass]="view === View.Decided ? 'rr-button-primary' : 'rr-button-secondary'"
+      [attr.aria-pressed]="view === View.Decided"
+      data-testid="nayax-sale-review-view-decided"
+      (click)="showView(View.Decided)"
+    >Decided</button>
+  </div>
+
   @if (state === 'loading') {
     <p class="text-sm text-rr-muted" data-testid="nayax-sale-review-loading">Loading...</p>
   } @else if (state === 'failed') {
     <p class="text-sm text-rr-navy" role="alert" data-testid="nayax-sale-review-failed">The sales to review could not be loaded. Reload the page to try again.</p>
   } @else if (items.length === 0) {
-    <p class="text-sm text-rr-muted" data-testid="nayax-sale-review-empty">No Nayax sales need review.</p>
+    <p class="text-sm text-rr-muted" data-testid="nayax-sale-review-empty">
+      {{ view === View.NeedsReview ? 'No Nayax sales need review.' : 'No Nayax sales have been decided yet.' }}
+    </p>
   } @else {
     <div class="flex flex-col gap-4">
       @for (item of items; track item.saleId) {
@@ -136,6 +155,14 @@
           }
         </section>
       }
+      <app-list-pagination
+        itemLabel="sales"
+        [totalItems]="totalCount"
+        [pageIndex]="pageIndex"
+        [pageSize]="pageSize"
+        [pageSizeOptions]="pageSizeOptions"
+        (pageIndexChange)="onPageIndexChange($event)"
+        (pageSizeChange)="onPageSizeChange($event)"></app-list-pagination>
     </div>
   }
 </div>

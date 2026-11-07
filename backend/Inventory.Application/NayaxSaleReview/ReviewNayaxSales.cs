@@ -27,8 +27,11 @@ public sealed class ReviewNayaxSales
         _actors = actors;
     }
 
-    public Task<IReadOnlyList<NayaxSaleReviewItem>> ListAsync(CancellationToken cancellationToken) =>
-        _store.ListAsync(cancellationToken);
+    public Task<NayaxSaleReviewPage> ListAsync(NayaxSaleReviewQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return _store.ListAsync(query, cancellationToken);
+    }
 
     public Task<NayaxSaleReviewSummary> SummaryAsync(CancellationToken cancellationToken) =>
         _store.SummaryAsync(cancellationToken);

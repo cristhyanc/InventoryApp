@@ -17668,7 +17668,11 @@ undoes the decision. All reads and writes are ordinary tenant-scoped statements:
 
 An Owner state may move to `Conflict` or `NeedsInvestigation`
 (`NayaxSqsVerificationTransitions`), but `EfNayaxSaleProviderEvidenceStore` allows it only for a
-`Comparison` that contradicts the decided values and differs from the latest comparison. Matching
+`Comparison` that contradicts the decided values and differs from the comparison the decision relied
+on: the latest comparison no newer than the decision audit's evidence id, read inside the evidence
+write's own transaction. Comparing with the latest comparison instead would let a contradiction the
+Owner already considered (A), followed by a matching comparison (B), supersede the decision when A
+came back. Deduplication of the evidence history still compares with the latest row. Matching
 evidence is recorded and changes nothing (a decided sale is never promoted to `Verified`); an absence
 never supersedes a decision. A superseded decision writes a `Superseded` audit row naming the new
 evidence, and the Dashboard alert shows again. Any evidence write that moves a sale into or out of the
@@ -17684,8 +17688,12 @@ refused for a read-only support session and a role preview by their method rules
 `presentedState`, `presentedLatestEvidenceId`, the relied-on `evidenceId`, the `decision` and the
 `reason`. The Dashboard's Needs attention panel shows `NayaxSaleReviewAlertComponent` ("3 Nayax sales
 need your review · 1 is not being counted") while anything is `Conflict` or `NeedsInvestigation`; it
-links to `/nayax-sales-review`, which lists flagged and decided sales with the stored values beside
-the evidence and the decision history, and offers the allowed decisions to an Owner only. An absence is
+links to `/nayax-sales-review`, which lists the sales with the stored values beside the evidence and
+the decision history, and offers the allowed decisions to an Owner only. The list is paged on the
+server in two separate views, `view=10` (needs review: exactly the `Conflict` and
+`NeedsInvestigation` sales the summary counts, the page's default) and `view=20` (decided), with
+`pageIndex` from 0 and `pageSize` from 1 to 100 (default 25), and answers the view's total beside the
+page; decided sales therefore never push a flagged sale out of reach. An absence is
 shown as what `lastSales` returned for the machine (count, earliest and latest, in business time),
 never as "missing from Nayax".
 

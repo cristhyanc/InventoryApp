@@ -299,8 +299,9 @@ public class EfNayaxSaleReviewStoreTests
                 Owner,
                 CancellationToken.None));
 
-            var listed = await Store(asB).ListAsync(CancellationToken.None);
-            Assert.Equal([saleB], listed.Select(item => item.SaleId));
+            var listed = await Store(asB).ListAsync(NeedsReview(), CancellationToken.None);
+            Assert.Equal([saleB], listed.Items.Select(item => item.SaleId));
+            Assert.Equal(1, listed.TotalCount);
         }
 
         await AssertUnchangedAsync(fixture, saleA, NayaxSqsVerification.Conflict);
@@ -322,7 +323,7 @@ public class EfNayaxSaleReviewStoreTests
 
         Assert.Equal(new NayaxSaleReviewSummary(2, 1), await store.SummaryAsync(CancellationToken.None));
 
-        var items = (await store.ListAsync(CancellationToken.None)).ToDictionary(item => item.SaleId);
+        var items = (await store.ListAsync(NeedsReview(), CancellationToken.None)).Items.ToDictionary(item => item.SaleId);
         Assert.False(items[conflictId].IsCounted);
         Assert.Equal(comparisonId, items[conflictId].LatestComparison!.Id);
         Assert.Equal(
@@ -341,6 +342,72 @@ public class EfNayaxSaleReviewStoreTests
                 new NayaxSaleAvailableDecision(NayaxSaleOwnerDecision.Genuine, absenceId),
             ],
             items[investigationId].AvailableDecisions);
+    }
+
+    /// <summary>
+    /// A flagged sale older than every decided one is still on the review page: the two views are
+    /// paged separately, and the needs-review view holds exactly what the Dashboard summary counts.
+    /// </summary>
+    [Fact]
+    public async Task A_flagged_sale_older_than_every_decided_sale_is_reachable_and_every_page_can_be_read()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        var flaggedId = await StoreQueueSaleAsync(fixture, transactionId: 4100000100);
+        var decidedIds = new List<long>();
+        for (var i = 1; i <= 5; i++)
+        {
+            decidedIds.Add(await StoreQueueSaleAsync(fixture, transactionId: 4100000100 + i));
+        }
+
+        await using (var db = fixture.Context())
+        {
+            var flagged = await db.NayaxSales.SingleAsync(row => row.Id == flaggedId);
+            flagged.SqsVerification = NayaxSqsVerification.Conflict;
+            flagged.MachineAuthorizationTime = NayaxSqsSaleFixture.SaleInstant.AddDays(-30);
+            var offset = 0;
+            foreach (var sale in await db.NayaxSales.Where(row => decidedIds.Contains(row.Id)).OrderBy(row => row.Id).ToListAsync())
+            {
+                sale.SqsVerification = NayaxSqsVerification.OwnerConfirmed;
+                sale.MachineAuthorizationTime = NayaxSqsSaleFixture.SaleInstant.AddMinutes(++offset);
+            }
+
+            await db.SaveChangesAsync();
+        }
+
+        await using var read = fixture.Context();
+        var store = Store(read);
+
+        // The summary counts it, and the needs-review view lists it, on a page of one.
+        Assert.Equal(new NayaxSaleReviewSummary(1, 1), await store.SummaryAsync(CancellationToken.None));
+        var needsReview = await store.ListAsync(new NayaxSaleReviewQuery(NayaxSaleReviewView.NeedsReview, 0, 1), CancellationToken.None);
+        Assert.Equal([flaggedId], needsReview.Items.Select(item => item.SaleId));
+        Assert.Equal(1, needsReview.TotalCount);
+
+        // The decided view pages through all five, newest first, with no sale twice or missed.
+        var seen = new List<long>();
+        for (var page = 0; page < 3; page++)
+        {
+            var decided = await store.ListAsync(new NayaxSaleReviewQuery(NayaxSaleReviewView.Decided, page, 2), CancellationToken.None);
+            Assert.Equal(5, decided.TotalCount);
+            seen.AddRange(decided.Items.Select(item => item.SaleId));
+        }
+
+        Assert.Equal(Enumerable.Reverse(decidedIds), seen);
+        Assert.Empty((await store.ListAsync(new NayaxSaleReviewQuery(NayaxSaleReviewView.Decided, 3, 2), CancellationToken.None)).Items);
+        Assert.Empty((await store.ListAsync(new NayaxSaleReviewQuery(NayaxSaleReviewView.Decided, int.MaxValue, 100), CancellationToken.None)).Items);
+    }
+
+    [Theory]
+    [InlineData(-1, 25)]
+    [InlineData(0, 0)]
+    [InlineData(0, 101)]
+    public async Task A_page_outside_the_allowed_range_is_refused(int pageIndex, int pageSize)
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        await using var db = fixture.Context();
+
+        await Assert.ThrowsAsync<DomainValidationException>(() => Store(db).ListAsync(
+            new NayaxSaleReviewQuery(NayaxSaleReviewView.NeedsReview, pageIndex, pageSize), CancellationToken.None));
     }
 
     // ---------------------------------------------------------------- costing and reconciliation
@@ -447,6 +514,58 @@ public class EfNayaxSaleReviewStoreTests
         Assert.Equal(NayaxSqsVerification.OwnerConfirmed, await VerificationOfAsync(fixture, saleId));
         await using var read = fixture.Context();
         Assert.Equal(1, await read.NayaxSaleOwnerDecisionAudits.CountAsync());
+    }
+
+    /// <summary>
+    /// A, the Owner keeps the SQS values, a matching B, then A again: A is exactly what the Owner
+    /// already considered, so the decision stands even though B is now the latest comparison. A
+    /// genuinely new contradiction afterwards still supersedes it.
+    /// </summary>
+    [Fact]
+    public async Task The_relied_on_contradiction_returning_after_a_match_never_supersedes_the_decision()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        var a = Provider() with { SettlementValue = 4.5m };
+        var (saleId, evidenceId) = await ConflictingSaleAsync(fixture, a);
+        await DecideAsync(fixture, saleId, evidenceId, NayaxSaleOwnerDecision.KeepSqsValues);
+
+        foreach (var (provider, hours) in new[] { (Provider(), 2), (a, 3) })
+        {
+            await using var db = fixture.Context();
+            var written = await new EfNayaxSaleProviderEvidenceStore(db).RecordComparisonAsync(
+                new NayaxSaleComparisonEvidence(saleId, Guid.NewGuid(), RunStarted.AddHours(hours), provider),
+                CancellationToken.None);
+
+            // Both are new to the history (each differs from the latest row), and neither moves the state.
+            Assert.True(written.Written);
+            Assert.False(written.StateChanged);
+            Assert.Equal(NayaxSqsVerification.OwnerConfirmed, written.State);
+        }
+
+        await using (var read = fixture.Context())
+        {
+            Assert.Equal(NayaxSqsVerification.OwnerConfirmed, await VerificationOfAsync(fixture, saleId));
+            Assert.Equal(1, await read.NayaxSaleOwnerDecisionAudits.CountAsync());
+
+            // Only the decision's own rebuild: neither later comparison changed counting.
+            Assert.Equal(1, await read.PendingInventoryCostRebuilds.CountAsync());
+        }
+
+        long newEvidenceId;
+        await using (var db = fixture.Context())
+        {
+            var written = await new EfNayaxSaleProviderEvidenceStore(db).RecordComparisonAsync(
+                new NayaxSaleComparisonEvidence(saleId, Guid.NewGuid(), RunStarted.AddHours(4), Provider() with { SettlementValue = 6.5m }),
+                CancellationToken.None);
+            Assert.True(written.StateChanged);
+            newEvidenceId = written.EvidenceId!.Value;
+        }
+
+        Assert.Equal(NayaxSqsVerification.Conflict, await VerificationOfAsync(fixture, saleId));
+        await using var after = fixture.Context();
+        var superseded = await after.NayaxSaleOwnerDecisionAudits.AsNoTracking()
+            .SingleAsync(row => row.Kind == NayaxSaleOwnerDecisionAuditKind.Superseded);
+        Assert.Equal(newEvidenceId, superseded.EvidenceId);
     }
 
     [Fact]
@@ -713,6 +832,9 @@ public class EfNayaxSaleReviewStoreTests
     }
 
     // ---------------------------------------------------------------- helpers
+
+    private static NayaxSaleReviewQuery NeedsReview() =>
+        new(NayaxSaleReviewView.NeedsReview, 0, NayaxSaleReviewQuery.MaxPageSize);
 
     private static EfNayaxSaleReviewStore Store(AppDbContext db) =>
         new(db, new EfNayaxProductLinkStore(db), new FakeClock(DecidedAt));
