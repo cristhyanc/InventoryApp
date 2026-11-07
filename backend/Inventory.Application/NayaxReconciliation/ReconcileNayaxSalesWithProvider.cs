@@ -220,6 +220,13 @@ public sealed class ReconcileNayaxSalesWithProvider
 
             var counts = await CompareAsync(observer, cancellationToken).ConfigureAwait(false);
 
+            // A contradiction this comparison found stops a sale counting, and a superseded "Don't
+            // count this sale" may start it counting again (issue #1105). Each such change staged its
+            // product's rebuild in the evidence write's own transaction; this drains them through the
+            // same path and failure handling as the sync, and a product that cannot be replayed keeps
+            // its pending row for the next run.
+            await _sales.RebuildInventoryCostsAsync(cancellationToken).ConfigureAwait(false);
+
             // Last, and only here: the machine list and every machine's lastSales were read, the save
             // committed, every rebuild drained and every observation recorded. A run that threw
             // anywhere above never reaches this line, which is exactly the rule that a partial run

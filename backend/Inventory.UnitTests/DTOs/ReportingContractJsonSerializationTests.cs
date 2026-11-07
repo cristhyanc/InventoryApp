@@ -235,6 +235,7 @@ public class ReportingContractJsonSerializationTests
                 "nayaxFeesGst", "importedReimbursement", "netReimbursement", "isReconciled", "reconciliationStatus",
                 "completedTransactionCount", "pendingTransactionCount", "declinedOrCancelledTransactionCount",
                 "refundedTransactionCount", "unknownStatusTransactionCount", "nayaxFeeSource", "partialCostOfGoods",
+                "excludedByReviewTransactionCount",
             },
             PropertyNames(json));
 

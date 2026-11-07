@@ -662,6 +662,14 @@ public class AppDbContext : DbContext
         Set<NayaxSaleProviderEvidence>();
 
     /// <summary>
+    /// The append-only trail of business Owner decisions about flagged queue-delivered sales, and of
+    /// later evidence superseding them (issue #1105). Ordinary tenant-owned data, written in the same
+    /// write-locked transaction as the change it records. See <see cref="NayaxSaleOwnerDecisionAudit"/>.
+    /// </summary>
+    public DbSet<NayaxSaleOwnerDecisionAudit> NayaxSaleOwnerDecisionAudits =>
+        Set<NayaxSaleOwnerDecisionAudit>();
+
+    /// <summary>
     /// Append-only records of stored Nayax sale instants repaired from authoritative source evidence
     /// (issue #472). Nothing in the application updates or deletes a row in this set; see
     /// <see cref="NayaxSaleTimestampRepair"/>.
@@ -924,6 +932,7 @@ public class AppDbContext : DbContext
         ConfigureSqsSaleProvenance(modelBuilder);
         ConfigurePendingInventoryCostRebuilds(modelBuilder);
         ConfigureNayaxSaleProviderEvidence(modelBuilder);
+        ConfigureNayaxSaleOwnerDecisionAudit(modelBuilder);
         ConfigureProviderCatalogueReview(modelBuilder);
 
         modelBuilder.Entity<Product>()
@@ -3262,6 +3271,39 @@ public class AppDbContext : DbContext
                  })
         {
             evidence.Property<DateTime?>(instant).HasConversion(
+                toProvider => toProvider,
+                fromProvider => fromProvider.HasValue
+                    ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                    : fromProvider);
+        }
+    }
+
+    /// <summary>
+    /// Maps the append-only Owner decision trail of issue #1105. One index, for the one read: a sale's
+    /// decisions in order. No foreign key to the sale or the evidence, for the reason
+    /// <see cref="ConfigureNayaxSaleProviderEvidence"/> declares none: the audit of a financial
+    /// decision must never depend on, or be deleted with, the rows it describes. Every instant is
+    /// persisted UTC and marked UTC on the way out.
+    /// </summary>
+    private static void ConfigureNayaxSaleOwnerDecisionAudit(ModelBuilder modelBuilder)
+    {
+        var audit = modelBuilder.Entity<NayaxSaleOwnerDecisionAudit>();
+
+        audit.HasIndex(x => new { x.BusinessId, x.NayaxSaleId, x.Id });
+        audit.Property(x => x.Reason).HasMaxLength(NayaxSaleOwnerDecisionPolicy.MaxReasonLength);
+        audit.Property(x => x.ActorDirectoryTenantId).HasMaxLength(100);
+        audit.Property(x => x.ActorObjectId).HasMaxLength(100);
+        audit.Property(x => x.OccurredAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        foreach (var instant in new[]
+                 {
+                     nameof(NayaxSaleOwnerDecisionAudit.PreviousAuthorizationInstantUtc),
+                     nameof(NayaxSaleOwnerDecisionAudit.ResultingAuthorizationInstantUtc),
+                 })
+        {
+            audit.Property<DateTime?>(instant).HasConversion(
                 toProvider => toProvider,
                 fromProvider => fromProvider.HasValue
                     ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)

@@ -20,6 +20,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.NayaxReconciliation;
+using Inventory.Application.NayaxSaleReview;
 using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
@@ -33,21 +34,21 @@ using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
-using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
-using Inventory.Application.SalesSync;
 using Inventory.Application.SaleTimestampRepair;
+using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.Subscriptions;
-using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
+using Inventory.Application.Suppliers;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Microsoft.Extensions.DependencyInjection;
@@ -421,6 +422,7 @@ public static class ApplicationServiceCollectionExtensions
         // loop is a singleton registered in Inventory.Infrastructure with its schedule and log sink,
         // because it is about the process rather than about one business.
         services.AddScoped<ReconcileNayaxSalesWithProvider>();
+        services.AddScoped<ReviewNayaxSales>();
         // The slot-to-product lookup a queued Nayax SQS message needs (issue #1102), which an SQS
         // message cannot answer itself: it reports the machine's MDB slot and no product id.
         // Scoped like every other Nayax consumer, because the credentials, status gate and

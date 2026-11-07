@@ -47,6 +47,7 @@ import { IconComponent } from '../shared/icon.component';
 import { HelpToggletipComponent } from '../shared/help-toggletip/help-toggletip.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
 import { MachineRestockSyncReminderComponent } from './machine-restock-sync-reminder/machine-restock-sync-reminder.component';
+import { NayaxSaleReviewAlertComponent } from './nayax-sale-review-alert/nayax-sale-review-alert.component';
 import { SiteMachinePerformanceComponent } from './site-machine-performance/site-machine-performance.component';
 import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -130,6 +131,7 @@ export const CHEAPEST_SUPPLIER_HELP_LABEL = 'About Cheapest supplier';
     IconComponent,
     LegacyBusinessSettingsPromptComponent,
     MachineRestockSyncReminderComponent,
+    NayaxSaleReviewAlertComponent,
     BusinessDateTimePipe,
     CheapestSuppliersComponent,
     CheapestSupplierCellComponent,
@@ -146,6 +148,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   @ViewChild(MachineRestockSyncReminderComponent, { static: true })
   private readonly restockSyncReminder?: MachineRestockSyncReminderComponent;
+
+  @ViewChild(NayaxSaleReviewAlertComponent, { static: true })
+  private readonly nayaxSaleReviewAlert?: NayaxSaleReviewAlertComponent;
 
   /**
    * Said beside the inventory card's unit count (issue #972): the card's value is every unit the
@@ -938,7 +943,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /** The number of alerts the panel renders, counted from them rather than assumed. */
   get attentionCount(): number {
-    return this.attentionAlerts.length + (this.isRestockSyncReminderShown ? 1 : 0);
+    return this.attentionAlerts.length
+      + (this.isRestockSyncReminderShown ? 1 : 0)
+      + (this.nayaxSaleReviewAlert?.isShown ? 1 : 0);
   }
 
   get attentionCountLabel(): string {

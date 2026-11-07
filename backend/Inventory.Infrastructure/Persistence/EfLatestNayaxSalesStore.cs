@@ -93,12 +93,6 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         public const string ProductMissing = "product_missing";
     }
 
-    /// <summary>
-    /// The revision a <see cref="PendingInventoryCostRebuild"/> is first recorded at. Every later
-    /// enqueue for the same product moves it on by one, which is what an acknowledgement compares.
-    /// </summary>
-    private const long FirstPendingRebuildRevision = 1;
-
     private readonly AppDbContext _db;
     private readonly ICostSale _saleCosting;
     private readonly IRebuildProductCost _inventoryCostRebuild;
@@ -352,11 +346,8 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     /// pending row at either point. The sales, the costs and everything else this context is tracking
     /// are untouched - it is deliberately not a <c>ChangeTracker.Clear()</c>.</para>
     /// </summary>
-    private void ForgetTrackedPendingRebuilds()
-    {
-        foreach (var tracked in _db.ChangeTracker.Entries<PendingInventoryCostRebuild>().ToList())
-            tracked.State = EntityState.Detached;
-    }
+    private void ForgetTrackedPendingRebuilds() =>
+        PendingInventoryCostRebuildRecorder.ForgetTracked(_db);
 
     /// <summary>
     /// Records one failed attempt on the row a claim was read from: the attempt count, the instant and
@@ -409,9 +400,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     private async Task<MatchingContext> ReadMatchingContextAsync(
         IReadOnlyList<NayaxLastSalesReport> sales, CancellationToken cancellationToken)
     {
-        var candidates = (await _db.Products.AsNoTracking().ToListAsync(cancellationToken))
-            .Select(product => new ProductMatchCandidate(product.Id, product.Name))
-            .ToList();
+        var candidates = await NayaxSaleProductResolver.ReadCandidatesAsync(_db, cancellationToken);
 
         // The batch's Nayax product ids are resolved to local product ids once, through the one
         // lookup over the recorded provider ids (issue #745, parent #329 decision A2b),
@@ -488,9 +477,10 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         Dictionary<long, DateTime> affected,
         CancellationToken cancellationToken)
     {
-        var matchedProductId = ProductMatcher.MatchLinked(
+        var matchedProductId = NayaxSaleProductResolver.Match(
             context.Candidates,
-            LocalProductId(sale.NayaxProductId, context.LocalProductIdByNayaxId),
+            context.LocalProductIdByNayaxId,
+            sale.NayaxProductId,
             sale.ProductName);
 
         var existing = await _db.NayaxSales
@@ -582,9 +572,10 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         var enriched = false;
         if (!existing.ProductId.HasValue && !context.ConflictingSaleIds.Contains(existing.Id))
         {
-            var existingMatch = ProductMatcher.MatchLinked(
+            var existingMatch = NayaxSaleProductResolver.Match(
                 context.Candidates,
-                LocalProductId(sale.NayaxProductId, context.LocalProductIdByNayaxId),
+                context.LocalProductIdByNayaxId,
+                sale.NayaxProductId,
                 sale.ProductName ?? existing.ProductName);
             if (existingMatch is not null)
             {
@@ -652,79 +643,10 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
 
     /// <summary>
     /// Stages one <see cref="PendingInventoryCostRebuild"/> per affected product, to be saved in the
-    /// caller's own transaction alongside the sales that affected them.
-    ///
-    /// <para><strong>The instant only ever moves earlier.</strong> A product that already has a
-    /// pending row keeps it and has its instant lowered when this batch's is earlier, because a
-    /// replay from the earlier instant covers the later one and not the other way round. Moving it
-    /// later would silently skip a sale's effect on cost. The unique index on
-    /// <c>(BusinessId, ProductId)</c> is the database's backstop under this read.</para>
-    ///
-    /// <para><strong>The revision moves on every enqueue, including one the instant does not
-    /// notice.</strong> That is exactly why it exists: a sale at or after the instant the row already
-    /// holds adds work without changing any other column, so without the revision a replay already in
-    /// flight - one that has read its costing inputs and not yet acknowledged - would find its claim
-    /// intact, save figures computed without that sale and delete the work recorded for it, and the
-    /// newer sale would be replayed by nobody. See <see cref="AcknowledgeAsync"/>.</para>
-    ///
-    /// <para>The read is answered by the database rather than by a row this context tracked earlier,
-    /// and it sits inside the caller's <c>BEGIN IMMEDIATE</c> transaction, so the revision this
-    /// increments from is the stored one and no other writer can commit between the read and the
-    /// save.</para>
+    /// caller's own transaction alongside the sales that affected them, under the shared rules of
+    /// <see cref="PendingInventoryCostRebuildRecorder"/>.
     /// </summary>
-    private async Task RecordPendingRebuildsAsync(
-        IReadOnlyDictionary<long, DateTime> affected, CancellationToken cancellationToken)
-    {
-        if (affected.Count == 0)
-            return;
-
-        ForgetTrackedPendingRebuilds();
-
-        var productIds = affected.Keys.ToList();
-        var existing = await _db.PendingInventoryCostRebuilds
-            .Where(row => productIds.Contains(row.ProductId))
-            .ToListAsync(cancellationToken);
-
-        var createdAtUtc = _clock.UtcNow;
-
-        foreach (var (productId, fromInstantUtc) in affected)
-        {
-            var row = existing.Find(candidate => candidate.ProductId == productId);
-            if (row is null)
-            {
-                _db.PendingInventoryCostRebuilds.Add(new PendingInventoryCostRebuild
-                {
-                    ProductId = productId,
-                    FromInstantUtc = fromInstantUtc,
-                    CreatedAtUtc = createdAtUtc,
-                    Revision = FirstPendingRebuildRevision,
-
-                    // BusinessId is deliberately left unset: BusinessOwnershipEnforcer stamps it from
-                    // the resolved scope on SaveChanges, exactly as it does for every other
-                    // tenant-owned insert, so this adapter never assigns an owner itself.
-                });
-                continue;
-            }
-
-            // Before the instant, and whatever the instant does: this sale is work the row did not
-            // describe a moment ago, and saying so is the only way a replay in flight can tell.
-            row.Revision++;
-
-            if (fromInstantUtc < row.FromInstantUtc)
-                row.FromInstantUtc = fromInstantUtc;
-        }
-    }
-
-    /// <summary>
-    /// The local product a payload item's <c>NayaxProductID</c> names, or <see langword="null"/>
-    /// when this business has recorded that Nayax id on no product - an unknown product, handled exactly as an
-    /// unmatched id already was: the sale is still imported, still visible and left for the name
-    /// fallback and then the uncosted path, never attached to the product whose local id happens to
-    /// equal the remote one (issue #745).
-    /// </summary>
-    private static long? LocalProductId(
-        long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>
-        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
-            ? localProductId
-            : null;
+    private Task RecordPendingRebuildsAsync(
+        IReadOnlyDictionary<long, DateTime> affected, CancellationToken cancellationToken) =>
+        PendingInventoryCostRebuildRecorder.StageAsync(_db, affected, _clock.UtcNow, cancellationToken);
 }

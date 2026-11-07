@@ -1,0 +1,141 @@
+<!--
+  Nayax sales to review (issue #1105). An absence is shown as what lastSales returned for the
+  machine - its count and earliest and latest times - and never as "missing from Nayax" or "fake".
+-->
+<div class="page" data-testid="nayax-sale-review-page">
+  <header class="page-header">
+    <div>
+      <a routerLink="/" class="btn-link text-sm">&larr; Back to Dashboard</a>
+      <h1 class="page-title mt-2">Nayax sales to review</h1>
+      <p class="page-subtitle">
+        Sales delivered by Nayax's queue that Nayax's own sales records contradict, or don't yet show. A contradicted
+        sale is not counted until the owner decides what is true. A sale that only needs review keeps counting.
+      </p>
+      @if (!canDecide) {
+        <p class="text-sm text-rr-muted" data-testid="nayax-sale-review-owner-only">Only the business owner can decide about these sales.</p>
+      }
+    </div>
+  </header>
+
+  @if (message) {
+    <output class="block rounded-lg border border-rr-line bg-white p-3 text-sm text-rr-navy" data-testid="nayax-sale-review-message">{{ message }}</output>
+  }
+  @if (error) {
+    <p class="rounded-lg border border-rr-line bg-rr-warn-bg p-3 text-sm text-rr-navy" role="alert" data-testid="nayax-sale-review-error">{{ error }}</p>
+  }
+
+  @if (state === 'loading') {
+    <p class="text-sm text-rr-muted" data-testid="nayax-sale-review-loading">Loading...</p>
+  } @else if (state === 'failed') {
+    <p class="text-sm text-rr-navy" role="alert" data-testid="nayax-sale-review-failed">The sales to review could not be loaded. Reload the page to try again.</p>
+  } @else if (items.length === 0) {
+    <p class="text-sm text-rr-muted" data-testid="nayax-sale-review-empty">No Nayax sales need review.</p>
+  } @else {
+    <div class="flex flex-col gap-4">
+      @for (item of items; track item.saleId) {
+        <section class="rounded-xl border border-rr-line bg-white p-4" [attr.data-testid]="'nayax-sale-review-item-' + item.saleId">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="m-0 text-base font-semibold text-rr-navy">Transaction {{ item.transactionId }}</h2>
+            <span
+              class="rounded-full px-2 py-0.5 text-xs font-semibold"
+              [ngClass]="isFlagged(item) ? 'bg-rr-warn-bg text-rr-warn-text' : 'bg-rr-line text-rr-navy'"
+              data-testid="nayax-sale-review-state"
+            >{{ verificationLabel(item.state) }}</span>
+          </div>
+
+          <div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <h3 class="m-0 text-sm font-semibold text-rr-navy">Stored sale</h3>
+              <dl class="m-0 mt-1 text-sm text-rr-muted">
+                <div>Machine: {{ item.machineName || item.machineId }} ({{ item.machineId }})</div>
+                <div>Amount: {{ item.settlementValue | currency }}</div>
+                <div>Authorized: {{ item.authorizationInstantUtc | businessDateTime }}</div>
+                <div>Received: {{ item.receivedViaSqsAtUtc ? (item.receivedViaSqsAtUtc | businessDateTime) : 'Not recorded' }}</div>
+                <div>Product: {{ item.productName || 'Unknown' }}</div>
+                <div>Counted in sales: {{ item.isCounted ? 'Yes' : 'No' }}</div>
+              </dl>
+            </div>
+
+            <div>
+              @if (item.latestComparison; as comparison) {
+                <h3 class="m-0 text-sm font-semibold text-rr-navy">Nayax's record</h3>
+                <dl class="m-0 mt-1 text-sm text-rr-muted" data-testid="nayax-sale-review-comparison">
+                  <div>Machine: {{ comparison.providerMachineId ?? 'Not given' }} ({{ comparisonLabel(comparison.machineComparison) }})</div>
+                  <div>Amount: {{ comparison.providerSettlementValue !== null ? (comparison.providerSettlementValue | currency) : 'Not given' }} ({{ comparisonLabel(comparison.amountComparison) }})</div>
+                  <div>Authorized: {{ comparison.providerAuthorizationInstantUtc ? (comparison.providerAuthorizationInstantUtc | businessDateTime) : 'Not given' }} ({{ comparisonLabel(comparison.instantComparison) }})</div>
+                  <div>Product: {{ comparison.providerProductName || comparison.providerNayaxProductId || 'Not given' }} ({{ comparisonLabel(comparison.productComparison) }})</div>
+                  <div>Checked: {{ comparison.observedAtUtc | businessDateTime }}</div>
+                </dl>
+              }
+              @if (item.latestAbsence; as absence) {
+                <h3 class="m-0 mt-2 text-sm font-semibold text-rr-navy">What Nayax's sales list returned for this machine</h3>
+                <p class="m-0 mt-1 text-sm text-rr-muted" data-testid="nayax-sale-review-absence">
+                  {{ absence.returnedItemCount ?? 0 }} {{ absence.returnedItemCount === 1 ? 'sale' : 'sales' }} for machine
+                  {{ absence.readMachineId }}@if (absence.returnedEarliestInstantUtc && absence.returnedLatestInstantUtc) {, from
+                  {{ absence.returnedEarliestInstantUtc | businessDateTime }} to {{ absence.returnedLatestInstantUtc | businessDateTime }}}.
+                  This transaction was not among them. Checked {{ absence.observedAtUtc | businessDateTime }}.
+                </p>
+              }
+            </div>
+          </div>
+
+          @if (item.history.length > 0) {
+            <h3 class="m-0 mt-3 text-sm font-semibold text-rr-navy">Decision history</h3>
+            <ul class="m-0 mt-1 list-none p-0 text-sm text-rr-muted" data-testid="nayax-sale-review-history">
+              @for (entry of item.history; track entry.id) {
+                <li>
+                  {{ entry.occurredAtUtc | businessDateTime }}:
+                  @if (entry.superseded) {
+                    Decision superseded by new evidence.
+                  } @else if (entry.decision !== null) {
+                    {{ decisionLabel(entry.decision) }} by the owner@if (entry.reason) {: "{{ entry.reason }}"}.
+                  }
+                  {{ verificationLabel(entry.previousState) }} &rarr; {{ verificationLabel(entry.resultingState) }}.
+                  @if (entry.reconciledPeriodDifference !== null) {
+                    Changed the reimbursement period {{ entry.reconciledPeriodFrom | date: 'dd/MM/yyyy' }} to
+                    {{ entry.reconciledPeriodTo | date: 'dd/MM/yyyy' }} by {{ entry.reconciledPeriodDifference | currency }}.
+                  }
+                </li>
+              }
+            </ul>
+          }
+
+          @if (decisionsFor(item).length > 0) {
+            <div class="mt-3 flex flex-wrap gap-2" data-testid="nayax-sale-review-decisions">
+              @for (option of decisionsFor(item); track option.decision) {
+                <button
+                  type="button"
+                  class="rr-button-secondary"
+                  [attr.data-testid]="'nayax-sale-review-decision-' + option.decision"
+                  (click)="start(item, option)"
+                >{{ decisionLabel(option.decision) }}</button>
+              }
+            </div>
+          }
+
+          @if (pending && pending.saleId === item.saleId) {
+            <form class="mt-3 flex flex-col gap-2" (ngSubmit)="submit(item)" data-testid="nayax-sale-review-form">
+              <p class="m-0 text-sm font-semibold text-rr-navy">{{ decisionLabel(pending.option.decision) }}</p>
+              @if (requiresReason(pending.option.decision)) {
+                <label class="text-sm text-rr-navy" [attr.for]="'reason-' + item.saleId">Reason (required)</label>
+                <textarea
+                  [id]="'reason-' + item.saleId"
+                  name="reason"
+                  maxlength="500"
+                  rows="2"
+                  class="rounded-lg border border-rr-line p-2 text-sm"
+                  [(ngModel)]="pending.reason"
+                  data-testid="nayax-sale-review-reason"
+                ></textarea>
+              }
+              <div class="flex gap-2">
+                <button type="submit" class="rr-button-primary" [disabled]="!canSubmit" data-testid="nayax-sale-review-submit">Save decision</button>
+                <button type="button" class="rr-button-secondary" (click)="cancel()">Cancel</button>
+              </div>
+            </form>
+          }
+        </section>
+      }
+    </div>
+  }
+</div>

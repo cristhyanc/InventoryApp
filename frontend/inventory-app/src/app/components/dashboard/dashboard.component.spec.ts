@@ -14,6 +14,7 @@ import {
 } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
+import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
@@ -469,6 +470,7 @@ async function renderDashboard(
       provideRouter([]),
       { provide: ProductService, useValue: { getLowStock: () => of(machineAwareAlerts(overrides.products ?? [])) } },
       { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
+      { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
       { provide: SiteService, useValue: { getAll: () => of(overrides.sites ?? []) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(SYNC_RAN) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },

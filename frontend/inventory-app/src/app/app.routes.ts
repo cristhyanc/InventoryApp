@@ -522,6 +522,14 @@ export const routes: Routes = [
       import('./components/admin/avco-transition/avco-transition.component').then((m) => m.AvcoTransitionComponent)
   },
   {
+    // The Nayax sales review (issue #1105): every member who can see the Dashboard can read it; the
+    // page offers decisions only to an Owner, and the API enforces Data.Repair on each one.
+    path: 'nayax-sales-review',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Dashboard.View')],
+    loadComponent: () =>
+      import('./components/nayax-sale-review/nayax-sale-review-page.component').then((m) => m.NayaxSaleReviewPageComponent)
+  },
+  {
     path: 'admin/costing-repair',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
     loadComponent: () =>

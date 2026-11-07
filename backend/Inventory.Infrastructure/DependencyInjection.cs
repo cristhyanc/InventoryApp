@@ -14,14 +14,15 @@ using Inventory.Application.Expenses;
 using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
-using Inventory.Application.Machines;
 using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
+using Inventory.Application.Machines;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.NayaxReconciliation;
+using Inventory.Application.NayaxSaleReview;
 using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
@@ -35,16 +36,16 @@ using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
-using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
-using Inventory.Application.SalesSync;
 using Inventory.Application.SaleTimestampRepair;
+using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.Subscriptions;
@@ -59,12 +60,12 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.NayaxSqs;
 using Inventory.Infrastructure.Persistence;
-using Inventory.Infrastructure.Reporting;
 using Inventory.Infrastructure.Reporting.Persistence;
+using Inventory.Infrastructure.Reporting;
 using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Inventory.Infrastructure;
@@ -432,6 +433,9 @@ public static class InfrastructureServiceCollectionExtensions
         // the evidence for it one operation - and what keeps issue #1105's Owner decisions from
         // interleaving with a run. The success store is an ordinary tenant-owned update of one column.
         services.AddScoped<INayaxSaleProviderEvidenceStore, EfNayaxSaleProviderEvidenceStore>();
+
+        // The Nayax sales review of issue #1105: the Owner's decisions and the Dashboard summary.
+        services.AddScoped<INayaxSaleReviewStore, EfNayaxSaleReviewStore>();
         services.AddScoped<INayaxReconciliationSuccessStore, EfNayaxReconciliationSuccessStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();

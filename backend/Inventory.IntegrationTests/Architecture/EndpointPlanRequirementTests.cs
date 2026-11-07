@@ -222,6 +222,11 @@ public class EndpointPlanRequirementTests
         new("NayaxSaleTimestampRepairsController.Apply", PlanRequirementKind.None), // POST api/admin/nayax-sale-timestamp-repair/apply
         new("NayaxSaleTimestampRepairsController.Preview", PlanRequirementKind.ViaProviderGate), // POST api/admin/nayax-sale-timestamp-repair/preview
 
+        // The Nayax sales review (issue #1105) reads and decides stored rows and makes no Nayax call.
+        new("NayaxSaleReviewController.Decide", PlanRequirementKind.None), // POST api/nayax-sale-review/{saleId}/decision
+        new("NayaxSaleReviewController.List", PlanRequirementKind.None), // GET api/nayax-sale-review
+        new("NayaxSaleReviewController.Summary", PlanRequirementKind.None), // GET api/nayax-sale-review/summary
+
         // The sales sync is the provider read the Dashboard starts with.
         new("NayaxSalesSyncController.SyncLatest", PlanRequirementKind.ViaProviderGate), // POST api/nayax-sales-sync
 

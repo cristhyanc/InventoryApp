@@ -6,6 +6,7 @@ import { DashboardComponent } from './dashboard.component';
 import { DashboardSummary, Machine, ReorderAlertListing, Site } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
+import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
@@ -120,6 +121,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       provideRouter([]),
       { provide: ProductService, useValue: { getLowStock: () => of(NO_ALERTS) } },
       { provide: MachineService, useValue: { getAll: () => of([MACHINE]) } },
+      { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
       { provide: SiteService, useValue: { getAll: () => of([SITE]) } },
       {
         provide: NayaxSalesSyncService,
