@@ -892,6 +892,12 @@ ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
 NayaxTokenProtection__ActiveKeyId
 NayaxTokenProtection__Keys__<key-id>
+NayaxSqs__QueueUrl
+NayaxSqs__DeadLetterQueueUrl
+NayaxSqs__Region
+NayaxSqs__AccessKeyId
+NayaxSqs__SecretAccessKey
+NayaxSqs__VisibilityTimeoutSeconds
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
 ExternalId__Instance
@@ -913,6 +919,8 @@ APPLICATIONINSIGHTS_CONNECTION_STRING
 A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `Nayax__Token` is read by exactly one thing: the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command, which moves that pair into the existing business's encrypted record (`NayaxLynx__AccessToken` is preferred over `Nayax__Token` when both are set). Leave them in place until that command has been applied and Nayax has been verified, then remove them as a deliberate human step — [docs/tenant-rollout.md § When to remove the global settings](docs/tenant-rollout.md#when-to-remove-the-global-settings) is the procedure. They are still secrets while they exist: never commit them, and the token is never logged.
 
 `NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Since issue #520 that is what every Nayax call does, so **an environment that uses Nayax must have a key provisioned** — it is a human step, and it must happen before the existing business's credential is moved into the table by [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) (issue #519), which refuses with the setting named until it is. Keep the key configured afterwards: removing the key that encrypted a stored token is what makes that token undecryptable. An environment with no Nayax integration at all needs no key and is unaffected. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518) and [§ Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520).
+
+`NayaxSqs__*` are the six settings of the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103) below. `NayaxSqs__SecretAccessKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. The other five are not secrets but are still **absent from `appsettings.json`, which is the shipped state**: with no `NayaxSqs__QueueUrl` the reader is not started at all, the API starts and runs exactly as it did before, and one information line says the reader is off. A queue URL **with** a missing region, key id or secret fails at startup with the setting named, because a deployment that asked for the reader and silently imported nothing would be worse than one that refused to start. `NayaxSqs__VisibilityTimeoutSeconds` must match the queue's own visibility timeout (120 seconds); blank or out of range falls back to that default. All six are read once at startup, so filling them in takes effect on the next restart.
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
@@ -1016,6 +1024,96 @@ production API; a separate `production` target runs only from `main`, in its own
 the production checklist,
 the normal and interrupted runs, sample limits, and actual provider cost evidence. Human review,
 release to `main`, environment setup and dispatch are separate from implementing the workflow.
+
+## The Nayax SQS sales reader (issue #1103)
+
+Nayax Core can deliver every transaction to an Amazon SQS queue within seconds of the vend. One shared
+Restockroo queue carries **every** business's transactions, one send-only AWS IAM user sends each
+business's, and a message is attributed to a business by the SQS `SenderId` system attribute — which a
+Super Admin records on the business's [Nayax SQS sender](#super-admin-businesses-api) card. This
+section is the human setup and the operations runbook; the design is
+[docs/architecture.md § Nayax SQS sales reader](docs/architecture.md#nayax-sqs-sales-reader-issue-1103).
+
+With no `NayaxSqs__QueueUrl` configured the reader is not started at all, which is the shipped state:
+sales are imported only by the Dashboard's own refresh, exactly as before.
+
+### What a human sets up, once
+
+**In AWS** (none of this is done by the application, and the application can create none of it):
+
+- **The main queue**: visibility timeout **120 seconds**, message retention at least **4 days**.
+- **A dead-letter queue** on it: `maxReceiveCount` **5**, retention **14 days** — longer than the main
+  queue on purpose, because AWS keeps a redriven message's original enqueue time.
+- **A CloudWatch alarm** on the dead-letter queue's visible messages above 0.
+- **The reader IAM user**: `ReceiveMessage`, `DeleteMessage`, `ChangeMessageVisibility` and
+  `GetQueueAttributes` on the main queue, and **only** `GetQueueAttributes` on the dead-letter queue.
+  Nothing in this application sends, purges, or receives from the dead-letter queue, and the port it
+  calls SQS through offers no way to.
+- **A send-only IAM user per business**, whose user id (`aws iam get-user --user-name <user> --query
+  User.UserId`) is what a Super Admin records against that business.
+
+**In the App Service**: the six `NayaxSqs__*` settings above, with the secret as a Key Vault reference,
+and **Always On switched on**. Always On is a real prerequisite rather than a nicety: without it the
+platform may idle the process out, and an idle process polls nothing — sales would then arrive only when
+somebody next loaded the Dashboard, which is the behaviour this feature exists to replace.
+
+Do not switch production consumption on until the verification and conflict work of issues #1104 and
+#1105 is deployed — that is parent #1100's rollout rule. The [hosted testing
+environment](docs/testing-environment.md) is deliberately given no `NayaxSqs__*` settings at all: a
+second reader on the production queue would *take* messages the production API then never sees.
+
+### Reading the reader's own state
+
+The reader logs one line per message with the queue message id, the business id, what it did with the
+message and a fixed reason code, one warning per failed poll with the exception type and the backoff it
+chose, and one warning whenever the dead-letter queue is not empty. **No log line ever carries a message
+body, a receipt handle, a card or customer value, an AWS key, a queue URL or a sender id** — a queue
+message is somebody's card transaction, and a receipt handle is a capability to change or delete a queue
+message. If you need to see a message, look at the queue in the console, not at the logs.
+
+```kql
+// Did the reader say anything in the last hour, and what?
+traces
+| where timestamp > ago(1h)
+| where message has "Nayax SQS"
+| project timestamp, message, severityLevel
+| order by timestamp desc
+```
+
+### Runbook: the dead-letter queue is not empty
+
+A message reaches the dead-letter queue after five receives that did not finish it. That is not a bug
+report on its own — it is the queue doing what it was configured to do — but it always means at least
+one transaction was **not** imported, so it is worth looking at every time.
+
+1. **Find out why.** The reader's own log lines name the queue message id and a fixed reason code for
+   every message it refused. The codes worth acting on are: `SenderUnknown` or `SenderDisabled` (no
+   business has that AWS IAM user recorded, or the mapping is switched off — fix it on the Super Admin
+   card), `BusinessNotActive` (the business is not approved and trading), `MachineNotInFleet` (the
+   machine the message names is not one of that business's machines in Nayax), `MessageRefused` (the
+   message is not a transaction this application consumes — a free vend, a refund, a void, a pending or
+   unrecognised status — see [docs/architecture.md § Nayax SQS transaction
+   messages](docs/architecture.md#nayax-sqs-transaction-messages-issue-1102)), and
+   `ConnectionUnavailable` or `RebuildPending` (the business's Nayax connection or plan, or a product's
+   cost history, needs attention first).
+2. **Look at a sample if you must.** Use the AWS console's **Poll for messages** on the *dead-letter*
+   queue. Treat what you see as a consumer's card transaction: do not paste it into an issue, a pull
+   request, a chat message or a log.
+3. **Fix the cause.** Record or re-enable the sender, approve the business, add the machine in Nayax,
+   reconnect Nayax, repair the product's cost history — whatever the reason code points at. Nothing is
+   fixed by replaying first.
+4. **Replay, deliberately.** Once the cause is fixed, use the AWS console's **Start DLQ redrive** on
+   the dead-letter queue to move the messages back to the main queue. **Only the repository owner does
+   this, and only after step 3.** It is a human console procedure for the same reason a database
+   restore is: it replays real financial transactions, and replaying them while the cause is still
+   present simply fills the dead-letter queue again. No code path, workflow, alert action or agent may
+   redrive it, and this application has no permission to.
+5. **Check it emptied.** The depth is read every five minutes and warned about while it is above zero,
+   so the warning stopping is the confirmation.
+
+Messages that are genuinely not sales this application consumes — a free vend, say — stay in the
+dead-letter queue as the sample that decides what to do about them. Deleting them is a decision, not
+housekeeping.
 
 ## Platform diagnostics API
 

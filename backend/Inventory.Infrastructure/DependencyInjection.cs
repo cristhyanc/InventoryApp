@@ -21,6 +21,7 @@ using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
@@ -55,6 +56,7 @@ using Inventory.Infrastructure.Clock;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using Inventory.Infrastructure.NayaxSqs;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting;
 using Inventory.Infrastructure.Reporting.Persistence;
@@ -415,6 +417,14 @@ public static class InfrastructureServiceCollectionExtensions
         // shared BEGIN IMMEDIATE write lock, so the two refill endpoints serialise against each other.
         services.AddScoped<IMultiMachinePickListRefillStore, EfMultiMachinePickListRefillStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
+        // The queue reader's two sender adapters (issue #1103), and they are deliberately two. The
+        // directory answers "whose sale is this?" before any business exists, which is the one
+        // reviewed IgnoreQueryFilters statement outside a request and is read-only; the activity
+        // store stamps the last-message instant on that business's own row inside its resolved scope,
+        // as an ordinary tenant-owned update with nothing added. Both are scoped like every adapter
+        // here, so each runs on the context of the scope the reader opened for it.
+        services.AddScoped<INayaxSqsSenderDirectory, EfNayaxSqsSenderDirectory>();
+        services.AddScoped<INayaxSqsSenderActivityStore, EfNayaxSqsSenderActivityStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
         // The provider catalogue review (issue #738), the catalogue import's one persistence
@@ -691,6 +701,71 @@ public static class InfrastructureServiceCollectionExtensions
         // Constructed now rather than lazily: validation of the key section belongs at startup.
         var protector = new AesGcmNayaxTokenProtector(options);
         services.AddSingleton<INayaxTokenProtector>(protector);
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers everything the Nayax SQS sales reader needs behind its Application ports (issue
+    /// #1103): the queue client, the pacing, the log sink, the process-wide health record and the
+    /// reader itself.
+    ///
+    /// Separate from <see cref="AddInfrastructureServices"/>, like <see cref="AddNayaxLynxClient"/>
+    /// and <see cref="AddNayaxTokenProtection"/>, because only the composition root reads
+    /// configuration - which keeps the queue URLs and the AWS credential pair out of
+    /// Inventory.Application and Inventory.Domain entirely.
+    ///
+    /// <para><strong>Two outcomes, and both are deliberate.</strong> With no
+    /// <c>NayaxSqs:QueueUrl</c> the reader is registered and does not start: it logs one information
+    /// line and returns, and the <see cref="UnconfiguredNayaxSqsQueueClient"/> it holds refuses every
+    /// operation, so an environment with no queue - every test host, the hosted testing environment,
+    /// and the shipped state - starts exactly as it did before and cannot reach a queue by accident.
+    /// With a queue URL and a missing region or credential, registration fails here, at startup, with
+    /// the setting named rather than with an API that quietly imports nothing (see
+    /// <see cref="NayaxSqsConfiguration.From"/>).</para>
+    ///
+    /// <para>Singletons throughout. One <see cref="AwsNayaxSqsQueueClient"/> because the AWS SDK's
+    /// client is thread-safe and owns the HTTP connection pool - one per poll would renegotiate TLS
+    /// every twenty seconds - and one <see cref="NayaxSqsReaderHealth"/> because there is one reader
+    /// in one process and its state is a fact about that process. The per-business work the reader
+    /// does is scoped: it opens a service scope per message through
+    /// <c>INayaxSqsReaderScopes</c>, which the composition root satisfies.</para>
+    ///
+    /// <para>The hosted service that starts the loop is <strong>not</strong> registered here: that is
+    /// the composition root's own line, so "what background work does this application run?" stays
+    /// answerable from <c>Program.cs</c>.</para>
+    /// </summary>
+    /// <param name="services">The container being built.</param>
+    /// <param name="options">The queue settings, bound from configuration.</param>
+    /// <exception cref="InvalidOperationException">
+    /// A queue URL is configured without the region and credential pair the reader needs.
+    /// </exception>
+    public static IServiceCollection AddNayaxSqsReader(
+        this IServiceCollection services,
+        NayaxSqsOptions options)
+    {
+        // Validated now rather than lazily, for the reason the token protection section is: a
+        // half-configured queue belongs at startup, not at the first poll.
+        var configuration = NayaxSqsConfiguration.From(options);
+
+        services.AddSingleton(configuration);
+        services.AddSingleton<INayaxSqsReaderSettings>(configuration);
+
+        if (configuration.IsConfigured)
+        {
+            services.AddSingleton<INayaxSqsQueueClient>(
+                _ => new AwsNayaxSqsQueueClient(configuration));
+        }
+        else
+        {
+            services.AddSingleton<INayaxSqsQueueClient>(new UnconfiguredNayaxSqsQueueClient());
+        }
+
+        services.TryAddSingleton<IClock, SystemClock>();
+        services.AddSingleton<INayaxSqsReaderPacing, SystemNayaxSqsReaderPacing>();
+        services.AddSingleton<INayaxSqsReaderLog, LoggingNayaxSqsReaderLog>();
+        services.AddSingleton<NayaxSqsReaderHealth>();
+        services.AddSingleton<NayaxSqsSalesReader>();
 
         return services;
     }

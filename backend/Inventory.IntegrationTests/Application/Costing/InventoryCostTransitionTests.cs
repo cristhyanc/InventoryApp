@@ -393,7 +393,8 @@ public class InventoryCostTransitionTests
                 // Nayax id names the local product with the same id - so these costing cases keep
                 // asserting the same matches while the store resolves them through the link lookup
                 // (issue #745) instead of comparing the remote id with Product.Id.
-                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
+                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+                TestClocks.Fixed));
     }
 
     private static async Task<NayaxSales> SaleAsync(AppDbContext db, long transactionId) =>

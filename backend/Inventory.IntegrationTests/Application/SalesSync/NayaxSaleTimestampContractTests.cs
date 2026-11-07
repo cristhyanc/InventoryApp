@@ -320,7 +320,11 @@ public class NayaxSaleTimestampContractTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return new EfLatestNayaxSalesStore(
-            db, TestCostingUseCases.CostSale(db, rebuild), rebuild, new EfNayaxProductLinkStore(db));
+            db,
+            TestCostingUseCases.CostSale(db, rebuild),
+            rebuild,
+            new EfNayaxProductLinkStore(db),
+            TestClocks.Fixed);
     }
 
     private static async Task<SqliteConnection> CreateSqliteAsync()

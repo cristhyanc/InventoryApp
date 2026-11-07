@@ -642,6 +642,16 @@ public class AppDbContext : DbContext
     public DbSet<InventoryCostRepair> InventoryCostRepairs => Set<InventoryCostRepair>();
 
     /// <summary>
+    /// The products whose historical inventory cost still has to be replayed, one row per product
+    /// (issue #1103). Written in the same transaction as the sale that invalidated the cost and
+    /// removed in the same transaction as the rebuilt costs, which is what makes a failed replay
+    /// recoverable instead of forgotten. See <see cref="PendingInventoryCostRebuild"/> and
+    /// <see cref="ConfigurePendingInventoryCostRebuilds"/>.
+    /// </summary>
+    public DbSet<PendingInventoryCostRebuild> PendingInventoryCostRebuilds =>
+        Set<PendingInventoryCostRebuild>();
+
+    /// <summary>
     /// Append-only records of stored Nayax sale instants repaired from authoritative source evidence
     /// (issue #472). Nothing in the application updates or deletes a row in this set; see
     /// <see cref="NayaxSaleTimestampRepair"/>.
@@ -901,6 +911,8 @@ public class AppDbContext : DbContext
         ConfigureMachines(modelBuilder);
         ConfigureProviderDataCoverage(modelBuilder);
         ConfigureSaleProductAssociation(modelBuilder);
+        ConfigureSqsSaleProvenance(modelBuilder);
+        ConfigurePendingInventoryCostRebuilds(modelBuilder);
         ConfigureProviderCatalogueReview(modelBuilder);
 
         modelBuilder.Entity<Product>()
@@ -3100,6 +3112,81 @@ public class AppDbContext : DbContext
         resolution.Property(x => x.CandidateProductIds).HasMaxLength(64);
         resolution.Property(x => x.DecidedBy).HasMaxLength(256);
         resolution.HasIndex(x => new { x.BusinessId, x.NayaxSaleId });
+    }
+
+    /// <summary>
+    /// Maps the three nullable columns that say a sale arrived from the shared Nayax SQS queue (issue
+    /// #1103): when the reader accepted it, which delivery created it, and how far it has been
+    /// verified against the provider's own record (issue #1104's column, written as
+    /// <c>Unverified</c> and moved by nothing in #1103).
+    ///
+    /// <para><strong>All three are additive and nothing is backfilled.</strong> Every sale this
+    /// database already holds keeps <c>NULL</c> in all three, which is what keeps "did not arrive from
+    /// the queue" and "arrived from the queue" apart without a fourth column to say which. No
+    /// financial rule reads any of them: stock consumption, costing and revenue continue to follow the
+    /// saved <c>TransactionStatusId</c> through <c>NayaxTransactionStatusClassifier</c>.</para>
+    ///
+    /// <para>The instant gets the same UTC conversion as every other persisted instant here - the
+    /// SQLite provider does not round-trip <see cref="DateTimeKind"/> - and the message id is capped
+    /// because an SQS message id is a fixed-length identifier. <strong>There is no column for a
+    /// receipt handle</strong>, deliberately: a handle is a capability to change or delete a queue
+    /// message and belongs in no row and no log.</para>
+    /// </summary>
+    private static void ConfigureSqsSaleProvenance(ModelBuilder modelBuilder)
+    {
+        var sale = modelBuilder.Entity<NayaxSales>();
+
+        sale.Property(x => x.ReceivedViaSqsAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+
+        // An SQS message id is a 100-character-or-less identifier; 128 leaves room without inviting
+        // anything larger to be stored under this name.
+        sale.Property(x => x.SqsFirstMessageId).HasMaxLength(128);
+    }
+
+    /// <summary>
+    /// Maps the durable record of which products still have to have their inventory cost replayed
+    /// (issue #1103) - see <see cref="PendingInventoryCostRebuild"/> for why a replay has to be
+    /// remembered rather than held in a dictionary for the length of one call.
+    ///
+    /// <para><strong>One row per product is a database rule, not a convention.</strong> The unique
+    /// index on <c>(BusinessId, ProductId)</c> is what makes "record a pending replay" an
+    /// insert-or-lower-the-instant rather than a growing list two concurrent writers could each add
+    /// to: the write-locked transaction reads the row and the index is the backstop under that read.
+    /// It is per business, like every constraint over tenant-owned data.</para>
+    ///
+    /// <para>The second index is <c>(BusinessId, CreatedAtUtc)</c>, because the drain reads "this
+    /// business's pending replays, oldest first": replaying in the order the work arrived is what
+    /// keeps a product that has been waiting since yesterday from being starved by today's sales.</para>
+    ///
+    /// <para><c>Revision</c> needs no mapping of its own and is listed here because of what it is
+    /// for: it is the version of the work a replay's acknowledgement is conditional on, moved on
+    /// every enqueue, because <c>FromInstantUtc</c> only ever moves earlier and therefore cannot say
+    /// that a sale at or after it added work (see <c>PendingInventoryCostRebuild.Revision</c>).</para>
+    /// </summary>
+    private static void ConfigurePendingInventoryCostRebuilds(ModelBuilder modelBuilder)
+    {
+        var pending = modelBuilder.Entity<PendingInventoryCostRebuild>();
+
+        pending.HasIndex(x => new { x.BusinessId, x.ProductId }).IsUnique();
+        pending.HasIndex(x => new { x.BusinessId, x.CreatedAtUtc });
+
+        pending.Property(x => x.LastFailureCode).HasMaxLength(64);
+
+        pending.Property(x => x.FromInstantUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        pending.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        pending.Property(x => x.LastAttemptAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
     }
 
     /// <summary>

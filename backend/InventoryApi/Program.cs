@@ -4,6 +4,7 @@ using Inventory.Application.Access;
 using Inventory.Application.ConnectedMachines;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
@@ -11,12 +12,14 @@ using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using Inventory.Infrastructure.NayaxSqs;
 using Inventory.Application.Businesses;
 using Inventory.Application.Products;
 using InventoryApi.Adapters.Businesses;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
+using InventoryApi.Adapters.NayaxSqs;
 using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
@@ -481,10 +484,31 @@ builder.Services.AddScoped<IRolePreviewAccessor, RequestRolePreviewAccessor>();
 
 // The host-side half of that refresh: one background drain that runs each queued write in its own
 // new service scope, after the request that scheduled it has finished and with no business
-// resolved. It is the only hosted service this application runs; see
-// docs/architecture.md § Member display name and email for why this work is in-process rather than
-// a WebJob or a Function.
+// resolved. See docs/architecture.md § Member display name and email for why this work is in-process
+// rather than a WebJob or a Function.
 builder.Services.AddHostedService<MemberProfileRefreshWorker>();
+
+// The second hosted background service, and the first that is not started by a request (issue
+// #1103): the Nayax SQS sales reader. It polls the one shared Restockroo queue, attributes each
+// message to a business by the SQS SenderId a Super Admin recorded (issue #1101), and saves the sale
+// and the inventory-cost rebuilds it needs in that business's own service scope before the message
+// is deleted. Registered unconditionally and started only when NayaxSqs:QueueUrl is configured: with
+// no queue it logs one information line and returns, which is the shipped state and the state of
+// every test host and the hosted testing environment.
+//
+// It is in-process rather than a Function or a WebJob because the production store is one SQLite file
+// with one writer on the App Service's own mount, and because the API can receive from the queue
+// itself - see docs/architecture.md § Azure Functions and background workloads. App Service
+// Always On is the human prerequisite that keeps the process alive to poll (README.md § Nayax SQS
+// sales reader).
+builder.Services.AddNayaxSqsReader(
+    builder.Configuration.GetSection(NayaxSqsOptions.SectionName).Get<NayaxSqsOptions>()
+        ?? new NayaxSqsOptions());
+
+// The two service scopes that reader needs, opened by the host: a denied one to ask whose sender a
+// message's SenderId is, and one resolved to that business for everything the message then causes.
+builder.Services.AddSingleton<INayaxSqsReaderScopes, ServiceScopeNayaxSqsReaderScopes>();
+builder.Services.AddHostedService<NayaxSqsSalesReaderWorker>();
 
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as

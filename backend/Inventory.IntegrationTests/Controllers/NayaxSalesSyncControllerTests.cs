@@ -36,10 +36,7 @@ public class NayaxSalesSyncControllerTests
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, cancellation.Token))
             .ReturnsAsync(new List<NayaxLastSalesReport>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), cancellation.Token))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var controller = Controller(TestSalesSync.UseCase(nayax.Object, store.Object));
 
         var result = await controller.SyncLatest(force: false, cancellation.Token);
@@ -65,10 +62,7 @@ public class NayaxSalesSyncControllerTests
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var controller = Controller(TestSalesSync.UseCase(nayax.Object, store.Object, clock));
 
         for (var run = 0; run < NayaxSalesSyncRateLimiter.MaxRunsPerWindow; run++)
@@ -115,10 +109,7 @@ public class NayaxSalesSyncControllerTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var useCase = TestSalesSync.UseCase(nayax.Object, store.Object, new FakeClock(Now));
 
         var loads = await Task.WhenAll(Enumerable.Range(0, NayaxSalesSyncRateLimiter.MaxRunsPerWindow)
@@ -142,10 +133,7 @@ public class NayaxSalesSyncControllerTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var controller = Controller(TestSalesSync.UseCase(nayax.Object, store.Object, clock));
 
         for (var run = 0; run < NayaxSalesSyncRateLimiter.MaxRunsPerWindow; run++)
@@ -218,14 +206,7 @@ public class NayaxSalesSyncControllerTests
         return nayax;
     }
 
-    private static Mock<ILatestNayaxSalesStore> EmptyStore()
-    {
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
-        return store;
-    }
+    private static Mock<ILatestNayaxSalesStore> EmptyStore() => TestSalesSync.EmptyStoreMock();
 
     /// <summary>
     /// A controller with a real <see cref="HttpContext"/>, because the refusal writes a response

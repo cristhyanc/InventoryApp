@@ -112,4 +112,38 @@ public class NayaxSales : IBusinessOwned
     public decimal? CostOfGoodsSold { get; set; }
     public SaleCostingStatus CostingStatus { get; set; } = SaleCostingStatus.Pending;
     public SaleCostSource CostSource { get; set; } = SaleCostSource.Unknown;
+
+    /// <summary>
+    /// When the Nayax SQS sales reader accepted the message that stored this sale, or
+    /// <see langword="null"/> for a sale that did not arrive from the queue (issue #1103).
+    ///
+    /// <para>It is written on the <em>insert</em>, in the same transaction as the row itself, and is
+    /// never written afterwards: the enrich-only path leaves it exactly as it is, so a transaction the
+    /// <c>lastSales</c> sync stored first and a message later enriched still says truthfully that the
+    /// row was not created from the queue. Nothing backfills it, and no financial rule reads it.</para>
+    /// </summary>
+    public DateTime? ReceivedViaSqsAtUtc { get; set; }
+
+    /// <summary>
+    /// The SQS message id of the delivery that stored this sale, or <see langword="null"/> for a sale
+    /// that did not arrive from the queue (issue #1103).
+    ///
+    /// <para><strong>First, and only first.</strong> A standard queue can deliver one message more
+    /// than once, so a later delivery of the same transaction finds the row already stored and leaves
+    /// this column alone - which is what makes it provenance ("this delivery created the sale")
+    /// rather than a moving record of the last thing that touched it. It is a queue message id and
+    /// never a receipt handle: a handle is a capability to change or delete a queue message and is
+    /// stored nowhere.</para>
+    /// </summary>
+    public string? SqsFirstMessageId { get; set; }
+
+    /// <summary>
+    /// How far this queue-sourced sale has been checked against the provider's own record of the
+    /// transaction, or <see langword="null"/> for a sale that did not arrive from the queue (issue
+    /// #1103, for issue #1104).
+    ///
+    /// <para>Written as <see cref="Domain.NayaxSqs.NayaxSqsVerification.Unverified"/> on the insert
+    /// and by nothing else in this issue. Issue #1104 owns the comparison that moves it.</para>
+    /// </summary>
+    public Domain.NayaxSqs.NayaxSqsVerification? SqsVerification { get; set; }
 }

@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.Providers;
 using Inventory.Application.Tenancy;
@@ -72,6 +73,14 @@ public sealed record NayaxSalesSyncOutcome
 /// that lets a report tell "no sales" apart from "no sales data", so it is written last and only
 /// once everything above succeeded: a failed, cancelled or partly read run leaves no coverage, and
 /// the gap it leaves is reported as unverified rather than as a measured zero.</para>
+///
+/// <para><strong>Every pending inventory-cost rebuild is drained, not just this batch's</strong>
+/// (issue #1103). The save records a durable pending rebuild per affected product and this run then
+/// replays every pending row the business has. That is what makes a failed rebuild recoverable on
+/// this path: the sales were already stored, so a run that only looked at its own batch found no
+/// affected products the next time and never retried. A product whose history is still unreplayable
+/// is raised as the one <see cref="Costing.InventoryCostDataQualityException"/> it always was, after
+/// every product that could be rebuilt has been.</para>
 ///
 /// <para><strong>A run that happened moments ago is skipped, not repeated</strong> (issue #843, part
 /// of parent #839). The Dashboard calls this on every load, so a visit, a back-navigation or a
@@ -197,10 +206,19 @@ public sealed class SyncLatestNayaxSales
                 windowStarts.Add(earliest.Min());
         }
 
-        var persisted = await _store.PersistLatestSalesAsync(sales, cancellationToken);
-        if (persisted.EarliestCompletedSaleByProductId.Count > 0)
-            await _store.RebuildInventoryCostsAsync(
-                persisted.EarliestCompletedSaleByProductId, cancellationToken);
+        await _store.PersistLatestSalesAsync(sales, cancellationToken);
+
+        // Unconditionally, and that is the change issue #1103 makes here. The save above recorded a
+        // durable pending rebuild per affected product, and this drains every pending row this
+        // business has - including one an earlier run left behind. Before, the rebuild ran only for
+        // the products this batch's completed sales touched, so a rebuild that failed was never
+        // retried: the sales were already stored, the next sync therefore reported no affected
+        // products, and that product's costing position stayed stale until its next sale.
+        var drained = await _store.RebuildInventoryCostsAsync(cancellationToken);
+        if (drained.Failures.Count > 0)
+            throw new InventoryCostDataQualityException(
+                "The latest Nayax sales synchronization could not rebuild every affected product's "
+                    + "inventory cost. " + string.Join(" ", drained.Failures));
 
         await RecordCoverageAsync(windowStarts, everyReadSaleHasAnInstant, readStartedAtUtc, cancellationToken);
 

@@ -362,12 +362,5 @@ public class SyncLatestNayaxSalesFreshnessTests
         return nayax;
     }
 
-    private static Mock<ILatestNayaxSalesStore> EmptyStore()
-    {
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
-        return store;
-    }
+    private static Mock<ILatestNayaxSalesStore> EmptyStore() => TestSalesSync.EmptyStoreMock();
 }

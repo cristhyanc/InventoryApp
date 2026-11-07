@@ -96,7 +96,10 @@ public class AddNayaxSaleProductAssociationMigrationTests
         // The migration left the old column exactly as it found it, and said nothing about what
         // kind of identifier it holds.
         await using var db = fixture.Context();
-        var sale = await db.NayaxSales.AsNoTracking().SingleAsync(x => x.TransactionID == 900);
+        var sale = await db.NayaxSales.AsNoTracking()
+            .Where(x => x.TransactionID == 900)
+            .Select(x => new { x.NayaxProductId, x.ProviderProductIdIsRaw, x.Provider })
+            .SingleAsync();
         Assert.Equal(5001, sale.NayaxProductId);
         Assert.False(sale.ProviderProductIdIsRaw);
         Assert.Equal(ExternalProvider.Nayax, sale.Provider);
@@ -114,7 +117,9 @@ public class AddNayaxSaleProductAssociationMigrationTests
             Sale(900, nayaxProductId: 5001, productName: "Chips", cost: 1.10m));
 
         await using var db = fixture.Context();
-        var sale = await db.NayaxSales.AsNoTracking().SingleAsync();
+        var sale = await db.NayaxSales.AsNoTracking()
+            .Select(x => new { x.ProductId, x.UnitCostAtSale, x.CostOfGoodsSold, x.CostingStatus })
+            .SingleAsync();
         Assert.Equal(5001, sale.ProductId);
         Assert.Equal(1.10m, sale.UnitCostAtSale);
         Assert.Equal(1.10m, sale.CostOfGoodsSold);
@@ -163,7 +168,7 @@ public class AddNayaxSaleProductAssociationMigrationTests
         // migration's work and it committed.
         await using var db = fixture.Context();
         Assert.Equal(903, (await db.NayaxSaleProductConflicts.AsNoTracking().SingleAsync()).TransactionId);
-        Assert.Null((await db.NayaxSales.AsNoTracking().SingleAsync()).ProductId);
+        Assert.Null(await db.NayaxSales.AsNoTracking().Select(x => x.ProductId).SingleAsync());
     }
 
     /// <summary>
@@ -179,27 +184,29 @@ public class AddNayaxSaleProductAssociationMigrationTests
         await fixture.MigrateAsync(AssociationMigration);
         await Assert.ThrowsAsync<SqliteException>(() => fixture.MigrateAsync(NameMigration));
 
+        var sale = await fixture.SaleKeyAsync();
+
         await using (var decide = fixture.Context())
         {
-            var sale = await decide.NayaxSales.SingleAsync();
             decide.NayaxSaleProductResolutions.Add(new NayaxSaleProductResolution
             {
                 NayaxSaleId = sale.Id,
-                TransactionId = sale.TransactionID,
+                TransactionId = sale.TransactionId,
                 NewProductId = 7100,
                 Rule = NayaxSaleProductResolutionRule.OperatorDecision,
                 CandidateProductIds = "777,7100",
                 DecidedBy = "A. Operator",
                 ResolvedAtUtc = new DateTime(2026, 10, 18, 0, 0, 0, DateTimeKind.Utc),
             });
-            sale.ProductId = 7100;
             await decide.SaveChangesAsync();
         }
+
+        await fixture.ExecuteAsync($"UPDATE NayaxSales SET ProductId = 7100 WHERE Id = {sale.Id};");
 
         await fixture.MigrateAsync(NameMigration);
 
         await using var db = fixture.Context();
-        Assert.Equal(7100, (await db.NayaxSales.AsNoTracking().SingleAsync()).ProductId);
+        Assert.Equal(7100, await db.NayaxSales.AsNoTracking().Select(x => x.ProductId).SingleAsync());
     }
 
     /// <summary>
@@ -214,7 +221,9 @@ public class AddNayaxSaleProductAssociationMigrationTests
             Sale(904, nayaxProductId: 424242, productName: "locally created (2.00)"));
 
         await using var db = fixture.Context();
-        var sale = await db.NayaxSales.AsNoTracking().SingleAsync();
+        var sale = await db.NayaxSales.AsNoTracking()
+            .Select(x => new { x.Id, x.ProductId })
+            .SingleAsync();
         Assert.Equal(5002, sale.ProductId);
 
         var resolution = await db.NayaxSaleProductResolutions.AsNoTracking().SingleAsync();
@@ -280,7 +289,7 @@ public class AddNayaxSaleProductAssociationMigrationTests
         Assert.Contains("a product name attributes today", refused.Message, StringComparison.Ordinal);
 
         await using var db = fixture.Context();
-        Assert.Null((await db.NayaxSales.AsNoTracking().SingleAsync()).ProductId);
+        Assert.Null(await db.NayaxSales.AsNoTracking().Select(x => x.ProductId).SingleAsync());
         Assert.Empty(await db.NayaxSaleProductResolutions.AsNoTracking().ToListAsync());
     }
 
@@ -300,26 +309,28 @@ public class AddNayaxSaleProductAssociationMigrationTests
         var refused = await Assert.ThrowsAsync<SqliteException>(() => fixture.MigrateAsync(NameMigration));
         Assert.Contains("a product name attributes today", refused.Message, StringComparison.Ordinal);
 
+        var sale = await fixture.SaleKeyAsync();
+
         await using (var decide = fixture.Context())
         {
-            var sale = await decide.NayaxSales.SingleAsync();
             decide.NayaxSaleProductResolutions.Add(new NayaxSaleProductResolution
             {
                 NayaxSaleId = sale.Id,
-                TransactionId = sale.TransactionID,
+                TransactionId = sale.TransactionId,
                 NewProductId = 5001,
                 Rule = NayaxSaleProductResolutionRule.OperatorDecision,
                 DecidedBy = "A. Operator",
                 ResolvedAtUtc = new DateTime(2026, 10, 18, 0, 0, 0, DateTimeKind.Utc),
             });
-            sale.ProductId = 5001;
             await decide.SaveChangesAsync();
         }
+
+        await fixture.ExecuteAsync($"UPDATE NayaxSales SET ProductId = 5001 WHERE Id = {sale.Id};");
 
         await fixture.MigrateAsync(NameMigration);
 
         await using var db = fixture.Context();
-        Assert.Equal(5001, (await db.NayaxSales.AsNoTracking().SingleAsync()).ProductId);
+        Assert.Equal(5001, await db.NayaxSales.AsNoTracking().Select(x => x.ProductId).SingleAsync());
     }
 
     /// <summary>
@@ -357,7 +368,10 @@ public class AddNayaxSaleProductAssociationMigrationTests
             + Sale(907, nayaxProductId: null, productName: null));
 
         await using var db = fixture.Context();
-        var sales = await db.NayaxSales.AsNoTracking().OrderBy(x => x.TransactionID).ToListAsync();
+        var sales = await db.NayaxSales.AsNoTracking()
+            .OrderBy(x => x.TransactionID)
+            .Select(x => new { x.Provider, x.ProviderProductIdIsRaw, x.NayaxProductId })
+            .ToListAsync();
         Assert.All(sales, sale => Assert.Equal(ExternalProvider.Nayax, sale.Provider));
         Assert.All(sales, sale => Assert.False(sale.ProviderProductIdIsRaw));
         Assert.Equal([5001L, null], sales.Select(sale => sale.NayaxProductId));
@@ -458,6 +472,26 @@ public class AddNayaxSaleProductAssociationMigrationTests
         }
 
         public AppDbContext Context() => TestAppDbContext.Unrestricted(Options);
+
+        /// <summary>
+        /// The single sale's own key and transaction id, for a case that has to write a decision
+        /// about it.
+        ///
+        /// <para><strong>Every read in this file projects the columns it asserts rather than
+        /// materialising the entity</strong> (issue #1103). The database here sits at a past
+        /// migration on purpose, so the model legitimately declares columns it does not have yet -
+        /// <c>NayaxSales.ReceivedViaSqsAtUtc</c> and the two beside it are the ones that made that
+        /// concrete - and a read of the whole entity would fail on the schema rather than on what it
+        /// is asserting. A projection asks for exactly the columns under test, which is the same
+        /// reason the other migration tests here read with SQL.</para>
+        /// </summary>
+        public async Task<(long Id, long TransactionId)> SaleKeyAsync()
+        {
+            await using var db = Context();
+            return await db.NayaxSales.AsNoTracking()
+                .Select(sale => ValueTuple.Create(sale.Id, sale.TransactionID))
+                .SingleAsync();
+        }
 
         /// <summary>Each sale's transaction id and the local product it came out attributed to.</summary>
         public async Task<List<(long TransactionId, long? ProductId)>> AssociationsAsync()

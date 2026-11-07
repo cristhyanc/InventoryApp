@@ -431,7 +431,11 @@ public class NayaxHistoricalCostTests
         return TestSalesSync.UseCase(
             nayax,
             new EfLatestNayaxSalesStore(
-                db, TestCostingUseCases.CostSale(db, rebuild), rebuild, IdentityLinks()));
+                db,
+                TestCostingUseCases.CostSale(db, rebuild),
+                rebuild,
+                IdentityLinks(),
+                TestClocks.Fixed));
     }
 
     private static AppDbContext CreateDb() =>

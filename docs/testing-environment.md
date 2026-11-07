@@ -159,12 +159,23 @@ deploy without them.
 | `PlatformAdmin__DirectoryTenantId`, `PlatformAdmin__ObjectId` | your own Entra ids (optional) | Super Admin pages on testing, for example to approve that business. |
 | `PriceCollector__TenantId`, `PriceCollector__ClientId`, `PriceCollector__RunExpiryHours` | see [Collector](#manual-supplier-price-collector-against-testing) | Only when you test the collector. |
 
-**Leave unset**: `NayaxTokenProtection__*`, `BackupStorage__*`, `APPLICATIONINSIGHTS_CONNECTION_STRING`
-(or point it at a separate test Application Insights resource), `ExternalId__*` (see below), and
-`Subscriptions__EnforcementEnabled`. With no Nayax token key, no business on testing can store Nayax
-credentials, so the test API makes no Nayax call. The deploy job warns when a Nayax key or backup
-storage is configured. The application has no payment provider. Never copy production
-connection strings, keys or storage settings into testing.
+**Leave unset**: `NayaxTokenProtection__*`, `NayaxSqs__*`, `BackupStorage__*`,
+`APPLICATIONINSIGHTS_CONNECTION_STRING` (or point it at a separate test Application Insights
+resource), `ExternalId__*` (see below), and `Subscriptions__EnforcementEnabled`. With no Nayax token
+key, no business on testing can store Nayax credentials, so the test API makes no Nayax call. The
+deploy job warns when a Nayax key or backup storage is configured. The application has no payment
+provider. Never copy production connection strings, keys or storage settings into testing.
+
+**The Nayax SQS sales reader stays off on testing, and `NayaxSqs__*` must stay unset to keep it off**
+(issue #1103). The production queue carries real transactions for real businesses, and a second
+reader on the same queue would take messages the production API then never sees — a lost sale, not a
+duplicated one, because a received message is invisible to everybody else for its visibility timeout.
+With no `NayaxSqs__QueueUrl` the reader is not started at all: the API logs one information line and
+imports sales only through `POST /api/nayax-sales-sync`, which is what testing had before the reader
+existed. Giving testing its *own* queue and IAM user is possible and is not configured by this
+repository; it would be a separate human setup, never the production values. Note that a queue URL
+with no region or credential pair **fails startup** rather than being ignored, so a half-filled
+setting is a refusal rather than a quiet no-op. See `docs/architecture.md` § Nayax SQS sales reader.
 
 The database starts empty. Startup creates the schema from the migrations on the first deployment
 and applies new migrations on later ones. Nothing rolls a migration back. To reset testing, stop the

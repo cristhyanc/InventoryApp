@@ -69,6 +69,15 @@
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxOperationCredentials.cs" Link="Application\Nayax\FakeNayaxOperationCredentials.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxProductLinkStore.cs" Link="Application\Nayax\FakeNayaxProductLinkStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" Link="Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" />
+    <!-- The first real Nayax SQS message's shape with fictional values (issue #1102). It is a
+         fixture rather than a double, and it is shared for the reason the doubles are: the queue
+         reader of issue #1103 has to be exercised against the document Nayax really sends - card
+         fields and all - and a second copy of it here would be a second thing to keep in step. -->
+    <Compile Include="..\Inventory.UnitTests\Application\NayaxSqs\FakeNayaxSqsReader.cs" Link="Application\NayaxSqs\FakeNayaxSqsReader.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\NayaxSqs\NayaxSqsRealMessage.cs" Link="Application\NayaxSqs\NayaxSqsRealMessage.cs" />
+    <!-- The published documentation sample beside it, which that fixture's own documentation refers
+         to as the thing it is not. -->
+    <Compile Include="..\Inventory.UnitTests\Application\NayaxSqs\NayaxSqsExampleMessage.cs" Link="Application\NayaxSqs\NayaxSqsExampleMessage.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeBusinessApplicationAudit.cs" Link="Application\Onboarding\FakeBusinessApplicationAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" Link="Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PickList\FakeMultiMachinePickListRefillStore.cs" Link="Application\PickList\FakeMultiMachinePickListRefillStore.cs" />
