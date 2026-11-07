@@ -27,7 +27,8 @@ public sealed record DailyReportDayFacts(
     int PendingTransactionCount,
     int DeclinedOrCancelledTransactionCount,
     int RefundedTransactionCount,
-    int UnknownStatusTransactionCount);
+    int UnknownStatusTransactionCount,
+    int ExcludedByReviewTransactionCount = 0);
 
 /// <summary>
 /// Already-aggregated raw facts for the whole requested range, used to build the totals row. Some
@@ -47,7 +48,8 @@ public sealed record DailyReportTotalsFacts(
     int DeclinedOrCancelledTransactionCount,
     int RefundedTransactionCount,
     int UnknownStatusTransactionCount,
-    int NullStatusTransactionCount);
+    int NullStatusTransactionCount,
+    int ExcludedByReviewTransactionCount = 0);
 
 /// <summary>
 /// Raw facts needed to build the daily report for a resolved date range and optional machine

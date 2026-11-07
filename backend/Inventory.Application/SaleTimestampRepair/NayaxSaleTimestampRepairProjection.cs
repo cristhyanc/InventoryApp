@@ -5,6 +5,7 @@ using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Application.SaleTimestampRepair;
@@ -215,7 +216,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
             decision.Sale.MachineName,
             decision.Sale.SettlementValue,
             decision.Sale.TransactionStatusId,
-            NayaxTransactionStatusClassifier.IsCompletedSale(decision.Sale.TransactionStatusId),
+            NayaxSaleCountingPolicy.IsCountedSale(decision.Sale.TransactionStatusId, decision.Sale.SqsVerification),
             decision.Sale.StoredInstantUtc,
             _calendar.ToBusinessDate(decision.Sale.StoredInstantUtc),
             decision.RepairedInstantUtc,
@@ -238,7 +239,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
         foreach (var decision in decisions)
         {
             if (decision.RepairedInstantUtc is not { } repaired
-                || !NayaxTransactionStatusClassifier.IsCompletedSale(decision.Sale.TransactionStatusId))
+                || !NayaxSaleCountingPolicy.IsCountedSale(decision.Sale.TransactionStatusId, decision.Sale.SqsVerification))
                 continue;
 
             var from = _calendar.ToBusinessDate(decision.Sale.StoredInstantUtc);
@@ -276,7 +277,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
         foreach (var decision in decisions)
         {
             if (decision.Outcome != NayaxSaleTimestampRepairOutcome.Repairable
-                || !NayaxTransactionStatusClassifier.IsCompletedSale(decision.Sale.TransactionStatusId))
+                || !NayaxSaleCountingPolicy.IsCountedSale(decision.Sale.TransactionStatusId, decision.Sale.SqsVerification))
                 continue;
 
             // The association persisted on the sale (issue #758), never a match re-made here: the
@@ -374,7 +375,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
             .ToDictionary(decision => decision.Sale.TransactionId, decision => decision.RepairedInstantUtc!.Value);
         var all = windowed
             .Concat(decisions.Select(decision => decision.Sale))
-            .Where(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+            .Where(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification))
             .GroupBy(sale => sale.TransactionId)
             .Select(group => group.First())
             .ToList();
@@ -404,7 +405,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
         // export that does not account for them.
         var unresolved = decisions
             .Where(decision => decision.Outcome == NayaxSaleTimestampRepairOutcome.Unresolved
-                && NayaxTransactionStatusClassifier.IsCompletedSale(decision.Sale.TransactionStatusId)
+                && NayaxSaleCountingPolicy.IsCountedSale(decision.Sale.TransactionStatusId, decision.Sale.SqsVerification)
                 && InWindow(decision.Sale.StoredInstantUtc)
                 && decision.Sale.StoredInstantUtc < request.CutoffUtc)
             .ToList();

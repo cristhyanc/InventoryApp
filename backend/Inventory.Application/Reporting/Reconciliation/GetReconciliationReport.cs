@@ -58,6 +58,8 @@ public sealed class GetReconciliationReport
             qualityNotes.Add(MissingStatusNote(facts.NullStatusTransactionCount));
         if (facts.UnknownStatusTransactionCount > 0)
             qualityNotes.Add(UnrecognisedStatusNote(facts.UnknownStatusTransactionCount));
+        if (facts.ExcludedByReviewTransactionCount > 0)
+            qualityNotes.Add($"{facts.ExcludedByReviewTransactionCount} Nayax sale(s) contradicted by Nayax or excluded by the owner are not counted in these figures.");
         if (facts.PendingTransactionCount > 0)
             qualityNotes.Add(PendingNote(facts.PendingTransactionCount));
         if (facts.IsMachineFiltered)
@@ -100,6 +102,7 @@ public sealed class GetReconciliationReport
             DeclinedOrCancelledTransactionCount = facts.DeclinedOrCancelledTransactionCount,
             UnknownStatusTransactionCount = facts.UnknownStatusTransactionCount,
             MissingStatusTransactionCount = facts.NullStatusTransactionCount,
+            ExcludedByReviewTransactionCount = facts.ExcludedByReviewTransactionCount,
             CardTransactionSales = totals.CardTransactionSales,
             NayaxReportedGrossCardSales = totals.NayaxReportedGrossCardSales,
             NayaxReportedCardTransactionCount = totals.NayaxReportedCardTransactionCount,

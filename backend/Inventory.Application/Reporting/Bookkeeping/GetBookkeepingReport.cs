@@ -64,6 +64,8 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             qualityNotes.Add($"{facts.MissingStatusTransactionCount} Nayax transaction(s) have no status ID and are excluded from completed sales.");
         if (facts.UnknownStatusTransactionCount > 0)
             qualityNotes.Add($"{facts.UnknownStatusTransactionCount} Nayax transaction(s) have an unrecognised status ID and are excluded from completed sales.");
+        if (facts.ExcludedByReviewTransactionCount > 0)
+            qualityNotes.Add($"{facts.ExcludedByReviewTransactionCount} Nayax sale(s) contradicted by Nayax or excluded by the owner are not counted in completed sales.");
         if (facts.UnknownTransactions > 0)
             qualityNotes.Add("One or more transactions have an unknown payment method.");
         if (isMachineFiltered && !facts.ImportedMachineFilterMatched)

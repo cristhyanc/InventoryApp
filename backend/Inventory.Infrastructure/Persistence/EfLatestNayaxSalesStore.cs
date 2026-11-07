@@ -555,7 +555,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);
 
         var insertedCompleted =
-            NayaxTransactionStatusClassifier.IsCompletedSale(added.TransactionStatusId);
+            NayaxSaleCountingPolicy.IsCountedSale(added.TransactionStatusId, added.SqsVerification);
 
         if (insertedCompleted && matchedProductId is not null)
             RecordAffected(affected, matchedProductId.Value, added.MachineAuthorizationTime);
@@ -610,7 +610,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             await _saleCosting.CostAsync(
                 existing,
                 cancellationToken: cancellationToken);
-            if (NayaxTransactionStatusClassifier.IsCompletedSale(existing.TransactionStatusId))
+            if (NayaxSaleCountingPolicy.IsCountedSale(existing.TransactionStatusId, existing.SqsVerification))
             {
                 // The association persisted on the row (issue #758) - never a match re-made
                 // from the provider's product id or the reported name. A sale whose product a
@@ -626,7 +626,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             Stored: true,
             Inserted: false,
             CompletedSaleProductId:
-                NayaxTransactionStatusClassifier.IsCompletedSale(existing.TransactionStatusId)
+                NayaxSaleCountingPolicy.IsCountedSale(existing.TransactionStatusId, existing.SqsVerification)
                     ? existing.ProductId
                     : null);
     }

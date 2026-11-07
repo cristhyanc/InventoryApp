@@ -46,6 +46,17 @@ public static class NayaxSqsVerificationTransitions
             // Terminal: only an Owner decision (issue #1105) moves a row out of a contradiction.
             NayaxSqsVerification.Conflict => false,
 
+            // An Owner decision (issue #1105) stands until later provider evidence contradicts the
+            // decided values. Matching evidence changes nothing: an owner-decided row is never
+            // promoted to Verified, because "Confirmed by owner" and "Nayax-verified" are different
+            // facts. Which evidence may supersede a decision - a comparison that differs from the one
+            // the decision relied on, never an absence - is decided by the evidence write, which is
+            // the only place that can see both.
+            NayaxSqsVerification.OwnerConfirmed
+                or NayaxSqsVerification.OwnerCorrected
+                or NayaxSqsVerification.OwnerExcluded =>
+                to is NayaxSqsVerification.Conflict or NayaxSqsVerification.NeedsInvestigation,
+
             // Not a queue sale, or a state this build does not declare. Fail closed either way.
             _ => false,
         };
@@ -62,4 +73,12 @@ public static class NayaxSqsVerificationTransitions
     public static NayaxSqsVerification? Apply(
         NayaxSqsVerification? current, NayaxSqsVerification? observed) =>
         observed is { } next && IsAllowed(current, next) ? next : current;
+
+    /// <summary>
+    /// Whether <paramref name="state"/> records a business Owner's decision (issue #1105).
+    /// </summary>
+    public static bool IsOwnerDecided(NayaxSqsVerification? state) =>
+        state is NayaxSqsVerification.OwnerConfirmed
+            or NayaxSqsVerification.OwnerCorrected
+            or NayaxSqsVerification.OwnerExcluded;
 }

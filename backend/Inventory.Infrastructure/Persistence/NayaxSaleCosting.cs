@@ -56,6 +56,7 @@ internal sealed class NayaxCostableSale : CostableSale
         Entity = entity;
         TransactionId = entity.TransactionID;
         TransactionStatusId = entity.TransactionStatusId;
+        SqsVerification = entity.SqsVerification;
         ProductId = entity.ProductId;
         NayaxProductId = entity.NayaxProductId;
         ProductName = entity.ProductName;

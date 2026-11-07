@@ -42,7 +42,7 @@ public sealed class GetDailyReport
             totalsFacts.ImportedContainsRows ? totalsFacts.ImportedNetReimbursement : rows.Sum(x => x.NetReimbursement),
             totalsFacts.CompletedTransactionCount, totalsFacts.PendingTransactionCount,
             totalsFacts.DeclinedOrCancelledTransactionCount, totalsFacts.RefundedTransactionCount,
-            totalsFacts.UnknownStatusTransactionCount)
+            totalsFacts.UnknownStatusTransactionCount, totalsFacts.ExcludedByReviewTransactionCount)
         {
             PartialCostOfGoods = totalsFacts.PartialCostOfGoods,
             NayaxProcessingFees = totalsFacts.ProcessingFees
@@ -114,7 +114,8 @@ public sealed class GetDailyReport
             result.GrossMarginPercent, day.ProcessingFees.TotalFeeExGst, day.ProcessingFees.TotalFeeIncGst,
             day.ProcessingFees.TotalFeeGst, day.ImportedReimbursement, day.NetReimbursement, result.IsReconciled, result.ReconciliationStatus,
             day.CompletedTransactionCount, day.PendingTransactionCount, day.DeclinedOrCancelledTransactionCount,
-            day.RefundedTransactionCount, day.UnknownStatusTransactionCount, feeSource)
+            day.RefundedTransactionCount, day.UnknownStatusTransactionCount, feeSource,
+            day.ExcludedByReviewTransactionCount)
         {
             PartialCostOfGoods = day.PartialCostOfGoods
         };
@@ -130,6 +131,8 @@ public sealed class GetDailyReport
             notes.Add($"{totals.DeclinedOrCancelledTransactionCount} cancelled or declined Nayax transaction(s) are excluded from completed sales.");
         if (totals.UnknownStatusTransactionCount > 0)
             notes.Add($"{totals.UnknownStatusTransactionCount} Nayax transaction(s) have unrecognised status IDs.");
+        if (totals.ExcludedByReviewTransactionCount > 0)
+            notes.Add($"{totals.ExcludedByReviewTransactionCount} Nayax sale(s) contradicted by Nayax or excluded by the owner are not counted in completed sales.");
         if (totals.NullStatusTransactionCount > 0)
             notes.Add($"{totals.NullStatusTransactionCount} Nayax transaction(s) have no status ID and are excluded from completed sales.");
     }

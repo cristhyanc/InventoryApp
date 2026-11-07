@@ -15,7 +15,13 @@ public enum NayaxTransactionStatus
     Completed,
     Pending,
     Refunded,
-    CancelledOrDeclined
+    CancelledOrDeclined,
+
+    // A status-12 sale that issue #1105's review keeps out of every completed-sale total: contradicted
+    // by the business's own Nayax lastSales, or excluded by the business Owner. Only
+    // Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy.Classify ever answers it; the transaction
+    // status alone never does. Appended last so no persisted or serialized ordinal moves.
+    ExcludedByReview
 }
 
 public enum CommissionFrequency
