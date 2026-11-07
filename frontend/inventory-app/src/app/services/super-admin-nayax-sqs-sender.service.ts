@@ -18,9 +18,31 @@ export interface SuperAdminNayaxSqsSender {
   readonly awsSenderId: string | null;
   readonly isEnabled: boolean;
   readonly lastMessageReceivedAtUtc: string | null;
+  /**
+   * When this business's hourly reconciliation last **fully** succeeded, or `null` when it never
+   * has (issue #1104's column, reported here since issue #1106). It is half of what decides whether
+   * that business's Dashboard may stop reading Nayax, which is why the card shows it.
+   */
+  readonly lastReconciliationSucceededAtUtc: string | null;
+  /** How the one queue reader is getting on - a fact about the process, not about this business. */
+  readonly readerHealth: SuperAdminNayaxSqsReaderHealth;
   readonly revision: number;
   readonly createdAtUtc: string;
   readonly updatedAtUtc: string;
+}
+
+/**
+ * The queue reader's own health as the sender endpoints report it (issue #1106, over the record of
+ * issue #1103).
+ *
+ * `lastSuccessfulPollUtc` counts an **empty** poll: the queue answering with nothing to hand over is
+ * the normal state of a quiet fleet. `null` means the reader has not polled since the process
+ * started - which is every deployment with no queue configured, and every API before its first poll.
+ */
+export interface SuperAdminNayaxSqsReaderHealth {
+  readonly lastSuccessfulPollUtc: string | null;
+  readonly consecutivePollFailures: number;
+  readonly deadLetterQueueDepth: number | null;
 }
 
 /**

@@ -240,6 +240,26 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   salesSyncedAtUtc: string | null = null;
 
+  /**
+   * Whether this business's sales arrive live from the shared Nayax SQS queue, as the server's own
+   * answer to the on-load call said (issue #1106).
+   *
+   * It is a different statement from {@link salesSyncedAtUtc} and never shown beside it: a live
+   * business's figures are not "synced N min ago" at all - nothing was read, because the sales
+   * arrive as they happen - so the freshness line says so instead. It stays `false` for everything
+   * that is not that answer: a run, a recent-sync skip, a failure, the run limit and a support
+   * session.
+   */
+  isSalesLiveViaSqs = false;
+
+  /**
+   * When this business's queue last delivered a sale, as a true instant, or `null` when it has never
+   * delivered one (issue #1106). Only ever set beside {@link isSalesLiveViaSqs}, and `null` is a
+   * healthy quiet queue rather than a problem - which is why it reads "no sales received yet" and
+   * never as a warning.
+   */
+  lastSqsMessageReceivedAtUtc: string | null = null;
+
   /** Whether a Refresh the operator asked for is still in flight; see {@link refreshSales}. */
   isRefreshingSales = false;
 
@@ -414,12 +434,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * synchronized less than three minutes ago. That is a third answer and not a refusal: the figures
    * below are current, so no notice is shown and {@link salesSyncedAtUtc} carries the instant the
    * server reported instead. `force` is the Refresh control's, and the only thing that bypasses it.
+   *
+   * Since issue #1106 there is a fourth answer, and it is the strongest of them: this business's
+   * sales arrive live from the shared Nayax SQS queue, so the server read nothing at all. The
+   * persisted figures below are loaded exactly as before - the queue reader has already stored the
+   * sales they are calculated from - and the freshness line says "Live from Nayax" instead of an
+   * age, because nothing was synchronized and claiming an age would be a false statement. The
+   * Refresh control still forces a full `lastSales` read for an operator who wants one.
    */
   refreshSalesDashboard(force = false): void {
     this.isSalesSyncFailed = false;
     this.isSalesSyncRecentlyRefreshed = false;
     this.isSalesSyncSkippedInSupportView = false;
     this.salesSyncedAtUtc = null;
+    this.isSalesLiveViaSqs = false;
+    this.lastSqsMessageReceivedAtUtc = null;
     if (!this.isProviderUsable) {
       this.isLoadingSites = false;
       this.isLoadingMachines = false;
@@ -437,9 +466,17 @@ export class DashboardComponent implements OnInit, OnDestroy {
     this.nayaxSalesSyncService.syncLatest(force).subscribe({
       next: (result) => {
         this.isRefreshingSales = false;
-        // A skipped run reports when the sales were synchronized; a run that happened has just
-        // finished, so the instant is this moment.
-        this.salesSyncedAtUtc = result.lastSyncedAtUtc ?? new Date().toISOString();
+        if (result.liveViaSqs) {
+          // Nothing was read, and nothing needed to be: the sales arrive from the queue as they
+          // happen (issue #1106). Claiming an age for figures no request produced - "synced just
+          // now" - would be exactly the wrong statement, so this page says what is actually true.
+          this.isSalesLiveViaSqs = true;
+          this.lastSqsMessageReceivedAtUtc = result.lastSqsMessageReceivedAtUtc;
+        } else {
+          // A skipped run reports when the sales were synchronized; a run that happened has just
+          // finished, so the instant is this moment.
+          this.salesSyncedAtUtc = result.lastSyncedAtUtc ?? new Date().toISOString();
+        }
         this.refreshMachines();
         this.refreshSites();
       },

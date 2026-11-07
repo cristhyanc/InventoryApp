@@ -12,6 +12,14 @@ const recorded: SuperAdminNayaxSqsSender = {
   awsSenderId: 'AIDAEXAMPLEUSERID123',
   isEnabled: true,
   lastMessageReceivedAtUtc: '2026-11-05T22:10:00Z',
+  // The two the endpoints also report since issue #1106: this business's last fully successful
+  // reconciliation, and the one reader's own health.
+  lastReconciliationSucceededAtUtc: '2026-11-05T21:00:00Z',
+  readerHealth: {
+    lastSuccessfulPollUtc: '2026-11-05T22:11:40Z',
+    consecutivePollFailures: 0,
+    deadLetterQueueDepth: 0
+  },
   revision: 3,
   createdAtUtc: '2026-11-01T01:00:00Z',
   updatedAtUtc: '2026-11-06T03:45:00Z'
