@@ -238,9 +238,26 @@ internal sealed class NayaxSqsSaleFixture : IAsyncDisposable
             ProductCostPrice = 1.2m,
         };
 
-    /// <summary>Records <paramref name="senderId"/> as that business's enabled SQS sender (issue #1101).</summary>
+    /// <summary>
+    /// Records <paramref name="senderId"/> as that business's enabled SQS sender (issue #1101).
+    /// </summary>
+    /// <param name="businessId">The business the sender belongs to.</param>
+    /// <param name="senderId">The AWS IAM user id, or <c>null</c> for a row whose id was cleared.</param>
+    /// <param name="isEnabled">Whether the mapping is in force.</param>
+    /// <param name="lastMessageReceivedAtUtc">
+    /// When its queue last delivered, for the cases that read it back (issue #1106). Normally written
+    /// by the reader itself; arranged here so a test need not deliver a message to have one.
+    /// </param>
+    /// <param name="lastReconciliationSucceededAtUtc">
+    /// When its hourly reconciliation last fully succeeded, for the same reason (issue #1104's
+    /// column, issue #1106's reader).
+    /// </param>
     public async Task RecordSenderAsync(
-        int businessId, string senderId, bool isEnabled = true)
+        int businessId,
+        string? senderId,
+        bool isEnabled = true,
+        DateTime? lastMessageReceivedAtUtc = null,
+        DateTime? lastReconciliationSucceededAtUtc = null)
     {
         await using var db = Unrestricted();
         db.BusinessNayaxSqsSenders.Add(new BusinessNayaxSqsSender
@@ -248,6 +265,8 @@ internal sealed class NayaxSqsSaleFixture : IAsyncDisposable
             BusinessId = businessId,
             AwsSenderId = senderId,
             IsEnabled = isEnabled,
+            LastMessageReceivedAtUtc = lastMessageReceivedAtUtc,
+            LastReconciliationSucceededAtUtc = lastReconciliationSucceededAtUtc,
             Revision = 1,
             CreatedAtUtc = ReceivedAtUtc,
             UpdatedAtUtc = ReceivedAtUtc,

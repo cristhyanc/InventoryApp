@@ -38,6 +38,12 @@ const recordedSender: SuperAdminNayaxSqsSender = {
   awsSenderId: 'AIDAEXAMPLEUSERID123',
   isEnabled: true,
   lastMessageReceivedAtUtc: null,
+  lastReconciliationSucceededAtUtc: null,
+  readerHealth: {
+    lastSuccessfulPollUtc: null,
+    consecutivePollFailures: 0,
+    deadLetterQueueDepth: null
+  },
   revision: 2,
   createdAtUtc: '2026-11-01T01:00:00Z',
   updatedAtUtc: '2026-11-06T03:45:00Z'
