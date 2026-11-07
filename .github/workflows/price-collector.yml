@@ -1,11 +1,14 @@
 name: Price collector
 
-# Scheduled collection (#1110, completing #929): one best-effort daily run at 05:17 Sydney time on
-# main, against production, asking only for the work that is due on each supplier's own schedule
-# (#1108). It ships switched off: the unprotected, credential-free gate job lets a scheduled run
-# continue only when the repository variable PRICE_COLLECTOR_SCHEDULE_ENABLED is exactly true, so a
-# switched-off schedule ends there without requesting the protected environment or its approval.
-# GitHub may delay or drop a scheduled run; a dropped day is caught up by the next run, and
+# Daily collection (#1110, completing #929): one run a day on main, against production, asking only
+# for the work that is due on each supplier's own schedule (#1108). GitHub's own cron is best effort
+# (runs came hours late), so the daily start comes from an Azure Logic App at 05:00 Sydney time
+# (owner decision, 8 November 2026; docs/price-collector-testing.md § Daily schedule). It calls this
+# workflow's dispatch API with scheduled_run true and nothing else, and every other input is then
+# ignored. The unprotected, credential-free gate job lets that run continue only when the repository
+# variable PRICE_COLLECTOR_SCHEDULE_ENABLED is exactly true, so a switched-off daily run ends there
+# without requesting the protected environment or its approval. A missed day is caught up by the
+# next run, and
 # overlapping due runs cannot issue a pair twice because the backend decides due per product and
 # supplier pair, atomically, and blocks pairs with pending work (#1108). A manual run's schedule
 # input defaults to all, which deliberately bypasses that and can re-search a covered pair.
@@ -17,12 +20,15 @@ name: Price collector
 # reviewer), with that environment's own identity, and only to the production API origin.
 # full_run is a production-sized run: every issued search with the production page sizes, in fresh
 # Claude sessions of a few searches each. A scheduled run is always a full run of the due work.
+run-name: ${{ inputs.scheduled_run && 'Price collector (daily schedule)' || 'Price collector' }}
 on:
-  schedule:
-    - cron: '17 5 * * *'
-      timezone: Australia/Sydney
   workflow_dispatch:
     inputs:
+      scheduled_run:
+        description: Set only by the Azure daily schedule - the daily run (production, due, full run, Kmart and BIG W allowed) if PRICE_COLLECTOR_SCHEDULE_ENABLED is true; every other input is ignored. Leave off for a manual run.
+        required: false
+        type: boolean
+        default: false
       target:
         description: test = the disposable test API (main or develop); production = the production API (main only, needs the environment reviewer's approval)
         required: true
@@ -115,11 +121,15 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           RUN_REF: ${{ github.ref }}
+          SCHEDULED_RUN: ${{ inputs.scheduled_run }}
           SCHEDULE_ENABLED: ${{ vars.PRICE_COLLECTOR_SCHEDULE_ENABLED }}
         run: |
-          case "$EVENT_NAME" in
-            workflow_dispatch) echo 'enabled=true' >> "$GITHUB_OUTPUT" ;;
-            schedule)
+          if [ "$EVENT_NAME" != 'workflow_dispatch' ]; then
+            echo '::error::The collector starts only through its dispatch entry point (by hand or by the Azure daily schedule).'
+            exit 1
+          fi
+          case "$SCHEDULED_RUN" in
+            true)
               if [ "$SCHEDULE_ENABLED" != 'true' ]; then
                 echo 'Scheduled collection is switched off (PRICE_COLLECTOR_SCHEDULE_ENABLED is not true).'
                 printf '## Price collector\n\nScheduled collection is switched off: PRICE_COLLECTOR_SCHEDULE_ENABLED is not true, so nothing was requested, searched or spent.\n' >> "$GITHUB_STEP_SUMMARY"
@@ -131,11 +141,11 @@ jobs:
                 exit 1
               fi
               echo 'enabled=true' >> "$GITHUB_OUTPUT" ;;
-            *) echo '::error::The collector starts only by schedule or by hand.'; exit 1 ;;
+            *) echo 'enabled=true' >> "$GITHUB_OUTPUT" ;;
           esac
 
       - name: Require main or develop and the owner's confirmation for the chosen target
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduled_run != true
         env:
           RUN_REF: ${{ github.ref }}
           TARGET: ${{ inputs.target }}
@@ -182,7 +192,7 @@ jobs:
       - name: Publish the run's settings
         id: settings
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULED_RUN: ${{ inputs.scheduled_run }}
           ENABLED: ${{ steps.switch.outputs.enabled }}
           TARGET: ${{ inputs.target }}
           SCHEDULE: ${{ inputs.schedule }}
@@ -195,7 +205,7 @@ jobs:
             echo 'proceed=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$EVENT_NAME" = 'schedule' ]; then
+          if [ "$SCHEDULED_RUN" = 'true' ]; then
             TARGET=production SCHEDULE=due SAMPLE_SIZE=3 FULL_RUN=true INCLUDE_RETAILERS=true STOP_AFTER_MINUTES=''
           fi
           case "$SCHEDULE" in

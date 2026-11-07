@@ -1037,8 +1037,8 @@ Runs for one issue are queued rather than cancelled by a newer invocation, so a 
 
 ## Supplier price collector (#929, #1110)
 
-`price-collector.yml` deploys nothing. It starts by hand, or from one daily schedule (#1110) that
-ships switched off; see [Scheduled runs](#scheduled-collector-runs) below. Its `test` target
+`price-collector.yml` deploys nothing. It starts by hand, or once a day from an Azure Logic App (#1110)
+through the same dispatch entry point, switched by a repository variable; see [Scheduled runs](#scheduled-collector-runs) below. Its `test` target
 runs only reviewed `main` or reviewed `develop` (develop to test against the hosted testing API) in
 the protected `price-collector` environment and refuses the production API origin; its `production`
 target runs only reviewed `main` in the separate, reviewer-protected `price-collector-production`
@@ -1082,19 +1082,23 @@ private workspace, state and CLI installation.
 
 ### Scheduled collector runs
 
-The only automatic trigger is `schedule` with `cron: '17 5 * * *'` and `timezone: Australia/Sydney`
-(best effort: GitHub may delay or drop it, and the workflow does not check the hour). The first job,
-`gate`, has `permissions: {}`, no environment and no secret. For a scheduled run it reads the
-repository variable `PRICE_COLLECTOR_SCHEDULE_ENABLED` and ends green unless it is exactly `true`,
-so a switched-off schedule never requests the protected environment; it refuses a scheduled run on
-any ref but `main`; and it publishes fixed settings (target `production`, `due` work, full run,
-verified retailer actors allowed) as job outputs, which the credentialed `collect` job (`needs:
-gate`) reads instead of `inputs`. A manual run keeps its confirmation gate and gains a `schedule`
-input (`all` by default, or `due`). When a `due` request issues no run (#1108), the prepare step
-outputs `run_issued=false`, and the Claude and finalisation steps are skipped. Every switched-on
-scheduled run still waits for `price-collector-production`'s required reviewer; the workflow changes
-no environment rule. `workflow-contract.mjs` checks the single schedule, the switch, the
-credential-free gate, the fixed scheduled settings and the skipped steps.
+The workflow's only trigger is `workflow_dispatch`. The daily run is started by an Azure Logic App at
+05:00 Sydney time (owner decision, 8 November 2026, because GitHub's cron started runs hours late),
+which calls the dispatch API on `main` with the input `scheduled_run: true` and a fine-grained token
+that holds only the Actions permission on this repository; the workflow does not check the hour. The
+first job, `gate`, has `permissions: {}`, no environment and no secret. For a `scheduled_run` run it
+reads the repository variable `PRICE_COLLECTOR_SCHEDULE_ENABLED` and ends green unless it is exactly
+`true`, so a switched-off daily run never requests the protected environment; it refuses a daily run
+on any ref but `main`; it skips the manual confirmation; and it publishes fixed settings (target
+`production`, `due` work, full run, verified retailer actors allowed) as job outputs, which the
+credentialed `collect` job (`needs: gate`) reads instead of `inputs`. A manual run keeps its
+confirmation gate and its `schedule` input (`all` by default, or `due`). When a `due` request issues
+no run (#1108), the prepare step outputs `run_issued=false`, and the Claude and finalisation steps
+are skipped. Every switched-on daily run still waits for `price-collector-production`'s required
+reviewer unless the owner removes it; the workflow changes no environment rule.
+`workflow-contract.mjs` checks that there is no GitHub cron and no other trigger, the
+`scheduled_run` switch, the credential-free gate, the fixed scheduled settings and the skipped
+steps. Setup: [Daily schedule](price-collector-testing.md#daily-schedule).
 
 See [Manual collector test](price-collector-testing.md) for all environment variables/secrets,
 Entra setup, the normal and interruption tests, actual supplier cost evidence, and how to switch

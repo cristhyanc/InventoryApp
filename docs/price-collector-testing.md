@@ -5,7 +5,8 @@ disposable Restockroo test API, let Claude search and match through the guard, s
 file, and complete the run. It makes real paid supplier calls and writes the **test catalogue**.
 A **test** run (the default `target`) never reaches the production API; a **production** run is a
 separate, main-only target described in [Production run](#production-run). The same workflow also
-has one daily production schedule, which ships switched off; see [Daily schedule](#daily-schedule).
+has one daily production run, started at 05:00 Sydney time by an Azure Logic App and switched by
+a repository variable; see [Daily schedule](#daily-schedule).
 #926 stays open until real output/cost evidence exists.
 
 ## One-time human setup
@@ -407,41 +408,76 @@ set by hand.
 
 ## Daily schedule
 
-[#1110](https://github.com/cristhyanc/InventoryApp/issues/1110) adds one schedule to the same
-workflow: `cron: '17 5 * * *'` with `timezone: Australia/Sydney`, so it is due at 05:17 Sydney time
-every day in both standard and daylight time. A scheduled run is fixed, with no inputs: it runs on
-**main** against **production**, asks for `due` work only, is a **full run**, and allows the
-previously verified Kmart and BIG W actors, because each supplier's **Search prices** switch and
-search schedule already decide whether it is searched that day.
+[#1110](https://github.com/cristhyanc/InventoryApp/issues/1110) added one daily production run. It
+first used GitHub's own cron (`'17 5 * * *'`, Australia/Sydney), but GitHub starts cron runs when it
+has capacity: the first switched-on morning's run came about 5 hours late and the next had not
+started 3 hours after its slot. So the owner decided (8 November 2026) that **an Azure Logic App
+starts it at 05:00 Sydney time**, and the workflow has no GitHub cron any more. The Logic App calls
+the workflow's dispatch API on **main** with one input, `scheduled_run: true`. Such a run is fixed,
+whatever else it is given: it runs on **main** against **production**, asks for `due` work only, is
+a **full run**, and allows the previously verified Kmart and BIG W actors, because each supplier's
+**Search prices** switch and search schedule already decide whether it is searched that day. A
+person can tick **scheduled_run** in the Run workflow form to start the same daily run by hand.
 
-**It ships switched off.** The run continues only when the repository variable
-`PRICE_COLLECTOR_SCHEDULE_ENABLED` is exactly `true`. That check is made in the workflow's first job
-(**Check run authorization**), which names no environment and holds no secret, API token or OIDC
-permission, so a switched-off scheduled run ends there green, saying "Scheduled collection is
+**It is switched by a repository variable.** A `scheduled_run` run continues only when
+`PRICE_COLLECTOR_SCHEDULE_ENABLED` is exactly `true`. That check is made in the workflow's first
+job (**Check run authorization**), which names no environment and holds no secret, API token or
+OIDC permission, so a switched-off daily run ends there green, saying "Scheduled collection is
 switched off", without requesting `price-collector-production` or its reviewer's approval. Any
-other value, or no variable at all, means off.
+other value, or no variable at all, means off. Disabling the Logic App also stops it.
 
-**Best effort.** GitHub may start a scheduled run late, or drop it when Actions is busy; 05:17 is
-off the hour because the start of an hour is the busiest. The workflow does not check the hour, so a
-late run still does its work. A dropped day is caught up by the next run, because `due` is decided
-per product-and-supplier pair and an owed search stays owed. Runs share the non-cancelling
-`price-collector` concurrency group, and the backend never issues a pair that another open run holds.
-A day with nothing due ends green with "Nothing due today" and spends nothing.
+**A missed day is caught up.** If Azure or GitHub fails one morning, the next run does that work,
+because `due` is decided per product-and-supplier pair and an owed search stays owed. The workflow
+does not check the hour, so a run that starts late still does its work. Runs share the
+non-cancelling `price-collector` concurrency group, and the backend never issues a pair that another
+open run holds. A day with nothing due ends green with "Nothing due today" and spends nothing.
 
 **Approval.** The `price-collector-production` environment has a required reviewer, so every
-switched-on scheduled run waits for that approval before its credentialed job starts, just like a
-manual production run. The workflow does not change environment protection rules; whether to keep
-that approval for scheduled runs is the owner's decision in the environment's settings.
+switched-on daily run waits for that approval before its credentialed job starts, just like a manual
+production run. The workflow does not change environment protection rules. To have the run start
+at 05:00 without anyone approving it, the owner removes the required reviewer in GitHub → Settings →
+Environments → `price-collector-production` (keep the main-only deployment branch rule); otherwise
+it waits until the reviewer approves it.
 
-**Switching it on**, after the change is released to **main**:
+### Set up the Azure Logic App
 
-1. Set each supplier's search schedule in **Super Admin → Supplier presets** (#1109).
-2. Run the workflow by hand from **main** with **target** `production`, **confirm_production_api**
-   ticked, **schedule** `due`, **full_run** ticked and **include_verified_retailers** ticked, and
-   check that it issues only the suppliers due today, or ends with "Nothing due today".
-3. In GitHub → Settings → Secrets and variables → Actions → Variables, create
-   `PRICE_COLLECTOR_SCHEDULE_ENABLED` with the value `true`. Delete it, or set it to anything else, to
-   switch the schedule off again.
+Do this after the change is released to **main**. Nothing here goes into the repository.
+
+1. **Create a GitHub token that can only start workflows.** GitHub → Settings → Developer settings →
+   Personal access tokens → **Fine-grained tokens** → Generate new token. Name it
+   `Restockroo price collector schedule`, choose an expiry (put a reminder in your calendar before
+   it ends), Repository access **Only select repositories** → `cristhyanc/InventoryApp`, and under
+   Repository permissions set **Actions** to **Read and write**. Leave every other permission at
+   No access. Copy the token; GitHub shows it once.
+2. **Create the Logic App.** Azure Portal → Create a resource → **Logic App** → plan type
+   **Consumption** (billed per action, a few cents a month at one run a day). Use the production
+   resource group and region, and name it, for example, `restockroo-price-collector-schedule`.
+3. **Add the trigger.** In the designer choose **Schedule → Recurrence**: Interval `1`, Frequency
+   `Day`, Time zone **(UTC+10:00) Canberra, Melbourne, Sydney** (`AUS Eastern Standard Time`, which
+   follows daylight saving), At these hours `5`, At these minutes `0`.
+4. **Add the action.** **HTTP**, Method `POST`, URI
+   `https://api.github.com/repos/cristhyanc/InventoryApp/actions/workflows/price-collector.yml/dispatches`,
+   Headers `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`,
+   `User-Agent: restockroo-price-collector-schedule` and `Authorization: Bearer <the token>`, Body:
+
+   ```json
+   { "ref": "main", "inputs": { "scheduled_run": "true" } }
+   ```
+
+   Open the action's **Settings** and turn on **Secure inputs** and **Secure outputs**, so the token
+   never appears in the Logic App's run history. Save.
+5. **Test it once.** With `PRICE_COLLECTOR_SCHEDULE_ENABLED` set to `true`, select **Run trigger →
+   Run** in the Logic App. GitHub answers `204 No Content`, and a run named
+   **Price collector (daily schedule)** appears under Actions. A `401` means the token is wrong or
+   expired, a `403` that it lacks the Actions permission, and a `422` that `main` does not have this
+   workflow change yet.
+
+**Switching it on or off:** in GitHub → Settings → Secrets and variables → Actions → Variables,
+`PRICE_COLLECTOR_SCHEDULE_ENABLED` set to `true` is on; deleting it, or any other value, is off.
+Before the first morning, check the schedules by hand: run the workflow from **main** with
+**target** `production`, **confirm_production_api** ticked, **schedule** `due`, **full_run** ticked
+and **include_verified_retailers** ticked, and check that it issues only the suppliers due today, or
+ends with "Nothing due today".
 
 ## Implementation and checks
 
@@ -463,7 +499,7 @@ as actor calls. Every other Apify account tool stays denied. Claude is launched 
 The finalizer obtains a **fresh** API token, copies only this sample's regular result files to a
 private submission folder, and delegates independent schema validation, batching, outcome ordering
 and completion to `submit-results.mjs`. It never prints raw error bodies or supplier-provided text.
-There is no automatic retry loop; the only automatic start is the [daily schedule](#daily-schedule).
+There is no automatic retry loop; the only automatic start is the [daily schedule](#daily-schedule), started by the Azure Logic App.
 
 ```bash
 node --test scripts/price-collector/*.test.mjs

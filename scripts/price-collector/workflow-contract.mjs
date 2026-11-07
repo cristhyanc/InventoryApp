@@ -1,6 +1,7 @@
 // Contract for the price collector workflow (#929, #1110): a manual test target, a main-only
-// production target, and one daily Sydney-time schedule that ships switched off behind an
-// unprotected, credential-free gate job.
+// production target, and one daily run started from outside GitHub (an Azure Logic App at 05:00
+// Sydney time, owner decision 8 November 2026) through the dispatch entry point with scheduled_run
+// true, switched off behind an unprotected, credential-free gate job.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,11 +20,12 @@ export const RUN_LOG_STEP = `      - name: Upload the run log
 `;
 export const COLLECT_ENVIRONMENT = "    environment: ${{ needs.gate.outputs.target == 'production' && 'price-collector-production' || 'price-collector' }}\n";
 export const COLLECT_CONDITION = "    if: needs.gate.outputs.proceed == 'true' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && (needs.gate.outputs.target == 'test' || (needs.gate.outputs.target == 'production' && github.ref == 'refs/heads/main')) && (";
-// One best-effort daily run in Sydney time (#1110), off the hour because GitHub documents that
-// scheduled runs at the start of an hour are the likeliest to be delayed or dropped.
-export const SCHEDULE_TRIGGER = "on:\n  schedule:\n    - cron: '17 5 * * *'\n      timezone: Australia/Sydney\n  workflow_dispatch:\n";
-export const SCHEDULE_SWITCH = `            schedule)
+// GitHub's cron started the daily run hours late, so the daily start comes from Azure through the
+// dispatch entry point. The only trigger is workflow_dispatch; scheduled_run marks the daily run.
+export const SCHEDULE_TRIGGER = "on:\n  workflow_dispatch:\n    inputs:\n      scheduled_run:\n";
+export const SCHEDULE_SWITCH = `            true)
               if [ "$SCHEDULE_ENABLED" != 'true' ]; then`;
+export const MANUAL_CONFIRMATION = "        if: github.event_name == 'workflow_dispatch' && inputs.scheduled_run != true\n";
 export const SCHEDULED_SETTINGS = "            TARGET=production SCHEDULE=due SAMPLE_SIZE=3 FULL_RUN=true INCLUDE_RETAILERS=true STOP_AFTER_MINUTES=''\n";
 export const FINALISE_STEP = "      - name: Submit finished files and complete the issued run\n        if: always() && steps.prepare.outputs.run_issued != 'false'\n        timeout-minutes: 15";
 export const GATE_PRODUCTION = `            production)
@@ -36,9 +38,11 @@ export function verifyCollectorWorkflow(text) {
   const problems = runnerPlacementViolations(text, workflowPath);
   const requireText = (part, reason) => { if (!text.includes(part)) problems.push(reason); };
   requireText('  workflow_dispatch:', 'The collector must have a manual entry point.');
-  requireText(SCHEDULE_TRIGGER, 'The only automatic start is one daily schedule at 05:17 Sydney time.');
-  if ((text.match(/^ {4}- cron:/gm) ?? []).length !== 1) problems.push('There must be exactly one schedule entry.');
-  if (/^ {2}(?:push|pull_request|pull_request_target|workflow_run|workflow_call|repository_dispatch):/m.test(text)) problems.push('Nothing but the schedule may start the collector automatically.');
+  requireText(SCHEDULE_TRIGGER, 'The only start is the dispatch entry point, whose scheduled_run input marks the daily run.');
+  if (/^ {2}schedule:|^ {4}- cron:/m.test(text)) problems.push('The daily run comes from the Azure schedule, not a GitHub cron.');
+  if (/^ {2}(?:push|pull_request|pull_request_target|workflow_run|workflow_call|repository_dispatch):/m.test(text)) problems.push('Nothing but the dispatch entry point may start the collector.');
+  requireText("          SCHEDULED_RUN: ${{ inputs.scheduled_run }}\n          SCHEDULE_ENABLED: ${{ vars.PRICE_COLLECTOR_SCHEDULE_ENABLED }}\n", 'The switch must read the scheduled_run input.');
+  requireText("          SCHEDULED_RUN: ${{ inputs.scheduled_run }}\n          ENABLED: ${{ steps.switch.outputs.enabled }}\n", 'The run settings must read the scheduled_run input.');
   // A delayed scheduled run still does its work; the backend's due rule (#1108) makes repeats safe.
   if (/date\s+[+-]|\$\(date|TZ=/.test(text)) problems.push('No runtime check of the hour or date may discard a delayed scheduled run.');
   // The switch is checked in the gate job, which names no environment and holds no credential, so a
@@ -47,7 +51,7 @@ export function verifyCollectorWorkflow(text) {
   requireText(SCHEDULE_SWITCH, 'A scheduled run must stop unless PRICE_COLLECTOR_SCHEDULE_ENABLED is exactly true.');
   requireText("              if [ \"$RUN_REF\" != 'refs/heads/main' ]; then\n                echo '::error::A scheduled collector run must be on main.'", 'A scheduled run must be on main.');
   requireText(SCHEDULED_SETTINGS, 'A scheduled run is a full production run of the due work only.');
-  requireText("        if: github.event_name == 'workflow_dispatch'\n", "The manual confirmation gate must apply to every manual run.");
+  requireText(MANUAL_CONFIRMATION, "The manual confirmation gate must apply to every manual run.");
   requireText("    needs: gate\n", 'The credentialed job must wait for the gate.');
   requireText('group: price-collector\n  cancel-in-progress: false', 'Collector runs must not overlap or cancel one another.');
   // Reviewed main or develop only (develop to test against the hosted testing API); a feature branch
