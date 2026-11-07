@@ -178,6 +178,12 @@ public class ProductsController : ControllerBase
     /// product - the catalogue page's reactivation path, the Admin costing-repair and
     /// AVCO-transition tools and the stock-history product filter - see only active products; see
     /// docs/architecture.md § Manual catalogue: who owns a product's fields.</para>
+    ///
+    /// <para><strong>No stock history.</strong> Each product's <c>stockAdjustments</c> key is
+    /// omitted here: no reader of the listing uses the movements, and every product's whole history
+    /// made each search a download large enough for a search typed after a pause to overtake the
+    /// previous one on a slow connection. <see cref="Get"/> and the stock endpoints still answer
+    /// them.</para>
     /// </summary>
     [HttpGet]
     public async Task<ActionResult<IEnumerable<ProductResponse>>> GetAll(
@@ -193,8 +199,10 @@ public class ProductsController : ControllerBase
             lowStockOnly,
             ct);
         ReorderListingMetadataHeaders.Publish(Response, listing);
+        // The listing leaves each product's stock history out: nothing that reads it uses the
+        // movements, and a single product and the stock endpoints still serve them.
         return Ok(listing.Products
-            .Select(product => ProductRecordResponseMapper.ToResponse(product, visibility))
+            .Select(product => ProductRecordResponseMapper.ToResponse(product, visibility, includeStockHistory: false))
             .ToList());
     }
 

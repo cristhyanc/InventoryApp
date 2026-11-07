@@ -114,7 +114,17 @@ public sealed record ProductResponse
     // a product no longer carries `supplierId`/`supplier`, here or in the product snapshot nested in
     // a purchase line, a supplier-order line or a machine slot. A supplier is still published on the
     // purchase and the supplier order themselves, where one is actually recorded.
-    public IReadOnlyList<ProductStockAdjustmentResponse> StockAdjustments { get; init; } = [];
+
+    /// <summary>
+    /// The product's stock movements. <see langword="null"/> - and omitted from the
+    /// JSON - on the <c>GET api/products</c> listing (All Products, and the reorder listing it also
+    /// serves with <c>lowStockOnly=true</c>): no reader of the listing uses them, and every
+    /// product's whole history made each search download hundreds of movements. A single product
+    /// (<c>GET api/products/{id}</c>), the stock endpoints and every other product response still
+    /// carry them. An absent key means "not sent on this read", never "no movements".
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ProductStockAdjustmentResponse>? StockAdjustments { get; init; } = [];
 
     public bool IsLowStock => ProductReorderPolicy.IsLowStock(QuantityInStock, LowStockThreshold);
 
