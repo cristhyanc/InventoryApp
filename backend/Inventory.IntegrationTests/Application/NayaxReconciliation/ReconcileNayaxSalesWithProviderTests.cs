@@ -630,6 +630,10 @@ public class ReconcileNayaxSalesWithProviderTests
             CredentialProvider(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestBusinessId),
             Coverage,
+            // The hourly run always forces, so it makes no live decision at all (issue #1106): these
+            // two are never consulted on this path, and the empty defaults say so.
+            new InventoryApi.Tests.Application.NayaxSqs.FakeNayaxSqsLiveStatusStore(),
+            new Inventory.Application.NayaxSqs.NayaxSqsReaderHealth(),
             Clock);
 
         public Task<NayaxSalesReconciliationResult> Reconcile() =>

@@ -1,7 +1,9 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.SalesSync;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.NayaxSqs;
 using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Application.Time;
 using Moq;
@@ -40,7 +42,9 @@ internal static class TestSalesSync
         FakeProviderDataCoverageStore? coverage = null,
         NayaxSalesSyncFreshness? freshness = null,
         FakeNayaxOperationCredentials? credentials = null,
-        NayaxSalesSyncLock? syncLock = null)
+        NayaxSalesSyncLock? syncLock = null,
+        FakeNayaxSqsLiveStatusStore? sqsStatus = null,
+        NayaxSqsReaderHealth? readerHealth = null)
     {
         var sharedClock = clock ?? new FakeClock(FixedNow);
         return new SyncLatestNayaxSales(
@@ -55,6 +59,11 @@ internal static class TestSalesSync
             credentials ?? new FakeNayaxOperationCredentials(),
             new FakeCurrentBusinessProvider(BusinessId),
             coverage ?? new FakeProviderDataCoverageStore(),
+            // Not live by default, in both halves: a business with no recorded SQS sender and a
+            // reader that has never polled, which is the state every test that is not about issue
+            // #1106 is about and is exactly the behaviour those tests already asserted.
+            sqsStatus ?? new FakeNayaxSqsLiveStatusStore(),
+            readerHealth ?? new NayaxSqsReaderHealth(),
             sharedClock);
     }
 

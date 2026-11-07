@@ -15,7 +15,9 @@ namespace InventoryApi.Controllers;
 // as a side effect of MachineService.GetAll(). The controller is a thin adapter over the
 // Inventory.Application.SalesSync.SyncLatestNayaxSales use case: it binds nothing but the request's
 // cancellation token and the `force` flag the Dashboard's Refresh control sets (issue #843), and
-// maps the use case's outcome to 204, 200 or 429.
+// maps the use case's outcome to 204, 200, 409 or 429. Whether this business's sales arrive live
+// from SQS (issue #1106) is the use case's and the Domain rule's decision too; the controller only
+// publishes it.
 //
 // It requires Dashboard.View (issue #526), because issue #526 says this endpoint follows the page
 // that calls it, and that page is the home Dashboard: putting it on Imports.Run instead would leave
@@ -72,10 +74,16 @@ public class NayaxSalesSyncController : ControllerBase
     /// the only thing this request carries - never a business, a machine or an instant.
     /// </param>
     /// <param name="ct">The request's cancellation token.</param>
-    /// <response code="204">The synchronization ran.</response>
+    /// <response code="204">
+    /// The synchronization ran. It carries no body, so a business that is not live via SQS and did
+    /// run learns the not-live reason from its next skipped call rather than from here - which is
+    /// exactly how this answer behaved before issue #1106.
+    /// </response>
     /// <response code="200">
-    /// This business's sales were already synchronized less than three minutes ago, so nothing was
-    /// read or written (issue #843). The body says when they were synchronized.
+    /// Nothing was read or written, because there was nothing to read: this business's sales were
+    /// already synchronized less than three minutes ago (issue #843), or they arrive live from the
+    /// shared Nayax SQS queue (issue #1106). The body says which, when they were last synchronized,
+    /// when the queue last delivered, and - when the business is not live - why.
     /// </response>
     /// <response code="409">
     /// A synchronization for this business is already running - the hourly reconciliation of issue
@@ -113,9 +121,10 @@ public class NayaxSalesSyncController : ControllerBase
         }
 
         // A skip is its own answer, kept off 204 and 429 so both of those keep exactly the meaning
-        // every existing caller already has.
-        return outcome.RecentlySyncedAtUtc is { } lastSyncedAtUtc
-            ? Ok(new NayaxSalesRecentlySyncedResponse(true, lastSyncedAtUtc))
+        // every existing caller already has. Since issue #1106 there are two of them - the sales
+        // were read moments ago, or they arrive live from SQS - and the body tells them apart.
+        return outcome.RecentlySyncedAtUtc is not null || outcome.LiveViaSqs
+            ? Ok(NayaxSalesRecentlySyncedResponse.From(outcome))
             : NoContent();
     }
 
