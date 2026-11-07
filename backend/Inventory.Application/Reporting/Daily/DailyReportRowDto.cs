@@ -27,7 +27,8 @@ public record DailyReportRowDto(
     int DeclinedOrCancelledTransactionCount = 0,
     int RefundedTransactionCount = 0,
     int UnknownStatusTransactionCount = 0,
-    string NayaxFeeSource = "None")
+    string NayaxFeeSource = "None",
+    int ExcludedByReviewTransactionCount = 0)
 {
     public decimal PartialCostOfGoods { get; init; }
 }

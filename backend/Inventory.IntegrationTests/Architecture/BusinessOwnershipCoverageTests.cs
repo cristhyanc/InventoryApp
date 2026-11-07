@@ -794,6 +794,8 @@ public class BusinessOwnershipCoverageTests
     // index over the sender id, which is asserted by name above.
     [InlineData(typeof(BusinessNayaxSqsSender))]
     [InlineData(typeof(BusinessNayaxSqsSenderAudit))]
+    // Issue #1105: the Owner decision trail about one business's own sales.
+    [InlineData(typeof(NayaxSaleOwnerDecisionAudit))]
     public void The_named_entity_is_business_owned(Type entityType)
     {
         Assert.True(

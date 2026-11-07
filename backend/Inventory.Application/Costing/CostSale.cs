@@ -1,4 +1,4 @@
-using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 
 namespace Inventory.Application.Costing;
 
@@ -47,7 +47,7 @@ public sealed class CostSale : ICostSale
     {
         ArgumentNullException.ThrowIfNull(sale);
 
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+        if (!NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification))
             return new SaleCostAssignment(null, SaleCostStatus.Pending, SaleCostOrigin.Unknown);
 
         if (!force &&

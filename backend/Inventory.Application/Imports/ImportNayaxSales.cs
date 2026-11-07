@@ -1,6 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Application.Imports;
@@ -280,7 +281,7 @@ public sealed class ImportNayaxSales
     /// </summary>
     private static void TrackImportedProduct(CostableSale sale, IDictionary<long, DateTime> affected)
     {
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+        if (!NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification))
             return;
 
         RecordAffectedProduct(sale.ProductId, sale, affected);
@@ -295,7 +296,7 @@ public sealed class ImportNayaxSales
     /// </summary>
     private static void TrackStoredProduct(CostableSale stored, IDictionary<long, DateTime> affected)
     {
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(stored.TransactionStatusId))
+        if (!NayaxSaleCountingPolicy.IsCountedSale(stored.TransactionStatusId, stored.SqsVerification))
             return;
 
         RecordAffectedProduct(stored.ProductId, stored, affected);

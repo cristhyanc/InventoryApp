@@ -2,10 +2,11 @@ using System.Runtime.CompilerServices;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Reporting.Transactions;
-using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using Inventory.Infrastructure.Sites;
 using Microsoft.EntityFrameworkCore;
 
 namespace Inventory.Infrastructure.Reporting.Persistence;
@@ -125,8 +126,12 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
                 PaymentMethodClassifier.Classify(sale.PaymentMethod), sale.PaymentMethod, sale.SettlementValue,
                 sale.NayaxProductCostPrice, sale.UnitCostAtSale, sale.CostOfGoodsSold,
                 sale.CostingStatus.ToString(), CostSourceLabel(sale), hasPersistedCost,
-                NayaxTransactionStatusClassifier.Classify(sale.TransactionStatusId),
-                sale.TransactionStatusId, NayaxTransactionStatusClassifier.Describe(sale.TransactionStatusId));
+                // Through the counting policy (issue #1105), so a status-12 sale the business's own
+                // lastSales contradicted, or its Owner excluded, is listed as excluded - visible, and
+                // never counted as a completed sale in the totals.
+                NayaxSaleCountingPolicy.Classify(sale.TransactionStatusId, sale.SqsVerification),
+                sale.TransactionStatusId,
+                NayaxSaleCountingPolicy.Describe(sale.TransactionStatusId, sale.SqsVerification));
         }
     }
 

@@ -8614,6 +8614,16 @@ costing migration). It replaced the removed `InventoryApi.Services.InventoryCost
   calls the four use cases directly with unchanged routes (`POST api/admin/inventory-cost-transition/
   preview`, `apply`, `preview-all`, `apply-all`), request/response JSON, status codes and messages.
 
+#### Exclusion and correction rebuilds (issue #1105)
+
+A sale that stops counting (a new `Conflict`, or "Don't count this sale"), starts counting again
+("Keep the SQS values", a superseded exclusion) or has its product, amount, machine or instant
+corrected records a `PendingInventoryCostRebuild` in the same transaction as the change, through the
+shared `PendingInventoryCostRebuildRecorder` (instant only moves earlier, revision moves on every
+enqueue). A correction that moves the sale to another product records both products from the earlier
+instant. The replay reads completed sales through `NayaxSaleCountingPolicy`, so excluding a sale
+releases exactly the one unit of costing inventory it consumed.
+
 #### Costing repairs (issue #359)
 
 A costing repair is the one supported way to restore costing history that was never recorded. It
@@ -12736,6 +12746,12 @@ to a product only if the caller's own catalogue holds it. Since issue #733 the s
 the local one its `NayaxProductID` is linked to, resolved in the observation adapter (see
 [Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)).
 Unresolvable slots are dropped, the same exclusion the Pick List applies.
+
+**Exclusion and correction (issue #1105).** The ledger reads completed sales through the same
+completed-sale rule as costing, so a contradicted or Owner-excluded sale stops consuming machine
+stock, and an Owner's correction of its machine, product or instant moves the consumption with it.
+Nothing here is written: the ledger reads rows live, and the costing side follows through the pending
+rebuild the decision recorded.
 
 **Not in this slice.** There is no Angular page yet (the API is the exposure), no back-dated count,
 no machine-level write-off, and no automatic correction of a discrepancy - by design, since
@@ -17377,11 +17393,10 @@ that business's own Nayax `lastSales`, using that business's own credentials. It
 #1100 that makes a queue-delivered sale *checkable*: issue #1103 stores a sale and marks it
 `Unverified`, and nothing until now moved it.
 
-**It changes nothing about what counts.** A verification state is evidence about a sale, never a
-reason to include or exclude it: stock consumption, costing and revenue still follow the stored
-`TransactionStatusId` through `NayaxTransactionStatusClassifier`, so a conflicting or flagged row
-counts exactly as it did before. Excluding a row, the Owner decisions that could, and the Dashboard
-alert are issue #1105's.
+**On its own it changed nothing about what counts.** As issue #1104 shipped, a verification state
+was evidence about a sale and never a reason to include or exclude it. Issue #1105 changed that for
+exactly two states, `Conflict` and `OwnerExcluded`; see
+[Owner decisions about flagged Nayax sales](#owner-decisions-about-flagged-nayax-sales-issue-1105).
 
 #### What is compared, and how
 
@@ -17578,6 +17593,109 @@ read (#1106); refunds (#1107) and multivend; and a WebJob or CLI mode for this r
 Each step is a separate, passing pull request. Existing endpoints stay operational throughout.
 
 Backend and frontend tracks can progress independently when their contracts do not change. A vertical feature change that touches both sides should still be delivered as one coherent, tested pull request.
+
+### Owner decisions about flagged Nayax sales (issue #1105)
+
+A queue-delivered sale that the business's own `lastSales` authoritatively contradicts stops
+counting until the business Owner decides what is true. A sale that is only missing from `lastSales`
+keeps counting and waits for the Owner, because a missing sale is never proof that it was fake.
+
+#### What counts
+
+A completed sale is status `12` **and** a `SqsVerification` that is not `Conflict` or
+`OwnerExcluded`. `Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy.IsCountedSale` is the rule and
+`EfNayaxSalesQueries.CompletedSalePredicate` its EF-translatable form; a test runs the predicate over
+every state and status and compares it with the policy. Every completed-sale read uses one of them:
+sale costing (`CostSale`, `NayaxCostableSale`), the inventory-cost replay, the machine-stock ledger,
+reorder needs, the site and machine dashboard facts, the timestamp repair projection and every report.
+An excluded status-12 sale is classified `NayaxTransactionStatus.ExcludedByReview`
+(`NayaxSaleCountingPolicy.Classify`), shown in the transaction report as "Not counted - contradicted by
+Nayax" or "Not counted - excluded by the owner", and counted as data quality in the daily,
+reconciliation and bookkeeping reports. The only automatic exclusion is #1104's authoritative
+contradiction; `NeedsInvestigation` counts.
+
+#### The decision table
+
+`NayaxSaleOwnerDecisionPolicy` is the table and nothing else:
+
+| Row state | Decision | Evidence it may name | Result |
+|---|---|---|---|
+| `Conflict` | Use Nayax's values | the latest `Comparison` | values replaced from the evidence; `OwnerCorrected` |
+| `Conflict` | Keep the SQS values (reason) | the latest `Comparison` | `OwnerConfirmed` |
+| `Conflict` or `NeedsInvestigation` | Don't count this sale (reason) | the latest `Comparison` or `Absence` | `OwnerExcluded` |
+| `NeedsInvestigation` | This sale is genuine (reason) | the latest `Comparison` or `Absence` | `OwnerConfirmed`, values unchanged |
+
+"This sale is genuine" is never allowed on a conflict, and neither conflict resolution may rest on an
+absence, which has no provider values to choose. `OwnerConfirmed` and `OwnerCorrected` are "Confirmed
+by owner" and never "Verified". A reason is at most 500 characters. The currency is not corrected,
+because no sale column holds one.
+
+#### Product resolution for "Use Nayax's values"
+
+The evidence's raw Nayax product id is written to `NayaxProductId` with `ProviderProductIdIsRaw =
+true`, and the local `ProductId` is resolved through `NayaxSaleProductResolver` - the shared,
+tenant-scoped resolution `EfLatestNayaxSalesStore` also uses for a new sale: the business's provider
+link map (`INayaxProductLinkStore.GetLocalProductIdsAsync`) and then `ProductMatcher.MatchLinked` with
+the evidence's product id and name. A Nayax product id is never assigned to `ProductId`. When the
+evidence carries neither an id nor a name, or nothing resolves, the decision is refused with 409
+("Nayax's product isn't linked to a product in this business. Link it first, or choose another
+decision.") and nothing changes. The three product columns change in the same transaction as the
+machine, amount and instant.
+
+#### One write-locked decision transaction
+
+`EfNayaxSaleReviewStore.DecideAsync` runs in one `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`):
+
+1. re-read the sale authoritatively (query, then reload) and its latest evidence id;
+2. refuse with 409 and write nothing when the state or the latest evidence id differs from what the
+   request presented, or the named evidence is not the latest row of its kind for that sale;
+3. resolve the product (for "Use Nayax's values");
+4. apply the correction or state change;
+5. write the `NayaxSaleOwnerDecisionAudits` row (who, when, reason, evidence id, state and values
+   before and after, counted amount before and after, and the imported reimbursement period the change
+   moved, with the difference);
+6. stage the pending inventory-cost rebuild for the old and the new product, from the earlier of the
+   old and new instants, whenever counting or a costed value changed.
+
+#1104's evidence write takes the same lock, so a decision and new evidence for the same sale are
+strictly ordered and whichever commits second sees the other; a race test on a real SQLite file runs
+both concurrently. After commit, `ReviewNayaxSales` drains the rebuilds through
+`ILatestNayaxSalesStore.RebuildInventoryCostsAsync`; a failed replay keeps its pending row and never
+undoes the decision. All reads and writes are ordinary tenant-scoped statements: no
+`IgnoreQueryFilters`, and another business's sale or evidence id is simply not found.
+
+#### Later evidence and superseded decisions
+
+An Owner state may move to `Conflict` or `NeedsInvestigation`
+(`NayaxSqsVerificationTransitions`), but `EfNayaxSaleProviderEvidenceStore` allows it only for a
+`Comparison` that contradicts the decided values and differs from the comparison the decision relied
+on: the latest comparison no newer than the decision audit's evidence id, read inside the evidence
+write's own transaction. Comparing with the latest comparison instead would let a contradiction the
+Owner already considered (A), followed by a matching comparison (B), supersede the decision when A
+came back. Deduplication of the evidence history still compares with the latest row. Matching
+evidence is recorded and changes nothing (a decided sale is never promoted to `Verified`); an absence
+never supersedes a decision. A superseded decision writes a `Superseded` audit row naming the new
+evidence, and the Dashboard alert shows again. Any evidence write that moves a sale into or out of the
+counted totals stages that product's rebuild in its own transaction, and the hourly run drains it
+after the comparison. A newly flagged or excluded row logs a warning with the business id, machine id
+and transaction id only.
+
+#### API and pages
+
+`NayaxSaleReviewController`: `GET api/nayax-sale-review` and `GET api/nayax-sale-review/summary`
+(`Dashboard.View`), and `POST api/nayax-sale-review/{saleId}/decision` (`Data.Repair`, Owner-only;
+refused for a read-only support session and a role preview by their method rules). The body presents
+`presentedState`, `presentedLatestEvidenceId`, the relied-on `evidenceId`, the `decision` and the
+`reason`. The Dashboard's Needs attention panel shows `NayaxSaleReviewAlertComponent` ("3 Nayax sales
+need your review · 1 is not being counted") while anything is `Conflict` or `NeedsInvestigation`; it
+links to `/nayax-sales-review`, which lists the sales with the stored values beside the evidence and
+the decision history, and offers the allowed decisions to an Owner only. The list is paged on the
+server in two separate views, `view=10` (needs review: exactly the `Conflict` and
+`NeedsInvestigation` sales the summary counts, the page's default) and `view=20` (decided), with
+`pageIndex` from 0 and `pageSize` from 1 to 100 (default 25), and answers the view's total beside the
+page; decided sales therefore never push a flagged sale out of reach. An absence is
+shown as what `lastSales` returned for the machine (count, earliest and latest, in business time),
+never as "missing from Nayax".
 
 ### Backend migration track
 

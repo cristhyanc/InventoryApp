@@ -2,6 +2,7 @@ using Inventory.Application.Machines;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Machines;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -68,7 +69,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
         var monthToDateFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.MonthToDate, machineId, cancellationToken);
         var twoWeeksAgoFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.TwoWeeksAgo, machineId, cancellationToken);
 
-        var completedSales = lastSales.Where(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId)).ToList();
+        var completedSales = lastSales.Where(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification)).ToList();
         var statusInputs = new MachineProfitabilityStatusInputs(
             completedSales.Any(sale => !sale.CostOfGoodsSold.HasValue),
             completedSales.Count > 0,
@@ -85,7 +86,7 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
     private static List<NayaxSales> CompletedSales(List<NayaxSales> sales, MachineDashboardPeriodUtc period) =>
         sales.Where(sale => sale.MachineAuthorizationTime >= period.StartUtc &&
                              sale.MachineAuthorizationTime <= period.EndUtc &&
-                             NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+                             NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification))
             .ToList();
 
     private async Task<MachineDashboardPeriodFacts> BuildPeriodFactsAsync(

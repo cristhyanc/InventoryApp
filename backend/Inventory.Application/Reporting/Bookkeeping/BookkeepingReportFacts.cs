@@ -62,6 +62,12 @@ public sealed record BookkeepingReportFacts(
     int MissingStatusTransactionCount)
 {
     /// <summary>
+    /// Status-12 queue-delivered sales in scope that issue #1105's review keeps out of every figure:
+    /// contradicted by the business's own Nayax <c>lastSales</c>, or excluded by the Owner.
+    /// </summary>
+    public int ExcludedByReviewTransactionCount { get; init; }
+
+    /// <summary>
     /// Every provider coverage range overlapping the requested period that accounts for sale
     /// instants - a successful sales synchronization or a committed sales file import (issue #730).
     /// Unordered and expected to overlap: successive successful runs claim overlapping windows by

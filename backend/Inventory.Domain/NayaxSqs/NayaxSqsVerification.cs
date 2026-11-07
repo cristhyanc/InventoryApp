@@ -20,11 +20,11 @@ namespace Inventory.Domain.NayaxSqs;
 /// transaction, so the state can never say something no evidence supports.
 /// <see cref="NayaxSqsVerificationTransitions"/> is the whole of which moves are permitted.</para>
 ///
-/// <para><strong>No state changes what counts, in this issue.</strong> Stock consumption, costing
-/// and revenue continue to follow the saved <c>TransactionStatusId</c> through
-/// <c>NayaxTransactionStatusClassifier</c>, so a <see cref="Conflict"/> and a
-/// <see cref="NeedsInvestigation"/> row count exactly as they did before. Excluding a row and the
-/// Owner decisions that could are issue #1105's.</para>
+/// <para><strong>Two states change what counts (issue #1105).</strong> A completed sale is status
+/// <c>12</c> <em>and</em> not <see cref="Conflict"/> or <see cref="OwnerExcluded"/> - see
+/// <see cref="NayaxSaleCountingPolicy"/>, the one place that rule is written. Every other state,
+/// <see cref="NeedsInvestigation"/> included, counts exactly as the status alone says: an absence
+/// from <c>lastSales</c> is never proof, so it never excludes anything.</para>
 ///
 /// <para>No value is <c>0</c>, for the reason <c>BusinessStatus</c> declares none: <c>0</c> is what
 /// an unfilled integer column and a default-constructed enum both hold, so a value nothing wrote
@@ -70,4 +70,30 @@ public enum NayaxSqsVerification
     /// the transaction did not happen (see <see cref="NayaxSaleProviderAbsencePolicy"/>).</para>
     /// </summary>
     NeedsInvestigation = 40,
+
+    /// <summary>
+    /// The business Owner reviewed the sale and decided it stands as stored (issue #1105): either
+    /// "Keep the SQS values" on a <see cref="Conflict"/>, or "This sale is genuine" on a
+    /// <see cref="NeedsInvestigation"/> row. It counts as a completed sale again.
+    ///
+    /// <para>It is <strong>never</strong> Nayax verification. It is shown as "Confirmed by owner",
+    /// and only later provider evidence that contradicts the decided values - a comparison that
+    /// differs from the one the decision relied on - moves it back to a flagged state.</para>
+    /// </summary>
+    OwnerConfirmed = 50,
+
+    /// <summary>
+    /// The business Owner chose "Use Nayax's values" on a <see cref="Conflict"/> (issue #1105): the
+    /// stored machine, amount, instant and product were replaced from the provider's own record of
+    /// the transaction. It counts as a completed sale again, and is shown as "Confirmed by owner",
+    /// never as <see cref="Verified"/>.
+    /// </summary>
+    OwnerCorrected = 60,
+
+    /// <summary>
+    /// The business Owner chose "Don't count this sale" (issue #1105). The row stays stored and
+    /// visible in status and data-quality reporting, and is excluded from every completed-sale
+    /// total, from costing and from the machine-stock ledger exactly as a <see cref="Conflict"/> is.
+    /// </summary>
+    OwnerExcluded = 70,
 }

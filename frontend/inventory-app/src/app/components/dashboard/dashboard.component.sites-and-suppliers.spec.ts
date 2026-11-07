@@ -17,6 +17,7 @@ import { BusinessSettingsService } from '../../services/business-settings.servic
 import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
+import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { ProductService } from '../../services/product.service';
@@ -210,6 +211,7 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
       },
       { provide: SiteService, useValue: { getAll: () => options.sites ?? of([HARBOUR, PAVILLION]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
+      { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
       { provide: SupportSessionService, useValue: { active$: of(options.supportSession ?? false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },

@@ -63,6 +63,13 @@ public sealed record ReconciliationReportFacts(
     bool IsMachineFiltered)
 {
     /// <summary>
+    /// Status-12 queue-delivered sales in scope that issue #1105's review keeps out of every figure:
+    /// contradicted by the business's own Nayax <c>lastSales</c>, or excluded by the Owner. Reported
+    /// as data quality, never summed into a total.
+    /// </summary>
+    public int ExcludedByReviewTransactionCount { get; init; }
+
+    /// <summary>
     /// How well recorded provider coverage accounts for the requested range (issue #731, extending
     /// issue #730's model to this report). Both families matter here: the recorded card sales come
     /// from stored provider sales, and the Nayax-reported gross, its transaction count, the fees and

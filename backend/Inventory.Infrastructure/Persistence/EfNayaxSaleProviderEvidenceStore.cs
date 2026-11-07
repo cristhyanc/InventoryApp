@@ -3,6 +3,8 @@ using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Inventory.Infrastructure.Persistence;
 
@@ -60,10 +62,13 @@ namespace Inventory.Infrastructure.Persistence;
 public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenceStore
 {
     private readonly AppDbContext _db;
+    private readonly ILogger<EfNayaxSaleProviderEvidenceStore> _logger;
 
-    public EfNayaxSaleProviderEvidenceStore(AppDbContext db)
+    public EfNayaxSaleProviderEvidenceStore(
+        AppDbContext db, ILogger<EfNayaxSaleProviderEvidenceStore>? logger = null)
     {
         _db = db;
+        _logger = logger ?? NullLogger<EfNayaxSaleProviderEvidenceStore>.Instance;
     }
 
     /// <inheritdoc />
@@ -228,7 +233,6 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
         var observation = observe(sale);
 
         var next = NayaxSqsVerificationTransitions.Apply(current, observation.ObservedState);
-        var stateChanged = next != current;
 
         var latest = await _db.NayaxSaleProviderEvidences
             .AsNoTracking()
@@ -236,6 +240,23 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
             .OrderByDescending(row => row.Id)
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        // An Owner decision (issue #1105) is superseded only by a comparison that contradicts the
+        // decided values and differs from the comparison the decision relied on - not merely from the
+        // latest one, which a later matching comparison may have replaced: A, then the Owner's
+        // decision, then a matching B, then A again must leave the decision standing, because A is
+        // exactly what the Owner already considered. An absence never supersedes a decision: a
+        // missing sale is never proof of anything, and the Owner has already looked at that question.
+        if (NayaxSqsVerificationTransitions.IsOwnerDecided(current)
+            && next != current
+            && (kind is not NayaxSaleProviderEvidenceKind.Comparison
+                || observation.RepeatsLatest(
+                    await DecisionComparisonAsync(context.SaleId, latest, cancellationToken).ConfigureAwait(false))))
+        {
+            next = current;
+        }
+
+        var stateChanged = next != current;
 
         if (!stateChanged && observation.RepeatsLatest(latest))
         {
@@ -264,15 +285,101 @@ public sealed class EfNayaxSaleProviderEvidenceStore : INayaxSaleProviderEvidenc
         observation.Fill(evidence);
         _db.NayaxSaleProviderEvidences.Add(evidence);
 
+        var before = NayaxSaleOwnerDecisionAuditing.Snapshot(sale);
+
         if (stateChanged)
         {
             sale.SqsVerification = next;
+            await StageRebuildWhenCountingChangesAsync(sale, current, context.ObservedAtUtc, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        if (stateChanged && NayaxSqsVerificationTransitions.IsOwnerDecided(current))
+        {
+            // "Decision superseded by new evidence", in the same transaction as the state change and
+            // naming the evidence row that caused it.
+            var audit = await NayaxSaleOwnerDecisionAuditing
+                .NewRowAsync(_db, sale, before, context.ObservedAtUtc, cancellationToken)
+                .ConfigureAwait(false);
+            audit.Kind = NayaxSaleOwnerDecisionAuditKind.Superseded;
+            audit.EvidenceId = evidence.Id;
+            _db.NayaxSaleOwnerDecisionAudits.Add(audit);
+            await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
+        if (stateChanged && next is NayaxSqsVerification.Conflict or NayaxSqsVerification.NeedsInvestigation)
+        {
+            // Identifiers only: no amount, product, card or payload value reaches the log.
+            _logger.LogWarning(
+                "Nayax queue sale flagged for Owner review: business {BusinessId}, machine {MachineId}, transaction {TransactionId}, state {State}.",
+                sale.BusinessId,
+                sale.MachineID,
+                sale.TransactionID,
+                next);
+        }
+
         return new NayaxSaleEvidenceWriteResult(true, evidence.Id, next, stateChanged);
+    }
+
+    /// <summary>
+    /// The comparison the sale's standing Owner decision had in front of it, read inside this
+    /// write's transaction: the latest comparison no newer than the evidence the decision relied on.
+    /// A "Use Nayax's values" or "Keep the SQS values" decision relies on the latest comparison
+    /// itself; the other two rely on the latest evidence of either kind, and every comparison the
+    /// Owner was shown is no newer than that row, because a decision is refused unless it presents
+    /// the sale's latest evidence. Only a sale with no decision audit at all (which an Owner state
+    /// cannot have) falls back to <paramref name="latestComparison"/>.
+    /// </summary>
+    private async Task<NayaxSaleProviderEvidence?> DecisionComparisonAsync(
+        long saleId, NayaxSaleProviderEvidence? latestComparison, CancellationToken cancellationToken)
+    {
+        var reliedOnId = await _db.NayaxSaleOwnerDecisionAudits
+            .AsNoTracking()
+            .Where(row => row.NayaxSaleId == saleId && row.Kind == NayaxSaleOwnerDecisionAuditKind.Decision)
+            .OrderByDescending(row => row.Id)
+            .Select(row => (long?)row.EvidenceId)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (reliedOnId is not { } evidenceId)
+        {
+            return latestComparison;
+        }
+
+        return await _db.NayaxSaleProviderEvidences
+            .AsNoTracking()
+            .Where(row => row.NayaxSaleId == saleId
+                && row.Kind == NayaxSaleProviderEvidenceKind.Comparison
+                && row.Id <= evidenceId)
+            .OrderByDescending(row => row.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stages a pending inventory-cost rebuild (issue #1103) for the sale's product, from its instant,
+    /// when this state change moved the sale into or out of the completed-sale totals (issue #1105) -
+    /// a new contradiction stops it counting, and a superseded "Don't count this sale" may make it
+    /// count again. Saved with the state change, in the same transaction.
+    /// </summary>
+    private async Task StageRebuildWhenCountingChangesAsync(
+        NayaxSales sale, NayaxSqsVerification previous, DateTime observedAtUtc, CancellationToken cancellationToken)
+    {
+        if (!NayaxSaleCountingPolicy.ChangesCounting(previous, sale.SqsVerification)
+            || !Domain.FinancialConfiguration.NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+        {
+            return;
+        }
+
+        var affected = new Dictionary<long, DateTime>();
+        PendingInventoryCostRebuildRecorder.Add(affected, sale.ProductId, sale.MachineAuthorizationTime);
+        await PendingInventoryCostRebuildRecorder
+            .StageAsync(_db, affected, observedAtUtc, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

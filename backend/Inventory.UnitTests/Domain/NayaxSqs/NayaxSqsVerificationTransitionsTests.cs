@@ -28,6 +28,15 @@ public class NayaxSqsVerificationTransitionsTests
         { NayaxSqsVerification.NeedsInvestigation, NayaxSqsVerification.Conflict },
         { NayaxSqsVerification.Verified, NayaxSqsVerification.Conflict },
         { NayaxSqsVerification.Verified, NayaxSqsVerification.NeedsInvestigation },
+
+        // Issue #1105: an Owner decision stands until later provider evidence contradicts it. Which
+        // evidence may do so - a differing comparison, never an absence - is the evidence write's rule.
+        { NayaxSqsVerification.OwnerConfirmed, NayaxSqsVerification.Conflict },
+        { NayaxSqsVerification.OwnerConfirmed, NayaxSqsVerification.NeedsInvestigation },
+        { NayaxSqsVerification.OwnerCorrected, NayaxSqsVerification.Conflict },
+        { NayaxSqsVerification.OwnerCorrected, NayaxSqsVerification.NeedsInvestigation },
+        { NayaxSqsVerification.OwnerExcluded, NayaxSqsVerification.Conflict },
+        { NayaxSqsVerification.OwnerExcluded, NayaxSqsVerification.NeedsInvestigation },
     };
 
     [Theory]

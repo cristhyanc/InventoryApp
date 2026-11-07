@@ -1432,6 +1432,105 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("NayaxProcessingFeeRates");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleOwnerDecisionAudit", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ActorDirectoryTenantId")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorObjectId")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("Decision")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("EvidenceId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("NayaxSaleId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("PreviousAuthorizationInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PreviousCountedAmount")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("PreviousMachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("PreviousNayaxProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("PreviousProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal?>("PreviousSettlementValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("PreviousState")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("ReconciledPeriodDifference")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReconciledPeriodFrom")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReconciledPeriodTo")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ResultingAuthorizationInstantUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("ResultingCountedAmount")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ResultingMachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("ResultingNayaxProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("ResultingProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal?>("ResultingSettlementValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ResultingState")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("TransactionId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "NayaxSaleId", "Id");
+
+                    b.ToTable("NayaxSaleOwnerDecisionAudits");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleProductConflict", b =>
                 {
                     b.Property<long>("Id")

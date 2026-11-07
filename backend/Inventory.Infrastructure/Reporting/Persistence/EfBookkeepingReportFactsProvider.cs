@@ -1,7 +1,8 @@
-using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Commissions;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -56,9 +57,10 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         // Read every status in the same business/date/machine scope before the completed-sale filter
         // removes them (issue #476), so the report can state what it excluded and why. The financial
         // queries above and below stay on the completed-sale predicate: this list only produces counts.
-        var statuses = await EfReportingSharedQueries.AllSalesQuery(_db, from, endExclusive, machineId)
-            .Select(x => x.TransactionStatusId)
+        var statusRows = await EfReportingSharedQueries.AllSalesQuery(_db, from, endExclusive, machineId)
+            .Select(x => new { x.TransactionStatusId, x.SqsVerification })
             .ToListAsync(cancellationToken);
+        var statuses = statusRows.ConvertAll(x => x.TransactionStatusId);
 
         var saleCosts = await EfReportingSharedQueries.CostQuery(_db, from, endExclusive, machineId).ToListAsync(cancellationToken);
         var partialCost = saleCosts.Sum(x => x.CostOfGoodsSold ?? 0m);
@@ -127,6 +129,8 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             SalesCoverage = coverage.SalesCoverage,
             SettlementCoverage = coverage.SettlementCoverage,
             ContainsSalesRows = coverage.ContainsSalesRows,
+            ExcludedByReviewTransactionCount = statusRows.Count(x =>
+                NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview),
         };
     }
 

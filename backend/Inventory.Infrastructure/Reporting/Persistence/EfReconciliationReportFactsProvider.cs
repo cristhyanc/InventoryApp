@@ -1,5 +1,6 @@
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -92,7 +93,9 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
             NullStatusTransactionCount: CountMissingStatus(statusSales),
             IsMachineFiltered: isMachineFiltered)
         {
-            Coverage = coverage
+            Coverage = coverage,
+            ExcludedByReviewTransactionCount = statusSales.Count(x =>
+                NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview),
         };
     }
 

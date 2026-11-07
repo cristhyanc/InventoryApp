@@ -356,8 +356,9 @@ public class ReconcileNayaxSalesWithProviderTests
 
         await world.Reconcile();
 
-        // Drain, then read, then drain again - the second one being the sync's own.
-        Assert.Equal(["drain", "machines", "drain"], calls);
+        // Drain, then read, then drain again - the second one being the sync's own - and a last drain
+        // after the comparison, for the rebuilds a counting change staged (issue #1105).
+        Assert.Equal(["drain", "machines", "drain", "drain"], calls);
     }
 
     /// <summary>

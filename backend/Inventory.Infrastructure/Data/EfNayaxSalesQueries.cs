@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Models;
 
 namespace Inventory.Infrastructure.Data;
@@ -23,6 +24,18 @@ namespace Inventory.Infrastructure.Data;
 /// </summary>
 internal static class EfNayaxSalesQueries
 {
+    /// <summary>
+    /// Status 12 <em>and</em> not kept out by issue #1105's review: a queue-delivered sale the
+    /// business's own <c>lastSales</c> contradicted (<see cref="NayaxSqsVerification.Conflict"/>) or
+    /// that the business Owner excluded (<see cref="NayaxSqsVerification.OwnerExcluded"/>) is not a
+    /// completed sale. This is the translatable form of
+    /// <see cref="NayaxSaleCountingPolicy.IsCountedSale"/>, and the two must agree. A sale with no
+    /// verification value - every <c>lastSales</c> and uploaded-export sale - is decided by its
+    /// status alone, exactly as before.
+    /// </summary>
     public static Expression<Func<NayaxSales, bool>> CompletedSalePredicate =>
-        sale => sale.TransactionStatusId == NayaxTransactionStatusIds.Completed;
+        sale => sale.TransactionStatusId == NayaxTransactionStatusIds.Completed
+            && (sale.SqsVerification == null
+                || (sale.SqsVerification != NayaxSqsVerification.Conflict
+                    && sale.SqsVerification != NayaxSqsVerification.OwnerExcluded));
 }

@@ -36,6 +36,14 @@ public class CostableSale
     public int? TransactionStatusId { get; init; }
 
     /// <summary>
+    /// The sale's queue-delivery verification state, or <c>null</c> for a sale the queue did not
+    /// deliver. Read only through <see cref="Domain.NayaxSqs.NayaxSaleCountingPolicy"/>: a status-12
+    /// sale the business's own <c>lastSales</c> contradicted, or that its Owner excluded, is not a
+    /// completed sale and is neither costed nor counted (issue #1105).
+    /// </summary>
+    public Domain.NayaxSqs.NayaxSqsVerification? SqsVerification { get; init; }
+
+    /// <summary>
     /// The local product the sale is attributed to, as persisted on the row (issue #758), or
     /// <c>null</c> when the sale is unresolved. Costing reads exactly this and never re-derives it
     /// from <see cref="NayaxProductId"/> or <see cref="ProductName"/>: an unresolved sale is left

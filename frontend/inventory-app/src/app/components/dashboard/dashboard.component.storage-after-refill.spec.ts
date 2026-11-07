@@ -5,6 +5,7 @@ import { DashboardComponent } from './dashboard.component';
 import { DashboardSummary, Product, ReorderAlertListing } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
+import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
@@ -95,6 +96,7 @@ async function render(alerts: Observable<ReorderAlertListing>): Promise<HTMLElem
       provideRouter([]),
       { provide: ProductService, useValue: { getLowStock: () => alerts } },
       { provide: MachineService, useValue: { getAll: () => of([]) } },
+      { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
       { provide: SiteService, useValue: { getAll: () => of([]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
