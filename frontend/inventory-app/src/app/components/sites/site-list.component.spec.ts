@@ -441,6 +441,22 @@ describe('SiteListComponent overview (issue #1128)', () => {
     expect(card.textContent).toContain('↑ 25.0%');
   });
 
+  it('lets a long unbroken site name wrap anywhere in its mobile card instead of pinning it to one line', async () => {
+    const longName = 'SampleSupercalifragilisticVendingKioskTerminalNorthWing';
+    const { fixture, host } = await renderWith(() => of([site({ siteId: 7, siteName: longName })]));
+    fixture.detectChanges();
+
+    const card = host.querySelector('[data-testid="site-card"]') as HTMLElement;
+    const name = card.querySelector('[data-testid="site-card-name"]') as HTMLElement;
+    expect(name.textContent?.replace(/\u00a0/g, ' ').trim()).toBe(longName);
+    expect(name.className).toContain('[overflow-wrap:anywhere]');
+    expect(name.querySelector('.whitespace-nowrap')).toBeNull();
+    const link = card.querySelector('a') as HTMLAnchorElement;
+    expect(link.className).toContain('min-w-0');
+    expect(link.className).toContain('min-h-11');
+    expect(link.getAttribute('href')).toBe('/sites/7/products');
+  });
+
   it('keeps one site link per desktop row', async () => {
     const { fixture, host } = await renderWith(() => of(fleet));
     fixture.detectChanges();

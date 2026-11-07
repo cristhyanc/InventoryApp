@@ -74,7 +74,9 @@ function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 }
 
-async function answerApi(page: Page, options: { operator?: boolean; holdSites?: boolean } = {}): Promise<void> {
+type ApiOptions = { operator?: boolean; holdSites?: boolean; sites?: ReturnType<typeof site>[] };
+
+async function answerApi(page: Page, options: ApiOptions = {}): Promise<void> {
   await page.route('**/api/**', (route: Route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/me/access')) {
@@ -90,9 +92,10 @@ async function answerApi(page: Page, options: { operator?: boolean; holdSites?: 
     if (path.endsWith('/nayax-connection/status')) return json(route, { status: 'Ready', machineChecksPending: false });
     if (path.endsWith('/api/sites')) {
       if (options.holdSites) return new Promise<void>(() => undefined);
+      const fleet = options.sites ?? sites;
       const visible = options.operator
-        ? sites.map((s) => ({ ...s, todayRevenue: null, currentWeekRevenue: null, previousComparableWeekRevenue: null, lastWeekRevenue: null, monthToDateRevenue: null }))
-        : sites;
+        ? fleet.map((s) => ({ ...s, todayRevenue: null, currentWeekRevenue: null, previousComparableWeekRevenue: null, lastWeekRevenue: null, monthToDateRevenue: null }))
+        : fleet;
       return json(route, visible);
     }
     if (route.request().method() !== 'GET') return route.fulfill({ status: 204, body: '' });
@@ -100,13 +103,13 @@ async function answerApi(page: Page, options: { operator?: boolean; holdSites?: 
   });
 }
 
-async function openSites(page: Page, width: number, options: { operator?: boolean; holdSites?: boolean } = {}): Promise<void> {
+async function openSites(page: Page, width: number, options: ApiOptions = {}): Promise<void> {
   await page.setViewportSize({ width, height: width >= 1024 ? 900 : 844 });
   await answerApi(page, options);
   await page.goto('/sites');
   await page.addStyleTag({ content: '*, *::before, *::after { animation: none !important; transition: none !important; }' });
   await expect(page.getByRole('heading', { name: 'Sites', level: 1 })).toBeVisible();
-  if (!options.holdSites) await expect(page.locator('[data-testid="sites-summary"]')).toHaveText('5 sites · 8 machines');
+  if (!options.holdSites && !options.sites) await expect(page.locator('[data-testid="sites-summary"]')).toHaveText('5 sites · 8 machines');
 }
 
 async function expectNoHorizontalOverflow(page: Page): Promise<void> {
@@ -200,6 +203,31 @@ test.describe('Sites overview redesign (issue #1128)', () => {
     await openSites(page, 1440, { holdSites: true });
     await expect(page.locator('[data-testid="sites-loading"]')).toBeVisible();
     await capture(page, 'sites-desktop-loading-1440', false);
+  });
+
+  test('8 a long unbroken site name wraps inside its mobile card at 320px', async ({ page }) => {
+    const longName = 'SampleSupercalifragilisticVendingKioskTerminalNorthWing';
+    await openSites(page, 320, { sites: [site(9, longName, 1, [88, 3, 1], [10, 100, 90]), ...sites] });
+
+    const name = page.locator('[data-testid="site-card-name"]', { hasText: longName });
+    await expect(name).toBeVisible();
+    await expect(name).toContainText(longName);
+    // Nothing of the name is cut off: it fits its own box and stays inside its card.
+    const fits = await name.evaluate((el) => {
+      const card = el.closest('[data-testid="site-card"]') as HTMLElement;
+      const box = el.getBoundingClientRect();
+      const cardBox = card.getBoundingClientRect();
+      return {
+        noClip: el.scrollWidth <= el.clientWidth + 1,
+        inside: box.left >= cardBox.left && box.right <= cardBox.right + 0.5,
+        wrapped: box.height > 30
+      };
+    });
+    expect(fits).toEqual({ noClip: true, inside: true, wrapped: true });
+    // The link keeps its 44px touch target.
+    const link = name.locator('xpath=ancestor::a[1]');
+    expect((await link.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await capture(page, 'sites-mobile-long-name-320');
   });
 
   for (const width of [1440, 390]) {

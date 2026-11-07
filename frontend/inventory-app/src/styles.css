@@ -2031,10 +2031,6 @@ video {
   min-width: 900px;
 }
 
-.min-w-\[9rem\] {
-  min-width: 9rem;
-}
-
 .max-w-24 {
   max-width: 6rem;
 }
@@ -2121,6 +2117,10 @@ video {
 
 .grow {
   flex-grow: 1;
+}
+
+.basis-36 {
+  flex-basis: 9rem;
 }
 
 .basis-full {
@@ -3322,6 +3322,10 @@ video {
   -webkit-appearance: textfield;
      -moz-appearance: textfield;
           appearance: textfield;
+}
+
+.\[overflow-wrap\:anywhere\] {
+  overflow-wrap: anywhere;
 }
 
 /* stylelint-enable at-rule-no-unknown */
