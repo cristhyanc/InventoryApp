@@ -55,7 +55,7 @@
       ],
       "role": "name_search",
       "itemLimitField": "maxItems",
-      "pageSize": 10,
+      "pageSize": 5,
       "maxPages": 1,
       "forcedInput": {
         "mode": "search",
@@ -83,7 +83,7 @@
       ],
       "role": "name_search",
       "itemLimitField": "maxItems",
-      "pageSize": 10,
+      "pageSize": 5,
       "maxPages": 1,
       "forcedInput": {
         "includeFullDetail": false,
