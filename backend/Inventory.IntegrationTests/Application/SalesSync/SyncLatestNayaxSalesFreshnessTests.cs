@@ -1,9 +1,11 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.SalesSync;
 using Inventory.Application.SupportSessions;
 using Inventory.Domain.Nayax;
 using Inventory.Domain.Providers;
 using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.NayaxSqs;
 using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Application.Time;
 using Moq;
@@ -250,6 +252,8 @@ public class SyncLatestNayaxSalesFreshnessTests
             new FakeNayaxOperationCredentials(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestSalesSync.BusinessId + 1),
             new FakeProviderDataCoverageStore(),
+            new FakeNayaxSqsLiveStatusStore(),
+            new NayaxSqsReaderHealth(),
             clock);
 
         Assert.Null((await otherBusiness.Handle()).RecentlySyncedAtUtc);
@@ -343,6 +347,11 @@ public class SyncLatestNayaxSalesFreshnessTests
             credentials ?? new FakeNayaxOperationCredentials(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestSalesSync.BusinessId),
             coverage ?? new FakeProviderDataCoverageStore(),
+            // Not live via SQS, which is what every case here is about: these tests are the
+            // recent-sync skip's own, and the live decision of issue #1106 has its own tests beside
+            // them.
+            new FakeNayaxSqsLiveStatusStore(),
+            new NayaxSqsReaderHealth(),
             sharedClock);
     }
 

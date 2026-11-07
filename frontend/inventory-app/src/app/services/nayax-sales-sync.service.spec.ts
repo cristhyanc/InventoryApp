@@ -34,8 +34,9 @@ function result(syncLatest: Observable<NayaxSalesSyncResult>): NayaxSalesSyncRes
 
 /**
  * The answers of `POST api/nayax-sales-sync` the Dashboard has to tell apart (issue #843, extended
- * by issue #1104). The `429` run limit is an error response and stays the component's business; what
- * this service owns is the two success answers, the `409` skip, and the `force` flag.
+ * by issues #1104 and #1106). The `429` run limit is an error response and stays the component's
+ * business; what this service owns is the success answers - the run, the recent-sync skip and the
+ * live-via-SQS skip - the `409` skip, and the `force` flag.
  */
 describe('NayaxSalesSyncService', () => {
   it('reads a 204 as a run that happened, with no instant of its own', () => {
@@ -44,19 +45,64 @@ describe('NayaxSalesSyncService', () => {
     expect(result(service.syncLatest())).toEqual({
       wasRecentlySynced: false,
       wasBusy: false,
-      lastSyncedAtUtc: null
+      lastSyncedAtUtc: null,
+      liveViaSqs: false,
+      lastSqsMessageReceivedAtUtc: null,
+      sqsNotLiveReason: null
     });
     expect(http.post).toHaveBeenCalledWith('/api/nayax-sales-sync', {});
   });
 
   it('reads a 200 body as a skipped run and carries the instant the sales were synced', () => {
-    const { service } = createService({ wasRecentlySynced: true, lastSyncedAtUtc: '2026-10-23T09:00:00Z' });
+    const { service } = createService({
+      wasRecentlySynced: true,
+      lastSyncedAtUtc: '2026-10-23T09:00:00Z',
+      liveViaSqs: false,
+      lastSqsMessageReceivedAtUtc: null,
+      sqsNotLiveReason: 'SenderDisabled'
+    });
 
     expect(result(service.syncLatest())).toEqual({
       wasRecentlySynced: true,
       wasBusy: false,
-      lastSyncedAtUtc: '2026-10-23T09:00:00Z'
+      lastSyncedAtUtc: '2026-10-23T09:00:00Z',
+      liveViaSqs: false,
+      lastSqsMessageReceivedAtUtc: null,
+      sqsNotLiveReason: 'SenderDisabled'
     });
+  });
+
+  // Issue #1106: the same 200, for the other reason the server read nothing - this business's sales
+  // arrive live from the shared SQS queue. It is not the recent-sync skip and carries no synced
+  // instant, because nothing was synchronized.
+  it('reads a 200 body as live via SQS and carries when the queue last delivered', () => {
+    const { service } = createService({
+      wasRecentlySynced: false,
+      lastSyncedAtUtc: null,
+      liveViaSqs: true,
+      lastSqsMessageReceivedAtUtc: '2026-11-07T08:55:00Z',
+      sqsNotLiveReason: null
+    });
+
+    expect(result(service.syncLatest())).toEqual({
+      wasRecentlySynced: false,
+      wasBusy: false,
+      lastSyncedAtUtc: null,
+      liveViaSqs: true,
+      lastSqsMessageReceivedAtUtc: '2026-11-07T08:55:00Z',
+      sqsNotLiveReason: null
+    });
+  });
+
+  // A queue that has delivered nothing yet is still live: the instant is absent, not the claim.
+  it('reads a live answer with no message instant as live', () => {
+    const { service } = createService({ liveViaSqs: true });
+
+    const answer = result(service.syncLatest());
+
+    expect(answer.liveViaSqs).toBe(true);
+    expect(answer.lastSqsMessageReceivedAtUtc).toBeNull();
+    expect(answer.wasRecentlySynced).toBe(false);
   });
 
   // Issue #1104: a sync for this business is already running - the hourly reconciliation, or another
@@ -74,7 +120,15 @@ describe('NayaxSalesSyncService', () => {
     });
 
     expect(errored).toBe(false);
-    expect(emitted).toEqual({ wasRecentlySynced: true, wasBusy: true, lastSyncedAtUtc: null });
+    expect(emitted).toEqual({
+      wasRecentlySynced: true,
+      wasBusy: true,
+      lastSyncedAtUtc: null,
+      // A 409 is a ProblemDetails: there is no live decision in it, so none is claimed here.
+      liveViaSqs: false,
+      lastSqsMessageReceivedAtUtc: null,
+      sqsNotLiveReason: null
+    });
     // One request, and no second attempt: the service does not retry a busy sync.
     expect(http.post).toHaveBeenCalledTimes(1);
   });

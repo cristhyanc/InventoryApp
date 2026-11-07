@@ -32,7 +32,10 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 const SYNC_RAN: NayaxSalesSyncResult = {
   wasRecentlySynced: false,
   wasBusy: false,
-  lastSyncedAtUtc: null
+  lastSyncedAtUtc: null,
+  liveViaSqs: false,
+  lastSqsMessageReceivedAtUtc: null,
+  sqsNotLiveReason: 'NoSender'
 };
 
 /**

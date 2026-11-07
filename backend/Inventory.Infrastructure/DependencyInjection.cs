@@ -427,6 +427,10 @@ public static class InfrastructureServiceCollectionExtensions
         // here, so each runs on the context of the scope the reader opened for it.
         services.AddScoped<INayaxSqsSenderDirectory, EfNayaxSqsSenderDirectory>();
         services.AddScoped<INayaxSqsSenderActivityStore, EfNayaxSqsSenderActivityStore>();
+        // The Dashboard's read of the same row (issue #1106), scoped for the same reason: it runs on
+        // the request's own context, in the caller's own business scope, and it is read-only and
+        // projects no sender id.
+        services.AddScoped<INayaxSqsLiveStatusStore, EfNayaxSqsLiveStatusStore>();
         // The hourly reconciliation's two adapters (issue #1104), scoped for the same reason: both run
         // on the context of the per-business scope the runner opened. The evidence store's writes each
         // take SQLite's write lock before their own reads, which is what makes the sale's state and

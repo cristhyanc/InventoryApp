@@ -1,19 +1,22 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.Providers;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.SalesSync;
 
 /// <summary>
-/// The outcome of asking for a latest-sales synchronization: it ran, this business's sales were
-/// synchronized moments ago so there was nothing to read (issue #843), a synchronization for this
-/// business is already running (issue #1104), or it has run too many too recently (issue #681).
+/// The outcome of asking for a latest-sales synchronization: it ran, this business's sales already
+/// arrive live from SQS so there was nothing to read (issue #1106), its sales were synchronized
+/// moments ago so there was nothing to read (issue #843), a synchronization for this business is
+/// already running (issue #1104), or it has run too many too recently (issue #681).
 ///
-/// None of the three bounds is thrown as an exception, exactly as <c>NayaxConnectionTestOutcome</c>
+/// None of the bounds is thrown as an exception, exactly as <c>NayaxConnectionTestOutcome</c>
 /// reports the connection test's rate limit: each is an expected answer the HTTP boundary turns into a
 /// specific status, not a failure any other caller would want to catch. A <em>refusal</em> - no usable
 /// Nayax connection, or a support session - is still an exception, because it is not an answer about
@@ -21,11 +24,20 @@ namespace Inventory.Application.SalesSync;
 /// </summary>
 public sealed record NayaxSalesSyncOutcome
 {
-    private NayaxSalesSyncOutcome(TimeSpan? retryAfter, DateTime? recentlySyncedAtUtc, bool isBusy)
+    private NayaxSalesSyncOutcome(
+        TimeSpan? retryAfter,
+        DateTime? recentlySyncedAtUtc,
+        bool isBusy,
+        bool liveViaSqs = false,
+        DateTime? lastSqsMessageReceivedAtUtc = null,
+        NayaxSqsNotLiveReason? sqsNotLiveReason = null)
     {
         RetryAfter = retryAfter;
         RecentlySyncedAtUtc = recentlySyncedAtUtc;
         IsBusy = isBusy;
+        LiveViaSqs = liveViaSqs;
+        LastSqsMessageReceivedAtUtc = lastSqsMessageReceivedAtUtc;
+        SqsNotLiveReason = sqsNotLiveReason;
     }
 
     /// <summary>
@@ -53,6 +65,34 @@ public sealed record NayaxSalesSyncOutcome
     /// </summary>
     public bool IsBusy { get; }
 
+    /// <summary>
+    /// Whether this business's sales arrive live from the shared Nayax SQS queue, so this unforced
+    /// call read nothing at all (issue #1106).
+    ///
+    /// <para><strong>It is a claim about the queue path, not about a moment.</strong> It is
+    /// <see langword="true"/> only while the business has an enabled sender, the reader polled
+    /// successfully inside <see cref="NayaxSqsLivePolicy.PollWindow"/> with no failures, and this
+    /// business's hourly reconciliation fully succeeded inside
+    /// <see cref="NayaxSqsLivePolicy.ReconciliationWindow"/>. Like the recent-sync skip it reads
+    /// nothing from Nayax, writes nothing and claims <em>no</em> rate-limit allowance; unlike it, a
+    /// quiet queue keeps it true, because the time since the last message is not a condition.</para>
+    /// </summary>
+    public bool LiveViaSqs { get; }
+
+    /// <summary>
+    /// When a message from this business's SQS sender was last accepted, or <see langword="null"/>
+    /// when none ever has or when this call made no live decision at all (a forced run). It is
+    /// reported so the Dashboard can say what it last received, and is never a condition of being
+    /// live.
+    /// </summary>
+    public DateTime? LastSqsMessageReceivedAtUtc { get; }
+
+    /// <summary>
+    /// Why this business is not live via SQS, or <see langword="null"/> when it is live or when no
+    /// live decision was made - which is every forced run, and every call refused before the decision.
+    /// </summary>
+    public NayaxSqsNotLiveReason? SqsNotLiveReason { get; }
+
     // Cast because a record's own copy constructor makes a bare `new(null, null, false)` ambiguous.
     public static NayaxSalesSyncOutcome Completed { get; } = new((TimeSpan?)null, null, false);
 
@@ -67,6 +107,33 @@ public sealed record NayaxSalesSyncOutcome
     /// <summary>The sales were synchronized at <paramref name="lastSyncedAtUtc"/>, so this run was skipped.</summary>
     public static NayaxSalesSyncOutcome RecentlySynced(DateTime lastSyncedAtUtc) =>
         new(null, lastSyncedAtUtc, false);
+
+    /// <summary>
+    /// This business's sales arrive live from SQS, so nothing was read, written or rationed (issue
+    /// #1106).
+    /// </summary>
+    /// <param name="lastSqsMessageReceivedAtUtc">
+    /// When a message from its sender was last accepted, or <see langword="null"/> for a queue that
+    /// has delivered nothing yet - which is a healthy quiet queue and still live.
+    /// </param>
+    public static NayaxSalesSyncOutcome LiveFromSqs(DateTime? lastSqsMessageReceivedAtUtc) =>
+        new(
+            null,
+            null,
+            false,
+            liveViaSqs: true,
+            lastSqsMessageReceivedAtUtc: lastSqsMessageReceivedAtUtc);
+
+    /// <summary>
+    /// The same outcome, carrying why this business is <em>not</em> live via SQS (issue #1106).
+    ///
+    /// <para>It is reported beside whatever the call then did - a run, a recent-sync skip, a busy
+    /// skip or the run limit's refusal - rather than changing any of them: when a business is not
+    /// live, everything about this synchronization behaves exactly as it did before.</para>
+    /// </summary>
+    public NayaxSalesSyncOutcome NotLiveViaSqs(
+        NayaxSqsNotLiveReason reason, DateTime? lastSqsMessageReceivedAtUtc) =>
+        new(RetryAfter, RecentlySyncedAtUtc, IsBusy, false, lastSqsMessageReceivedAtUtc, reason);
 }
 
 /// <summary>
@@ -167,6 +234,22 @@ public interface INayaxLastSalesObserver
 /// Refresh control on the Dashboard forces a run past the skip, and a forced run is still rationed
 /// by the limiter.</para>
 ///
+/// <para><strong>A business whose sales arrive live from SQS is not synchronized on load at all</strong>
+/// (issue #1106, child of #1100). Once the queue reader of issue #1103 is delivering a business's
+/// sales, opening the Dashboard has nothing to read: an unforced call answers
+/// <see cref="NayaxSalesSyncOutcome.LiveFromSqs"/> having read nothing from Nayax, written nothing
+/// and claimed no rate-limit allowance. The claim is narrow on purpose -
+/// <see cref="NayaxSqsLivePolicy"/> requires an enabled sender, a reader that polled successfully
+/// moments ago with no failures, and a reconciliation that fully succeeded for <em>this</em> business
+/// inside 150 minutes - because what is being skipped is the read whose result the operator is
+/// looking at. An enabled sender alone, or a recent reconciliation alone, says nothing about whether
+/// the reader works. The order is the same as every other bound here and is asserted: the connection,
+/// the status gate and the support-session refusal are resolved <em>first</em>, so an unusable
+/// connection gets exactly the refusal it always did and is never told its sales are live. A forced
+/// Refresh makes no live decision at all and reads <c>lastSales</c> exactly as it does today, and a
+/// business that is not live behaves exactly as it did before, with the reason reported beside the
+/// answer.</para>
+///
 /// <para><strong>Only one run per business at a time</strong> (issue #1104).
 /// <see cref="NayaxSalesSyncLock"/> is shared with the hourly reconciliation, so a Dashboard load
 /// cannot run beside an hourly run for the same business: each would spend the business's Nayax
@@ -189,6 +272,8 @@ public sealed class SyncLatestNayaxSales
     private readonly INayaxRequestCredentialProvider _credentials;
     private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IProviderDataCoverageStore _coverage;
+    private readonly INayaxSqsLiveStatusStore _sqsStatus;
+    private readonly NayaxSqsReaderHealth _readerHealth;
     private readonly IClock _clock;
 
     public SyncLatestNayaxSales(
@@ -200,6 +285,8 @@ public sealed class SyncLatestNayaxSales
         INayaxRequestCredentialProvider credentials,
         ICurrentBusinessProvider currentBusiness,
         IProviderDataCoverageStore coverage,
+        INayaxSqsLiveStatusStore sqsStatus,
+        NayaxSqsReaderHealth readerHealth,
         IClock clock)
     {
         _nayax = nayax;
@@ -210,6 +297,8 @@ public sealed class SyncLatestNayaxSales
         _credentials = credentials;
         _currentBusiness = currentBusiness;
         _coverage = coverage;
+        _sqsStatus = sqsStatus;
+        _readerHealth = readerHealth;
         _clock = clock;
     }
 
@@ -267,20 +356,31 @@ public sealed class SyncLatestNayaxSales
         // refusal, and the credential revision the skip is keyed by, precede the decision.
         var credential = await _credentials.GetForOperationAsync(cancellationToken);
 
+        // After the refusals and before everything else, because the live answer is the strongest
+        // "there is nothing to read" this use case has (issue #1106): a business whose queue is
+        // demonstrably working does not need the three-minute window, the lock or an allowance. A
+        // forced Refresh makes this decision not at all - it is asking for a lastSales read - and
+        // neither does the hourly reconciliation, which always forces.
+        var live = force ? null : await FindSqsLiveStatusAsync(cancellationToken);
+        if (live is { Reason: null })
+        {
+            return NayaxSalesSyncOutcome.LiveFromSqs(live.LastMessageReceivedAtUtc);
+        }
+
         if (!force
             && _freshness.FindRecentSync(businessId, credential.CredentialRevision) is { } lastSyncedAtUtc)
         {
             // Before the allowance is claimed, because a skip reads nothing: rationing a run that
             // never leaves the API would let a browser in a reload loop spend the business's own
             // Refresh button on nothing.
-            return NayaxSalesSyncOutcome.RecentlySynced(lastSyncedAtUtc);
+            return NotLive(NayaxSalesSyncOutcome.RecentlySynced(lastSyncedAtUtc), live);
         }
 
         if (lockMode is NayaxSalesSyncLockMode.AlreadyHeld)
         {
             // The hourly reconciliation took this business's lease with TryAcquireAsync and keeps it
             // across its own evidence writes and success record, so there is nothing to take here.
-            return await RunAsync(businessId, credential, observer, cancellationToken);
+            return NotLive(await RunAsync(businessId, credential, observer, cancellationToken), live);
         }
 
         // After the freshness skip and before the allowance: a run that has nothing to read must not
@@ -296,11 +396,48 @@ public sealed class SyncLatestNayaxSales
             // A synchronization for this business is still running. Nothing was read from Nayax,
             // nothing was written, no coverage was recorded and - deliberately - no allowance was
             // claimed: an attempt that only ever waited must not cost the business a refresh.
-            return NayaxSalesSyncOutcome.Busy;
+            return NotLive(NayaxSalesSyncOutcome.Busy, live);
         }
 
-        return await RunAsync(businessId, credential, observer, cancellationToken);
+        return NotLive(await RunAsync(businessId, credential, observer, cancellationToken), live);
     }
+
+    /// <summary>
+    /// Whether this business counts as live via SQS, from its own sender row and the reader's
+    /// process-wide health record (issue #1106).
+    ///
+    /// <para>Both halves are read here, together, so the answer is one reading rather than two a
+    /// restart or a failed poll could land between. The row read is an ordinary tenant-owned one in
+    /// the caller's own scope, and it carries no sender id: whether one is recorded is the whole of
+    /// what the decision needs, and the identity itself is on no member-facing surface.</para>
+    /// </summary>
+    private async Task<SqsLiveStatus> FindSqsLiveStatusAsync(CancellationToken cancellationToken)
+    {
+        var sender = await _sqsStatus.FindCurrentAsync(cancellationToken).ConfigureAwait(false);
+        var health = _readerHealth.Current();
+
+        var reason = NayaxSqsLivePolicy.FindNotLiveReason(
+            new NayaxSqsLiveState(
+                // No row at all and a row whose id was cleared are the same answer: neither
+                // attributes anything on the shared queue.
+                SenderRecorded: sender?.SenderIdRecorded ?? false,
+                IsEnabled: sender?.IsEnabled ?? false,
+                health.LastSuccessfulPollUtc,
+                health.ConsecutivePollFailures,
+                sender?.LastReconciliationSucceededAtUtc),
+            _clock.UtcNow);
+
+        return new SqsLiveStatus(reason, sender?.LastMessageReceivedAtUtc);
+    }
+
+    /// <summary>
+    /// Carries a not-live reason on <paramref name="outcome"/>, and leaves the outcome exactly as it
+    /// is when no live decision was made - a forced run - or when the business is live.
+    /// </summary>
+    private static NayaxSalesSyncOutcome NotLive(NayaxSalesSyncOutcome outcome, SqsLiveStatus? live) =>
+        live is { Reason: { } reason }
+            ? outcome.NotLiveViaSqs(reason, live.LastMessageReceivedAtUtc)
+            : outcome;
 
     /// <summary>
     /// The run itself, with this business's synchronization lock held by this call or by its caller:
@@ -419,4 +556,11 @@ public sealed class SyncLatestNayaxSales
         await _coverage.RecordAsync(
             ExternalProvider.Nayax, ProviderDataSource.SalesSync, from, readStartedAtUtc, cancellationToken);
     }
+
+    /// <summary>
+    /// One live decision: why the business is not live, or <see langword="null"/> when it is, and
+    /// what its queue last delivered (issue #1106).
+    /// </summary>
+    private sealed record SqsLiveStatus(
+        NayaxSqsNotLiveReason? Reason, DateTime? LastMessageReceivedAtUtc);
 }

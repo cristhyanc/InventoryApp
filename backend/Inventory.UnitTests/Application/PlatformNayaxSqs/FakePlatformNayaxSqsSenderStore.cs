@@ -114,6 +114,8 @@ public sealed class FakePlatformNayaxSqsSenderStore : IPlatformNayaxSqsSenderSto
             write.AwsSenderId,
             write.IsEnabled,
             existing?.LastMessageReceivedAtUtc,
+            // Neither instant is this surface's to write: both are reported from the stored row.
+            existing?.LastReconciliationSucceededAtUtc,
             write.Revision,
             existing?.CreatedAtUtc ?? write.OccurredAtUtc,
             write.OccurredAtUtc);

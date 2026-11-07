@@ -1,7 +1,9 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.SalesSync;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.NayaxSqs;
 using InventoryApi.Tests.Application.SalesSync;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
@@ -22,6 +24,12 @@ namespace InventoryApi.Tests.Controllers;
 /// synchronized moments ago, and 429 with <c>Retry-After</c> when it has run too many too recently.
 /// The run-limit cases force every call, because an unforced second call inside three minutes is now
 /// skipped before the allowance is considered at all - which is itself asserted below.</para>
+///
+/// <para>Issue #1106 adds the second reason that <em>same</em> 200 body is sent: this business's
+/// sales arrive live from the shared Nayax SQS queue, so there was nothing to read. The body's
+/// existing fields keep their meaning and three are added - <c>liveViaSqs</c>,
+/// <c>lastSqsMessageReceivedAtUtc</c> and <c>sqsNotLiveReason</c> - and 204, 409 and 429 are
+/// untouched.</para>
 /// </summary>
 public class NayaxSalesSyncControllerTests
 {
@@ -265,6 +273,122 @@ public class NayaxSalesSyncControllerTests
         }
 
         Assert.IsType<NoContentResult>(await controller.SyncLatest(force: true, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The live answer at the HTTP boundary (issue #1106): a business whose sales arrive from SQS is
+    /// answered <c>200</c> with <c>liveViaSqs</c>, the instant its queue last delivered and no
+    /// not-live reason - and the request reaches Nayax not at all.
+    ///
+    /// <para>It is the existing <c>200</c> body with fields added rather than a new status, so
+    /// <c>204</c>, <c>409</c> and <c>429</c> all keep exactly the meaning every existing caller has;
+    /// <c>wasRecentlySynced</c> stays <see langword="false"/> here, because this is the other skip.</para>
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_answers_200_with_live_via_sqs_for_a_business_on_a_healthy_queue()
+    {
+        var clock = new FakeClock(Now);
+        var health = new NayaxSqsReaderHealth();
+        health.RecordSuccessfulPoll(Now.AddSeconds(-5));
+        var nayax = SingleMachineNayax();
+        var controller = Controller(TestSalesSync.UseCase(
+            nayax.Object,
+            EmptyStore().Object,
+            clock,
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Enabled(
+                reconciliationSucceededAtUtc: Now.AddMinutes(-30),
+                lastMessageReceivedAtUtc: Now.AddMinutes(-7)),
+            readerHealth: health));
+
+        var live = Assert.IsType<OkObjectResult>(
+            await controller.SyncLatest(force: false, CancellationToken.None));
+
+        var body = Assert.IsType<NayaxSalesRecentlySyncedResponse>(live.Value);
+        Assert.True(body.LiveViaSqs);
+        Assert.Equal(Now.AddMinutes(-7), body.LastSqsMessageReceivedAtUtc);
+        Assert.Null(body.SqsNotLiveReason);
+        Assert.False(body.WasRecentlySynced);
+        Assert.Null(body.LastSyncedAtUtc);
+
+        // Nothing was read and nothing was rationed.
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(controller.Response.Headers.RetryAfter.ToString());
+    }
+
+    /// <summary>
+    /// A queue that has delivered nothing yet is still live, and the body says so with a null
+    /// instant rather than with a reason: that is what the Dashboard renders as "no sales received
+    /// yet".
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_answers_live_with_no_instant_for_a_queue_that_has_delivered_nothing()
+    {
+        var health = new NayaxSqsReaderHealth();
+        health.RecordSuccessfulPoll(Now.AddSeconds(-5));
+        var controller = Controller(TestSalesSync.UseCase(
+            SingleMachineNayax().Object,
+            EmptyStore().Object,
+            new FakeClock(Now),
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Enabled(Now.AddMinutes(-30)),
+            readerHealth: health));
+
+        var body = Assert.IsType<NayaxSalesRecentlySyncedResponse>(
+            Assert.IsType<OkObjectResult>(
+                await controller.SyncLatest(force: false, CancellationToken.None)).Value);
+
+        Assert.True(body.LiveViaSqs);
+        Assert.Null(body.LastSqsMessageReceivedAtUtc);
+    }
+
+    /// <summary>
+    /// A business that is not live behaves exactly as it did before - the first load runs and
+    /// answers <c>204</c>, the second is the recent-sync <c>200</c> - and the reason travels with the
+    /// body that exists, as one of the published codes rather than as an enum's number.
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_reports_the_not_live_reason_on_the_recent_sync_body()
+    {
+        var clock = new FakeClock(Now);
+        var controller = Controller(TestSalesSync.UseCase(
+            SingleMachineNayax().Object,
+            EmptyStore().Object,
+            clock,
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Disabled(Now.AddMinutes(-30)),
+            readerHealth: new NayaxSqsReaderHealth()));
+
+        Assert.IsType<NoContentResult>(await controller.SyncLatest(force: false, CancellationToken.None));
+
+        clock.UtcNow = Now.AddMinutes(1);
+        var body = Assert.IsType<NayaxSalesRecentlySyncedResponse>(
+            Assert.IsType<OkObjectResult>(
+                await controller.SyncLatest(force: false, CancellationToken.None)).Value);
+
+        Assert.False(body.LiveViaSqs);
+        Assert.True(body.WasRecentlySynced);
+        Assert.Equal(Now, body.LastSyncedAtUtc);
+        Assert.Equal(NayaxSqsNotLiveReasons.SenderDisabled, body.SqsNotLiveReason);
+    }
+
+    /// <summary>
+    /// The Refresh control's <c>force=true</c> against a live business: the unchanged <c>204</c>,
+    /// having read every machine, with no live claim in the response at all.
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_with_force_still_reads_lastSales_for_a_live_business()
+    {
+        var health = new NayaxSqsReaderHealth();
+        health.RecordSuccessfulPoll(Now.AddSeconds(-5));
+        var nayax = SingleMachineNayax();
+        var controller = Controller(TestSalesSync.UseCase(
+            nayax.Object,
+            EmptyStore().Object,
+            new FakeClock(Now),
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Enabled(Now.AddMinutes(-30)),
+            readerHealth: health));
+
+        Assert.IsType<NoContentResult>(await controller.SyncLatest(force: true, CancellationToken.None));
+
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     private static Mock<INayaxLynxClient> SingleMachineNayax()

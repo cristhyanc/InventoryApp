@@ -465,7 +465,12 @@ public class SuperAdminNayaxSqsSenderApiTests
 
     /// <summary>
     /// The response carries nothing about any business but its own key: no name, no contact detail,
-    /// no plan and no Nayax Lynx credential value - the seven declared properties and no eighth.
+    /// no plan and no Nayax Lynx credential value - the nine declared properties and no tenth.
+    ///
+    /// <para>Issue #1106 added two of them and they are the whole of that change:
+    /// <c>lastReconciliationSucceededAtUtc</c>, the one column that issue widened this surface's read
+    /// by, and <c>readerHealth</c>, which is about the queue reader's process and about no business
+    /// at all.</para>
     /// </summary>
     [Fact]
     public async Task The_response_carries_exactly_the_declared_properties()
@@ -484,6 +489,8 @@ public class SuperAdminNayaxSqsSenderApiTests
                 "createdAtUtc",
                 "isEnabled",
                 "lastMessageReceivedAtUtc",
+                "lastReconciliationSucceededAtUtc",
+                "readerHealth",
                 "revision",
                 "updatedAtUtc",
             ],
@@ -491,6 +498,75 @@ public class SuperAdminNayaxSqsSenderApiTests
                 .Select(property => property.Name)
                 .OrderBy(name => name, StringComparer.Ordinal)
                 .ToArray());
+
+        // And the reader's health is three values about the reader: no business id, no message id,
+        // no receipt handle, no queue URL and no count of anybody's sales.
+        Assert.Equal(
+            [
+                "consecutivePollFailures",
+                "deadLetterQueueDepth",
+                "lastSuccessfulPollUtc",
+            ],
+            body.GetProperty("readerHealth")
+                .EnumerateObject()
+                .Select(property => property.Name)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray());
+    }
+
+    /// <summary>
+    /// What the card reports for a test host, which is also the shipped state and every deployment
+    /// with no queue configured: nothing has polled, nothing has failed, no dead-letter depth has
+    /// been read, and this business's reconciliation has never succeeded. Each is reported as "not
+    /// known" rather than as a reassuring zero instant (issue #1106).
+    /// </summary>
+    [Fact]
+    public async Task The_response_reports_an_unstarted_reader_and_an_unverified_business()
+    {
+        await PutAsync(
+            _factory.AsAdministrator(), _factory.OtherBusinessId, SenderId, isEnabled: true,
+            expectedRevision: null);
+
+        var body = await ReadAsync(
+            await _factory.AsAdministrator().GetAsync(SenderUrl(_factory.OtherBusinessId)));
+
+        Assert.Equal(
+            JsonValueKind.Null, body.GetProperty("lastReconciliationSucceededAtUtc").ValueKind);
+
+        var health = body.GetProperty("readerHealth");
+        Assert.Equal(JsonValueKind.Null, health.GetProperty("lastSuccessfulPollUtc").ValueKind);
+        Assert.Equal(0, health.GetProperty("consecutivePollFailures").GetInt32());
+        Assert.Equal(JsonValueKind.Null, health.GetProperty("deadLetterQueueDepth").ValueKind);
+    }
+
+    /// <summary>
+    /// The instant the hourly run of issue #1104 wrote is reported back unchanged, which is what
+    /// makes the card able to say whether a business's queue has been verified at all (issue #1106).
+    /// This surface writes neither that column nor the last-message one.
+    /// </summary>
+    [Fact]
+    public async Task The_response_reports_the_last_successful_reconciliation()
+    {
+        var succeededAt = new DateTime(2026, 11, 7, 3, 0, 0, DateTimeKind.Utc);
+
+        await PutAsync(
+            _factory.AsAdministrator(), _factory.OtherBusinessId, SenderId, isEnabled: true,
+            expectedRevision: null);
+        await _factory.RecordReconciliationSuccessAsync(_factory.OtherBusinessId, succeededAt);
+
+        var body = await ReadAsync(
+            await _factory.AsAdministrator().GetAsync(SenderUrl(_factory.OtherBusinessId)));
+
+        Assert.Equal(
+            succeededAt, body.GetProperty("lastReconciliationSucceededAtUtc").GetDateTime());
+
+        // The write path reports it too, and still does not write it: a "Turn off" leaves it as it is.
+        var afterWrite = await ReadAsync(await PutAsync(
+            _factory.AsAdministrator(), _factory.OtherBusinessId, SenderId, isEnabled: false,
+            expectedRevision: 1));
+
+        Assert.Equal(
+            succeededAt, afterWrite.GetProperty("lastReconciliationSucceededAtUtc").GetDateTime());
     }
 
     #endregion
@@ -593,6 +669,20 @@ public class SuperAdminNayaxSqsSenderApiTests
                 .Where(row => row.BusinessId == businessId)
                 .OrderBy(row => row.Id)
                 .ToListAsync();
+        }
+
+        /// <summary>
+        /// Stamps "the hourly reconciliation fully succeeded" on that business's sender row, as the
+        /// hourly run of issue #1104 does - arranged directly here, because this surface never writes
+        /// that column and issue #1106 only reports it.
+        /// </summary>
+        public async Task RecordReconciliationSuccessAsync(int businessId, DateTime succeededAtUtc)
+        {
+            await using var db = Database();
+            var sender = await db.BusinessNayaxSqsSenders
+                .SingleAsync(row => row.BusinessId == businessId);
+            sender.LastReconciliationSucceededAtUtc = succeededAtUtc;
+            await db.SaveChangesAsync();
         }
 
         public async Task<IReadOnlyList<BusinessNayaxSqsSenderAudit>> AuditsOfAsync(int businessId)
