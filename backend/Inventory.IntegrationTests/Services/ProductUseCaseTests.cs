@@ -141,6 +141,7 @@ public class ProductUseCaseTests
         Assert.Equal("Drinks", product.Category!.Name);
         Assert.Equal("Cold", product.Category.Description);
 
+        Assert.NotNull(product.StockAdjustments);
         var adjustment = Assert.Single(product.StockAdjustments);
         Assert.Equal(4, adjustment.QuantityChange);
         Assert.Equal(1.25m, adjustment.UnitCost);

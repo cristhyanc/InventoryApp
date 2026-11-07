@@ -91,7 +91,9 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
             // collation change this issue excludes - though it still leaves non-ASCII letters
             // unfolded. The escape character keeps a literal '%' or '_' a person types from acting
             // as a wildcard.
-            var pattern = $"%{LikePattern(filter.Search)}%";
+            // Trimmed first: a phone keyboard leaves a space after a word picked from its
+            // suggestions, and that space searched literally would miss a name ending in the word.
+            var pattern = $"%{LikePattern(filter.Search.Trim())}%";
             var escapeCharacter = SearchEscapeCharacter.ToString();
             query = query.Where(product => EF.Functions.Like(product.Name, pattern, escapeCharacter)
                 || (product.Sku != null && EF.Functions.Like(product.Sku, pattern, escapeCharacter)));

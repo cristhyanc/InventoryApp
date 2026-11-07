@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { EMPTY, Subject, Subscription, combineLatest } from 'rxjs';
-import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
+import { catchError, finalize, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { Product, Category } from '../../models/models';
@@ -256,7 +256,9 @@ export class ProductListComponent implements OnInit, OnDestroy {
 
   private fetchProducts() {
     const filters = {
-      search: this.search || undefined,
+      // Without the spaces around it: a phone keyboard adds one after a suggested word, and
+      // searching for that space too would miss a product whose name ends in the word.
+      search: this.search.trim() || undefined,
       categoryId: this.categoryId === '' ? undefined : this.categoryId,
       includeRetired: this.statusFilter === 'all'
     };
@@ -277,7 +279,11 @@ export class ProductListComponent implements OnInit, OnDestroy {
         this.loadState.fail(token);
         this.toastService.error('Failed to load products.');
         return EMPTY;
-      })
+      }),
+      // A newer search or filter replaces this request through `switchMap` before it answers, so
+      // neither branch above runs for it; releasing it is what lets the newer answer show instead
+      // of leaving the page waiting on a request that will never come back (a blank card).
+      finalize(() => this.loadState.release(token))
     );
   }
 
@@ -331,7 +337,9 @@ export class ProductListComponent implements OnInit, OnDestroy {
   onSearchChange(value: string): void {
     this.search = value;
     this.pageIndex = 0;
-    this.search$.next(value);
+    // Trimmed for the same reason as the request itself, so adding or removing a trailing space
+    // is not a new search.
+    this.search$.next(value.trim());
   }
 
   /** The search box's own clear button: an immediate refresh rather than a debounced one. */

@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { EMPTY, Observable, Subject } from 'rxjs';
-import { catchError, switchMap, take, takeUntil, tap } from 'rxjs/operators';
+import { catchError, finalize, switchMap, take, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
@@ -249,7 +249,9 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
   private fetchProducts() {
     const filters = {
-      search: this.search || undefined,
+      // Without the spaces around it, as on All products: a phone keyboard adds one after a
+      // suggested word.
+      search: this.search.trim() || undefined,
       categoryId: this.categoryId === '' ? undefined : this.categoryId
     };
 
@@ -271,7 +273,10 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         this.loadState.fail(token);
         this.toastService.error('Failed to load products needing ordering.');
         return EMPTY;
-      })
+      }),
+      // A newer search or filter replaces this request through `switchMap` before it answers;
+      // releasing it lets the newer answer show instead of a blank card (see ListLoadState).
+      finalize(() => this.loadState.release(token))
     );
   }
 
@@ -374,7 +379,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
   onSearchChange(value: string): void {
     this.search = value;
-    this.search$.next(value);
+    this.search$.next(value.trim());
   }
 
   /** Triggers an immediate (non-debounced) refresh, e.g. for a category change. */
