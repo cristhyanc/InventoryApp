@@ -7,6 +7,7 @@ import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pip
 import {
   MachineRestockSyncReminder,
   MachineRestockSyncReminderMachine,
+  MachineRestockSyncReminderResponse,
   isMachineRestockSyncReminderApplicable
 } from '../../../models/models';
 import { MachineService } from '../../../services/machine.service';
@@ -35,8 +36,10 @@ export type RestockSyncReminderState = 'idle' | 'loading' | 'loaded' | 'hidden' 
  * <p>**It reminds and nothing else.** There is no Sync Restock action here, no apply, no duplicate
  * resolution and no acknowledgement: each row links to the machine's own page, where the Sync
  * Restock dialog lives, and opening this banner or following one of its links leaves every pending
- * event exactly as pending as it was. The backend endpoint is a `GET` that makes no Nayax request
- * and writes nothing.</p>
+ * event exactly as pending as it was. Its first read is a `GET` that makes no Nayax request and
+ * writes nothing; since issue #1122 it then asks the API to fetch every machine's new Nayax restock
+ * events (at most once per business per hour) and shows the reminder that answers - an import that
+ * applies nothing.</p>
  *
  * <p>**Who sees it.** `Inventory.Operate`, the capability Sync Restock itself requires: a role that
  * may not reconcile restocks has nothing to do with a reminder to go and reconcile them. Like
@@ -86,6 +89,7 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
     + 'Reload the Dashboard, or open a machine and use Sync Restock to check it directly.';
 
   private reminderSubscription: Subscription | null = null;
+  private refreshSubscription: Subscription | null = null;
   private sessionActive = false;
   private readonly subscriptions = new Subscription();
 
@@ -119,6 +123,7 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
   ngOnDestroy(): void {
     this.subscriptions.unsubscribe();
     this.reminderSubscription?.unsubscribe();
+    this.refreshSubscription?.unsubscribe();
   }
 
   /** Whether there is a reminder with at least one machine on it to render. */
@@ -205,12 +210,9 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
     this.state = 'loading';
     this.reminderSubscription = this.machineService.getRestockSyncReminder().subscribe({
       next: (response) => {
-        if (isMachineRestockSyncReminderApplicable(response)) {
-          this.reminder = response;
-          this.state = 'loaded';
-        } else {
-          this.reminder = null;
-          this.state = 'hidden';
+        this.show(response);
+        if (this.state === 'loaded') {
+          this.refreshFromNayax();
         }
       },
       error: () => {
@@ -220,9 +222,40 @@ export class MachineRestockSyncReminderComponent implements OnDestroy {
     });
   }
 
+  /**
+   * Issue #1122: once the reminder from local data is on screen, asks the API to fetch every
+   * machine's new Nayax restock events (at most once per business per hour - the server decides)
+   * and shows the reminder it answers afterwards. A failed fetch request leaves the reminder already
+   * shown exactly as it is: it is still a true statement about what was imported.
+   */
+  private refreshFromNayax(): void {
+    this.refreshSubscription?.unsubscribe();
+    this.refreshSubscription = this.machineService.refreshRestockSyncReminder().subscribe({
+      // An empty answer says nothing new, so the reminder already shown stays.
+      next: (response) => {
+        if (response) {
+          this.show(response);
+        }
+      },
+      error: () => undefined
+    });
+  }
+
+  private show(response: MachineRestockSyncReminderResponse): void {
+    if (isMachineRestockSyncReminderApplicable(response)) {
+      this.reminder = response;
+      this.state = 'loaded';
+    } else {
+      this.reminder = null;
+      this.state = 'hidden';
+    }
+  }
+
   private clear(): void {
     this.reminderSubscription?.unsubscribe();
     this.reminderSubscription = null;
+    this.refreshSubscription?.unsubscribe();
+    this.refreshSubscription = null;
     this.reminder = null;
     this.state = 'idle';
   }

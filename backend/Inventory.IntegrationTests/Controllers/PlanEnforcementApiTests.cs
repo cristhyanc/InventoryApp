@@ -598,6 +598,24 @@ public class PlanEnforcementApiTests : IClassFixture<PlanEnforcementApiTests.Api
     }
 
     /// <summary>
+    /// Issue #1122: the Dashboard's hourly restock fetch asks the plan before any Nayax call, so a
+    /// business without the provider spends none and is answered the same withheld reminder.
+    /// </summary>
+    [Fact]
+    public async Task The_restock_fetch_makes_no_nayax_call_without_the_provider_plan()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Free);
+
+        var response = await Owner().PostAsync("/api/machine-restock-sync/reminder/refresh", content: null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response);
+        Assert.False(body.GetProperty("applicable").GetBoolean());
+        Assert.Equal("PlanRequired", body.GetProperty("reason").GetString());
+        Assert.Equal(0, _factory.NayaxRequests);
+    }
+
+    /// <summary>
     /// And the manual paths a Free business runs its stock on are not refused: recording a pick, and
     /// recording one across several machines, get past the plan and fail only on their own
     /// validation. They carry no plan requirement at all, which is what "Free keeps everything else

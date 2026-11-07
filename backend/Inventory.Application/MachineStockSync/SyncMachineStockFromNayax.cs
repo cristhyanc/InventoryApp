@@ -54,7 +54,7 @@ namespace Inventory.Application.MachineStockSync;
 /// range nor a completeness guarantee (Nayax developer portal, Get Machine Last Alerts), so what is
 /// recorded is when this workflow last succeeded and nothing more.</para>
 /// </summary>
-public sealed class SyncMachineStockFromNayax
+public sealed class SyncMachineStockFromNayax : IMachineRestockEventFetch
 {
     private readonly INayaxLynxClient _nayax;
     private readonly IMachineStockEventStore _store;
@@ -81,6 +81,13 @@ public sealed class SyncMachineStockFromNayax
         _coverage = coverage;
         _businessCalendar = businessCalendar;
     }
+
+    /// <summary>
+    /// The Dashboard's hourly fetch (issue #1122): this same import, with the preview it builds
+    /// discarded. Only the import and the #1018 coverage write matter to that caller.
+    /// </summary>
+    Task IMachineRestockEventFetch.FetchAsync(MachineIdentity machine, CancellationToken cancellationToken) =>
+        Handle(machine, cancellationToken);
 
     /// <summary>
     /// Imports new alerts and previews the machine's Sync Restock working list (issue #206).

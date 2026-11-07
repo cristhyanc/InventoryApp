@@ -389,6 +389,10 @@ public static class ApplicationServiceCollectionExtensions
         // reads the caller's resolved business's own connection record and machines through the
         // request's AppDbContext, and makes no Nayax call at all.
         services.AddScoped<GetMachineRestockSyncReminder>();
+        // Issue #1122: the Dashboard's hourly restock fetch, through the Sync Restock import itself.
+        services.AddScoped<IMachineRestockEventFetch>(provider => provider.GetRequiredService<SyncMachineStockFromNayax>());
+        services.AddScoped<RefreshMachineRestockEvents>();
+        services.AddSingleton<MachineRestockFetchThrottle>();
 
         // The machine-stock ledger (issue #56). Scoped like every other use case: the reconciliation
         // reads one caller's resolved business through the request's own AppDbContext, and a recorded

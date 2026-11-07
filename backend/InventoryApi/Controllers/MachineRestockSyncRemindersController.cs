@@ -34,10 +34,13 @@ namespace InventoryApi.Controllers;
 public sealed class MachineRestockSyncRemindersController : ControllerBase
 {
     private readonly GetMachineRestockSyncReminder _getReminder;
+    private readonly RefreshMachineRestockEvents _refresh;
 
-    public MachineRestockSyncRemindersController(GetMachineRestockSyncReminder getReminder)
+    public MachineRestockSyncRemindersController(
+        GetMachineRestockSyncReminder getReminder, RefreshMachineRestockEvents refresh)
     {
         _getReminder = getReminder;
+        _refresh = refresh;
     }
 
     /// <summary>
@@ -53,4 +56,18 @@ public sealed class MachineRestockSyncRemindersController : ControllerBase
     [HttpGet("reminder")]
     public Task<IMachineRestockSyncReminderDto> Reminder(CancellationToken cancellationToken) =>
         _getReminder.Handle(cancellationToken);
+
+    /// <summary>
+    /// The Dashboard's hourly restock fetch (issue #1122): fetches and imports every provider-named
+    /// machine's new Nayax restock alerts - at most once per business per hour, and never in a
+    /// support session, without the provider plan or with a refused connection - then answers the
+    /// same reminder <see cref="Reminder"/> does, read after the fetch. It applies nothing; the
+    /// <c>GET</c> above stays read-only and makes no Nayax call.
+    /// </summary>
+    [HttpPost("reminder/refresh")]
+    public async Task<IMachineRestockSyncReminderDto> RefreshReminder(CancellationToken cancellationToken)
+    {
+        await _refresh.Handle(cancellationToken);
+        return await _getReminder.Handle(cancellationToken);
+    }
 }

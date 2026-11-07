@@ -173,6 +173,9 @@ public class EndpointPlanRequirementTests
         // The Sync Restock reminder makes no Nayax call, so the credential gate never sees it; it
         // asks the same plan question itself and reports the same distinct reason.
         new("MachineRestockSyncRemindersController.Reminder", PlanRequirementKind.ViaProviderGate), // GET api/machine-restock-sync/reminder
+        // Issue #1122: the Dashboard's hourly restock fetch asks the same plan question before any
+        // Nayax call, and every Nayax call it then makes goes through the credential gate.
+        new("MachineRestockSyncRemindersController.RefreshReminder", PlanRequirementKind.ViaProviderGate), // POST api/machine-restock-sync/reminder/refresh
 
         // The machine reads are the fleet, so they are behind the credential gate and a business
         // without the provider sees its machines as the local records they are. Applying or
