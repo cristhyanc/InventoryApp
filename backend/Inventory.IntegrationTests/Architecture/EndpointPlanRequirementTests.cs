@@ -173,6 +173,9 @@ public class EndpointPlanRequirementTests
         // The Sync Restock reminder makes no Nayax call, so the credential gate never sees it; it
         // asks the same plan question itself and reports the same distinct reason.
         new("MachineRestockSyncRemindersController.Reminder", PlanRequirementKind.ViaProviderGate), // GET api/machine-restock-sync/reminder
+        // Issue #1122: the Dashboard's hourly restock fetch asks the same plan question before any
+        // Nayax call, and every Nayax call it then makes goes through the credential gate.
+        new("MachineRestockSyncRemindersController.RefreshReminder", PlanRequirementKind.ViaProviderGate), // POST api/machine-restock-sync/reminder/refresh
 
         // The machine reads are the fleet, so they are behind the credential gate and a business
         // without the provider sees its machines as the local records they are. Applying or
@@ -218,6 +221,11 @@ public class EndpointPlanRequirementTests
         // stored history and makes no Nayax call.
         new("NayaxSaleTimestampRepairsController.Apply", PlanRequirementKind.None), // POST api/admin/nayax-sale-timestamp-repair/apply
         new("NayaxSaleTimestampRepairsController.Preview", PlanRequirementKind.ViaProviderGate), // POST api/admin/nayax-sale-timestamp-repair/preview
+
+        // The Nayax sales review (issue #1105) reads and decides stored rows and makes no Nayax call.
+        new("NayaxSaleReviewController.Decide", PlanRequirementKind.None), // POST api/nayax-sale-review/{saleId}/decision
+        new("NayaxSaleReviewController.List", PlanRequirementKind.None), // GET api/nayax-sale-review
+        new("NayaxSaleReviewController.Summary", PlanRequirementKind.None), // GET api/nayax-sale-review/summary
 
         // The sales sync is the provider read the Dashboard starts with.
         new("NayaxSalesSyncController.SyncLatest", PlanRequirementKind.ViaProviderGate), // POST api/nayax-sales-sync
@@ -341,6 +349,12 @@ public class EndpointPlanRequirementTests
         new("SuperAdminBusinessesController.Reactivate", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reactivate
         new("SuperAdminBusinessesController.Reject", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/reject
         new("SuperAdminBusinessesController.ReleaseMember", PlanRequirementKind.None), // POST api/super-admin/businesses/{businessId:int}/members/{membershipId:int}/release
+        // Issue #1101's Nayax SQS sender identity. No plan requirement, for the reason no
+        // platform-admin endpoint has one: which AWS IAM user sends a business's sales is the
+        // platform's own record about that business, and a plan a business holds cannot decide
+        // whether the Super Admin may correct it.
+        new("SuperAdminNayaxSqsSenderController.Get", PlanRequirementKind.None), // GET api/super-admin/businesses/{businessId:int}/nayax-sqs-sender
+        new("SuperAdminNayaxSqsSenderController.Put", PlanRequirementKind.None), // PUT api/super-admin/businesses/{businessId:int}/nayax-sqs-sender
         new("SuperAdminMasterProductsController.Create", PlanRequirementKind.None), // POST api/super-admin/master-products
         new("SuperAdminMasterProductsController.Get", PlanRequirementKind.None), // GET api/super-admin/master-products/{id:long}
         new("SuperAdminMasterProductsController.List", PlanRequirementKind.None), // GET api/super-admin/master-products

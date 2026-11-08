@@ -7,6 +7,7 @@ import { ToastService } from '../../../services/toast.service';
 import { SuperAdminBusiness, SuperAdminBusinessesService } from '../../../services/super-admin-businesses.service';
 import type { NayaxConnectionStatusName } from '../../../services/nayax-connection.service';
 import { BusinessMembersDialogComponent } from './business-members-dialog.component';
+import { BusinessNayaxSqsSenderCardComponent } from './business-nayax-sqs-sender-card.component';
 import { BusinessPlanGrantDialogComponent } from './business-plan-grant-dialog.component';
 import { BusinessRejectDialogComponent } from './business-reject-dialog.component';
 import { ViewAsBusinessDialogComponent } from './view-as-business-dialog.component';
@@ -72,6 +73,11 @@ type PendingBusinessAction =
  * change or end lives entirely in its own dialog, with its own load, form, revision and error. This
  * page neither reads nor decides a plan - the businesses list carries none, because the grant is read
  * through its own endpoint rather than by widening the directory this table shows.
+ *
+ * "Nayax SQS sender" (issue #1101) is composed the same way once more: which AWS IAM user sends a
+ * business's Nayax sales to the shared queue lives entirely in its own card, with its own load,
+ * field, revision, remove confirmation and error. This page neither reads nor decides a sender - the
+ * businesses list carries none, for the reason it carries no plan.
  */
 @Component({
   selector: 'app-super-admin-businesses',
@@ -83,6 +89,7 @@ type PendingBusinessAction =
     ConfirmationDialogComponent,
     BusinessRejectDialogComponent,
     BusinessMembersDialogComponent,
+    BusinessNayaxSqsSenderCardComponent,
     BusinessPlanGrantDialogComponent,
     ViewAsBusinessDialogComponent
   ],
@@ -101,6 +108,7 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
   membersTarget: SuperAdminBusiness | null = null;
   viewAsTarget: SuperAdminBusiness | null = null;
   planGrantTarget: SuperAdminBusiness | null = null;
+  nayaxSqsSenderTarget: SuperAdminBusiness | null = null;
 
   private readonly destroying$ = new Subject<void>();
 
@@ -195,6 +203,23 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
    */
   onPlanGrantSaved(): void {
     this.toast.success('The plan grant was saved.');
+  }
+
+  openNayaxSqsSender(business: SuperAdminBusiness): void {
+    this.nayaxSqsSenderTarget = business;
+  }
+
+  closeNayaxSqsSender(): void {
+    this.nayaxSqsSenderTarget = null;
+  }
+
+  /**
+   * A committed recording, change, switch or removal. The card stays open showing what was stored -
+   * its own answer carries the new revision - and this page only reports it, because the businesses
+   * table shows no sender to refresh.
+   */
+  onNayaxSqsSenderSaved(): void {
+    this.toast.success('The Nayax SQS sender was saved.');
   }
 
   onViewAsStarted(): void {

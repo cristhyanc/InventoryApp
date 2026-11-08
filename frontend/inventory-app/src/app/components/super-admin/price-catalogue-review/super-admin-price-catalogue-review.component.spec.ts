@@ -456,6 +456,29 @@ describe('SuperAdminPriceCatalogueReviewComponent (issue #928)', () => {
       expect(read).toHaveBeenCalledTimes(2);
     });
 
+    it('says how many confirmed listings had a held reading that did not become a price', async () => {
+      const decideListing = jest
+        .fn()
+        .mockReturnValueOnce(of(decisionResult()))
+        .mockReturnValueOnce(of(decisionResult({ supplierListingId: 8, priceAccepted: false, priceReason: 'stale' })));
+      const read = jest.fn(() => of(twoListingQueue()));
+      const { host, fixture, toast } = await render({ queue: read, decideListing });
+
+      check(checkboxWithAccessibleName(host, 'Select Alpha Grocer SKU-COLA-30'), true);
+      check(checkboxWithAccessibleName(host, 'Select Beta Mart SKU-COLA-24'), true);
+      fixture.detectChanges();
+
+      confirmSelectedButton(host).click();
+      fixture.detectChanges();
+      buttonWithText(host, 'Confirm selected').click();
+      fixture.detectChanges();
+
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.warning).toHaveBeenCalledWith(
+        '2 listings confirmed. 1 held reading was not priced, so that listing has no current price until the next run.'
+      );
+    });
+
     it('does not stop at one failure, summarises the run, keeps failures selected with their reasons, and reloads once', async () => {
       const decideListing = jest.fn((id: number) => {
         if (id === 7) {

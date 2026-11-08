@@ -36,7 +36,16 @@ namespace InventoryApi.Adapters.Mapping;
 /// </summary>
 public static class ProductRecordResponseMapper
 {
-    public static ProductResponse ToResponse(ProductRecord record, FinancialFigureVisibility visibility) =>
+    /// <param name="record">The product.</param>
+    /// <param name="visibility">Which financial figures the caller may be shown.</param>
+    /// <param name="includeStockHistory">
+    /// <see langword="false"/> only for the <c>GET api/products</c> listing, which leaves
+    /// <see cref="ProductResponse.StockAdjustments"/> out (<see langword="null"/>, omitted from the
+    /// JSON): no reader of the listing uses the history, and every product's whole history made
+    /// each search a large download.
+    /// </param>
+    public static ProductResponse ToResponse(
+        ProductRecord record, FinancialFigureVisibility visibility, bool includeStockHistory = true) =>
         new()
         {
             Id = record.Id,
@@ -57,9 +66,11 @@ public static class ProductRecordResponseMapper
             Category = record.Category is null
                 ? null
                 : new CategoryResponse(record.Category.Id, record.Category.Name, record.Category.Description),
-            StockAdjustments = record.StockAdjustments
-                .Select(adjustment => ToMovementResponse(adjustment, visibility))
-                .ToList(),
+            StockAdjustments = includeStockHistory
+                ? record.StockAdjustments
+                    .Select(adjustment => ToMovementResponse(adjustment, visibility))
+                    .ToList()
+                : null,
 
             // Resolved live by the reorder-alert listing, not persisted; zero on the read paths that
             // do not resolve them, exactly as before. The derived values follow from these.

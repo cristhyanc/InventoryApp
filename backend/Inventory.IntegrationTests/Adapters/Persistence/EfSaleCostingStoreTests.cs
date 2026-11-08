@@ -69,7 +69,8 @@ public class EfSaleCostingStoreTests
         var store = new EfSaleCostingStore(db);
 
         Assert.Null(await store.GetTransitionCutoffAsync(ProductA, CancellationToken.None));
-        var sale = Assert.Single(await store.LoadCompletedSalesAsync(new CompletedSaleSelection(), forUpdate: false, CancellationToken.None));
+        var sale = Assert.Single(await store.LoadStockConsumingSalesAsync(
+            new StockConsumingSaleSelection(), forUpdate: false, CancellationToken.None));
         Assert.Equal(9m, sale.NayaxProductCostPrice);
 
         // Business B's sale is unresolved and its raw provider id is business A's product key,
@@ -89,7 +90,8 @@ public class EfSaleCostingStoreTests
         await using (var db = TestAppDbContext.Denied(options))
         {
             var store = new EfSaleCostingStore(db);
-            Assert.Empty(await store.LoadCompletedSalesAsync(new CompletedSaleSelection(), forUpdate: true, CancellationToken.None));
+            Assert.Empty(await store.LoadStockConsumingSalesAsync(
+                new StockConsumingSaleSelection(), forUpdate: true, CancellationToken.None));
             Assert.Equal(0, (await TestCostingUseCases.BackfillNayaxHistoricalSaleCosts(db).Handle(dryRun: false)).SalesReviewed);
         }
 

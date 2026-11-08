@@ -1,5 +1,5 @@
 using Inventory.Application.CatalogueReview;
-using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -69,6 +69,7 @@ public sealed class EfLinkedProviderSaleResolutionStore : ILinkedProviderSaleRes
             {
                 ProviderNumber = sale.NayaxProductId!.Value,
                 sale.TransactionStatusId,
+                sale.SqsVerification,
                 sale.MachineAuthorizationTime,
             })
             .ToListAsync(cancellationToken);
@@ -80,7 +81,7 @@ public sealed class EfLinkedProviderSaleResolutionStore : ILinkedProviderSaleRes
                     .Where(sale => sale.ProviderNumber == product.ProviderNumber)
                     .ToList();
                 var completed = own
-                    .Where(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+                    .Where(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification))
                     .Select(sale => sale.MachineAuthorizationTime)
                     .ToList();
 

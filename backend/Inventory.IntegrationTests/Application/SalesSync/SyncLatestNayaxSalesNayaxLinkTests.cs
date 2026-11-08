@@ -194,7 +194,11 @@ public class SyncLatestNayaxSalesNayaxLinkTests : IDisposable
         return TestSalesSync.UseCase(
             nayax.Object,
             new EfLatestNayaxSalesStore(
-                db, TestCostingUseCases.CostSale(db, rebuild), rebuild, new EfNayaxProductLinkStore(db)));
+                db,
+                TestCostingUseCases.CostSale(db, rebuild),
+                rebuild,
+                new EfNayaxProductLinkStore(db),
+                TestClocks.Fixed));
     }
 
     /// <summary>

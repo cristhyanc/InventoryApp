@@ -8,9 +8,16 @@
  * displayed collection (`isCurrent`), and both `loaded` and `loadFailed` stay
  * false until every outstanding request has settled, so an earlier response can
  * never reveal a stale table or empty state while a later request is still running.
+ *
+ * A request that is unsubscribed before it answers - typically one a `switchMap` replaced with a
+ * newer search - is never settled by `succeed` or `fail`, so the caller also calls
+ * `release(token)` when the request ends for any reason (an RxJS `finalize`). Without it the
+ * replaced request would count as outstanding for good and the page would show neither its rows
+ * nor an empty state. Each token settles once: whichever of `succeed`, `fail` or `release` comes
+ * first counts, and the others do nothing.
  */
 export class ListLoadState {
-  private activeCount = 0;
+  private readonly pending = new Set<number>();
   private latestToken = 0;
   private latestFailed = false;
 
@@ -21,10 +28,11 @@ export class ListLoadState {
   loadFailed = false;
 
   start(): number {
-    this.activeCount++;
+    const token = ++this.latestToken;
+    this.pending.add(token);
     this.loaded = false;
     this.loadFailed = false;
-    return ++this.latestToken;
+    return token;
   }
 
   isCurrent(token: number): boolean {
@@ -39,13 +47,25 @@ export class ListLoadState {
     this.settle(token, true);
   }
 
-  private settle(token: number, failed: boolean): void {
-    this.activeCount--;
-    if (this.isCurrent(token)) {
+  /**
+   * Stops counting a request that ended without an answer (unsubscribed or replaced). It is never
+   * a failure: a replaced request is not the latest one, and a request that simply stopped being
+   * listened to has nothing to report. A token that already settled is left alone.
+   */
+  release(token: number): void {
+    this.settle(token, null);
+  }
+
+  private settle(token: number, failed: boolean | null): void {
+    if (!this.pending.delete(token)) {
+      return;
+    }
+
+    if (failed !== null && this.isCurrent(token)) {
       this.latestFailed = failed;
     }
 
-    const allSettled = this.activeCount === 0;
+    const allSettled = this.pending.size === 0;
     this.loaded = allSettled && !this.latestFailed;
     this.loadFailed = allSettled && this.latestFailed;
   }

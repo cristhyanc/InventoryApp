@@ -95,6 +95,14 @@
                       >
                         Plan
                       </button>
+                      <button
+                        type="button"
+                        class="btn btn-secondary btn-sm"
+                        data-testid="nayax-sqs-sender"
+                        (click)="openNayaxSqsSender(business)"
+                      >
+                        Nayax SQS sender
+                      </button>
                       <button type="button" class="btn btn-danger btn-sm" (click)="requestDeactivate(business)">
                         Deactivate
                       </button>
@@ -154,6 +162,15 @@
     (saved)="onPlanGrantSaved()"
     (closed)="closePlanGrant()"
   ></app-business-plan-grant-dialog>
+}
+
+@if (nayaxSqsSenderTarget) {
+  <app-business-nayax-sqs-sender-card
+    [businessId]="nayaxSqsSenderTarget.businessId"
+    [businessName]="nayaxSqsSenderTarget.name"
+    (saved)="onNayaxSqsSenderSaved()"
+    (closed)="closeNayaxSqsSender()"
+  ></app-business-nayax-sqs-sender-card>
 }
 
 @if (viewAsTarget) {

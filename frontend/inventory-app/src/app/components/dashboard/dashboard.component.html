@@ -17,7 +17,22 @@
       given no answer about freshness; the notices below say what happened in those cases.
     -->
     <div class="flex flex-wrap items-center gap-2">
-      @if (salesSyncedLabel) {
+      <!--
+        A business whose sales arrive from the SQS queue is not "synced N min ago" at all (issue
+        #1106): nothing was read, because the sales arrive as they happen. The two statements are
+        never both shown - the component sets one or the other - and a queue that has delivered
+        nothing yet says so plainly rather than looking like a problem.
+      -->
+      @if (isSalesLiveViaSqs) {
+        <p
+          class="m-0 inline-flex items-center gap-2 rounded-full border border-rr-line bg-white px-3 py-1.5 text-sm text-rr-muted"
+          data-testid="sales-live-from-nayax"
+        ><span class="h-2 w-2 shrink-0 rounded-full bg-rr-ok-text" aria-hidden="true"></span>@if (lastSqsMessageReceivedAtUtc) {
+            <span>Live from Nayax · last sale received {{ lastSqsMessageReceivedAtUtc | businessDateTime }}</span>
+          } @else {
+            <span>Live from Nayax · no sales received yet</span>
+          }</p>
+      } @else if (salesSyncedLabel) {
         <p
           class="m-0 inline-flex items-center gap-2 rounded-full border border-rr-line bg-white px-3 py-1.5 text-sm text-rr-muted"
           data-testid="sales-synced-at"
@@ -255,6 +270,8 @@
         </div>
       }
       <app-machine-restock-sync-reminder></app-machine-restock-sync-reminder>
+      <!-- Issue #1105: queue-delivered sales Nayax contradicted or that need the Owner's review. -->
+      <app-nayax-sale-review-alert></app-nayax-sale-review-alert>
     </div>
 
     <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">

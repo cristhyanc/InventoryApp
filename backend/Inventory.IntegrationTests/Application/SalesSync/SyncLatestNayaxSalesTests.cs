@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using Inventory.Infrastructure.Persistence;
@@ -46,7 +47,8 @@ public class SyncLatestNayaxSalesTests
                 // The real link table over the same context, so the resolution these cases run
                 // through is the production one (issue #745); the cases that are about it seed links
                 // with ids that differ (SyncLatestNayaxSalesNayaxLinkTests).
-                new EfNayaxProductLinkStore(db)));
+                new EfNayaxProductLinkStore(db),
+                TestClocks.Fixed));
     }
 
     [Fact]
@@ -136,35 +138,60 @@ public class SyncLatestNayaxSalesTests
             Times.Never);
     }
 
+    /// <summary>
+    /// Issue #1103: the drain runs after every persist, not only when this batch's own completed
+    /// sales affected something. The save records a durable pending rebuild per affected product, so
+    /// the work to do is what the database says is pending - which is what makes a rebuild that failed
+    /// on an earlier run get retried at all. Before, the sales were already stored, so the next run
+    /// reported no affected products and never came back to it.
+    /// </summary>
     [Fact]
-    public async Task Handle_rebuilds_inventory_costs_for_the_products_a_completed_sale_affected()
+    public async Task Handle_drains_every_pending_inventory_cost_rebuild_after_persisting()
     {
-        var affected = new Dictionary<long, DateTime> { [10] = new(2026, 9, 2, 14, 30, 0) };
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(affected));
+        var store = TestSalesSync.StoreMock();
 
         await TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object).Handle();
 
-        store.Verify(
-            x => x.RebuildInventoryCostsAsync(affected, It.IsAny<CancellationToken>()), Times.Once);
+        store.Verify(x => x.RebuildInventoryCostsAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    /// <summary>
+    /// And the drain still runs when this batch affected nothing at all, which is the whole point:
+    /// a pending rebuild an earlier run left behind is retried by the next synchronization rather
+    /// than waiting for the product's next sale.
+    /// </summary>
     [Fact]
-    public async Task Handle_does_not_rebuild_inventory_costs_when_no_completed_sale_was_affected()
+    public async Task Handle_drains_pending_rebuilds_even_when_this_batch_affected_no_product()
     {
-        var store = new Mock<ILatestNayaxSalesStore>();
+        var store = TestSalesSync.StoreMock();
         store.Setup(x => x.PersistLatestSalesAsync(
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+            .ReturnsAsync(new LatestNayaxSalesPersistResult(
+                new Dictionary<long, DateTime>(), InsertedCount: 0));
 
         await TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object).Handle();
 
-        store.Verify(
-            x => x.RebuildInventoryCostsAsync(
-                It.IsAny<IReadOnlyDictionary<long, DateTime>>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        store.Verify(x => x.RebuildInventoryCostsAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// A product whose history is still unreplayable is raised as the one data-quality failure this
+    /// path has always raised (issue #362), after every product that could be rebuilt has been. The
+    /// store reports rather than throws since issue #1103 - the queue reader needs to tell its own
+    /// product's failure from another's - so this is where the request-driven path turns a reported
+    /// failure back into the exception an operator sees.
+    /// </summary>
+    [Fact]
+    public async Task Handle_raises_a_still_failing_pending_rebuild_as_a_data_quality_failure()
+    {
+        var store = TestSalesSync.StoreMock();
+        store.Setup(x => x.RebuildInventoryCostsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new InventoryCostRebuildDrainResult([10], ["Product 10: no opening cost."]));
+
+        var failure = await Assert.ThrowsAsync<InventoryCostDataQualityException>(
+            () => TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object).Handle());
+
+        Assert.Contains("Product 10: no opening cost.", failure.Message, StringComparison.Ordinal);
     }
 
     private static Mock<INayaxLynxClient> SingleMachineNayax()

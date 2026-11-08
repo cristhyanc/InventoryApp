@@ -19,10 +19,14 @@ using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.NayaxReconciliation;
+using Inventory.Application.NayaxSaleReview;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
+using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.PlatformOptions;
 using Inventory.Application.PlatformPlans;
 using Inventory.Application.PriceCatalogue;
@@ -30,21 +34,21 @@ using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
-using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Daily;
+using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.Export;
 using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
-using Inventory.Application.SalesSync;
 using Inventory.Application.SaleTimestampRepair;
+using Inventory.Application.SalesSync;
 using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.Subscriptions;
-using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
+using Inventory.Application.Suppliers;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Microsoft.Extensions.DependencyInjection;
@@ -198,6 +202,13 @@ public static class ApplicationServiceCollectionExtensions
         // one BEGIN IMMEDIATE transaction on that same context, and the business it decides about is
         // named by the route - the subject of the decision rather than a tenancy scope.
         services.AddScoped<ManageBusinessPlanGrant>();
+
+        // And the Super Admin's Nayax SQS sender identity on one business (issue #1101). Scoped for
+        // exactly the reasons the grant above is: the business read, the lifecycle gate, the revision
+        // comparison and the sender and audit write all run on the request's own AppDbContext, inside
+        // one BEGIN IMMEDIATE transaction on that same context, and the business it records is named
+        // by the route - the subject of the decision rather than a tenancy scope.
+        services.AddScoped<ManageBusinessNayaxSqsSender>();
 
         // The attachment storage quota of issue #968, which reads the entitlement above for its
         // allowance. Scoped for the same reason: both the guard every upload path reserves through
@@ -380,6 +391,10 @@ public static class ApplicationServiceCollectionExtensions
         // reads the caller's resolved business's own connection record and machines through the
         // request's AppDbContext, and makes no Nayax call at all.
         services.AddScoped<GetMachineRestockSyncReminder>();
+        // Issue #1122: the Dashboard's hourly restock fetch, through the Sync Restock import itself.
+        services.AddScoped<IMachineRestockEventFetch>(provider => provider.GetRequiredService<SyncMachineStockFromNayax>());
+        services.AddScoped<RefreshMachineRestockEvents>();
+        services.AddSingleton<MachineRestockFetchThrottle>();
 
         // The machine-stock ledger (issue #56). Scoped like every other use case: the reconciliation
         // reads one caller's resolved business through the request's own AppDbContext, and a recorded
@@ -395,7 +410,31 @@ public static class ApplicationServiceCollectionExtensions
         // sales finished synchronizing a minute ago, under the credentials it holds now" is a fact
         // about the process, and a per-request memory would remember nothing at all.
         services.AddSingleton<NayaxSalesSyncFreshness>();
+        // The per-business synchronization lock of issue #1104, shared by the Dashboard's sync and
+        // the hourly reconciliation. A singleton for the strongest version of the same reason: a
+        // mutual-exclusion primitive that was not shared would not exclude anything.
+        services.AddSingleton<NayaxSalesSyncLock>();
         services.AddScoped<SyncLatestNayaxSales>();
+        // One business's hourly reconciliation of what SQS delivered against its own lastSales
+        // (issue #1104). Scoped and resolved from the per-business service scope the runner opens, so
+        // the gates, the reads, the evidence writes and the success record all belong to the one
+        // business that scope resolved - exactly as they would to a member of it. The runner's own
+        // loop is a singleton registered in Inventory.Infrastructure with its schedule and log sink,
+        // because it is about the process rather than about one business.
+        services.AddScoped<ReconcileNayaxSalesWithProvider>();
+        services.AddScoped<ReviewNayaxSales>();
+        // The slot-to-product lookup a queued Nayax SQS message needs (issue #1102), which an SQS
+        // message cannot answer itself: it reports the machine's MDB slot and no product id.
+        // Scoped like every other Nayax consumer, because the credentials, status gate and
+        // support-session refusal behind INayaxLynxClient belong to one caller's business. Its own
+        // message parser is a pure function and is registered nowhere.
+        services.AddScoped<INayaxSqsSlotProductResolver, NayaxSqsSlotProductResolver>();
+        // Everything one queued Nayax SQS message causes inside one business (issue #1103). Scoped,
+        // and resolved from the per-message service scope the reader opens: the gates, the save and
+        // the rebuild drain all belong to the one business that scope resolved, exactly as they would
+        // to a member of it. The reader's own loop is a singleton registered with the queue client in
+        // Inventory.Infrastructure, because it is about the process rather than about one message.
+        services.AddScoped<ProcessNayaxSqsSale>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();
         services.AddScoped<ListPurchases>();

@@ -350,6 +350,8 @@ async function answerApi(
     if (path.endsWith('/nayax-connection/status')) return json(route, { status: 'Ready', machineChecksPending: false });
     if (path.endsWith('/dashboard/summary')) return json(route, summary);
     if (path.endsWith('/machine-restock-sync/reminder')) return json(route, restockReminder);
+    // Issue #1122: the Dashboard's hourly Nayax fetch answers the same reminder.
+    if (path.endsWith('/machine-restock-sync/reminder/refresh')) return json(route, restockReminder);
     if (path.endsWith('/products/alerts/low-stock')) {
       return json(route, reorderList, options.storageOnlyReorder ? STORAGE_ONLY_REORDER_HEADERS : {});
     }

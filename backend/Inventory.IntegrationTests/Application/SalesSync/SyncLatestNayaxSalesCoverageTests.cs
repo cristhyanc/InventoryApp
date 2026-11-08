@@ -38,7 +38,8 @@ public class SyncLatestNayaxSalesCoverageTests
                 db,
                 TestCostingUseCases.CostSale(db, rebuild),
                 rebuild,
-                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
+                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+                new FakeClock(RunAt)),
             new FakeClock(RunAt),
             coverage);
     }

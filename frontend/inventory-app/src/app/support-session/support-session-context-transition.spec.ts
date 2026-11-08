@@ -43,6 +43,9 @@ const SUMMARY = '/api/dashboard/summary';
  */
 const REMINDER = '/api/machine-restock-sync/reminder';
 const HIDDEN_REMINDER = { applicable: false as const, reason: 'NoProviderMachines' };
+/** The Dashboard's Nayax sales review alert (issue #1105), answered as nothing to review. */
+const REVIEW_SUMMARY = '/api/nayax-sale-review/summary';
+const NOTHING_TO_REVIEW = { needsReviewCount: 0, notCountedCount: 0 };
 
 /** One business's Dashboard, as the figures a test can recognise on screen. */
 interface Figures {
@@ -265,7 +268,7 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedSessionId
   const answered: TestRequest[] = [];
   const answer = (
     url: string,
-    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | null
+    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | typeof NOTHING_TO_REVIEW | null
   ): void => {
     for (const request of rendered.httpMock.match((candidate) => candidate.url === url)) {
       answered.push(request);
@@ -281,6 +284,7 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedSessionId
   // Issue #891's reminder is requested by its own child component as soon as the page renders, and
   // not at all inside a support session, so `match` tolerates its absence here too.
   answer(REMINDER, HIDDEN_REMINDER);
+  answer(REVIEW_SUMMARY, NOTHING_TO_REVIEW);
   answer(LOW_STOCK, []);
   answer(SUMMARY, summary(figures));
   answer(SYNC, null);
@@ -317,7 +321,9 @@ function flushStale(requests: readonly TestRequest[], figures: Figures): void {
             ? summary(figures)
             : request.request.url === REMINDER
               ? HIDDEN_REMINDER
-              : []
+              : request.request.url === REVIEW_SUMMARY
+                ? NOTHING_TO_REVIEW
+                : []
     );
   }
 }
@@ -453,7 +459,11 @@ describe('refreshing visible business data on a support-context transition (issu
     // The server ended the session first - it expired there, or another tab of another browser
     // ended it - so the support view's own reads are refused with the one code that says so.
     for (const request of inSession) {
-      request.flush({ code: 'support_session_ended' }, { status: 403, statusText: 'Forbidden' });
+      // The first refusal ends the session and replaces the page, which cancels the reads of the
+      // components it destroyed (the Nayax sales review alert of issue #1105 among them).
+      if (!request.cancelled) {
+        request.flush({ code: 'support_session_ended' }, { status: 403, statusText: 'Forbidden' });
+      }
     }
     await settle(rendered);
 

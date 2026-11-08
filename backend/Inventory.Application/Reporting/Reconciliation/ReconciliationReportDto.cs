@@ -44,6 +44,12 @@ public record ReconciliationReportDto(
     public int UnknownStatusTransactionCount { get; init; }
 
     /// <summary>
+    /// Status-12 Nayax sales this reconciliation leaves out because the business's own Nayax
+    /// <c>lastSales</c> contradicted them or the business Owner excluded them (issue #1105).
+    /// </summary>
+    public int ExcludedByReviewTransactionCount { get; init; }
+
+    /// <summary>
     /// Transactions in the requested scope carrying no status ID at all (issue #477). Kept distinct
     /// from <see cref="UnknownStatusTransactionCount"/>, which counts a status ID that is present but
     /// not one this application recognises. Both are data-quality problems; neither changes which

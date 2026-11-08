@@ -3,6 +3,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Imports;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
@@ -199,23 +200,29 @@ public class ImportNayaxSalesTests
 
     /// <summary>
     /// Every status the Domain classifier knows, plus an unrecognised one and none at all: the raw
-    /// identifier is persisted as imported, and only an approved sale (status ID 12) is costed and
-    /// replays the product's inventory cost. A pending, refunded, cancelled, declined or unknown
-    /// row stays stored and visible instead of being treated as completed or discarded.
+    /// identifier is persisted as imported, and only a sale that <em>consumed a unit</em> is costed
+    /// and replays the product's inventory cost. A pending, cancelled, declined or unknown row stays
+    /// stored and visible instead of being treated as completed or discarded.
+    ///
+    /// <para><strong>Status 62 is the one row where the two answers differ</strong> (issue #1107): a
+    /// refunded sale is not a completed sale - its money is reversed - and it did consume its unit, so
+    /// it is costed and its product is replayed. Before that change an imported refund was costed as
+    /// nothing and scheduled no replay, which would now leave a unit consumed by a figure nobody
+    /// rebuilt.</para>
     /// </summary>
     [Theory]
-    [InlineData(NayaxTransactionStatusIds.Completed, true)]
-    [InlineData(NayaxTransactionStatusIds.PendingSettlementNotFinal, false)]
-    [InlineData(NayaxTransactionStatusIds.PendingBatch, false)]
-    [InlineData(NayaxTransactionStatusIds.Refunded, false)]
-    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined26, false)]
-    [InlineData(NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed, false)]
-    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined31, false)]
-    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined250, false)]
-    [InlineData(21, false)]
-    [InlineData(null, false)]
-    public async Task Only_an_approved_sale_is_costed_and_replays_the_products_inventory_cost(
-        int? statusId, bool expectedCompleted)
+    [InlineData(NayaxTransactionStatusIds.Completed, true, true)]
+    [InlineData(NayaxTransactionStatusIds.PendingSettlementNotFinal, false, false)]
+    [InlineData(NayaxTransactionStatusIds.PendingBatch, false, false)]
+    [InlineData(NayaxTransactionStatusIds.Refunded, false, true)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined26, false, false)]
+    [InlineData(NayaxTransactionStatusIds.CashlessCancelledProductNotDispensed, false, false)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined31, false, false)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined250, false, false)]
+    [InlineData(21, false, false)]
+    [InlineData(null, false, false)]
+    public async Task Only_a_sale_that_consumed_a_unit_is_costed_and_replays_the_products_inventory_cost(
+        int? statusId, bool expectedCompleted, bool expectedConsumesStock)
     {
         await using var db = CreateDb();
         db.Products.Add(new Product { Id = 10, Name = "Snack" });
@@ -230,20 +237,27 @@ public class ImportNayaxSalesTests
         var sale = await db.NayaxSales.SingleAsync();
         Assert.Equal(statusId, sale.TransactionStatusId);
         Assert.Equal(1.10m, sale.NayaxProductCostPrice);
-        // The persisted raw identifier and the Domain rule's verdict on it, so a reimplemented
-        // status list in the import would be caught here rather than silently costing a refund.
+        // The persisted raw identifier and both Domain rules' verdicts on it, so a reimplemented
+        // status list in the import would be caught here rather than silently costing a declined row
+        // or silently counting a refund as revenue.
         Assert.Equal(
             expectedCompleted,
             NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId));
         Assert.Equal(
-            expectedCompleted ? SaleCostingStatus.Costed : SaleCostingStatus.Pending,
+            expectedConsumesStock,
+            NayaxSaleCountingPolicy.ConsumesStock(sale.TransactionStatusId, sale.SqsVerification));
+
+        // Costing and the replay follow the stock rule, because costing is what a consumed unit
+        // costs - not what the sale counts as.
+        Assert.Equal(
+            expectedConsumesStock ? SaleCostingStatus.Costed : SaleCostingStatus.Pending,
             sale.CostingStatus);
         Assert.Equal(
-            expectedCompleted ? SaleCostSource.NayaxTransactionExport : SaleCostSource.Unknown,
+            expectedConsumesStock ? SaleCostSource.NayaxTransactionExport : SaleCostSource.Unknown,
             sale.CostSource);
         rebuild.Verify(
             x => x.RebuildAsync(10, It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
-            expectedCompleted ? Times.Once() : Times.Never());
+            expectedConsumesStock ? Times.Once() : Times.Never());
     }
 
     /// <summary>

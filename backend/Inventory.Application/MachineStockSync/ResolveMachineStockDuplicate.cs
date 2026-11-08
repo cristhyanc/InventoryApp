@@ -86,10 +86,41 @@ public sealed class ResolveMachineStockDuplicate
             null);
     }
 
+    /// <summary>
+    /// The one resolution that writes, and it takes the same write-locked transaction one product's
+    /// apply batch takes (issue #1127): the event and its matched product's storage quantity are
+    /// re-read and revalidated <em>inside</em> the lock, because both of them decide the write. That
+    /// is what keeps this action from recording a second movement when it races an ordinary apply of
+    /// the same event - the loser waits, re-reads the winner's committed <c>Applied</c> state, and
+    /// reports it having written nothing.
+    /// </summary>
     private async Task<NayaxStockEventApplyResultDto> ApplyAsSeparateRestockAsync(
         MachineIdentity machine, MachineStockEventState state, ManualRefillEvidence duplicate, CancellationToken cancellationToken)
     {
-        var product = state.MatchedProductId is long productId
+        await using var transaction = await _store
+            .BeginRefillWriteTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var locked = await _store.FindEventAsync(machine.RequiredNayaxMachineId, state.Id, cancellationToken);
+        if (locked is null)
+            return new(state.Id, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
+
+        // The same two settled states the use case answers before any lock, re-checked against what
+        // is actually committed, so a resolution that arrives while another writer is committing is
+        // answered with that writer's result instead of applying the event twice.
+        if (locked.DuplicateResolution == NayaxDuplicateResolution.ReconciledManually)
+        {
+            return new(
+                locked.Id,
+                NayaxStockEventApplyOutcome.Reconciled,
+                "Already reconciled as recorded manually; no Nayax movement was applied.",
+                null);
+        }
+
+        if (locked.ProcessingStatus == NayaxStockEventProcessingStatus.Applied)
+            return new(locked.Id, NayaxStockEventApplyOutcome.Applied, "Already applied.", locked.StockAdjustmentId);
+
+        var product = locked.MatchedProductId is long productId
             ? await _store.FindStorageProductAsync(productId, cancellationToken)
             : null;
 
@@ -97,48 +128,64 @@ public sealed class ResolveMachineStockDuplicate
         // underlying match/quantity/storage guards still apply, but the duplicate gate itself does
         // not: that is exactly what this resolution means.
         var ruling = NayaxMachineStockApplyPolicy.Decide(
-            state.ProcessingStatus,
-            state.MatchStatus,
-            state.NeedsReviewReason,
-            state.MatchedProductId,
-            state.ParsedQuantity,
+            locked.ProcessingStatus,
+            locked.MatchStatus,
+            locked.NeedsReviewReason,
+            locked.MatchedProductId,
+            locked.ParsedQuantity,
             product?.QuantityInStock);
 
         switch (ruling.Decision)
         {
             case NayaxStockEventApplyDecision.NeedsReview:
-                return new(state.Id, NayaxStockEventApplyOutcome.NotMatched, ruling.Message, null);
+                return new(locked.Id, NayaxStockEventApplyOutcome.NotMatched, ruling.Message, null);
 
             case NayaxStockEventApplyDecision.NegativeDiscrepancy:
-                return new(state.Id, NayaxStockEventApplyOutcome.NotApplicable, ruling.Message, null);
+                return new(locked.Id, NayaxStockEventApplyOutcome.NotApplicable, ruling.Message, null);
 
             case NayaxStockEventApplyDecision.InsufficientStorage:
-                return new(state.Id, NayaxStockEventApplyOutcome.InsufficientStock, ruling.Message, null);
+                return new(locked.Id, NayaxStockEventApplyOutcome.InsufficientStock, ruling.Message, null);
 
             case NayaxStockEventApplyDecision.MatchedProductMissing:
-                return new(state.Id, NayaxStockEventApplyOutcome.Error, ruling.Message, null);
+                return new(locked.Id, NayaxStockEventApplyOutcome.Error, ruling.Message, null);
         }
 
-        var application = await _store.ApplyRefillAsync(
-            state.Id,
+        var application = await _store.ApplyProductRefillsAsync(
             machine,
-            state.NayaxEventLogId,
-            state.MatchedProductId!.Value,
-            state.ParsedQuantity!.Value,
-            NayaxDuplicateResolution.AppliedAsSeparateRestock,
-            duplicate.StockAdjustmentId,
+            locked.MatchedProductId!.Value,
+            [
+                new MachineStockRefillRequest(
+                    locked.Id,
+                    locked.NayaxEventLogId,
+                    locked.ParsedQuantity!.Value,
+                    NayaxDuplicateResolution.AppliedAsSeparateRestock,
+                    duplicate.StockAdjustmentId),
+            ],
             cancellationToken);
 
-        return application.Succeeded
-            ? new(
-                state.Id,
-                NayaxStockEventApplyOutcome.Applied,
-                "Applied as a separate restock: the operator explicitly overrode the possible-duplicate warning.",
-                application.StockAdjustmentId)
-            : new(
-                state.Id,
-                NayaxStockEventApplyOutcome.Error,
-                "Failed to apply this event; no inventory movement was recorded.",
-                null);
+        if (!application.Succeeded)
+        {
+            // Returned without committing: the transaction's disposal discards the movement and the
+            // resolution state together, exactly as they would have been written together.
+            return ApplyMachineStockSync.Failed(locked.Id);
+        }
+
+        try
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A failed commit wrote nothing either: the disposal rolls the movement and the
+            // resolution back together and the event stays unresolved, so it reports the same
+            // failure. A cancelled request is not caught here.
+            return ApplyMachineStockSync.Failed(locked.Id);
+        }
+
+        return new(
+            locked.Id,
+            NayaxStockEventApplyOutcome.Applied,
+            "Applied as a separate restock: the operator explicitly overrode the possible-duplicate warning.",
+            application.Applied.Single().StockAdjustmentId);
     }
 }

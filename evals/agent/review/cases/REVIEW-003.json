@@ -1,0 +1,45 @@
+{
+  "id": "REVIEW-003",
+  "title": "Azure schedule: setup guide pastes the GitHub token into the Logic App definition",
+  "pullRequest": 1133,
+  "baseSha": "fc2ce16118aa61a4367d13075d0faa7dc6bf2339",
+  "headSha": "1c7bf966ab7520106b45feeb692c137213d9ac99",
+  "context": {
+    "prTitle": "Start the daily price collector from Azure at 05:00 instead of GitHub cron",
+    "prSummary": "GitHub cron runs are best effort and started hours late. An Azure Logic App with a 05:00 Sydney recurrence will call the workflow dispatch API on main with scheduled_run: true. price-collector.yml becomes workflow_dispatch only with a new scheduled_run input that applies the old schedule rules; workflow-contract.mjs enforces this. The docs describe the owner's setup of a fine-grained GitHub token and the Logic App. No Azure resource, token, environment rule or variable is created by the PR.",
+    "linkedIssue": "None: follows the owner's request in chat (refs #1110, closed). The acceptance criteria below are the PR's own.",
+    "acceptanceCriteria": [
+      "The daily run is started by the dispatch entry point with scheduled_run: true. The schedule: cron trigger is removed.",
+      "A scheduled_run run behaves exactly as the old scheduled run did: it stops green unless PRICE_COLLECTOR_SCHEDULE_ENABLED is exactly true; it must be on main; it uses the fixed settings (production, due, full run, verified Kmart/BIG W allowed); every other input is ignored and the manual confirmation is skipped.",
+      "Manual runs are unchanged.",
+      "The Azure Logic App and token setup is documented."
+    ],
+    "outOfScope": [
+      "Creating or changing any Azure resource, GitHub token, environment rule or repository variable (the owner does these from the docs).",
+      "Removing the price-collector-production required reviewer."
+    ],
+    "documentationImpact": "Decision: UPDATED. Evidence: docs/price-collector-testing.md § Daily schedule describes the Azure Logic App start at 05:00 Sydney, the scheduled_run input, the switch, the approval choice and step-by-step token and Logic App setup; docs/automation.md § Scheduled collector runs describes the dispatch-only trigger and scheduled_run gate; docs/architecture.md names the Azure start.",
+    "validation": "The merge-validation check (bash scripts/validate.sh: restore, C# format check, backend build with analyzers and warnings-as-errors, backend tests with coverage including architecture tests, NuGet vulnerability check, npm ci, Angular ESLint and production build) succeeded on exactly this head SHA. Treat it as the exact-SHA validation evidence for this review."
+  },
+  "expected": {
+    "verdict": "CHANGES REQUESTED",
+    "findings": [
+      {
+        "id": "token-literal-in-logic-app",
+        "summary": "The setup guide tells the owner to put \"Authorization: Bearer <the token>\" directly in the Logic App HTTP action, so the token is stored in plain text in the Logic App definition (code view, exports, anyone with read access); secure inputs/outputs only hide run history. It should come from Key Vault via managed identity.",
+        "paths": [
+          "price-collector-testing",
+          "automation\\.md",
+          "docs/",
+          "logic app"
+        ],
+        "allOf": [
+          "token|bearer|credential|secret|\\bPAT\\b",
+          "key ?vault|definition|code view|plain ?text|literal|hard-?coded|stored in|embedded|inline|secure (input|output)|run history|managed identity|exposed|visible"
+        ]
+      }
+    ],
+    "forbiddenBlockers": []
+  },
+  "source": "Found in review of PR #1133 at this head; fixed by commit 72dd1c7b \"Keep the dispatch token in Key Vault in the Logic App setup\", which moves the token to Key Vault read by the Logic App's managed identity and corrects the token's reach."
+}

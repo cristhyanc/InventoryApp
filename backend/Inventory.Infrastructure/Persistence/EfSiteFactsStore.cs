@@ -1,5 +1,6 @@
 using Inventory.Application.Sites;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Sites;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -37,7 +38,7 @@ public sealed class EfSiteFactsStore : ISiteFactsStore
             .ToListAsync(cancellationToken);
 
         return sales
-            .Where(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+            .Where(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification))
             .Select(sale => new SiteCompletedSaleFact(sale.MachineID, sale.SettlementValue, sale.MachineAuthorizationTime))
             .ToList();
     }

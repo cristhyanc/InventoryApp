@@ -23,7 +23,8 @@ public record DailyReportTotalsDto(
     int PendingTransactionCount = 0,
     int DeclinedOrCancelledTransactionCount = 0,
     int RefundedTransactionCount = 0,
-    int UnknownStatusTransactionCount = 0)
+    int UnknownStatusTransactionCount = 0,
+    int ExcludedByReviewTransactionCount = 0)
 {
     public decimal PartialCostOfGoods { get; init; }
     public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);

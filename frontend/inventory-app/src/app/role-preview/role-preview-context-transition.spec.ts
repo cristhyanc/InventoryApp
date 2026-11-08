@@ -37,6 +37,9 @@ const SUMMARY = '/api/dashboard/summary';
  */
 const REMINDER = '/api/machine-restock-sync/reminder';
 const HIDDEN_REMINDER = { applicable: false as const, reason: 'NoProviderMachines' };
+/** The Dashboard's Nayax sales review alert (issue #1105), answered as nothing to review. */
+const REVIEW_SUMMARY = '/api/nayax-sale-review/summary';
+const NOTHING_TO_REVIEW = { needsReviewCount: 0, notCountedCount: 0 };
 
 /** One answer's Dashboard, as the figures a test can recognise on screen. */
 interface Figures {
@@ -280,7 +283,7 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: str
   const answered: TestRequest[] = [];
   const answer = (
     url: string,
-    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | null
+    body: Machine[] | Site[] | DashboardSummary | typeof HIDDEN_REMINDER | typeof NOTHING_TO_REVIEW | null
   ): void => {
     for (const request of rendered.httpMock.match((candidate) => candidate.url === url)) {
       answered.push(request);
@@ -293,6 +296,7 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: str
   // requests do not exist until this one is answered. Issue #891's reminder is asked for by its
   // own child component as the page renders, so it is already outstanding by now.
   answer(REMINDER, HIDDEN_REMINDER);
+  answer(REVIEW_SUMMARY, NOTHING_TO_REVIEW);
   answer(LOW_STOCK, []);
   answer(SUMMARY, summary(figures));
   answer(SYNC, null);

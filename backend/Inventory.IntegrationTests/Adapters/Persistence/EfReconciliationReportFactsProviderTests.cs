@@ -329,4 +329,37 @@ public class EfReconciliationReportFactsProviderTests
         Assert.Equal(1, period.MissingStatusTransactionCount);
         Assert.Equal(0, period.RefundedTransactionCount);
     }
+
+    /// <summary>
+    /// Issue #1105: reconciliation's recorded card sales leave out only contradicted and
+    /// Owner-excluded sales, which it reports as data quality instead.
+    /// </summary>
+    [Fact]
+    public async Task Leaves_out_only_contradicted_and_owner_excluded_sales_and_counts_them_as_data_quality()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var id = 1L;
+        foreach (var state in Enum.GetValues<Inventory.Domain.NayaxSqs.NayaxSqsVerification>().Cast<Inventory.Domain.NayaxSqs.NayaxSqsVerification?>().Append(null))
+        {
+            db.NayaxSales.Add(new NayaxSales
+            {
+                TransactionID = id++,
+                MachineID = 10,
+                SettlementValue = 10m,
+                PaymentMethod = "Credit Card",
+                TransactionStatusId = NayaxTransactionStatusIds.Completed,
+                MachineAuthorizationTime = new DateTime(2025, 8, 10),
+                SqsVerification = state,
+            });
+        }
+
+        await db.SaveChangesAsync();
+        var provider = new EfReconciliationReportFactsProvider(db);
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
+
+        Assert.Equal(60m, Assert.Single(facts.Periods).CardSales);
+        Assert.Equal(2, facts.ExcludedByReviewTransactionCount);
+    }
 }

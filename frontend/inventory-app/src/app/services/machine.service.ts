@@ -42,6 +42,18 @@ export class MachineService {
     );
   }
 
+  /**
+   * The Dashboard's hourly restock fetch (issue #1122): asks the API to fetch and import every
+   * Nayax machine's new restock alerts - at most once per business per hour, which the server
+   * decides - and answers the reminder as it stands afterwards. It applies nothing.
+   */
+  refreshRestockSyncReminder(): Observable<MachineRestockSyncReminderResponse> {
+    return this.http.post<MachineRestockSyncReminderResponse>(
+      `${this.config.apiBaseUrl.replace(/\/$/, '')}/machine-restock-sync/reminder/refresh`,
+      null
+    );
+  }
+
   get(id: number): Observable<Machine> {
     return this.http.get<Machine>(`${this.baseUrl}/${id}`);
   }

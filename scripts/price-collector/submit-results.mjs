@@ -182,6 +182,21 @@ export function tidyResultRows(file) {
   return notes;
 }
 
+/**
+ * The changes submission makes to a file before validating it (stock words, observation instant,
+ * tidied rows), then the validation itself. The collector's write hook runs the same function on a
+ * copy before a file is written, so a file this would skip is refused while Claude can still fix it.
+ */
+export function prepareOutputFile(parsed, isResult, writtenAt) {
+  let tidied = [];
+  if (isResult) {
+    normaliseStockStatus(parsed);
+    stampObservedAt(parsed, writtenAt);
+    tidied = tidyResultRows(parsed);
+  }
+  return { checked: isResult ? validateResultFile(parsed) : validateMatchFile(parsed), tidied };
+}
+
 /** One file, read and validated on its own: a result, a match, or a reason it is skipped. */
 async function classifyOutputFile(dir, name) {
   if (!RESULT_FILE_NAME.test(name) && !MATCH_FILE_NAME.test(name)) {
@@ -196,13 +211,7 @@ async function classifyOutputFile(dir, name) {
   }
 
   const isResult = RESULT_FILE_NAME.test(name);
-  let tidied = [];
-  if (isResult) {
-    normaliseStockStatus(parsed);
-    stampObservedAt(parsed, (await stat(join(dir, name))).mtime);
-    tidied = tidyResultRows(parsed);
-  }
-  const checked = isResult ? validateResultFile(parsed) : validateMatchFile(parsed);
+  const { checked, tidied } = prepareOutputFile(parsed, isResult, isResult ? (await stat(join(dir, name))).mtime : null);
   if (!checked.ok) return { skip: checked.problems[0] };
 
   if (isResult && parsed.workItemId !== Number(RESULT_FILE_NAME.exec(name)[1])) {

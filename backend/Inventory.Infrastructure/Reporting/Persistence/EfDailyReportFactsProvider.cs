@@ -1,8 +1,9 @@
+using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Shared;
-using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -83,13 +84,14 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
                     HasImportedReimbursement: imported?.HasReimbursement ?? false,
                     HasPeriodOnlyImportedData: imported?.HasPeriodOnlyData == true,
                     HasDataQualityWarning: uncosted.Count != 0 || unknownTransactions != 0 ||
-                        statusRows.Any(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) != NayaxTransactionStatus.Completed &&
+                        statusRows.Any(x => NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) != NayaxTransactionStatus.Completed &&
                             x.TransactionStatusId is not null),
-                    CompletedTransactionCount: statusRows.Count(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId)),
+                    CompletedTransactionCount: statusRows.Count(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification)),
                     PendingTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
                     DeclinedOrCancelledTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
                     RefundedTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
-                    UnknownStatusTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown));
+                    UnknownStatusTransactionCount: statusRows.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
+                    ExcludedByReviewTransactionCount: statusRows.Count(x => NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview));
             })
             .ToList();
 
@@ -101,12 +103,13 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
             ImportedContainsRows: importedPeriod.ContainsRows,
             ImportedReimbursement: importedPeriod.Settlement,
             ImportedNetReimbursement: importedPeriod.NetSettlement,
-            CompletedTransactionCount: statusSales.Count(sale => NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId)),
+            CompletedTransactionCount: statusSales.Count(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification)),
             PendingTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Pending),
             DeclinedOrCancelledTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.CancelledOrDeclined),
             RefundedTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Refunded),
             UnknownStatusTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
-            NullStatusTransactionCount: statusSales.Count(x => x.TransactionStatusId is null));
+            NullStatusTransactionCount: statusSales.Count(x => x.TransactionStatusId is null),
+            ExcludedByReviewTransactionCount: statusSales.Count(x => NayaxSaleCountingPolicy.Classify(x.TransactionStatusId, x.SqsVerification) == NayaxTransactionStatus.ExcludedByReview));
 
         // Compared with the same business-day-midnight instants the sales above were selected
         // between, never with the plain calendar range (issue #731): coverage may only be measured

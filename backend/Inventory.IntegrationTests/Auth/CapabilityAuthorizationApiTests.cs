@@ -83,6 +83,10 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // points at - reconciling restocks - rather than the Dashboard's own: a role that may not
         // run Sync Restock has nothing to do with a reminder to go and run it.
         { "Inventory.Operate", "GET", "/api/machine-restock-sync/reminder", "Operator,Manager,Owner" },
+        // Issue #1122: the Dashboard's hourly restock fetch is the import half of Sync Restock, so it
+        // declares the same capability. This business stores no Nayax connection, so the call fetches
+        // nothing and answers the reminder.
+        { "Inventory.Operate", "POST", "/api/machine-restock-sync/reminder/refresh", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/stock-history", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/products/1/stock", "Operator,Manager,Owner" },
         { "Inventory.Operate", "POST", "/api/products/1/inventory-count/apply", "Operator,Manager,Owner" },
@@ -217,6 +221,13 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // figures the plan page shows beside it, so it declares Dashboard.View rather than a
         // narrower capability.
         { "Dashboard.View", "GET", "/api/me/plan-catalogue", "Operator,Manager,Owner" },
+
+        // Issue #1105. Every member who sees the Dashboard sees the Nayax sales review and its
+        // needs-attention alert; only an Owner decides. The decision row names a sale that does not
+        // exist, so an Owner is answered 404 (or 400 for the empty body) and nothing is written.
+        { "Dashboard.View", "GET", "/api/nayax-sale-review", "Operator,Manager,Owner" },
+        { "Dashboard.View", "GET", "/api/nayax-sale-review/summary", "Operator,Manager,Owner" },
+        { "Data.Repair", "POST", $"/api/nayax-sale-review/{MissingId}/decision", "Owner" },
     };
 
     /// <summary>

@@ -237,7 +237,11 @@ public class ImportedProductGeneratedIdAttributionTests : IDisposable
         await using var db = TestAppDbContext.For(_options, BusinessA);
         var rebuild = TestCostingUseCases.Rebuild(db);
         var store = new EfLatestNayaxSalesStore(
-            db, TestCostingUseCases.CostSale(db, rebuild), rebuild, new EfNayaxProductLinkStore(db));
+            db,
+            TestCostingUseCases.CostSale(db, rebuild),
+            rebuild,
+            new EfNayaxProductLinkStore(db),
+            TestClocks.Fixed);
 
         var nayax = new LastSalesNayaxLynxClient(new Dictionary<long, List<NayaxLastSalesReport>>
         {

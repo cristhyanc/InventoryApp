@@ -1,6 +1,7 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Application.Imports;
@@ -280,7 +281,10 @@ public sealed class ImportNayaxSales
     /// </summary>
     private static void TrackImportedProduct(CostableSale sale, IDictionary<long, DateTime> affected)
     {
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+        // The stock rule, not the completed-sale rule (issue #1107): an imported status-62 row
+        // consumes its unit, so the product it belongs to has to be replayed. The import still never
+        // changes a stored row's status - only the SQS path does.
+        if (!NayaxSaleCountingPolicy.ConsumesStock(sale.TransactionStatusId, sale.SqsVerification))
             return;
 
         RecordAffectedProduct(sale.ProductId, sale, affected);
@@ -295,17 +299,17 @@ public sealed class ImportNayaxSales
     /// </summary>
     private static void TrackStoredProduct(CostableSale stored, IDictionary<long, DateTime> affected)
     {
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(stored.TransactionStatusId))
+        if (!NayaxSaleCountingPolicy.ConsumesStock(stored.TransactionStatusId, stored.SqsVerification))
             return;
 
         RecordAffectedProduct(stored.ProductId, stored, affected);
     }
 
     /// <summary>
-    /// Records the product a completed sale affected, keeping the earliest such sale's instant.
-    /// A sale that is not a completed sale changed no costed inventory, and an unmatched product
-    /// has no inventory to replay - both stay visible through the sale's own status and costing
-    /// provenance instead.
+    /// Records the product a stock-consuming sale affected, keeping the earliest such sale's instant.
+    /// A sale that consumed no unit changed no costed inventory, and an unmatched product has no
+    /// inventory to replay - both stay visible through the sale's own status and costing provenance
+    /// instead.
     /// </summary>
     private static void RecordAffectedProduct(
         long? productId,

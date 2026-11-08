@@ -15,7 +15,9 @@ namespace InventoryApi.Controllers;
 // as a side effect of MachineService.GetAll(). The controller is a thin adapter over the
 // Inventory.Application.SalesSync.SyncLatestNayaxSales use case: it binds nothing but the request's
 // cancellation token and the `force` flag the Dashboard's Refresh control sets (issue #843), and
-// maps the use case's outcome to 204, 200 or 429.
+// maps the use case's outcome to 204, 200, 409 or 429. Whether this business's sales arrive live
+// from SQS (issue #1106) is the use case's and the Domain rule's decision too; the controller only
+// publishes it.
 //
 // It requires Dashboard.View (issue #526), because issue #526 says this endpoint follows the page
 // that calls it, and that page is the home Dashboard: putting it on Imports.Run instead would leave
@@ -41,6 +43,20 @@ public class NayaxSalesSyncController : ControllerBase
 {
     internal const string TooManySyncsTitle = "Too many Nayax sales refreshes";
 
+    /// <summary>
+    /// The title of the <c>409</c> a request gets when a synchronization for its business is already
+    /// running (issue #1104).
+    /// </summary>
+    internal const string SyncAlreadyRunningTitle = "A Nayax sales sync is already running";
+
+    /// <summary>
+    /// The <c>409</c>'s sentence. It names no business, no run, no wait and no other member: that a
+    /// background reconciliation or somebody else's refresh is in progress is not something this
+    /// response needs to spell out, and "try again shortly" is the whole of what the caller can do.
+    /// </summary>
+    internal const string SyncAlreadyRunningDetail =
+        "A sync for this business is already running. Try again shortly.";
+
     private readonly SyncLatestNayaxSales _syncLatestSales;
 
     public NayaxSalesSyncController(SyncLatestNayaxSales syncLatestSales)
@@ -58,10 +74,23 @@ public class NayaxSalesSyncController : ControllerBase
     /// the only thing this request carries - never a business, a machine or an instant.
     /// </param>
     /// <param name="ct">The request's cancellation token.</param>
-    /// <response code="204">The synchronization ran.</response>
+    /// <response code="204">
+    /// The synchronization ran. It carries no body, so a business that is not live via SQS and did
+    /// run learns the not-live reason from its next skipped call rather than from here - which is
+    /// exactly how this answer behaved before issue #1106.
+    /// </response>
     /// <response code="200">
-    /// This business's sales were already synchronized less than three minutes ago, so nothing was
-    /// read or written (issue #843). The body says when they were synchronized.
+    /// Nothing was read or written, because there was nothing to read: this business's sales were
+    /// already synchronized less than three minutes ago (issue #843), or they arrive live from the
+    /// shared Nayax SQS queue (issue #1106). The body says which, when they were last synchronized,
+    /// when the queue last delivered, and - when the business is not live - why.
+    /// </response>
+    /// <response code="409">
+    /// A synchronization for this business is already running - the hourly reconciliation of issue
+    /// #1104, or another member's refresh - and this request waited a minute for it without getting
+    /// in. Nothing was read from Nayax, nothing was written, no coverage was recorded and no run
+    /// allowance was claimed, so the attempt does not count against issue #681's limit. The Dashboard
+    /// treats it as a skip: the figures it loads next are the ones the run in progress is producing.
     /// </response>
     /// <response code="429">
     /// This business has synchronized too many times too recently (issue #681). <c>Retry-After</c>
@@ -72,6 +101,7 @@ public class NayaxSalesSyncController : ControllerBase
     [RequireCapability(Capability.InventoryOperate)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(typeof(NayaxSalesRecentlySyncedResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> SyncLatest([FromQuery] bool force, CancellationToken ct)
     {
@@ -82,12 +112,33 @@ public class NayaxSalesSyncController : ControllerBase
             return TooManySyncs(retryAfter);
         }
 
+        if (outcome.IsBusy)
+        {
+            // Its own status, kept off 204, 200 and 429 so each of those keeps exactly the meaning
+            // every existing caller already has. It carries no Retry-After: this is not a rationed
+            // request and the wait is however long the run in progress still needs.
+            return SyncAlreadyRunning();
+        }
+
         // A skip is its own answer, kept off 204 and 429 so both of those keep exactly the meaning
-        // every existing caller already has.
-        return outcome.RecentlySyncedAtUtc is { } lastSyncedAtUtc
-            ? Ok(new NayaxSalesRecentlySyncedResponse(true, lastSyncedAtUtc))
+        // every existing caller already has. Since issue #1106 there are two of them - the sales
+        // were read moments ago, or they arrive live from SQS - and the body tells them apart.
+        return outcome.RecentlySyncedAtUtc is not null || outcome.LiveViaSqs
+            ? Ok(NayaxSalesRecentlySyncedResponse.From(outcome))
             : NoContent();
     }
+
+    /// <summary>
+    /// The already-running refusal (issue #1104). A fixed sentence with no business, no count and no
+    /// wait in it, exactly as the run limit's is.
+    /// </summary>
+    private ActionResult SyncAlreadyRunning() =>
+        Conflict(new ProblemDetails
+        {
+            Title = SyncAlreadyRunningTitle,
+            Detail = SyncAlreadyRunningDetail,
+            Status = StatusCodes.Status409Conflict,
+        });
 
     /// <summary>
     /// The per-business run limit's refusal. A fixed sentence with no count, no window and no

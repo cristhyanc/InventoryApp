@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { NEVER, Observable, of, throwError } from 'rxjs';
 import { AccessService } from '../../access/access.service';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import {
@@ -14,6 +14,7 @@ import {
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
+import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { CheapestSupplierService } from '../../services/cheapest-supplier.service';
@@ -138,11 +139,15 @@ async function render(options: Options = {}): Promise<{ fixture: ComponentFixtur
         provide: MachineService,
         useValue: {
           getAll: () => of(options.machines ?? [MACHINE]),
-          getRestockSyncReminder: () => options.reminder ?? of(NOT_APPLICABLE)
+          getRestockSyncReminder: () => options.reminder ?? of(NOT_APPLICABLE),
+          // Issue #1122: the hourly Nayax fetch after the first read; never answering keeps the
+          // reminder these cases arranged on screen.
+          refreshRestockSyncReminder: () => NEVER
         }
       },
       { provide: SiteService, useValue: { getAll: () => of(options.sites ?? [SITE]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
+      { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(options.summary ?? SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: () => of([]) } },

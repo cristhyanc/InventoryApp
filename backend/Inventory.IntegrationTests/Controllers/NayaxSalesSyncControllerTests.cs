@@ -1,7 +1,9 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.SalesSync;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.NayaxSqs;
 using InventoryApi.Tests.Application.SalesSync;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
@@ -22,6 +24,12 @@ namespace InventoryApi.Tests.Controllers;
 /// synchronized moments ago, and 429 with <c>Retry-After</c> when it has run too many too recently.
 /// The run-limit cases force every call, because an unforced second call inside three minutes is now
 /// skipped before the allowance is considered at all - which is itself asserted below.</para>
+///
+/// <para>Issue #1106 adds the second reason that <em>same</em> 200 body is sent: this business's
+/// sales arrive live from the shared Nayax SQS queue, so there was nothing to read. The body's
+/// existing fields keep their meaning and three are added - <c>liveViaSqs</c>,
+/// <c>lastSqsMessageReceivedAtUtc</c> and <c>sqsNotLiveReason</c> - and 204, 409 and 429 are
+/// untouched.</para>
 /// </summary>
 public class NayaxSalesSyncControllerTests
 {
@@ -36,10 +44,7 @@ public class NayaxSalesSyncControllerTests
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, cancellation.Token))
             .ReturnsAsync(new List<NayaxLastSalesReport>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), cancellation.Token))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var controller = Controller(TestSalesSync.UseCase(nayax.Object, store.Object));
 
         var result = await controller.SyncLatest(force: false, cancellation.Token);
@@ -65,10 +70,7 @@ public class NayaxSalesSyncControllerTests
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var controller = Controller(TestSalesSync.UseCase(nayax.Object, store.Object, clock));
 
         for (var run = 0; run < NayaxSalesSyncRateLimiter.MaxRunsPerWindow; run++)
@@ -115,10 +117,7 @@ public class NayaxSalesSyncControllerTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var useCase = TestSalesSync.UseCase(nayax.Object, store.Object, new FakeClock(Now));
 
         var loads = await Task.WhenAll(Enumerable.Range(0, NayaxSalesSyncRateLimiter.MaxRunsPerWindow)
@@ -142,10 +141,7 @@ public class NayaxSalesSyncControllerTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var store = TestSalesSync.EmptyStoreMock();
         var controller = Controller(TestSalesSync.UseCase(nayax.Object, store.Object, clock));
 
         for (var run = 0; run < NayaxSalesSyncRateLimiter.MaxRunsPerWindow; run++)
@@ -208,6 +204,193 @@ public class NayaxSalesSyncControllerTests
         nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
+    /// <summary>
+    /// The already-running answer at the HTTP boundary (issue #1104): <c>409 Conflict</c>, kept
+    /// distinct from <c>204</c>, <c>200</c> and <c>429</c> so each of those keeps exactly the meaning
+    /// every existing caller already has.
+    ///
+    /// <para>It carries <strong>no <c>Retry-After</c></strong>, deliberately: this is not a rationed
+    /// request, and the wait is however long the run in progress still needs. And it claims no
+    /// allowance - the two assertions at the end are what make the attempt free.</para>
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_answers_409_when_a_sync_for_the_business_is_already_running()
+    {
+        var clock = new FakeClock(Now);
+        var syncLock = new NayaxSalesSyncLock(TimeSpan.FromMilliseconds(20));
+        var nayax = SingleMachineNayax();
+        var store = EmptyStore();
+        var controller = Controller(
+            TestSalesSync.UseCase(nayax.Object, store.Object, clock, syncLock: syncLock));
+
+        using var held = await syncLock.TryAcquireAsync(
+            Inventory.Domain.Tenancy.BusinessId.From(TestSalesSync.BusinessId), CancellationToken.None);
+        Assert.True(held.Acquired);
+
+        var busy = Assert.IsType<ConflictObjectResult>(
+            await controller.SyncLatest(force: true, CancellationToken.None));
+
+        Assert.Equal(StatusCodes.Status409Conflict, busy.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(busy.Value);
+
+        // The fixed sentence the controller declares, asserted as text because the constant itself is
+        // internal to InventoryApi: a reader of this test should see what the caller is told.
+        Assert.Equal("A Nayax sales sync is already running", problem.Title);
+        Assert.Equal(
+            "A sync for this business is already running. Try again shortly.", problem.Detail);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.Status);
+
+        // Not a rationed request: no Retry-After, and nothing read or written.
+        Assert.Empty(controller.Response.Headers.RetryAfter.ToString());
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Never);
+        store.Verify(
+            x => x.PersistLatestSalesAsync(
+                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// And once the run in progress is finished the very next request answers the unchanged
+    /// <c>204</c>, having spent only one allowance for the whole exchange - so the busy attempt cost
+    /// the business nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task A_409_costs_the_business_none_of_its_run_allowance()
+    {
+        var clock = new FakeClock(Now);
+        var syncLock = new NayaxSalesSyncLock(TimeSpan.FromMilliseconds(20));
+        var controller = Controller(TestSalesSync.UseCase(
+            SingleMachineNayax().Object, EmptyStore().Object, clock, syncLock: syncLock));
+
+        using (var held = await syncLock.TryAcquireAsync(
+            Inventory.Domain.Tenancy.BusinessId.From(TestSalesSync.BusinessId), CancellationToken.None))
+        {
+            for (var attempt = 0; attempt < NayaxSalesSyncRateLimiter.MaxRunsPerWindow + 5; attempt++)
+            {
+                Assert.IsType<ConflictObjectResult>(
+                    await controller.SyncLatest(force: true, CancellationToken.None));
+            }
+        }
+
+        Assert.IsType<NoContentResult>(await controller.SyncLatest(force: true, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The live answer at the HTTP boundary (issue #1106): a business whose sales arrive from SQS is
+    /// answered <c>200</c> with <c>liveViaSqs</c>, the instant its queue last delivered and no
+    /// not-live reason - and the request reaches Nayax not at all.
+    ///
+    /// <para>It is the existing <c>200</c> body with fields added rather than a new status, so
+    /// <c>204</c>, <c>409</c> and <c>429</c> all keep exactly the meaning every existing caller has;
+    /// <c>wasRecentlySynced</c> stays <see langword="false"/> here, because this is the other skip.</para>
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_answers_200_with_live_via_sqs_for_a_business_on_a_healthy_queue()
+    {
+        var clock = new FakeClock(Now);
+        var health = new NayaxSqsReaderHealth();
+        health.RecordSuccessfulPoll(Now.AddSeconds(-5));
+        var nayax = SingleMachineNayax();
+        var controller = Controller(TestSalesSync.UseCase(
+            nayax.Object,
+            EmptyStore().Object,
+            clock,
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Enabled(
+                reconciliationSucceededAtUtc: Now.AddMinutes(-30),
+                lastMessageReceivedAtUtc: Now.AddMinutes(-7)),
+            readerHealth: health));
+
+        var live = Assert.IsType<OkObjectResult>(
+            await controller.SyncLatest(force: false, CancellationToken.None));
+
+        var body = Assert.IsType<NayaxSalesRecentlySyncedResponse>(live.Value);
+        Assert.True(body.LiveViaSqs);
+        Assert.Equal(Now.AddMinutes(-7), body.LastSqsMessageReceivedAtUtc);
+        Assert.Null(body.SqsNotLiveReason);
+        Assert.False(body.WasRecentlySynced);
+        Assert.Null(body.LastSyncedAtUtc);
+
+        // Nothing was read and nothing was rationed.
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(controller.Response.Headers.RetryAfter.ToString());
+    }
+
+    /// <summary>
+    /// A queue that has delivered nothing yet is still live, and the body says so with a null
+    /// instant rather than with a reason: that is what the Dashboard renders as "no sales received
+    /// yet".
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_answers_live_with_no_instant_for_a_queue_that_has_delivered_nothing()
+    {
+        var health = new NayaxSqsReaderHealth();
+        health.RecordSuccessfulPoll(Now.AddSeconds(-5));
+        var controller = Controller(TestSalesSync.UseCase(
+            SingleMachineNayax().Object,
+            EmptyStore().Object,
+            new FakeClock(Now),
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Enabled(Now.AddMinutes(-30)),
+            readerHealth: health));
+
+        var body = Assert.IsType<NayaxSalesRecentlySyncedResponse>(
+            Assert.IsType<OkObjectResult>(
+                await controller.SyncLatest(force: false, CancellationToken.None)).Value);
+
+        Assert.True(body.LiveViaSqs);
+        Assert.Null(body.LastSqsMessageReceivedAtUtc);
+    }
+
+    /// <summary>
+    /// A business that is not live behaves exactly as it did before - the first load runs and
+    /// answers <c>204</c>, the second is the recent-sync <c>200</c> - and the reason travels with the
+    /// body that exists, as one of the published codes rather than as an enum's number.
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_reports_the_not_live_reason_on_the_recent_sync_body()
+    {
+        var clock = new FakeClock(Now);
+        var controller = Controller(TestSalesSync.UseCase(
+            SingleMachineNayax().Object,
+            EmptyStore().Object,
+            clock,
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Disabled(Now.AddMinutes(-30)),
+            readerHealth: new NayaxSqsReaderHealth()));
+
+        Assert.IsType<NoContentResult>(await controller.SyncLatest(force: false, CancellationToken.None));
+
+        clock.UtcNow = Now.AddMinutes(1);
+        var body = Assert.IsType<NayaxSalesRecentlySyncedResponse>(
+            Assert.IsType<OkObjectResult>(
+                await controller.SyncLatest(force: false, CancellationToken.None)).Value);
+
+        Assert.False(body.LiveViaSqs);
+        Assert.True(body.WasRecentlySynced);
+        Assert.Equal(Now, body.LastSyncedAtUtc);
+        Assert.Equal(NayaxSqsNotLiveReasons.SenderDisabled, body.SqsNotLiveReason);
+    }
+
+    /// <summary>
+    /// The Refresh control's <c>force=true</c> against a live business: the unchanged <c>204</c>,
+    /// having read every machine, with no live claim in the response at all.
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_with_force_still_reads_lastSales_for_a_live_business()
+    {
+        var health = new NayaxSqsReaderHealth();
+        health.RecordSuccessfulPoll(Now.AddSeconds(-5));
+        var nayax = SingleMachineNayax();
+        var controller = Controller(TestSalesSync.UseCase(
+            nayax.Object,
+            EmptyStore().Object,
+            new FakeClock(Now),
+            sqsStatus: FakeNayaxSqsLiveStatusStore.Enabled(Now.AddMinutes(-30)),
+            readerHealth: health));
+
+        Assert.IsType<NoContentResult>(await controller.SyncLatest(force: true, CancellationToken.None));
+
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private static Mock<INayaxLynxClient> SingleMachineNayax()
     {
         var nayax = new Mock<INayaxLynxClient>();
@@ -218,14 +401,7 @@ public class NayaxSalesSyncControllerTests
         return nayax;
     }
 
-    private static Mock<ILatestNayaxSalesStore> EmptyStore()
-    {
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
-        return store;
-    }
+    private static Mock<ILatestNayaxSalesStore> EmptyStore() => TestSalesSync.EmptyStoreMock();
 
     /// <summary>
     /// A controller with a real <see cref="HttpContext"/>, because the refusal writes a response

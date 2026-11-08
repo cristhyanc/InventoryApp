@@ -1,9 +1,11 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.SalesSync;
 using Inventory.Application.SupportSessions;
 using Inventory.Domain.Nayax;
 using Inventory.Domain.Providers;
 using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.NayaxSqs;
 using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Application.Time;
 using Moq;
@@ -246,9 +248,12 @@ public class SyncLatestNayaxSalesFreshnessTests
             EmptyStore().Object,
             new NayaxSalesSyncRateLimiter(clock),
             freshness,
+            new NayaxSalesSyncLock(),
             new FakeNayaxOperationCredentials(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestSalesSync.BusinessId + 1),
             new FakeProviderDataCoverageStore(),
+            new FakeNayaxSqsLiveStatusStore(),
+            new NayaxSqsReaderHealth(),
             clock);
 
         Assert.Null((await otherBusiness.Handle()).RecentlySyncedAtUtc);
@@ -329,7 +334,8 @@ public class SyncLatestNayaxSalesFreshnessTests
         NayaxSalesSyncFreshness? freshness = null,
         FakeProviderDataCoverageStore? coverage = null,
         FakeNayaxOperationCredentials? credentials = null,
-        NayaxSalesSyncRateLimiter? limiter = null)
+        NayaxSalesSyncRateLimiter? limiter = null,
+        NayaxSalesSyncLock? syncLock = null)
     {
         var sharedClock = clock ?? new FakeClock(Now);
         return new SyncLatestNayaxSales(
@@ -337,9 +343,15 @@ public class SyncLatestNayaxSalesFreshnessTests
             store.Object,
             limiter ?? new NayaxSalesSyncRateLimiter(sharedClock),
             freshness ?? new NayaxSalesSyncFreshness(sharedClock),
+            syncLock ?? new NayaxSalesSyncLock(),
             credentials ?? new FakeNayaxOperationCredentials(),
             new InventoryApi.Tests.Application.Gst.FakeCurrentBusinessProvider(TestSalesSync.BusinessId),
             coverage ?? new FakeProviderDataCoverageStore(),
+            // Not live via SQS, which is what every case here is about: these tests are the
+            // recent-sync skip's own, and the live decision of issue #1106 has its own tests beside
+            // them.
+            new FakeNayaxSqsLiveStatusStore(),
+            new NayaxSqsReaderHealth(),
             sharedClock);
     }
 
@@ -362,12 +374,5 @@ public class SyncLatestNayaxSalesFreshnessTests
         return nayax;
     }
 
-    private static Mock<ILatestNayaxSalesStore> EmptyStore()
-    {
-        var store = new Mock<ILatestNayaxSalesStore>();
-        store.Setup(x => x.PersistLatestSalesAsync(
-                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
-        return store;
-    }
+    private static Mock<ILatestNayaxSalesStore> EmptyStore() => TestSalesSync.EmptyStoreMock();
 }

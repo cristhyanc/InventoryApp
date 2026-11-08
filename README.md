@@ -15,6 +15,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
   or complete it](#receiving-a-supplier-order-keep-it-open-or-complete-it)).
 - Sites, vending machines, product assignments, and machine refills.
 - A **home dashboard reminder when machine restock sync is behind** (see [Machine restock sync reminder](#machine-restock-sync-reminder)): Sync Restock is something an operator asks for, so the dashboard says which Nayax-linked machines have not had a successful restock sync in the last three business days, or still have restock events waiting to be reviewed.
+- A **home dashboard alert when Nayax sales need the owner's review**, and a **Nayax sales to review** page (see [Nayax sales to review](#nayax-sales-to-review)): a sale delivered by Nayax's queue that the business's own Nayax sales list contradicts stops counting until the owner decides, and one that is only missing from it keeps counting while it waits.
 - Nayax product and transaction imports with explicit payment/status handling.
 - Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
@@ -892,6 +893,12 @@ ConnectionStrings__DefaultConnection
 NayaxLynx__BaseUrl
 NayaxTokenProtection__ActiveKeyId
 NayaxTokenProtection__Keys__<key-id>
+NayaxSqs__QueueUrl
+NayaxSqs__DeadLetterQueueUrl
+NayaxSqs__Region
+NayaxSqs__AccessKeyId
+NayaxSqs__SecretAccessKey
+NayaxSqs__VisibilityTimeoutSeconds
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
 ExternalId__Instance
@@ -913,6 +920,8 @@ APPLICATIONINSIGHTS_CONNECTION_STRING
 A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `Nayax__Token` is read by exactly one thing: the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command, which moves that pair into the existing business's encrypted record (`NayaxLynx__AccessToken` is preferred over `Nayax__Token` when both are set). Leave them in place until that command has been applied and Nayax has been verified, then remove them as a deliberate human step — [docs/tenant-rollout.md § When to remove the global settings](docs/tenant-rollout.md#when-to-remove-the-global-settings) is the procedure. They are still secrets while they exist: never commit them, and the token is never logged.
 
 `NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Since issue #520 that is what every Nayax call does, so **an environment that uses Nayax must have a key provisioned** — it is a human step, and it must happen before the existing business's credential is moved into the table by [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) (issue #519), which refuses with the setting named until it is. Keep the key configured afterwards: removing the key that encrypted a stored token is what makes that token undecryptable. An environment with no Nayax integration at all needs no key and is unaffected. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518) and [§ Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520).
+
+`NayaxSqs__*` are the six settings of the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103) below. `NayaxSqs__SecretAccessKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. The other five are not secrets but are still **absent from `appsettings.json`, which is the shipped state**: with no `NayaxSqs__QueueUrl` the reader is not started at all, the API starts and runs exactly as it did before, and one information line says the reader is off. A queue URL **with** a missing region, key id or secret fails at startup with the setting named, because a deployment that asked for the reader and silently imported nothing would be worse than one that refused to start. `NayaxSqs__VisibilityTimeoutSeconds` must match the queue's own visibility timeout (120 seconds); blank or out of range falls back to that default. All six are read once at startup, so filling them in takes effect on the next restart.
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
@@ -1017,6 +1026,218 @@ the production checklist,
 the normal and interrupted runs, sample limits, and actual provider cost evidence. Human review,
 release to `main`, environment setup and dispatch are separate from implementing the workflow.
 
+## The Nayax SQS sales reader (issue #1103)
+
+Nayax Core can deliver every transaction to an Amazon SQS queue within seconds of the vend. One shared
+Restockroo queue carries **every** business's transactions, one send-only AWS IAM user sends each
+business's, and a message is attributed to a business by the SQS `SenderId` system attribute — which a
+Super Admin records on the business's [Nayax SQS sender](#super-admin-businesses-api) card. This
+section is the human setup and the operations runbook; the design is
+[docs/architecture.md § Nayax SQS sales reader](docs/architecture.md#nayax-sqs-sales-reader-issue-1103).
+
+With no `NayaxSqs__QueueUrl` configured the reader is not started at all, which is the shipped state:
+sales are imported only by the Dashboard's own refresh, exactly as before.
+
+### What a human sets up, once
+
+**In AWS** (none of this is done by the application, and the application can create none of it):
+
+- **The main queue**: visibility timeout **120 seconds**, message retention at least **4 days**.
+- **A dead-letter queue** on it: `maxReceiveCount` **5**, retention **14 days** — longer than the main
+  queue on purpose, because AWS keeps a redriven message's original enqueue time.
+- **A CloudWatch alarm** on the dead-letter queue's visible messages above 0.
+- **The reader IAM user**: `ReceiveMessage`, `DeleteMessage`, `ChangeMessageVisibility` and
+  `GetQueueAttributes` on the main queue, and **only** `GetQueueAttributes` on the dead-letter queue.
+  Nothing in this application sends, purges, or receives from the dead-letter queue, and the port it
+  calls SQS through offers no way to.
+- **A send-only IAM user per business**, whose user id (`aws iam get-user --user-name <user> --query
+  User.UserId`) is what a Super Admin records against that business.
+
+**In the App Service**: the six `NayaxSqs__*` settings above, with the secret as a Key Vault reference,
+and **Always On switched on**. Always On is a real prerequisite rather than a nicety: without it the
+platform may idle the process out, and an idle process polls nothing — sales would then arrive only when
+somebody next loaded the Dashboard, which is the behaviour this feature exists to replace.
+
+Do not switch production consumption on until the verification and conflict work of issues #1104 and
+#1105 is deployed — that is parent #1100's rollout rule. The [hosted testing
+environment](docs/testing-environment.md) is deliberately given no `NayaxSqs__*` settings at all: a
+second reader on the production queue would *take* messages the production API then never sees.
+
+### Reading the reader's own state
+
+The reader logs one line per message with the queue message id, the business id, what it did with the
+message and a fixed reason code, one warning per failed poll with the exception type and the backoff it
+chose, and one warning whenever the dead-letter queue is not empty. **No log line ever carries a message
+body, a receipt handle, a card or customer value, an AWS key, a queue URL or a sender id** — a queue
+message is somebody's card transaction, and a receipt handle is a capability to change or delete a queue
+message. If you need to see a message, look at the queue in the console, not at the logs.
+
+```kql
+// Did the reader say anything in the last hour, and what?
+traces
+| where timestamp > ago(1h)
+| where message has "Nayax SQS"
+| project timestamp, message, severityLevel
+| order by timestamp desc
+```
+
+### Runbook: the dead-letter queue is not empty
+
+A message reaches the dead-letter queue after five receives that did not finish it. That is not a bug
+report on its own — it is the queue doing what it was configured to do — but it always means at least
+one transaction was **not** imported, so it is worth looking at every time.
+
+1. **Find out why.** The reader's own log lines name the queue message id and a fixed reason code for
+   every message it refused. The codes worth acting on are: `SenderUnknown` or `SenderDisabled` (no
+   business has that AWS IAM user recorded, or the mapping is switched off — fix it on the Super Admin
+   card), `BusinessNotActive` (the business is not approved and trading), `MachineNotInFleet` (the
+   machine the message names is not one of that business's machines in Nayax), `MessageRefused` (the
+   message is not a transaction this application consumes — a free vend, a void, a pending or
+   unrecognised status — see [docs/architecture.md § Nayax SQS transaction
+   messages](docs/architecture.md#nayax-sqs-transaction-messages-issue-1102)),
+   `RefundUnmatched`, `RefundContradicted` or `RefundNotApplicable` (a refund this application could
+   not place against one of your stored sales — see [Refunded sales](#refunded-sales-issue-1107)), and
+   `ConnectionUnavailable` or `RebuildPending` (the business's Nayax connection or plan, or a product's
+   cost history, needs attention first).
+2. **Look at a sample if you must.** Use the AWS console's **Poll for messages** on the *dead-letter*
+   queue. Treat what you see as a consumer's card transaction: do not paste it into an issue, a pull
+   request, a chat message or a log.
+3. **Fix the cause.** Record or re-enable the sender, approve the business, add the machine in Nayax,
+   reconnect Nayax, repair the product's cost history — whatever the reason code points at. Nothing is
+   fixed by replaying first.
+4. **Replay, deliberately.** Once the cause is fixed, use the AWS console's **Start DLQ redrive** on
+   the dead-letter queue to move the messages back to the main queue. **Only the repository owner does
+   this, and only after step 3.** It is a human console procedure for the same reason a database
+   restore is: it replays real financial transactions, and replaying them while the cause is still
+   present simply fills the dead-letter queue again. No code path, workflow, alert action or agent may
+   redrive it, and this application has no permission to.
+5. **Check it emptied.** The depth is read every five minutes and warned about while it is above zero,
+   so the warning stopping is the confirmation.
+
+Messages that are genuinely not sales this application consumes — a free vend, say — stay in the
+dead-letter queue as the sample that decides what to do about them. Deleting them is a decision, not
+housekeeping.
+
+## Refunded sales (issue #1107)
+
+When Nayax refunds a sale, **the money comes off your reports and the item stays gone.**
+
+- **The money is reversed.** The sale stops counting as a completed sale: it leaves gross sales, the
+  card and cash totals, reconciliation and every completed-sale total — on its own original sale date,
+  not the refund's — and the daily report shows it in its refunded note and count, exactly as a
+  refunded transaction has always been shown. Nothing is hidden: the sale is still there in the
+  transaction report as refunded.
+- **The stock stays used.** The machine dispensed the item and you no longer have it, so the sale keeps
+  using up its unit at the cost it was sold at. Your costing quantity and inventory value do not go
+  back up, and nothing is added back to your storeroom count. If you did get the item back, that is a
+  separate stock movement you record yourself.
+- **It is not treated as demand.** Reorder suggestions and par/needs figures still use completed sales
+  only, so a refund does not ask you to buy another one.
+- **It happens once.** The queue can deliver the same message more than once; the second delivery
+  changes nothing. A later copy of the original sale cannot undo the refund either.
+- **A refund it cannot place is kept, not guessed at.** If a refund names a transaction you have no
+  sale for, or disagrees with the stored sale's machine, amount or product, nothing is changed and the
+  message is kept in the dead-letter queue as a sample (reason codes `RefundUnmatched`,
+  `RefundContradicted`, `RefundNotApplicable`). That holds even when the sale is already refunded: a
+  second refund message that disagrees about what was sold is kept for you to look at rather than
+  treated as a repeat of the first. That is deliberate: partial refunds are not supported, and a
+  refund the application cannot match is for a person to look at.
+- **Refunds already in your history count the same way.** Older refunded sales start using up their
+  unit the next time that product's cost history is replayed, which happens on its own as that product
+  sells. You may see a product's costing quantity and inventory value drop by one unit per past refund
+  at that point. Your storeroom count and your reported sales figures do not change.
+
+The design, including what is deliberately not supported, is [docs/architecture.md § Applying a Nayax
+SQS refund](docs/architecture.md#applying-a-nayax-sqs-refund-issue-1107).
+
+## The hourly Nayax sales reconciliation (issue #1104)
+
+Every hour, for each business whose SQS sender is recorded and switched on and whose own account is
+approved and active, the application reads that business's Nayax `lastSales` with that business's own
+credentials and compares it with the sales the queue delivered. A sale the two agree about is marked
+verified; a contradiction and a sale `lastSales` did not return are recorded with the evidence behind
+them. The design is [docs/architecture.md § Hourly Nayax sales
+reconciliation](docs/architecture.md#hourly-nayax-sales-reconciliation-issue-1104).
+
+**There is nothing to configure.** It has no settings of its own: a business is reconciled because a
+Super Admin recorded and enabled its [Nayax SQS sender](#super-admin-businesses-api), so a deployment
+with no senders recorded sweeps nobody and makes no Nayax call. It runs about five minutes after a
+restart and then every 60 minutes, one business at a time. **Always On** is the same prerequisite the
+queue reader has, and for the same reason: an idled process runs nothing.
+
+**It changes no figure.** A verified, conflicting or flagged sale still counts exactly as it did
+before — stock, costs and reports follow the sale's own status, not its verification state, except
+that a contradicted or owner-excluded sale is kept out of both (issues #1105 and #1107). Acting on a
+conflict is issue #1105's work.
+
+**Nothing is proved by a sale being missing.** Nayax documents `lastSales` as "the most recent sales"
+for a machine, with no stated count and no promised window, so a transaction the response did not
+include is flagged for a person at most, together with a record of what the response *did* include.
+It is never treated as evidence that the sale did not happen.
+
+### What you will see
+
+One log line per business per hour, with that business's key, the run's outcome and counts only —
+read, added, verified, conflict, needs investigation, absence rows, skipped, and whether the run
+counted as succeeded. **No line carries a transaction id, an amount, a currency, a machine or a
+product**: those belong in the business's own records, not in an operator's log.
+
+```kql
+// What did the last sweep do, per business?
+traces
+| where timestamp > ago(2h)
+| where message has "Reconciled Nayax sales for business"
+| project timestamp, message
+| order by timestamp desc
+```
+
+A run is counted as *succeeded* only when it did everything: every machine read without error,
+persistence committed, every observation recorded and no cost rebuild left behind. A run that was
+skipped or that failed anywhere simply leaves the business's last success instant where it was, and
+the next hour tries again — there is no state to repair by hand.
+
+### What a person pressing Refresh sees
+
+The hourly run and the Dashboard's own sync share one lock per business, so they never run at once. A
+Dashboard load or Refresh that arrives while a run is in progress waits up to a minute and then gets
+**`409 Conflict`** from `POST /api/nayax-sales-sync` — "A sync for this business is already running.
+Try again shortly." The Angular app treats that as a skip rather than an error: no message is shown
+and nothing is retried, because the run in progress is already producing exactly the data the page
+wanted. The attempt costs the business **none** of its refresh allowance, so a person who presses
+Refresh again a moment later is not told they have refreshed too often.
+
+That `409` is distinct from the endpoint's other answers and each keeps its own meaning: `204` the
+sync ran, `200` it was skipped — because the sales were synchronized in the last three minutes, or
+because this business is **live via SQS** (below) — `429` the business has refreshed too many times
+too recently (with `Retry-After`), and `409` a sync for this business is already running (with no
+`Retry-After` — the wait is however long that run still needs).
+
+### The Dashboard stops syncing on load while a business is live (issue #1106)
+
+For a business on the queue, opening the Dashboard no longer calls Nayax for every machine — **but
+only while the queue is demonstrably working**. All three of these must hold:
+
+- a Super Admin has recorded an **enabled** Nayax SQS sender for the business;
+- the reader is healthy: its last successful poll is **less than 2 minutes** old and no receives have
+  failed since (an *empty* poll counts as successful — a quiet fleet is not a failure);
+- the business's hourly reconciliation **fully succeeded less than 150 minutes** ago.
+
+150 minutes is deliberate: with hourly runs, a success at minute 0 and missed runs at 60 and 120 keeps
+the business live until minute 150, so it is a **30-minute grace after the second missed run** rather
+than a limit that expires the moment one is missed.
+
+When all three hold, the Dashboard's freshness line reads **"Live from Nayax · last sale received
+\<Sydney time\>"**, or **"Live from Nayax · no sales received yet"** when the queue has delivered
+nothing yet, and the page makes no Nayax call at all. Otherwise it reads "Sales synced N min ago"
+exactly as before. **Refresh always forces a full read** of `lastSales`, live or not, and is still
+rationed by the refresh allowance. The time since the last message is never a condition: a quiet queue
+with a healthy reader stays live. After an API restart the business is not live until the reader's
+first successful poll, and the Dashboard syncs on load in the meantime. The `200` body carries
+`liveViaSqs`, `lastSqsMessageReceivedAtUtc` and `sqsNotLiveReason` (`NoSender`, `SenderDisabled`,
+`ReaderNotPolling`, `ReaderFailing` or `ReconciliationStale`) — and never the AWS sender id, which no
+business-facing surface may read. See [docs/architecture.md § Dashboard sales live from the Nayax SQS
+queue](docs/architecture.md#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106).
+
 ## Platform diagnostics API
 
 The tenant boundary fails closed, which is what makes a problem *in* it hard to see: a row assigned to the wrong business, or a child row whose parent belongs to another business, is invisible to the only person who would notice. The platform diagnostics API is one narrowly bounded, read-only, audited path for that investigation and nothing else. See [docs/architecture.md](docs/architecture.md#platform-diagnostics-issue-336) for the complete design.
@@ -1051,17 +1272,20 @@ POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   w
 GET  /api/super-admin/businesses/{businessId}/plan-grant      the manual grant, and its revision
 PUT  /api/super-admin/businesses/{businessId}/plan-grant      { plan, endsOnUtc?, reason, revision }
 POST /api/super-admin/businesses/{businessId}/plan-grant/end  { reason, revision }
+GET  /api/super-admin/businesses/{businessId}/nayax-sqs-sender  the recorded sender, or 404
+PUT  /api/super-admin/businesses/{businessId}/nayax-sqs-sender  { awsSenderId, isEnabled, expectedRevision }
 ```
 
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the diagnostics API, checked on every request, plus the ordinary authentication and `access_as_user` scope requirements. **With the pair unset — the shipped state — nobody reaches it at all.** An Owner holds the strongest business role there is and is refused here like anybody else: a business role is not platform authority.
 - **What the Super Admin does with it.** See every business — name, status, created/applied/decided dates, contact email, ABN, the state or territory it recorded, how many of its members are active, whether Nayax credentials are stored and how usable they were at that business's last connection test — approve an application so the business starts trading, or refuse it with an optional reason the applicant reads back on their own account-state screen. Refusing also releases the applicant's membership, which is what frees them to apply again.
 - **Switching a business off, and on again.** **Deactivate** takes a trading business to `Deactivated` in one transaction, cancels every invite link of it that is still live, so no outstanding link survives, and ends every active [support session](#super-admin-support-sessions) for it; the response says how many invites were cancelled. **Nothing is deleted and no membership is changed** — the business simply stops resolving, so its members get the ordinary `403` on their next request. **Reactivate** brings it back, but only while it still has an active Owner membership: without one the business would trade with nobody able to administer it, so that is a `409` and nothing changes. A reactivation restores only the business — a released or revoked membership stays inactive, and a cancelled invite stays cancelled.
 - **Freeing somebody from a business that is off.** A person belongs to one business at a time, so a membership in a deactivated business would otherwise stop them joining anywhere else — and that business has no reachable Owner to release them. While a business is `Deactivated` (and only then) the Super Admin can **list its members** — membership id, display name, role and whether it is active, and nothing else — and **release** one, which marks that membership inactive and frees the person to accept an invite or apply for a business of their own. The usual "a business must keep an active Owner" rule deliberately does not apply here; the reactivation refusal above is what it is replaced by. Both endpoints answer `409` for a business in any other status: a trading business's members are its own Owner's to manage.
-- **Giving a business a plan without billing it (issue #982).** The last three routes above are the Super Admin's **manual plan grant**: grandfathering, a trial, a pilot site or a complimentary plan. A grant sets the plan (`Starter` or `Pro` — `Free` is not a grant, because a business with no grant is already on Free), an optional last day in UTC, and a **required reason**, and that is all it can set: there is no payment, price, billing status or subscription field here, the business's paid subscription is neither read to validate a grant nor changed, and the effective plan stays "the higher of the active grant and the active paid plan". Every write carries the grant's current `revision`, which the `GET` reports; a stale one is `409` with "reload it and decide again", so two Super Admin tabs cannot overwrite each other. **End** stops the grant at that moment and deletes nothing — the row keeps its plan, its start and the reason it was granted for — and the business falls back to its paid plan, or Free, on its members' next read of `GET /api/me/access`. Who may use it is the same answer as every route above: the configured Entra pair alone. An Owner, Manager or Operator is refused, a role preview cannot change a grant, and a member who presents a support-session id is still an ordinary member. See [docs/architecture.md § Super Admin sets a business's plan](docs/architecture.md#super-admin-sets-a-businesss-plan-issue-982).
-- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets, decide that business's manual plan grant, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no and the connection status stored beside it, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id. The plan grant is its **own** narrow store beside that one, over the business's grant row and the append-only record of each decision about it — and nothing else.
+- **Recording which AWS user sends a business's Nayax sales (issue #1101).** The last two routes above are the Super Admin's **Nayax SQS sender identity**. Nayax can deliver every transaction to one shared Amazon SQS queue, and a business's messages are told apart by the AWS IAM user that sent them — so before that queue can be read safely the application needs a trusted mapping from an IAM user id (what SQS reports as `SenderId`, for example `AIDAEXAMPLEUSERID123`) to exactly one business. **Only a Super Admin may set it**: a business that could choose its own sender id could claim another business's sales, so this record is on no business-facing screen at all, to read or to write. One business holds at most one sender, and **one sender id belongs to at most one business in the whole application** — enforced by the database, so a duplicate is `409` with a message that names no other business. The id must be 16 to 128 letters and digits; `isEnabled` can only be on while an id is recorded; only an `Active` business may be changed. Every write carries the row's current `expectedRevision`, which the `GET` reports and which is `null` for the first one; anything else is `409` with "reload it and try again", so two Super Admin tabs cannot overwrite each other. **Remove deletes nothing**: it clears the id, turns the mapping off and records the change, so the history survives and the id becomes free for another business — and every create, change, switch and removal appends an audit row in the same transaction. The sender id is an **identifier, not a secret**: an AWS access key or secret is never entered, stored or logged anywhere in this application. Nothing reads the queue yet (issue #1103). See [docs/architecture.md § Nayax SQS sender identity](docs/architecture.md#nayax-sqs-sender-identity-issue-1101).
+- **Giving a business a plan without billing it (issue #982).** The three `plan-grant` routes above are the Super Admin's **manual plan grant**: grandfathering, a trial, a pilot site or a complimentary plan. A grant sets the plan (`Starter` or `Pro` — `Free` is not a grant, because a business with no grant is already on Free), an optional last day in UTC, and a **required reason**, and that is all it can set: there is no payment, price, billing status or subscription field here, the business's paid subscription is neither read to validate a grant nor changed, and the effective plan stays "the higher of the active grant and the active paid plan". Every write carries the grant's current `revision`, which the `GET` reports; a stale one is `409` with "reload it and decide again", so two Super Admin tabs cannot overwrite each other. **End** stops the grant at that moment and deletes nothing — the row keeps its plan, its start and the reason it was granted for — and the business falls back to its paid plan, or Free, on its members' next read of `GET /api/me/access`. Who may use it is the same answer as every route above: the configured Entra pair alone. An Owner, Manager or Operator is refused, a role preview cannot change a grant, and a member who presents a support-session id is still an ordinary member. See [docs/architecture.md § Super Admin sets a business's plan](docs/architecture.md#super-admin-sets-a-businesss-plan-issue-982).
+- **It can change a business's status and one membership's activation, give a business being approved its own copies of the enabled supplier presets, decide that business's manual plan grant, and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no and the connection status stored beside it, one named business's memberships, and the status and activation writes — plus, on an approval alone, the supplier copies described under [New businesses start with the enabled presets](#new-businesses-start-with-the-enabled-presets), written through a separate one-purpose path that can only create that one business's suppliers. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and no response ever carries a member's email address or Entra id. The plan grant is its **own** narrow store beside that one, over the business's grant row and the append-only record of each decision about it — and nothing else. The Nayax SQS sender identity (issue #1101) is a third such store, over that business's sender row and the append-only record of each decision about it, with no way to look a sender id *up* across businesses — that lookup is the queue reader's and arrives with it.
 - **Only a pending application may be decided.** An already-trading, already-refused or deactivated business is `409`; an unknown id is `404`. Approving also requires that the applicant's membership in the application is still active and that they hold no active membership in any other business — a person belongs to one business at a time — so an approval after they joined somewhere else is `409` and changes nothing. Two decisions arriving at once resolve to one recorded decision and one `409`: the business is re-read inside the write transaction that decides it.
 - **Audit.** Every committed decision emits one structured `ILogger` event with the actor `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the correlation id; every committed deactivation, reactivation and member release emits one of its own, with the action, the membership id where one applies and how many invites were cancelled. Neither ever contains a name of any kind — not the business's, not the applicant's or released member's — nor a contact address, an Entra identity or the reason's text, and neither has an audit table. A **plan grant is the one platform action that does** (issue #982): each committed grant, change or end writes an append-only row — the actor, the business, the transition, the end instant, the revision, the reason as typed and the instant — in the **same transaction as the grant**, so a granted plan and the record of who gave it commit together or not at all, and nothing can later rewrite that row. The log event emitted beside it carries no reason text and no name at all. A refused action, and one that changed nothing, are audited as nothing. **The log destination and retention period are platform configuration, exactly as for the diagnostics audit above, and a human must verify them before relying on these trails.**
-- **The page.** The Angular app offers the Businesses page (issue #547) at `/super-admin/businesses`, shown as **Businesses** in the sidebar's **Super Admin** group (next to **Platform Diagnostics**) only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like that link; entering the URL directly works identically, because the policy above decides access on every request. The table shows nine of the directory's twelve fields - name, status, applied date, contact email, the recorded state or territory (issue #933, an em dash for a business that has none), ABN, how many members are active, whether Nayax is configured, and the stored Nayax connection status as a coloured dot beside the name (issue #983, see [Each business's Nayax connection status](#each-businesss-nayax-connection-status) below) - never the created/decided instants or the business id itself, which the page keeps only to name the subject of an action - filterable by status with pending applications first, the order the API already returns them in. **Approve** and **Reject** (with an optional reason) are offered for a pending application; **Deactivate** for a trading one; **Reactivate** and **Members** - which lists a deactivated business's memberships and **Release**s one - for a deactivated one; each action is behind a confirmation and shows the API's own result or refusal sentence verbatim, including reactivate's "no active Owner" one. The sidebar's pending-count badge, on both the group and the Businesses link, re-reads `GET .../pending-count` after every action on the page, so it is never more than one action's delay out of date. An action refused with `409` or `404` - the business was decided, changed or removed elsewhere, for example in another tab - also reloads the table and re-reads the badge, alongside the refusal, so the stale row does not keep offering the action that was just refused. **Plan** (issue #982), offered for an `Active` business, opens its own dialog, which reads that business's manual grant through the route above, offers the plan, the optional last day and the required reason, and shows the API's own refusal verbatim - including the stale-revision one; the table itself shows no plan, because the grant is read per business rather than listed. **View as this business**, offered for an `Active` business, is the one action that leaves this page rather than reloading it — see [Super Admin support sessions](#super-admin-support-sessions) for what it starts. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
+- **The page.** The Angular app offers the Businesses page (issue #547) at `/super-admin/businesses`, shown as **Businesses** in the sidebar's **Super Admin** group (next to **Platform Diagnostics**) only while `GET /api/admin/diagnostics/access` confirms the signed-in actor, exactly like that link; entering the URL directly works identically, because the policy above decides access on every request. The table shows nine of the directory's twelve fields - name, status, applied date, contact email, the recorded state or territory (issue #933, an em dash for a business that has none), ABN, how many members are active, whether Nayax is configured, and the stored Nayax connection status as a coloured dot beside the name (issue #983, see [Each business's Nayax connection status](#each-businesss-nayax-connection-status) below) - never the created/decided instants or the business id itself, which the page keeps only to name the subject of an action - filterable by status with pending applications first, the order the API already returns them in. **Approve** and **Reject** (with an optional reason) are offered for a pending application; **Deactivate** for a trading one; **Reactivate** and **Members** - which lists a deactivated business's memberships and **Release**s one - for a deactivated one; each action is behind a confirmation and shows the API's own result or refusal sentence verbatim, including reactivate's "no active Owner" one. The sidebar's pending-count badge, on both the group and the Businesses link, re-reads `GET .../pending-count` after every action on the page, so it is never more than one action's delay out of date. An action refused with `409` or `404` - the business was decided, changed or removed elsewhere, for example in another tab - also reloads the table and re-reads the badge, alongside the refusal, so the stale row does not keep offering the action that was just refused. **Plan** (issue #982), offered for an `Active` business, opens its own dialog, which reads that business's manual grant through the route above, offers the plan, the optional last day and the required reason, and shows the API's own refusal verbatim - including the stale-revision one; the table itself shows no plan, because the grant is read per business rather than listed. **Nayax SQS sender** (issue #1101), offered for an `Active` business, opens its own card, which reads that business's recorded sender through the route above and shows the sender ID (or "None"), On/Off and the last message received in Sydney time (or "Never") - and, since issue #1106, that business's last successful reconciliation plus the queue reader's own last successful poll, consecutive failures and dead-letter queue depth, so a recorded sender that is delivering nothing can be explained from the same card (an unread depth reads "Unknown", never `0`) - with **Set**/**Change**, **Turn off** and **Remove** — each sending the revision the card was loaded with, Remove behind a confirmation that says plainly the ID becomes free for another business - the confirmation every path that would remove the ID reaches, including submitting a cleared field over a recorded sender - and a `409` reloading the card and saying it changed elsewhere. The card also says how to find the ID: in AWS CloudShell, `aws iam get-user --user-name <user> --query User.UserId`. The table itself shows no sender, for the reason it shows no plan. **View as this business**, offered for an `Active` business, is the one action that leaves this page rather than reloading it — see [Super Admin support sessions](#super-admin-support-sessions) for what it starts. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
 
 ### Each business's Nayax connection status
 
@@ -2666,6 +2890,38 @@ missing bookkeeping. The home dashboard therefore shows a reminder when that wor
 - **Who sees it.** The same permission as Sync Restock itself, which every role holds (Operator,
   Manager and Owner). If your Nayax connection has not been confirmed for machine alerts, the
   reminder says the sync may be unavailable instead of sending you to an action that will refuse you.
+
+## Nayax sales to review
+
+Issue #1105. Sales that arrive from Nayax's queue are checked every hour against the business's own
+Nayax sales list (issue #1104). When the two disagree about the machine, amount or product, the sale
+is **contradicted by Nayax** and is not counted in sales, costing, machine stock or any report until
+the owner decides. When the sale simply is not in the list Nayax returned for its machine, it **needs
+review** but keeps counting, because a sale missing from that list is never proof that it was fake.
+
+While anything waits, the Dashboard's **Needs attention** panel says so - for example "3 Nayax sales
+need your review · 1 is not being counted" - and links to **Nayax sales to review**
+(`/nayax-sales-review`). Everyone who can see the Dashboard can open the page; only the business
+**Owner** can decide. Each sale shows the stored values beside Nayax's own record (or, for a missing
+sale, how many sales Nayax returned for the machine and between which times), and its decision history.
+The page has two lists, **Needs review** (shown first) and **Decided**, each paged, so every sale
+waiting for the owner can be reached however many decided sales there are.
+
+The owner's decisions:
+
+- **Use Nayax's values** (contradicted sales): the stored machine, amount, time and product are
+  replaced from Nayax's record. The product is matched through the business's own product links, so
+  if Nayax's product is not linked to one of yours the page asks you to link it first.
+- **Keep the SQS values** (contradicted sales, reason required): the stored values stand and the sale
+  counts again.
+- **Don't count this sale** (either kind, reason required): the sale stays visible but is not counted.
+- **This sale is genuine** (sales needing review, reason required): the sale keeps counting.
+
+A decided sale shows as **Confirmed by owner**, never as verified by Nayax. Every decision is
+recorded with who made it, when, why, the evidence it relied on and the values before and after, and
+it rebuilds the inventory cost of the products it touched. If Nayax later reports something different
+that contradicts the decision, the sale returns to review and the alert shows again. Nayax repeating
+the record the owner already decided about never does, even after a matching record in between.
 
 ## Product and supplier GST rules
 

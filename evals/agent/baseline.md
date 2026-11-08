@@ -518,3 +518,39 @@ Agent evals: PASS
 ```
 
 The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.
+
+## Review-prompt evals, first run (8 November 2026)
+
+First live run of `scripts/run-agent-review-evals.mjs` (`review-eval-v1`, cases `REVIEW-001` to
+`REVIEW-004`), on the working tree of the change that added it (develop 99b710b8 plus this change).
+Provider `claude-cli` (Claude Code 2.1.319), model `sonnet` with effort `high` and 80 turns as read
+from `agent-review.yml` (reported model `claude-sonnet-5-5`). Each variant ran twice, all four cases
+each time, with `--concurrency 2`.
+
+| Variant | Run | Known blockers caught | False alarms | Blockers on the READY control | Verdicts as expected | Blockers with file:line and a test | Reported cost (USD) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `current` | 1 | 1/3 | 0 | 0 | 3/4 | 1/3 | 1.49 |
+| `current` | 2 | 1/3 | 0 | 0 | 3/4 | 1/6 | 1.18 |
+| `candidate` | 1 | 3/3 | 0 | 0 | 4/4 | 3/5 | 1.24 |
+| `candidate` | 2 | 3/3 | 0 | 0 | 4/4 | 2/5 | 1.30 |
+
+Per case:
+
+- `REVIEW-001` (#1132 commit failure): both variants caught it in both runs.
+- `REVIEW-002` (#1131 long name clipped on mobile): `current` missed it in both runs. It requested
+  changes for other reasons: the weekly date ranges are not shown, and the documentation's reason for
+  that. Those may be worth a human look, but they are not the known bug. `candidate` caught it in
+  both runs.
+- `REVIEW-003` (#1133 token in the Logic App definition): `current` missed it and returned
+  `READY FOR HUMAN REVIEW` in both runs, and in the earlier single-case smoke run. `candidate` caught
+  it in both runs. In run 2 it also flagged that the docs overstate how narrow the token is, which
+  the fix commit 72dd1c7b also corrected.
+- `REVIEW-004` (#1130 control): both variants returned `READY FOR HUMAN REVIEW` with no blockers in
+  both runs.
+
+Interpretation: on these four cases the candidate finds all three known bugs and raises no false
+alarm, where the current prompt finds one. It is not yet proof that the candidate generalises,
+because its checklist was written after reading these bugs. The next steps are to add cases the
+candidate was not written from, then move the candidate into `agent-review.yml` in a reviewed pull
+request and watch the real workflow's next reviews. Two runs per variant is a small sample; model
+output varies between runs.

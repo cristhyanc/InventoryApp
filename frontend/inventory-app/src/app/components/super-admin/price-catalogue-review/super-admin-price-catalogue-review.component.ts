@@ -81,6 +81,13 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
    */
   bulkConfirmErrorsByListingId: Record<number, string> = {};
 
+  /**
+   * How many listings the current bulk run confirmed whose held reading did not become a price
+   * (owner decision, 6 November 2026), so the run never reports "confirmed" as if every price came
+   * back: those listings have no current price until the next run reads them.
+   */
+  private bulkConfirmUnpricedCount = 0;
+
   /** Whether the "Confirm N supplier listings?" dialog is open. */
   confirmSelectedRequested = false;
 
@@ -276,6 +283,7 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
 
     this.bulkConfirmInProgress = true;
     this.bulkConfirmErrorsByListingId = {};
+    this.bulkConfirmUnpricedCount = 0;
     this.confirmNextSelected(targets, 0, new Set<number>());
   }
 
@@ -311,7 +319,12 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
       .decideListing(target.id, request)
       .pipe(takeUntil(this.destroying$))
       .subscribe({
-        next: () => this.confirmNextSelected(targets, index + 1, failedListingIds),
+        next: (result) => {
+          if (target.pendingObservation !== null && !result.priceAccepted) {
+            this.bulkConfirmUnpricedCount += 1;
+          }
+          this.confirmNextSelected(targets, index + 1, failedListingIds);
+        },
         error: (err: unknown) => {
           failedListingIds.add(target.id);
           this.bulkConfirmErrorsByListingId[target.id] = extractReviewErrorMessage(
@@ -330,10 +343,18 @@ export class SuperAdminPriceCatalogueReviewComponent implements OnInit, OnDestro
     const confirmedCount = total - failedListingIds.size;
     this.selectedListingIds = failedListingIds;
 
-    if (failedListingIds.size === 0) {
+    const unpriced = this.bulkConfirmUnpricedCount;
+    const unpricedNote =
+      unpriced === 0
+        ? ''
+        : ` ${unpriced} held ${unpriced === 1 ? 'reading was' : 'readings were'} not priced, so ${unpriced === 1 ? 'that listing has' : 'those listings have'} no current price until the next run.`;
+
+    if (failedListingIds.size === 0 && unpriced === 0) {
       this.toast.success(`${confirmedCount} ${confirmedCount === 1 ? 'listing' : 'listings'} confirmed.`);
+    } else if (failedListingIds.size === 0) {
+      this.toast.warning(`${confirmedCount} ${confirmedCount === 1 ? 'listing' : 'listings'} confirmed.${unpricedNote}`);
     } else {
-      this.toast.warning(`${confirmedCount} confirmed, ${failedListingIds.size} not confirmed.`);
+      this.toast.warning(`${confirmedCount} confirmed, ${failedListingIds.size} not confirmed.${unpricedNote}`);
     }
 
     this.load();

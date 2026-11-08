@@ -10,7 +10,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// <summary>
 /// One <c>BEGIN IMMEDIATE</c> transaction over the request's own <see cref="AppDbContext"/>, as
 /// <see cref="EfBusinessMembershipWriteStore"/> (issue #522), <see cref="EfNayaxConnectionSaveTransactions"/>
-/// (issue #537) and <see cref="EfPickListRefillStore"/> (issue #743) each open one.
+/// (issue #537), <see cref="EfPickListRefillStore"/> (issue #743),
+/// <see cref="EfLatestNayaxSalesStore"/> (issue #1103, both of its save paths) and
+/// <see cref="MachineStockRefillWriteTransaction"/> (issue #1127, one per product of a Sync Restock
+/// apply) each open one.
 ///
 /// <para><strong>Why immediate.</strong> A deferred transaction - SQLite's default, and what
 /// <c>BeginTransactionAsync</c> opens - takes its write lock at the first <em>write</em>, which is
@@ -25,7 +28,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// <para>It is shared by the two operations that have to be serialised <em>against each other</em>
 /// (issue #896): deleting one of the business's own machines, and the provider machine review's
 /// apply that may link the very same row. Taking the same lock is what makes "nothing refers to this
-/// machine and no provider names it" true at the moment the row is removed.</para>
+/// machine and no provider names it" true at the moment the row is removed. The two Nayax sales
+/// paths are the second such pair (issue #1103): the request-driven batch and the queue reader both
+/// read "is this transaction stored?" and then insert, so taking the same lock is what turns their
+/// race into the enrich path instead of a unique-index violation.</para>
 ///
 /// <para>A non-SQLite relational provider falls back to its default transaction - still one
 /// transaction around the reads and the writes - and the EF InMemory provider some tests use has no

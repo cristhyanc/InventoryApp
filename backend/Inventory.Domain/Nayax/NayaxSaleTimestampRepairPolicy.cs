@@ -79,7 +79,11 @@ public sealed record StoredNayaxSale(
     DateTime StoredInstantUtc,
     long? NayaxProductId,
     string? ProductName,
-    long? ProductId = null);
+    long? ProductId = null,
+    // The queue-delivery verification state (issue #1105), read only through
+    // NayaxSaleCountingPolicy: a contradicted or Owner-excluded sale is not a completed sale here
+    // either, so a repair never moves revenue or cost that no report counts.
+    NayaxSqs.NayaxSqsVerification? SqsVerification = null);
 
 /// <summary>
 /// One piece of authoritative source evidence about one transaction's authorization instant.

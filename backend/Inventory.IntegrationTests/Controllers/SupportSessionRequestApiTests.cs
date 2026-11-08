@@ -195,6 +195,8 @@ public class SupportSessionRequestApiTests
     [InlineData("Business.Manage", "PUT", "/api/business/settings")]
     [InlineData("Suppliers.ManageGstDefaults", "PUT", "/api/suppliers/1/gst-defaults")]
     [InlineData("Dashboard.View", "POST", "/api/nayax-sales-sync")]
+    // Issue #1105: a supporter cannot decide about a business's flagged Nayax sale.
+    [InlineData("Data.Repair", "POST", "/api/nayax-sale-review/999999/decision")]
     public async Task A_write_is_refused_as_read_only(string capability, string method, string route)
     {
         var client = await _factory.InSupportSessionAsync();

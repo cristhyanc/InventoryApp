@@ -277,7 +277,11 @@ public class NayaxSaleProductAssociationTests : IDisposable
         await using var db = Context();
         var rebuild = TestCostingUseCases.Rebuild(db);
         var store = new EfLatestNayaxSalesStore(
-            db, TestCostingUseCases.CostSale(db, rebuild), rebuild, new EfNayaxProductLinkStore(db));
+            db,
+            TestCostingUseCases.CostSale(db, rebuild),
+            rebuild,
+            new EfNayaxProductLinkStore(db),
+            TestClocks.Fixed);
 
         await TestSalesSync.UseCase(LiveWindow(providerProductId, productName), store).Handle();
     }

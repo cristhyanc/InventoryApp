@@ -11,6 +11,9 @@ import { collectorToken } from './workflow-auth.mjs';
 import { startStubServer } from './stub-server.mjs';
 import { clip, redact, secretsOf, trace } from './trace.mjs';
 
+// A result file submission accepts, for the write hook's tests.
+const validResult = (workItemId, extra = {}) => ({ runId: 41, workItemId, supplierPresetId: 3, outcome: 'no_matches', rows: [], ...extra });
+
 const work = { runId: 41, searches: [
   { workItemId: 1, product: { kind: 'waiting', waitingKey: 'a' } },
   { workItemId: 2, product: { kind: 'waiting', waitingKey: 'b' } }
@@ -236,7 +239,7 @@ test('dedicated -- actor names are normalized, the call cap is enforced and writ
     assert.equal(first.hookSpecificOutput.updatedInput.maxPages, 1);
     assert.equal((await toolDecision(event, env)).hookSpecificOutput.permissionDecision, 'deny');
     const write = (path, item) => toolDecision({ tool_name: 'Write', tool_input: { file_path: path,
-      content: JSON.stringify({ runId: 41, workItemId: item }) } }, env);
+      content: JSON.stringify(validResult(item)) } }, env);
     assert.equal((await write(join(dir, 'out/99.json'), 99)).hookSpecificOutput.permissionDecision, 'deny');
     assert.equal((await write(join(dir, 'outside/1.json'), 1)).hookSpecificOutput.permissionDecision, 'deny');
     assert.equal((await write(join(dir, 'out/1.json'), 1)).hookSpecificOutput.permissionDecision, 'allow');
@@ -409,7 +412,9 @@ test('the hook log becomes counts per tool with fixed codes, never reason text, 
       hook(write('1.json', JSON.stringify({ runId: 40, workItemId: 1 }))),
       hook(write('1.json', 'not json')),
       hook(write('99.json', JSON.stringify({ runId: 41, workItemId: 99 }))),
-      hook(write('1.json', JSON.stringify({ runId: 41, workItemId: 1 }))),
+      // A field outside the schema is refused before the file exists (live run 42128721044).
+      hook(write('1.json', JSON.stringify(validResult(1, { outcome: 'complete', rows: [{ supplierProductId: 'jb-1', title: 'Coke', packQuantity: 1, packPrice: 2, regularPrice: 3, currency: 'AUD', priceBasis: 'inclusive_of_gst' }] })))),
+      hook(write('1.json', JSON.stringify(validResult(1)))),
       hook({ hook_event_name: 'PreToolUse', tool_name: 'mcp__apify__get-dataset-items', tool_input: { datasetId: 'Data1' } }),
       hook({ hook_event_name: 'PostToolUse', tool_name: 'mcp__apify__call-actor', tool_input: {}, tool_response: 'no run here' }),
       hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/etc/passwd' } }),
@@ -424,7 +429,7 @@ test('the hook log becomes counts per tool with fixed codes, never reason text, 
     const report = toolUseReport(dir);
     assert.match(report, /^Tool Bash:other: allowed 0, denied 1; not-helper 1$/m);
     assert.match(report, /^Tool Bash:read-work: allowed 1, denied 0$/m);
-    assert.match(report, /^Tool Write: allowed 1, denied 3; write-wrong-run 1, write-not-json 1, write-not-in-sample 1$/m);
+    assert.match(report, /^Tool Write: allowed 1, denied 4; write-wrong-run 1, write-not-json 1, write-not-in-sample 1, write-invalid 1$/m);
     assert.match(report, /^Tool mcp__apify__get-dataset-items: allowed 0, denied 1; not-own-dataset 1$/m);
     assert.match(report, /^Tool mcp__apify__call-actor: allowed 0, denied 0; not-recorded-string 1$/m);
     assert.match(report, /^Tool Read: allowed 0, denied 1; not-allowlisted 1$/m);
@@ -604,7 +609,7 @@ test('JB Metro calls get the run\'s own page caps, appended last, and the sample
     writeFileSync(join(dir, 'limits.json'), JSON.stringify(sampleLimits(source, false)));
     assert.equal(jbMetroFlags(dir), sample);
     writeFileSync(join(dir, 'limits.json'), JSON.stringify(fullRunLimits(source, false)));
-    assert.equal(jbMetroFlags(dir), '--page-size 20 --max-pages 5 --batch-size 20 --attempts 2 --timeout-ms 15000');
+    assert.equal(jbMetroFlags(dir), '--page-size 20 --max-pages 5 --batch-size 20 --attempts 3 --timeout-ms 25000');
     // A limits file above the hard ceiling, or with a missing or non-integer cap, falls back to the sample.
     for (const jbMetro of [{ ...JB_METRO_CAPS.full, maxPages: 50 }, { ...JB_METRO_CAPS.full, attempts: undefined }, { ...JB_METRO_CAPS.full, pageSize: 2.5 }, null]) {
       writeFileSync(join(dir, 'limits.json'), JSON.stringify({ ...fullRunLimits(source, false), jbMetro }));
@@ -614,7 +619,7 @@ test('JB Metro calls get the run\'s own page caps, appended last, and the sample
     const answer = await toolDecision({ tool_name: 'Bash', tool_input: { command: 'node scripts/price-collector/jbmetro-lookup.mjs --search "Coke Classic" https://www.jbmetro.com.au --max-pages 99' } },
       { PRICE_COLLECTOR_STATE_DIR: dir });
     assert.equal(answer.hookSpecificOutput.permissionDecision, 'allow');
-    assert.match(answer.hookSpecificOutput.updatedInput.command, /--max-pages 99 --page-size 20 --max-pages 5 --batch-size 20 --attempts 2 --timeout-ms 15000$/);
+    assert.match(answer.hookSpecificOutput.updatedInput.command, /--max-pages 99 --page-size 20 --max-pages 5 --batch-size 20 --attempts 3 --timeout-ms 25000$/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -683,4 +688,25 @@ test('the summary counts each supplier\'s issued, given, searched and unsearched
 test('the supplier counts say when nothing was issued and fall back to the searches given', () => {
   assert.match(supplierCounts({ searches: [] }, '/nonexistent'), /No searches were issued/);
   assert.match(supplierCounts({ searches: [{ workItemId: 9, supplierPresetId: 2, supplierName: 'JB Metro' }] }, '/nonexistent'), /^\| JB Metro \| 1 \| 1 \| 0 \| 1 \| - \| 0 \|$/m);
+});
+
+test('a result file submission would skip is refused with the reason, and the corrected file is then allowed once', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'collector-write-check-'));
+  try {
+    writeFileSync(join(dir, 'limits.json'), JSON.stringify(sampleLimits(JSON.parse(readFileSync(new URL('./apify-limits.json', import.meta.url))), false)));
+    saveTestWork(dir, {});
+    const env = { PRICE_COLLECTOR_STATE_DIR: dir, PRICE_COLLECTOR_OUT_DIR: join(dir, 'out'), PRICE_COLLECTOR_GUARD_STATE: join(dir, 'state.json') };
+    const row = { supplierProductId: 'jb-1', title: 'Coke Zero 375ml', packQuantity: 24, packPrice: 30, currency: 'AUD', priceBasis: 'exclusive_of_gst', stockStatus: 'in_stock' };
+    const write = file => toolDecision({ tool_name: 'Write', tool_input: { file_path: join(dir, 'out/1.json'), content: JSON.stringify(file) } }, env);
+    const refused = await write(validResult(1, { outcome: 'complete', rows: [{ ...row, regularPrice: 33 }] }));
+    assert.equal(refused.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(refused.code, 'write-invalid');
+    assert.match(refused.hookSpecificOutput.permissionDecisionReason, /regularPrice is not a field of this file/);
+    // Tidying that submission does itself (a stock word, a barcode without a scope) is not a refusal.
+    const allowed = await write(validResult(1, { outcome: 'complete', rows: [{ ...row, stockStatus: 'maybe', barcode: '9300675024235' }] }));
+    assert.equal(allowed.hookSpecificOutput.permissionDecision, 'allow');
+    // A match file is checked against its own schema.
+    const match = await toolDecision({ tool_name: 'Write', tool_input: { file_path: join(dir, 'out/match-a.json'), content: JSON.stringify({ runId: 41, waitingKey: 'a', extra: 1 }) } }, env);
+    assert.equal(match.code, 'write-invalid');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

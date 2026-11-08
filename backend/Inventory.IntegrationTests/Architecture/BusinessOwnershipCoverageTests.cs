@@ -573,7 +573,32 @@ public class BusinessOwnershipCoverageTests
     }
 
     /// <summary>
-    /// Every uniqueness rule on tenant-owned data must be scoped by business.
+    /// The one declared exemption from the rule below, by name (issue #1101, the repository owner's
+    /// approval of 6 November 2026).
+    ///
+    /// <para><see cref="BusinessNayaxSqsSender.AwsSenderId"/> is unique <em>globally</em> rather than
+    /// per business, on exactly the reasoning
+    /// <see cref="The_support_session_id_hash_is_unique_globally_rather_than_per_business"/> records
+    /// for the support session's id hash, and the reasoning is what makes it an exemption rather than
+    /// a hole. The rule below is about uniqueness over a value a <em>business</em> supplies, where a
+    /// global index lets one business's row deny another's; an AWS IAM user id is set by a platform
+    /// administrator and by nobody else, so no business can take one to deny it to another. And the
+    /// queue reader of issue #1103 matches a received message's <c>SenderId</c> with <em>no
+    /// business</em> to narrow the lookup by, so "which business is this?" has to have exactly one
+    /// answer - a per-business index would make that lookup a scan over a value two businesses could
+    /// both hold, which is the failure this index exists to prevent rather than cause.</para>
+    ///
+    /// <para>No other index is exempt. A second entry here is a tenancy decision needing its own
+    /// reviewed issue, not an implementation detail.</para>
+    /// </summary>
+    private static readonly HashSet<string> GloballyUniqueByDecision =
+    [
+        $"{nameof(BusinessNayaxSqsSender)}({nameof(BusinessNayaxSqsSender.AwsSenderId)})",
+    ];
+
+    /// <summary>
+    /// Every uniqueness rule on tenant-owned data must be scoped by business, except the one named in
+    /// <see cref="GloballyUniqueByDecision"/> above.
     ///
     /// A globally unique index in a shared database is a cross-tenant defect even though it leaks
     /// nothing: whichever business writes a value first silently denies it to every other one.
@@ -595,6 +620,7 @@ public class BusinessOwnershipCoverageTests
                 .Where(index => index.Properties.All(p => p.Name != nameof(IBusinessOwned.BusinessId)))
                 .Select(index =>
                     $"{entityType.ClrType.Name}({string.Join(", ", index.Properties.Select(p => p.Name))})"))
+            .Where(index => !GloballyUniqueByDecision.Contains(index))
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToArray();
 
@@ -603,6 +629,97 @@ public class BusinessOwnershipCoverageTests
             "These unique indexes on business-owned entities are global rather than per-business, "
                 + "so one business can deny another a legitimate row: "
                 + $"{string.Join(", ", globallyUnique)}. Add BusinessId as the leading column.");
+    }
+
+    /// <summary>
+    /// The exemption above is a decision about <em>one</em> index, so the rule still has to fail for
+    /// every other global unique index on tenant-owned data. Asserted by construction: a second
+    /// business-owned entity with a global unique index is reported by the rule, which is what keeps
+    /// the allowlist from quietly becoming a way out of it.
+    /// </summary>
+    [Fact]
+    public void The_global_uniqueness_rule_exempts_exactly_one_index()
+    {
+        var exempted = Assert.Single(GloballyUniqueByDecision);
+        Assert.Equal("BusinessNayaxSqsSender(AwsSenderId)", exempted);
+
+        var globallyUnique = BuildModel()
+            .GetEntityTypes()
+            .Where(entityType => typeof(IBusinessOwned).IsAssignableFrom(entityType.ClrType))
+            .SelectMany(entityType => entityType
+                .GetIndexes()
+                .Where(index => index.IsUnique)
+                .Where(index => index.Properties.All(p => p.Name != nameof(IBusinessOwned.BusinessId)))
+                .Select(index =>
+                    $"{entityType.ClrType.Name}({string.Join(", ", index.Properties.Select(p => p.Name))})"))
+            .ToArray();
+
+        // Exactly the exempted one, and nothing else: every other business-owned uniqueness rule in
+        // the model is still led by the business key.
+        Assert.Equal([exempted], globallyUnique);
+    }
+
+    /// <summary>
+    /// The exempted index's exact shape (issue #1101): over
+    /// <see cref="BusinessNayaxSqsSender.AwsSenderId"/> <strong>alone</strong>, unique, and filtered
+    /// to the rows that actually record one.
+    ///
+    /// <para>All three halves are load-bearing. <em>Alone</em> is what makes one sender id belong to
+    /// one business without ever reading another business's row. <em>Unique</em> is what the queue
+    /// reader's single answer depends on. And the <em>filter</em> is what makes a removed sender id
+    /// immediately free for another business: without it, every business that had ever had its sender
+    /// removed would collide on <c>NULL</c> and only one such row could exist at all.</para>
+    ///
+    /// <para>Beside it, the ordinary per-business rule: at most one sender row per business.</para>
+    /// </summary>
+    [Fact]
+    public void The_nayax_sqs_sender_id_is_unique_globally_rather_than_per_business()
+    {
+        var sender = BuildModel().FindEntityType(typeof(BusinessNayaxSqsSender))!;
+
+        Assert.True(typeof(IBusinessOwned).IsAssignableFrom(typeof(BusinessNayaxSqsSender)));
+
+        var global = Assert.Single(sender
+            .GetIndexes()
+            .Where(index => index.Properties.Count == 1
+                && index.Properties[0].Name == nameof(BusinessNayaxSqsSender.AwsSenderId)));
+
+        Assert.True(global.IsUnique);
+        Assert.Equal(@"""AwsSenderId"" IS NOT NULL", global.GetFilter());
+
+        // And the per-business rule beside it, which is the ordinary one: one row per business.
+        var perBusiness = Assert.Single(sender
+            .GetIndexes()
+            .Where(index => index.Properties.Count == 1
+                && index.Properties[0].Name == nameof(IBusinessOwned.BusinessId)));
+
+        Assert.True(perBusiness.IsUnique);
+        Assert.Null(perBusiness.GetFilter());
+    }
+
+    /// <summary>
+    /// The audit trail beside it carries no uniqueness rule at all and is indexed for the one way it
+    /// is read: a business's decisions in the order they happened. It is append-only, so there is no
+    /// value a second row could legitimately collide with.
+    /// </summary>
+    [Fact]
+    public void The_nayax_sqs_sender_audit_is_ordered_by_business_and_instant()
+    {
+        var audit = BuildModel().FindEntityType(typeof(BusinessNayaxSqsSenderAudit))!;
+
+        Assert.True(typeof(IBusinessOwned).IsAssignableFrom(typeof(BusinessNayaxSqsSenderAudit)));
+        Assert.Empty(audit.GetIndexes().Where(index => index.IsUnique));
+
+        Assert.Contains(
+            audit.GetIndexes(),
+            index => index.Properties
+                .Select(property => property.Name)
+                .SequenceEqual(
+                    [
+                        nameof(IBusinessOwned.BusinessId),
+                        nameof(BusinessNayaxSqsSenderAudit.OccurredAtUtc),
+                    ],
+                    StringComparer.Ordinal));
     }
 
     /// <summary>
@@ -670,6 +787,15 @@ public class BusinessOwnershipCoverageTests
     // the grandfathering record beside them is about none and is declared in PlatformEntities above.
     [InlineData(typeof(BusinessBillingSubscription))]
     [InlineData(typeof(BusinessPlanGrant))]
+    // The two tables of issue #1101: which AWS IAM user sends a business's Nayax sales to the shared
+    // SQS queue, and the append-only trail of the Super Admin's decisions about it. Both are facts
+    // about one business - whose sales these are - so both are tenant-owned, stamped, filtered and
+    // enforced centrally, and neither is a platform table. The one thing added is the global unique
+    // index over the sender id, which is asserted by name above.
+    [InlineData(typeof(BusinessNayaxSqsSender))]
+    [InlineData(typeof(BusinessNayaxSqsSenderAudit))]
+    // Issue #1105: the Owner decision trail about one business's own sales.
+    [InlineData(typeof(NayaxSaleOwnerDecisionAudit))]
     public void The_named_entity_is_business_owned(Type entityType)
     {
         Assert.True(

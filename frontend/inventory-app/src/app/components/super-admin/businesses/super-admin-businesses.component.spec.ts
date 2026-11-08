@@ -7,6 +7,10 @@ import {
   SuperAdminBusinessesService
 } from '../../../services/super-admin-businesses.service';
 import { SuperAdminPlanGrant, SuperAdminPlanGrantsService } from '../../../services/super-admin-plan-grants.service';
+import {
+  SuperAdminNayaxSqsSender,
+  SuperAdminNayaxSqsSenderService
+} from '../../../services/super-admin-nayax-sqs-sender.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
@@ -23,6 +27,26 @@ const noPlanGrant: SuperAdminPlanGrant = {
   revision: 0,
   grantedAtUtc: null,
   active: false
+};
+
+/**
+ * A business with a recorded Nayax SQS sender, which is what the sender card loads unless a test
+ * says otherwise (issue #1101).
+ */
+const recordedSender: SuperAdminNayaxSqsSender = {
+  businessId: 9,
+  awsSenderId: 'AIDAEXAMPLEUSERID123',
+  isEnabled: true,
+  lastMessageReceivedAtUtc: null,
+  lastReconciliationSucceededAtUtc: null,
+  readerHealth: {
+    lastSuccessfulPollUtc: null,
+    consecutivePollFailures: 0,
+    deadLetterQueueDepth: null
+  },
+  revision: 2,
+  createdAtUtc: '2026-11-01T01:00:00Z',
+  updatedAtUtc: '2026-11-06T03:45:00Z'
 };
 
 function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusiness {
@@ -47,7 +71,8 @@ async function render(
   service: Partial<SuperAdminBusinessesService>,
   toast?: Partial<ToastService>,
   supportSession?: Partial<SupportSessionService>,
-  planGrants?: Partial<SuperAdminPlanGrantsService>
+  planGrants?: Partial<SuperAdminPlanGrantsService>,
+  nayaxSqsSenders?: Partial<SuperAdminNayaxSqsSenderService>
 ) {
   await TestBed.configureTestingModule({
     imports: [SuperAdminBusinessesComponent],
@@ -61,6 +86,10 @@ async function render(
       {
         provide: SuperAdminPlanGrantsService,
         useValue: { get: jest.fn(() => of(noPlanGrant)), set: jest.fn(), end: jest.fn(), ...planGrants }
+      },
+      {
+        provide: SuperAdminNayaxSqsSenderService,
+        useValue: { get: jest.fn(() => of(recordedSender)), set: jest.fn(), ...nayaxSqsSenders }
       }
     ]
   }).compileComponents();
@@ -190,7 +219,7 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
 
   it.each<[SuperAdminBusiness['status'], string[]]>([
     ['Pending', ['Approve', 'Reject']],
-    ['Active', ['View as this business', 'Plan', 'Deactivate']],
+    ['Active', ['View as this business', 'Plan', 'Nayax SQS sender', 'Deactivate']],
     ['Deactivated', ['Reactivate', 'Members']]
   ])('for a %s business, offers %s', async (status, expectedButtons) => {
     const list = jest.fn(() => of([business({ status })]));
@@ -435,5 +464,50 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     const { host } = await render({ list });
 
     expect(rowFor(host, 'Snack Co').querySelector('[data-testid="plan-grant"]')).toBeNull();
+  });
+
+  /**
+   * Issue #1101: the Nayax SQS sender action is offered for a trading business, opens the dedicated
+   * card, and the card reads that business's own sender - this table carries none of its own.
+   */
+  it('opens the Nayax SQS sender card for an active business (issue #1101)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const get = jest.fn(() => of(recordedSender));
+    const { fixture, host } = await render({ list }, undefined, undefined, undefined, { get });
+
+    buttonWithText(host, 'Nayax SQS sender').click();
+    fixture.detectChanges();
+
+    expect(get).toHaveBeenCalledWith(9);
+    expect(host.textContent).toContain('Nayax SQS sender for Snack Co');
+  });
+
+  it('reports a saved sender and closes the card when it is dismissed (issue #1101)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const set = jest.fn(() => of({ ...recordedSender, isEnabled: false, revision: 3 }));
+    const success = jest.fn();
+    const { fixture, host } = await render({ list }, { success }, undefined, undefined, { set });
+
+    buttonWithText(host, 'Nayax SQS sender').click();
+    fixture.detectChanges();
+
+    buttonWithText(host, 'Turn off').click();
+    fixture.detectChanges();
+
+    expect(set).toHaveBeenCalledWith(9, 'AIDAEXAMPLEUSERID123', false, 2);
+    expect(success).toHaveBeenCalledWith('The Nayax SQS sender was saved.');
+
+    buttonWithText(host, 'Close').click();
+    fixture.detectChanges();
+
+    expect(host.textContent).not.toContain('Nayax SQS sender for Snack Co');
+  });
+
+  /** A business that is not trading has no sales to attribute, so the action is not offered. */
+  it('offers no Nayax SQS sender action for a business that is not trading (issue #1101)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Pending' })]));
+    const { host } = await render({ list });
+
+    expect(rowFor(host, 'Snack Co').querySelector('[data-testid="nayax-sqs-sender"]')).toBeNull();
   });
 });

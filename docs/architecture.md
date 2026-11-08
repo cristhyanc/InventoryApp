@@ -1055,7 +1055,7 @@ Contains:
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
 - The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection`, `resolve-nayax-sale-products` (issue #758), `grandfather-business-plans` (issue #966), `reconcile-attachment-storage` (issue #968) and the database backup commands, plus the startup report that says whether plan enforcement can take effect (issue #966).
-- The one hosted background drain, `Auth/MemberProfileRefreshWorker` (issue #524): it opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it. Hosting glue, not a use case — it holds no rule, resolves no `DbContext`, and logs only the outcome. See [Member display name and email](#member-display-name-and-email-issue-524).
+- The two hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. Both are hosting glue, not use cases — neither holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -1675,6 +1675,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Home Dashboard → machine restock-sync reminder (issue #891) | `GET api/machine-restock-sync/reminder` | `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Home Dashboard → hourly machine restock fetch (issue #1122) | `POST api/machine-restock-sync/reminder/refresh` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Pick List → record a refill (issue #743) | `POST api/pick-list/refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List → record a multi-machine run (issue #897) | `POST api/pick-list/multi-machine-refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
@@ -1818,7 +1819,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/refills` (issue #743) | none — the submitted quantities, the recorded movement ids and the per-row refusal sentences | Already safe |
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/multi-machine-refills` (issue #897) | none — the submitted quantities, the machines and products they name, the recorded movement ids and the per-allocation refusal sentences (whose only figure is a storage quantity `GET api/pick-list` already serves) | Already safe |
-| `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
+| `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here**. Since 7 November 2026 the `GET api/products` listing omits `stockAdjustments` altogether (no reader of the listing used the history, and it made each search a large download); the other endpoints in this row still carry it, redacted |
 | `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
 | `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`, `lastWeekRevenue`, `monthToDateRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
 | `Inventory.Operate` | `GET api/products/{productId}/stock`, `POST api/products/{productId}/stock` | each movement's `inventoryValueAfter` | **Redacted here** |
@@ -1902,7 +1903,7 @@ Everything above is about what decides access. This subsection is about the one 
 
 **Refreshed from the sign-in token, not entered.** Both values come from the claims the caller's own validated token carried — `name` for the display name, and `preferred_username` or, where a tenant issues that instead, `email` for the address — read at the API boundary by `EntraActorProfileAccessor` (`InventoryApi/Auth/`). It is a second, deliberately separate claims adapter: it takes the identity half of its answer from `EntraActorIdentityAccessor`, so there is one implementation of "who is calling" and no possibility of two that disagree, and a token whose `(tid, oid)` pair identifies nobody yields no profile at all. Both claim spellings a host with inbound claim mapping on or off produces are accepted, the first spelling present wins (they are two spellings of one fact), a blank claim is the same as an absent one, and a value longer than `MemberProfile.MaxLength` (256) is dropped rather than truncated — a cut-off email address is a wrong email address, and half a name presented as somebody's name is wrong in the same way. A membership whose member has never signed in simply has both columns `null`, which is why they are nullable; `bootstrap-business` sets neither.
 
-**A dedicated narrow write path, outside the request.** `BusinessScopeMiddleware` *schedules* a refresh after `await _next(context)` — after the response has been decided — and writes nothing itself. `ScheduleMemberProfileRefresh` (Application) decides whether to queue one, and `MemberProfileRefreshQueue` is a bounded (64) in-process channel whose only write is a synchronous `TryEnqueue` that never blocks and never throws: a full queue drops the newest refresh and says so. `MemberProfileRefreshWorker` (`InventoryApi/Auth/`, the one hosted service this application runs) drains it, one refresh at a time, and opens a **new service scope** per refresh to invoke the `RefreshMemberProfile` use case in it. That new scope is what "outside the request's business scope" means concretely: its `BusinessScope` is a fresh, *denied* one, so the tenant query filters and `BusinessOwnershipEnforcer` are fully in force over an `AppDbContext` that can read no business's data at all, and the request's own scope and context are gone by then. The refresh works under a denied scope because `BusinessMembership` is one of the five structural non-tenant-owned tables above — a cosmetic write must not be the thing that needs a resolved tenant — and what keeps it to the caller's own row is the identity in the `WHERE` clause, which is the pair the request authenticated as and which nothing a request supplies can choose.
+**A dedicated narrow write path, outside the request.** `BusinessScopeMiddleware` *schedules* a refresh after `await _next(context)` — after the response has been decided — and writes nothing itself. `ScheduleMemberProfileRefresh` (Application) decides whether to queue one, and `MemberProfileRefreshQueue` is a bounded (64) in-process channel whose only write is a synchronous `TryEnqueue` that never blocks and never throws: a full queue drops the newest refresh and says so. `MemberProfileRefreshWorker` (`InventoryApi/Auth/`, the first of the two hosted services this application runs — the other is issue #1103's [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103)) drains it, one refresh at a time, and opens a **new service scope** per refresh to invoke the `RefreshMemberProfile` use case in it. That new scope is what "outside the request's business scope" means concretely: its `BusinessScope` is a fresh, *denied* one, so the tenant query filters and `BusinessOwnershipEnforcer` are fully in force over an `AppDbContext` that can read no business's data at all, and the request's own scope and context are gone by then. The refresh works under a denied scope because `BusinessMembership` is one of the five structural non-tenant-owned tables above — a cosmetic write must not be the thing that needs a resolved tenant — and what keeps it to the caller's own row is the identity in the `WHERE` clause, which is the pair the request authenticated as and which nothing a request supplies can choose.
 
 **It cannot delay, change or fail a request.** Scheduling is a dictionary read and a non-blocking queue write; anything unexpected in that path is swallowed and logged rather than turned into a failed response, because a display value is never worth that. One refresh at a time rather than a task per sign-in is a consequence of the store: the production database is a single SQLite file with one writer ([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)), so cosmetic writes must not contend with interactive ones.
 
@@ -2213,7 +2214,7 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 Until this slice the platform administrator could only *look* (the read-only diagnostics API above), and nobody could decide a business application at all: issue #541 creates a `Pending` business and leaves it waiting. Issue #544, one slice of #509 under #328, is the first write-capable platform-admin path — the Super Admin sees every business and approves or refuses an application — and the whole design is about keeping "write-capable" from meaning "unrestricted".
 
-**What this surface writes, and what it deliberately does not.** A business's lifecycle status, one of its memberships' activation, and — on an approval alone — that business's own copies of the enabled supplier presets. The business's *plan* is **not** on this surface and `IPlatformBusinessDirectoryStore` was not widened to write one: the manual plan grant a Super Admin may decide (issue #982) is its own controller, its own narrow port and its own reviewed write, described in [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982).
+**What this surface writes, and what it deliberately does not.** A business's lifecycle status, one of its memberships' activation, and — on an approval alone — that business's own copies of the enabled supplier presets. The business's *plan* is **not** on this surface and `IPlatformBusinessDirectoryStore` was not widened to write one: the manual plan grant a Super Admin may decide (issue #982) is its own controller, its own narrow port and its own reviewed write, described in [Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982). The business's *Nayax SQS sender identity* is not on this surface either, and that store was not widened for it: which AWS IAM user sends that business's Nayax sales (issue #1101) is its own controller, its own narrow port and its own reviewed write and read, described in [Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101).
 
 **Who, and how it is enforced. Exactly the diagnostics surface's answer, reused rather than re-invented.** `SuperAdminBusinessesController` carries `[Authorize]`, `[Authorize(Policy = PlatformAdminPolicy.Name)]`, `[RequiredScope("access_as_user")]` and `PlatformDiagnosticsEndpointAttribute`. That is class 2 of the four [endpoint authorization classes](#capability-authorization-issue-525) — **not** a fifth class and **not** a second marker, which is the point: a platform surface that writes must not also be a new mechanism to review. Authority is the separately configured Entra `(tid, oid)` pair, held outside the database, and both values empty — the shipped state — means nobody reaches this controller at all. An Owner holds the strongest business role there is and is refused here exactly as any other member is, because this controller declares no capability any role could satisfy. Both policies are enforced, and both attributes are needed: the named policy *replaces* the default one rather than adding to it, so a controller with only `[Authorize(Policy = …)]` would leave the delegated scope undemanded — platform authority is an additional requirement on a delegated API call, never a replacement for one.
 
@@ -2228,6 +2229,23 @@ POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active, + Dec
 POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + reason, + DecidedAtUtc,
                                                         and the applicant's membership released
 ```
+
+**Two more routes hang off the same `{businessId}` path and belong to other surfaces** — they are
+listed here so the route space is readable in one place, and described where their own rules are:
+
+```text
+GET  /api/super-admin/businesses/{businessId}/plan-grant           issue #982, the manual plan grant
+PUT  /api/super-admin/businesses/{businessId}/plan-grant
+POST /api/super-admin/businesses/{businessId}/plan-grant/end
+GET  /api/super-admin/businesses/{businessId}/nayax-sqs-sender     issue #1101, the SQS sender identity
+PUT  /api/super-admin/businesses/{businessId}/nayax-sqs-sender
+```
+
+Each pair is its own controller, its own narrow Application port and its own reviewed denied-scope
+write — class 2 under this surface's own marker and policy, with no new class and no new marker — and
+neither is reachable through `IPlatformBusinessDirectoryStore`. See
+[Super Admin sets a business's plan](#super-admin-sets-a-businesss-plan-issue-982) and
+[Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101).
 
 **The business id in a route is the subject of a decision, not a tenancy scope.** Every other endpoint in this application resolves its business from the authenticated actor's membership and accepts no owner from a request ([Tenant ownership](#tenant-ownership-issue-64)). A platform decision has to name the application it is about, so these two routes carry the id — and that is the whole of what it does: it resolves no business for the request, which still runs with a **denied** `BusinessScope`; it is never stamped on a row; it cannot reach a tenant-owned table; and it is checked against the stored rows on every call, so an unknown id is `404` and an already-decided one is `409`. The directory response carries the id for the same reason, and it is the only response in the application that carries a tenant key. Neither shape may be copied onto a business endpoint.
 
@@ -8252,6 +8270,54 @@ page still authors no dialog markup itself (`page-composition.guard.ts`). Render
 `frontend/inventory-app/e2e/visual/products-redesign.visual.ts`, written to
 `docs/screenshots/issue-1093/`.
 
+### The Sites overview layout (issue #1128)
+
+**Sites** (`SiteListComponent`, route `/sites`) was redesigned on the Products page's `rr` scale. It
+is a presentation change: the page still makes exactly one `GET api/sites` per visit, keeps its
+route guards, the Nayax status banner, the `ListLoadState` loading/error lifecycle and the
+`Dashboard.ViewFinancials` gate on the sales figures, and no sales, stock or reporting-period
+calculation moved or changed.
+
+**Layout.** The title carries a count line ("2 sites · 3 machines") summed from the loaded rows
+themselves, shown only once a non-empty answer has loaded. One card holds the toolbar and the list.
+At `md` and wider the list is a table with the columns Site, Machines, Stock level, Refill status
+and - for a role with `Dashboard.ViewFinancials` - Sales today, Sales this week and vs last week,
+the sales figures right-aligned. Below `md` the same rows are compact cards: the linked site name
+and machine count with the refill status first, then the stock level, then Sales today and Sales
+this week side by side with the weekly change beside the weekly figure. Every card's link, the
+search box, the two filter buttons and the sort control are at least 44px tall below `md`. Each row
+or card has exactly one link, to the existing `/sites/:id/products` route; the desktop row still
+extends that one link's plain click to the rest of the row (`followRowLink`).
+
+**Search, filter and order.** The name search (trimmed, case-insensitive) and the *All sites* /
+*Needs refill* filter apply together over the loaded rows; each filter button shows its count and
+its selection through `aria-pressed`, and a search or filter that leaves nothing shows a no-results
+message with one *Clear search and filter* action. *Needs refill* keeps a site with a **known**
+positive low or empty count, even when its other count is unknown. The order defaults to **Refill
+priority** - sites with a known positive empty count first (more empty slots first, then more low
+slots), then sites with a known positive low count (more low slots first), then sites whose counts
+are unavailable, then sites known to be fine, with the site name (case-insensitive) and then the
+site id breaking every tie - and can be switched to *Site name (A to Z)*. The rules live in
+`frontend/inventory-app/src/app/formatting/site-refill-status.ts`.
+
+**Known versus unavailable stock.** The stock level is a neutral bar and the backend's
+`TotalStockPercentage`, deliberately quieter than the refill status, so a high overall percentage
+cannot hide low or empty slots. The refill status states each known positive count in text, red for
+empty slots and amber for low ones. *Stock OK* appears only when both counts are known zeros. *Stock
+unavailable* appears when neither count is known, or when no known count indicates a refill and the
+other is missing; when only one count is known and it is positive, that count is kept and the
+missing one is named ("Empty count unavailable"). A percentage that is not a finite number shows
+*Unavailable* with no bar fill. `GET api/sites` publishes both counts and the percentage as plain
+numbers today - a site whose stock read failed is not published at all - so these unknown states are
+defensive: the page reads a missing, `null`, negative or non-finite value as unknown rather than as
+a healthy zero.
+
+**Sales period wording, not dates.** `GET api/sites` carries no period boundaries, and the frontend
+has no copy of `MachineDashboardWindow`, so the page states the rule - this week runs from Monday to
+now in the business's time zone, compared with the same point last week - rather than computing
+dates of its own. Showing the actual dates would need the site read (or another existing read) to
+publish the window's business dates; that is a backend change outside issue #1128.
+
 ### A product carries no selling price (issue #792)
 
 **`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
@@ -8465,9 +8531,11 @@ Physical storage stock and costing inventory answer different questions:
 - `CostingQuantity`: total business-owned quantity still carrying inventory value.
 - `InventoryValue`: remaining value used with `CostingQuantity` to derive AVCO.
 
-A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Completed sales and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
+A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Sales that dispensed a unit and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
 
-Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the completed sales and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
+**Which sales consume costing inventory is one rule, and since issue #1107 it is not the completed-sale rule.** `NayaxSaleCountingPolicy.ConsumesStock` - status `12` **or** status `62`, neither `Conflict` nor `OwnerExcluded` - is what `EfInventoryCostLedgerStore` and `EfSaleCostingStore` select on, through `EfNayaxSalesQueries.StockConsumingSalePredicate`. A refunded sale therefore keeps the unit it consumed and keeps the cost it was sold at: the replay is chronological and the sale stays exactly where it was, so its `UnitCostAtSale`, the product's `CostingQuantity` and its `InventoryValue` come out identical before and after the refund. What the refund reverses is money, which every report reads live through the completed-sale rule instead. `WeightedAverageCostReplay` itself is unchanged - it consumes the sales it is given and knows nothing about statuses. There is deliberately **no separate "cost of refunded items" line**, so a refunded sale's COGS stays recorded on the sale and appears in no completed-sale report total; that asymmetry was the owner's decision of 8 November 2026. Existing status-`62` rows follow the rule with no backfill: each is picked up the next time its product is replayed, and a product with historical refunds therefore loses one unit of `CostingQuantity` and its value per such sale at that point. See [Applying a Nayax SQS refund](#applying-a-nayax-sqs-refund-issue-1107).
+
+Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the sales that dispensed a unit and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
 Historical sale cost precedence is:
 
@@ -8476,6 +8544,25 @@ Historical sale cost precedence is:
 3. uncosted/unknown.
 
 Current product cost and selling price are never substitutes for historical cost. Reports preserve partial COGS and quality counts and do not turn missing cost into zero.
+
+**What still has to be replayed is a row, not a value in memory (issue #1103).** A sale is saved and
+its cost replay is a longer step afterwards, so the same transaction that stores the sale writes a
+`PendingInventoryCostRebuilds` row for every product it affected — one row per
+`(BusinessId, ProductId)`, whose `FromInstantUtc` only ever moves *earlier* — and the replay removes
+each row in the same transaction as the costs it rebuilt, and only while that row still holds the
+`Revision` it replayed: the replay itself runs outside the write lock, so a sale another writer
+recorded meanwhile — at *any* instant, which is why the comparison is a revision and not the instant —
+is replayed by the next drain instead of being cleared by this one (see
+[Pending inventory-cost rebuilds](#pending-inventory-cost-rebuilds)). A replay that fails keeps its
+row with its attempt count and a short failure code and is retried by the next run of either sales
+path. That
+applies to **both** paths and the request-driven one needed it as much as the queue: before this, a
+replay that failed was simply forgotten, because the sale was already stored and the next
+synchronization therefore reported no affected products and never came back to it, leaving that
+product's costing position stale until its next sale. `SyncLatestNayaxSales` now drains every pending
+row after every persist and raises a still-failing product as the one `InventoryCostDataQualityException`
+it always did. The row records no quantity, cost, value or sale, so losing one would mean a replay is
+not retried, never a wrong figure. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
@@ -8576,6 +8663,16 @@ costing migration). It replaced the removed `InventoryApi.Services.InventoryCost
   moved to `Inventory.Infrastructure`, beside `AppDbContext`, in Persistence 8/8 of #153 (issue #309). `InventoryCostTransitionsController`
   calls the four use cases directly with unchanged routes (`POST api/admin/inventory-cost-transition/
   preview`, `apply`, `preview-all`, `apply-all`), request/response JSON, status codes and messages.
+
+#### Exclusion and correction rebuilds (issue #1105)
+
+A sale that stops counting (a new `Conflict`, or "Don't count this sale"), starts counting again
+("Keep the SQS values", a superseded exclusion) or has its product, amount, machine or instant
+corrected records a `PendingInventoryCostRebuild` in the same transaction as the change, through the
+shared `PendingInventoryCostRebuildRecorder` (instant only moves earlier, revision moves on every
+enqueue). A correction that moves the sale to another product records both products from the earlier
+instant. The replay reads completed sales through `NayaxSaleCountingPolicy`, so excluding a sale
+releases exactly the one unit of costing inventory it consumed.
 
 #### Costing repairs (issue #359)
 
@@ -8919,7 +9016,8 @@ Dashboard's reminder banner reads `GET /api/machine-restock-sync/reminder`, its 
 its own capability, because it answers a different question from a different source: it is a purely
 local aggregate over the business's machines and their imported restock events, it needs
 `Inventory.Operate` rather than `Dashboard.View`, and its failure must leave every card below it
-usable. Adding it to this summary would have coupled a local read to the live fleet read, and
+usable (since issue #1122 the component follows that read with an hourly restock fetch from Nayax,
+`POST /api/machine-restock-sync/reminder/refresh`, still outside this summary). Adding it to this summary would have coupled a local read to the live fleet read, and
 widened who sees restock work to every role that may open the Dashboard. See
 [Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891).
 
@@ -10012,7 +10110,10 @@ extra full run per instance per window.
 **The HTTP contract gains one answer and changes neither of the existing two.** `POST
 api/nayax-sales-sync` still answers `204` when the run happened and `429` with `Retry-After` when the
 run limit refused it. A skip is `200` with `NayaxSalesRecentlySyncedResponse`
-(`wasRecentlySynced: true`, `lastSyncedAtUtc`), and the optional query parameter `force=true` is the
+(`wasRecentlySynced: true`, `lastSyncedAtUtc`) — since issue #1106 that same body is also what a
+business whose sales arrive live from SQS gets, with three further fields and these two keeping their
+meaning (see [Dashboard sales live from the Nayax SQS
+queue](#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106)) — and the optional query parameter `force=true` is the
 Dashboard's Refresh control: it bypasses the freshness window and nothing else - the run limit and
 the connection refusals still apply. The response carries no business id, operator id or credential
 revision; the freshness key is the server's own.
@@ -10026,7 +10127,9 @@ business is Sydney. A skip shows **no** notice: it is neither `isSalesSyncFailed
 `Refresh` control calls `refreshSales()`, which forces the run and then reloads Sites and Machines
 from it; it is not offered for a business with no usable provider or inside a support session, where
 the call could only be refused. Nothing is remembered about freshness for a failure, a `429` or a
-support session - the label is absent rather than claiming an age it does not know.
+support session - the label is absent rather than claiming an age it does not know. A business that is
+**live via SQS** (issue #1106) shows the live line in place of this label, because nothing was
+synchronized and an age would be a false statement.
 
 ### Profit levels
 
@@ -12612,17 +12715,27 @@ proposes no correction - identifying shrinkage is the point, so writing it away 
 | --- | --- | --- | --- |
 | Refill | `StockAdjustment`, reason `MachineRefill`, negative quantity, machine recorded | `+n` | unchanged |
 | Return to storage | the same movement with a positive quantity | `-n` | unchanged |
-| Completed sale | `NayaxSales` with status `12` for that machine | `-1` per transaction | reduced once, by the sale-costing path |
+| Dispensed sale | `NayaxSales` with status `12` **or `62`** for that machine, not `Conflict`/`OwnerExcluded` | `-1` per transaction | reduced once, by the sale-costing path |
 | Counted reconciliation | `MachineStockCount` (the one table this feature adds) | sets the level | unchanged |
 
 `Inventory.Domain.MachineStock.MachineStockMovementPolicy` is the single place a fact becomes a
-movement and the single statement of which kinds consume costing inventory (only a completed sale -
+movement and the single statement of which kinds consume costing inventory (only a dispensed sale -
 and the ledger never performs that consumption itself). Because the ledger *reads* the refill
-movements and the completed sales rather than writing its own copies, a refill cannot be counted
+movements and the dispensed sales rather than writing its own copies, a refill cannot be counted
 twice and a sale cannot create COGS twice: there is only one record of each event to begin with, and
-nothing to keep in step. One completed transaction dispenses one unit, which is exactly the quantity
+nothing to keep in step. One such transaction dispenses one unit, which is exactly the quantity
 `WeightedAverageCostReplay` consumes from costing inventory for that sale, so the physical and
 costing ledgers cannot disagree about quantity.
+
+**A refunded sale is one of those movements** (issue #1107). The kind was called `CompletedSale`
+until the owner's refund decision of 8 November 2026; it is `DispensedSale` now, because status `62`
+dispensed its unit as surely as status `12` did and only a *completed* sale is money. Which sales the
+store reads is `NayaxSaleCountingPolicy.ConsumesStock` through
+`EfNayaxSalesQueries.StockConsumingSalePredicate`, so a refund reverses money without the unit coming
+back to this machine - returning a refunded item to stock is explicitly not what a refund means here.
+The unattributed-sale data-quality count covers those sales too, and its issue code
+(`UnattributedCompletedSales`) is left as it is because it is a published contract. See
+[Applying a Nayax SQS refund](#applying-a-nayax-sqs-refund-issue-1107).
 
 **Nothing is inferred from incomplete inputs.** `Inventory.Domain.MachineStock.MachineStockLedger`
 replays a machine's movements in effective-instant order (ties: refills, returns, sales, then the
@@ -12698,6 +12811,12 @@ to a product only if the caller's own catalogue holds it. Since issue #733 the s
 the local one its `NayaxProductID` is linked to, resolved in the observation adapter (see
 [Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)).
 Unresolvable slots are dropped, the same exclusion the Pick List applies.
+
+**Exclusion and correction (issue #1105).** The ledger reads completed sales through the same
+completed-sale rule as costing, so a contradicted or Owner-excluded sale stops consuming machine
+stock, and an Owner's correction of its machine, product or instant moves the consumption with it.
+Nothing here is written: the ledger reads rows live, and the costing side follows through the pending
+rebuild the decision recorded.
 
 **Not in this slice.** There is no Angular page yet (the API is the exposure), no back-dated count,
 no machine-level write-off, and no automatic correction of a discrepancy - by design, since
@@ -12820,17 +12939,28 @@ mapping](#domain-and-application-error-mapping).
 4. Historical cost is persisted on each sale with its status and source.
 5. Unknown products, statuses, payment methods, or missing costs remain visible.
 
-Sales reach the application two ways, and both follow those five rules: the operator uploads a Nayax
-transaction export (`POST api/imports/nayax-sales`, below), and the home dashboard synchronises each
-machine's latest transactions (see [Home dashboard coordinated Sites/Machines sales
-sync](#home-dashboard-coordinated-sitesmachines-sales-sync-issue-187)).
+Rule 3 is about **money**. Since issue #1107 it is not the same question as "did this sale consume a
+unit?", which is status `12` *or* status `62`: see [Applying a Nayax SQS
+refund](#applying-a-nayax-sqs-refund-issue-1107).
 
-A completed sale reduces business-owned costing inventory exactly once, here, and nowhere else. The
-[machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) also
-deducts that sale from the machine's *physical* expected stock - one unit per completed transaction,
-the same quantity this path consumes from costing inventory - by reading the same completed-sale row.
-It records no movement and no cost of its own, so a machine's physical ledger can never become a
-second deduction of COGS.
+Sales reach the application three ways, and all three follow those five rules: the operator uploads a
+Nayax transaction export (`POST api/imports/nayax-sales`, below); the home dashboard synchronises each
+machine's latest transactions (see [Home dashboard coordinated Sites/Machines sales
+sync](#home-dashboard-coordinated-sitesmachines-sales-sync-issue-187)); and, since issue #1103, the
+[Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103) takes each transaction off the shared
+queue within seconds of the vend. The last two save through the same port and the same write-locked
+transaction, so the deduplication, the status rules and the cost-replay bookkeeping are one
+implementation rather than two that can disagree. The one thing a queued message decides for itself is
+its **status**: it states its own `Transaction Status ID` and the store saves exactly that, while the
+settlement-value rule stays for the payload that states none.
+
+A sale that dispensed a unit - status `12` or `62`, neither excluded by review - reduces
+business-owned costing inventory exactly once, here, and nowhere else. The [machine stock
+ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) also deducts that
+sale from the machine's *physical* expected stock - one unit per such transaction, the same quantity
+this path consumes from costing inventory - by reading the same row through the same rule. It records
+no movement and no cost of its own, so a machine's physical ledger can never become a second
+deduction of COGS.
 
 #### Uploaded transaction export import (issue #301)
 
@@ -13051,6 +13181,14 @@ nothing writes it (below): a transaction export declares neither.
   also records nothing, because the store does not import such a row and the run therefore did not
   account for its own range; so does a run in which no machine returned a single dated sale, which
   is evidence of nothing at all.
+  **The hourly reconciliation of issue #1104 claims through this same rule and adds none of its
+  own.** It is the same `SyncLatestNayaxSales` code path with the same bound, so an hourly run
+  records exactly what a Dashboard-triggered run over the same data would — and it does **not** claim
+  to close every coverage gap: a period `lastSales` did not demonstrably reach stays `Unverified`,
+  and a verification state is evidence about one sale rather than about a range. The SQS reader of
+  issue #1103 still records no coverage at all, for the reason it never could: a queue delivers the
+  transactions somebody sent, which says nothing about what was not sent. See [Hourly Nayax sales
+  reconciliation](#hourly-nayax-sales-reconciliation-issue-1104).
 - `ImportNayaxSales` claims **nothing at all**, however completely it imported. Importing every row
   of a workbook says what was stored; it does not say the workbook held every transaction of the
   span those rows cover. The upload is a file a person exported from Nayax Core and it declares
@@ -15190,7 +15328,7 @@ PriceCollectorWorkItems + FailureReason?, SubmittedRowCount?
 | `Confirmed`, price outside its band | **SentToReview** — to `NeedsReview`, reading held |
 | `Confirmed`, everything agrees | **Accepted** — a `SupplierPriceObservation`, and the listing's new price |
 
-**Identity is the variant, the individual size and its unit, and the pack quantity** — the facts that change what a per-unit price *means*. The title and the URL are evidence and move freely; the supplier's own product id is the key the listing was found by. A variant is compared trimmed and case-insensitively, because a restyled page is not a new product. **The barcode and its scope are not part of the identity check** (owner decision, 3 November 2026): production runs kept sending confirmed Woolworths listings back to review, with their new price held, because one reading carried the barcode and the next did not, and the supplier product id already identifies the listing. A listing still stores its barcode, which the review's strong cross-supplier barcode match uses. A confirmed, flagged or refused listing's identity is **never overwritten** by a reading — that would quietly resolve the disagreement that sent it to review — and only a listing still in `Proposed` has its identity updated by a rediscovery.
+**Identity is the variant, the individual size and its unit, and the pack quantity** — the facts that change what a per-unit price *means*. The title and the URL are evidence and move freely; the supplier's own product id is the key the listing was found by. A variant is compared trimmed and case-insensitively, because a restyled page is not a new product. **The barcode and its scope are not part of the identity check** (owner decision, 3 November 2026): production runs kept sending confirmed Woolworths listings back to review, with their new price held, because one reading carried the barcode and the next did not, and the supplier product id already identifies the listing. A listing still stores its barcode, which the review's strong cross-supplier barcode match uses. **A value the reading leaves out is "not reported", never "changed"** (owner decision, 6 November 2026; `PriceCollectorResultPolicy.ReadingDisagrees`): a reading with no variant, no individual size (value and unit together) or no pack quantity is compared only on the fields it does report, so it cannot send a confirmed listing to review for saying nothing. Production run 42128721044 held 82 confirmed readings that way, and approving them confirmed the stored identity and dropped the readings, so prices came back only on the next run. A reported field that differs (46 g read as 180 g, a 24-pack read as a 36-pack) is still a change. `HasIdentityChanged` stays the comparison of two complete identities, where a missing value is real. A confirmed, flagged or refused listing's identity is **never overwritten** by a reading — that would quietly resolve the disagreement that sent it to review — and only a listing still in `Proposed` has its identity updated by a rediscovery.
 
 **The band is the owner's decision of 27 October 2026**: no more than 50% below and no more than 100% above the last accepted price, with **both edges inside** the band, so a supplier running a half-price special is not sent to review every time it does. A listing with no accepted price yet has no band at all. A price past either edge is **held**, not discarded: the listing is flagged and the reading waits where #928 can see it, and the listing keeps the price it already had.
 
@@ -15382,10 +15520,12 @@ No price, observation, check instant or inventory value is touched by any of it.
 | --- | --- |
 | the listing holds no reading | confirmed with **no current price**, and priced on the next run |
 | the reading is older than the supplier's own `PriceCheckFreshnessHours` (#925) | no price, with that reason |
-| the reading's variant or individual size is not the one confirmed (the barcode is not compared) | no price: a reading of another pack is a price for something else |
+| the reading's variant or individual size, where it reports one, is not the one confirmed (the barcode is not compared; a value it leaves out is not reported, owner decision of 6 November 2026) | no price: a reading of another pack is a price for something else |
 | the price is outside #937's band and no exception was approved | no price, with that reason |
 | the price is outside the band and the exception **was** approved | accepted, and recorded as an exception |
 | everything agrees | accepted as a `SupplierPriceObservation`, and the listing's current price |
+
+**The review card starts from a fresh held reading's own variant, size and pack quantity** (owner decision, 6 November 2026), keeping the stored value for anything the reading leaves out and the stored identity for a stale reading, so confirming a card as shown, alone or through "Confirm selected", makes the reading the price at once. "Confirm selected" also says how many confirmed listings' held readings did not become a price, so "confirmed" never reads as "priced".
 
 **The pack quantity is the reviewer's own answer, and that is the one difference from #937's identity check.** That rule compares a reading against what somebody already confirmed, where a changed pack count means the shelf moved under a settled decision. Here the reviewer *is* deciding the pack count with the reading in front of them — a BIG W row publishes no pack count field, so the count is read out of the name (`"Coca Cola 375Ml Coke 36Pk 36 Pack"`), confirmed, and then stored on the listing — so refusing the price because the reviewer corrected what was read would make the correction useless: the listing would be confirmed with no price and the next run would flag it for the same disagreement. The confirmed quantity wins and is what the per-unit price is derived from; every other identity field still has to agree.
 
@@ -15562,8 +15702,9 @@ Cleanup removes private temporary data and the per-job CLI installation; reset/e
 is still mandatory for credentialed self-hosted jobs.
 
 Manual limits and the explicit retailer-test checkbox apply only to that run's private limits;
-they do not turn on repository actor activation. The daily Sydney schedule (#1110) ships switched
-off behind the `PRICE_COLLECTOR_SCHEDULE_ENABLED` repository variable. See
+they do not turn on repository actor activation. The daily run (#1110) is started at 05:00 Sydney
+time by an Azure Logic App through the workflow's dispatch entry point (`scheduled_run`), and is
+switched by the `PRICE_COLLECTOR_SCHEDULE_ENABLED` repository variable. See
 [Manual collector test](price-collector-testing.md) for setup, bounds and the interruption check,
 and [automation](automation.md#supplier-price-collector-929-1110) for the workflow boundary.
 
@@ -16115,22 +16256,52 @@ that meaning.
     Checking a box never itself reconciles anything - only this explicit action does - and
     **Select all applicable** is unrelated: it still selects only the checkbox-eligible ids
     `isReadyToApply` computes, for **Apply selected**.
-7. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` runs
+7. **Apply only what is accepted, one transaction and one cost rebuild per product** (issue #1127).
+   `POST /api/machines/{id}/sync-restock/apply` runs
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
-   operator selects, one at a time, each in its own transaction. `NayaxMachineStockApplyPolicy` is
-   the deterministic Domain rule that decides each one. A validated positive event is applied
-   through the same `IRecordInventoryMovement` movement logic as every other stock
-   adjustment, as a `StockAdjustmentReason.MachineRefill` with
-   `StockAdjustmentSource.Nayax` - it reduces `QuantityInStock` but never touches costing
-   quantity/value, the same invariant an internal transfer already preserves. If the requested
-   quantity exceeds available storage, the event is left `Unprocessed` (not partially applied, and
-   storage is never made negative); the operator corrects storage or records the missing purchase
-   through the existing inventory/purchase workflows and retries. A negative event is never
-   "applied" at all - it is retained as a discrepancy/shrinkage candidate for review and never
-   increases storage. A failure while applying one event (for example, a costing-rebuild data-
-   quality failure) rolls back that event's own transaction only, so it is never left marked
-   processed without its inventory movement, and it does not stop the other selected events in the
-   batch from applying.
+   operator selects. The request is grouped by the matched product, and each product's accepted
+   events are written together in **one** transaction that ends with a **single**
+   `IRebuildProductCost.RebuildAsync` for that product - replaying a product's whole movement and
+   sale history is what an apply actually costs, so ten ticked events for one product mean one
+   replay of it, not ten. Every event is still its own `StockAdjustmentReason.MachineRefill`
+   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note and
+   its own `StockAdjustmentId` on the event row, so each one stays individually auditable, and the
+   response still reports one result per distinct requested event id in request order. Entities the
+   batch left tracked - including the history its rebuild loaded - are dropped once its transaction
+   has ended, so what each later product's `SaveChanges` has to examine does not grow with the
+   products already applied.
+
+   `NayaxMachineStockApplyPolicy` is the deterministic Domain rule that decides each event, and it
+   is applied **inside** that product's write lock: the transaction is `BEGIN IMMEDIATE` on SQLite
+   (`SqliteWriteLockTransaction`, the same lock issue #743's pick-list refill takes), taken before
+   the authoritative, tenant- and machine-scoped reads of the events and the product, because
+   whether an event may be applied is decided from facts that decide a write. Two simultaneous
+   applies of one event therefore serialise: the loser waits, re-reads the winner's committed state
+   and reports `Already applied.` with that one movement's id, never a second deduction. Within one
+   batch each event's stock check is made against the quantity read at the start of that
+   transaction less the refills the batch has already accepted, so a batch can never take more units
+   out of storage than it holds. A validated positive event is applied through the same
+   `IRecordInventoryMovement` movement logic as every other stock adjustment - it reduces
+   `QuantityInStock` but never touches costing quantity/value, the same invariant an internal
+   transfer already preserves. If the requested quantity exceeds the storage left to it, the event is
+   left `Unprocessed` (not partially applied, and storage is never made negative); the operator
+   corrects storage or records the missing purchase through the existing inventory/purchase
+   workflows and retries. A negative event is never "applied" at all - it is retained as a
+   discrepancy/shrinkage candidate for review and never increases storage.
+
+   A failure while writing or committing one product's batch (for example, a costing-rebuild
+   data-quality failure, or a commit the database refuses) rolls back that product's whole transaction, so no event is left marked processed
+   without its inventory movement: every event whose write that transaction had staged reports the
+   `Error` outcome with no movement id, and the other products are applied independently. An event
+   the policy already refused keeps its own outcome - including an `InsufficientStock` decided
+   against the storage left at the time of its check, which stays in the response even though the
+   rollback has since restored that stock; the event is still `Unprocessed` and is simply retried.
+   The "Apply as separate restock" duplicate resolution of step 6 writes through the same
+   write-locked save and re-reads and revalidates the event and the product inside it, so it cannot
+   record a second movement when it races another apply of the same event either; a failed write
+   or commit there returns the same `Error` and leaves the event unresolved, so it can be chosen
+   again. A cancelled request is the one failure that is not reported per event: it stops the
+   apply.
 8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
    page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
    [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
@@ -16224,13 +16395,19 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   #242), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
   parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
-  and an `ApplyRefillAsync` that also persists the duplicate-resolution columns, and with
-  `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
-  `MachineStockEventsPage` result - issue #206). The Nayax read stays on the existing
+  with `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
+  `MachineStockEventsPage` result - issue #206 - and, since issue #1127, with the per-product write
+  transaction (`BeginRefillWriteTransactionAsync`/`IMachineStockRefillWriteTransaction`), the
+  whole-request event read `FindEventsAsync` and the batch `ApplyProductRefillsAsync`, which records
+  one product's accepted refills and the duplicate-resolution columns of each and rebuilds that
+  product's cost once; the use cases decide every event and own the commit, so no policy moved
+  behind the port). The Nayax read stays on the existing
   `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `Inventory.Infrastructure.Persistence.EfMachineStockEventStore` implements the
-  persistence port over `AppDbContext`, owns the per-event transaction, and reuses
+  persistence port over `AppDbContext`, owns the per-product write-locked transaction
+  (`MachineStockRefillWriteTransaction` over the shared `SqliteWriteLockTransaction`, which also
+  drops what the batch left tracked when it is disposed), and reuses
   the Application `IRecordInventoryMovement`/`IRebuildProductCost` use cases (issue #296) so the
   refill inherits the established movement and costing invariants instead of re-implementing them.
   Like `EfSupplierStore` and `EfLocalCatalogSnapshotProvider` it was an API-owned adapter until
@@ -16287,10 +16464,11 @@ explicit action above is waiting for them.
 
 ### Dashboard reminder for overdue machine restock sync (issue #891)
 
-Sync Restock above is explicit: nothing imports a machine's stock-adjustment alerts until an
-operator asks for that machine — by pressing Sync Restock on its page or, since issue #1011, by
-following the reminder's "Open Sync Restock" link, which opens that same dialog. Forgetting it is
-therefore silent, and the storage inventory drifts in exactly the way that looks like missing
+Sync Restock above was explicit until issue #1122: nothing imported a machine's stock-adjustment
+alerts until an operator asked for that machine — by pressing Sync Restock on its page or, since
+issue #1011, by following the reminder's "Open Sync Restock" link, which opens that same dialog.
+Since #1122 opening the Dashboard also fetches them, at most once per business per hour (see
+**The Dashboard's hourly restock fetch** below). Forgetting it was therefore silent, and the storage inventory drifts in exactly the way that looks like missing
 product rather than missing bookkeeping — an inventory count found restocks that had not been synced
 for a week. This feature is the reminder, and only the reminder: its own read never syncs, applies
 an event, resolves a duplicate or changes an inventory quantity, and opening the Dashboard
@@ -16448,7 +16626,37 @@ see sales already imported, so a machine whose recent sales have not been import
 a trade-off the owner accepted. Each row publishes `hasSalesSinceLastSync`; the client groups rows by
 `knownPendingEventCount` alone and derives nothing else.
 
-**The Dashboard read is local, and it is read-only.**
+**The Dashboard's hourly restock fetch (issue #1122, by the owner's decision of 7 November
+2026).** Since #1090 a machine with nothing pending was listed as "Restock check due" whenever it
+had sold since a sync three or more days old, because nothing fetched restock alerts except an
+operator; the alert was therefore a guess. The reminder component now shows the reminder from the
+read-only `GET` first and then calls `POST api/machine-restock-sync/reminder/refresh`
+(`Inventory.Operate`), which runs `Inventory.Application.MachineStockSync.RefreshMachineRestockEvents`
+and answers the same reminder, read after the fetch. The use case:
+
+- answers `NotApplicable` without a Nayax call and without taking the hour in a support session,
+  for a plan without the sales provider and for a connection `NayaxConnectionStatusGate` refuses -
+  the reminder's own gates;
+- claims the hour in `MachineRestockFetchThrottle` (a singleton keyed by business and credential
+  revision, in memory per API instance, `Window` one hour) *before* the first Nayax call, so a
+  concurrent visit starts no second fetch, a credential save allows an immediate fetch, and a
+  restart allows one extra; only a cancelled fetch (the visitor left) gives its claim back;
+- fetches every provider-named machine through `IMachineRestockEventFetch`, which
+  `SyncMachineStockFromNayax` implements — the Sync Restock import itself, so the same dedupe,
+  classification and product mapping apply and nothing is applied to inventory — and coverage keeps
+  the #1018 rule, so a machine whose fetch leaves nothing pending is recorded as synced and drops off
+  the reminder, while one with new events is listed under "Restock sync pending";
+- stops the run on a refusal of the whole business (`NayaxNotConnectedException`, which a 401
+  becomes; `NayaxPermissionNotGrantedException`; `SupportSessionNayaxUnavailableException`) and
+  otherwise skips a machine that fails on its own. A machine that could not be fetched keeps its
+  local answer, which is the "Restock check due" fallback.
+
+Nayax call volume per business per hour is at most one `lastAlerts` call per provider machine, plus
+one fresh `machineProducts` call for each machine that had new alerts. A failed `POST` leaves the
+reminder already on screen unchanged.
+
+**The Dashboard read is local, and it is read-only.** (The `GET`; the hourly fetch above is the
+separate `POST`.)
 `Inventory.Application.MachineStockSync.GetMachineRestockSyncReminder` makes exactly two local
 reads — the business's own connection record without its token, and one aggregate read over the
 machines, their imported events and their imported sales (`IMachineRestockSyncCoverageStore.GetProviderMachineCoverageAsync`)
@@ -16508,7 +16716,10 @@ banner itself offers no action, and the component derives no date, threshold or 
 the three-day rule, the sales-since rule, the business dates, the day counts and the pending
 definition are all the server's. Since issue #1090 it splits the listed rows by
 `knownPendingEventCount` into a "Restock sync pending" group and a "Restock check due" group inside
-the one alert, so the Needs attention panel still counts it once.
+the one alert, so the Needs attention panel still counts it once. Since issue #1122, once a
+loaded reminder is on screen it calls the hourly fetch and shows the reminder that answers; it asks
+for no fetch when the reminder is hidden, failed or inside a support session, ignores a failed or
+empty answer, and cancels a fetch still running when a support session starts or the page closes.
 
 ### Machine latest sales (issue #768)
 
@@ -16661,11 +16872,1173 @@ nor the UI states one: the panel says it is Nayax's rolling latest-sales window 
 the machine's complete sales history. Historical report redesign, automatic sales sync or import, and
 any stock or costing change are out of scope for this feature.
 
+### Nayax SQS transaction messages (issue #1102)
+
+Nayax Core can deliver every transaction to an Amazon SQS queue within seconds of the vend, which is
+what parent #1100 makes the main source of sales. This section is the **meaning** of one such
+message, and only that: `Inventory.Application.NayaxSqs.NayaxSqsTransactionParser` takes the raw
+message body as a string and returns exactly one `NayaxSqsTransactionOutcome`. It holds no AWS SDK,
+no EF Core and makes no Nayax call, so every "what does this message mean" rule is in one tested
+place and none of it is spread across the reader (#1103), the reconciliation (#1104) or a report.
+
+**The message is not a `lastSales` item.** The Lynx `lastSales` payload the sales synchronization
+reads is a flat item carrying `NayaxProductID` and `AuthorizationDateTimeGMT`. An SQS message is two
+layers — root fields (`TransactionId`, `MachineId`, `SiteId`, `MachineTime`, `PaymentMethodId`,
+`Void`) and a `Data` object whose keys contain spaces — and the products are nested at
+**`Data.Products`**, an array. Each `Data.Products[i]` carries Nayax's own product id
+(`"Product ID"`), the machine slot (`"Product Code in Map"`, the MDB code), the PA code, the product
+name, the product group and the catalogue number, and `Data` repeats both root identifiers as
+`"Transaction ID"` and `"Machine ID"`. The field names, types and meanings below were read from the
+Nayax developer portal's Transaction JSON reference before any of them was accepted — the mapping and
+classification fields on 5 November 2026, and `"Product ID"` ("Product ID (Nayax Internal
+Identifier)", `Integer`), `"Transaction ID"` and `"Machine ID"` on 6 November 2026 (AGENTS.md
+§ Nayax contract verification); nothing here is inferred from a field name. The reference's field
+table is one flat list that does not say which layer a field arrives at, so the nesting above is
+what the **first real message** (the owner's queue, 5 November 2026, recorded on #1102 as field
+names and classifying values only) shows.
+
+**Null means false, and never a contradiction.** That first real message is why this is written
+down: on a perfectly ordinary settled card vend it sends `"Settlment Failed"` and
+`"Is Revalue Reward Transaction"` as `null` rather than `false`, and `"Cancel Type"` as `null`
+rather than the documented `255`. Every boolean flag the parser reads (root `Void`,
+`Settlment Failed`, `Is Revalue Transaction`, `Is Revalue Reward Transaction`, `Is Multivend`) is
+false unless the message says `true`, because each of them diverts a message away from being saved
+and reading "not set" as "set" would discard real sales; and an absent or `null` `Cancel Type` means
+"no cancel reason", so it contradicts nothing.
+
+**One message gets one outcome, chosen by the first rule that applies.** The order is part of the
+rule, not an implementation detail: a revalue that is also a multivend is a revalue, and a free vend
+whose cancel type contradicts its status is a free vend.
+
+| # | Outcome | Rule | What #1103 does with it |
+|---|---|---|---|
+| 1 | **Invalid** (reason code) | Not JSON; `TransactionId` or `MachineId` missing or not an integer; `Data` missing; `Data.SeValue` missing, null or not a number; `Data."Transaction Status ID"` missing or not an integer; `Data."Authorization Time"` missing or unreadable; `Data.Products` missing or empty; `Data."Transaction ID"` or `Data."Machine ID"` present and different from the root value | Permanent failure |
+| 2 | **Revalue** | `Is Revalue Transaction` or `Is Revalue Reward Transaction` is true | Acknowledged and deleted; a prepaid credit top-up is not a product sale |
+| 3 | **Multivend** | `Is Multivend` is true, or `Data.Products` holds more than one item | Deleted; the hourly `lastSales` run imports it |
+| 4 | **Unsupported** (reason code) | Root `Void` true; `Settlment Failed` true; status pending (`55`, `80`); status not in `NayaxTransactionStatusIds`; `SeValue` negative | Permanent failure; kept in the dead-letter queue as a sample |
+| 4a | **Refund** (issue #1107) | Status `62` | Never saved as a sale; it can only move a sale this business already stored from status `12` to `62` — see [Applying a Nayax SQS refund](#applying-a-nayax-sqs-refund-issue-1107) |
+| 5 | **CancelledOrDeclined** | Status `26`, `28`, `31` or `250` | Saved as a non-completed row with that status, visible in status reporting |
+| 6 | **FreeVend** | Status `12` and `SeValue` exactly `0` | Permanent failure, until a real free vend sample exists |
+| 7 | **CompletedSale** | Status `12`, `SeValue` > 0, and `Cancel Type` `255`, null or absent | Saved as a completed sale |
+| 8 | **Unsupported** (`StatusContradiction`) | Status `12` but `Cancel Type` a non-null value other than `255` | Permanent failure |
+
+The last clause of rule 1 is the one duplicated-identity check: `Data` repeats both root
+identifiers, and two copies of one identifier may not disagree about which transaction or which
+machine the message is, because saving it would attribute a sale to whichever copy the code happened
+to read. An absent or `null` copy says nothing and is no contradiction; a copy that is present but
+unreadable cannot be shown to agree and is refused, which is the fail-closed reading.
+
+**The status is the message's own `Transaction Status ID`, never its amount.** This is the one
+substantive difference from the `lastSales` path, where `EfLatestNayaxSalesStore` derives a status
+from the settlement value — a positive amount is completed and anything else is cancelled (`250`) —
+because that payload states none. A declined transaction that charged money is exactly the case those
+two rules disagree about, so an SQS row's status comes from the message. The parser only *reports* the
+status on the record and this issue touched the store not at all; **issue #1103 changed the store** to
+save a supplied status as given on an insert, to apply the amount rule only when none is supplied, and
+to let an enrichment fill the column only while the stored status is `NULL` — see [Nayax SQS sales
+reader](#nayax-sqs-sales-reader-issue-1103).
+
+**The status ids are the application's established ones, and verification moves to rollout.** Nayax
+publishes no list of `Transaction Status ID` values: neither the Transaction JSON reference nor the
+delivery setup page states one. The parser therefore classifies the id through the single
+`Inventory.Domain.FinancialConfiguration.NayaxTransactionStatusClassifier` that every import and
+every report already uses (`12` approved, `55`/`80` pending, `62` refunded, `26`/`28`/`31`/`250`
+cancelled or declined; AGENTS.md § Sales, payment methods, and statuses), rather than restating the
+ids. Any other value is **Unsupported**, so an unexpected status can never become a completed sale.
+The first real message **confirms `12`** for an ordinary card vend, where it arrives beside
+`"Transaction Status Name": "Settled"`. The remaining values are still unconfirmed, so parent
+#1100's rollout rule stands: before production consumption is switched on, the owner records the
+status ids and names of a declined or cancelled sale, a cash sale and the other payment types from
+real messages on #1102, and a mismatch is fixed before any message is consumed.
+
+**A malformed amount is invalid and never becomes zero.** An absent, null or non-numeric `SeValue`
+makes the whole message invalid. Binding it to `0` would hand the sale paths a zero-value
+transaction, which the amount rule above reads as cancelled — a silent, plausible-looking loss of
+revenue. The same fail-closed reading applies to `Data."Authorization Time"`: it is read through the
+one GMT rule (`NayaxGmtTimestamp`, issue #471), so an offset-free value is UTC because the field
+contract says GMT and not because of the host's time zone, and a value that is absent or is not a
+documented date-time shape has no instant at all rather than a defaulted one. The first real message
+is exactly the shape that rule exists for: its `"Authorization Time"`, `"Settlement Time"` and
+`"Updated DT"` carry **no `Z` designator** and sit eleven hours behind `"Machine AuTime"`, the
+machine's Sydney wall clock — which is kept as the raw imported fact it is and never read as an
+instant.
+
+**`Is Refund Card` is not read, because it is not refund evidence.** The reference documents it as
+"Bit indicating if this is a Nayax Refund Card" — the instrument, not the transaction. An otherwise
+completed sale paid for with one is a completed sale. A refund is recognised by status `62` and by
+nothing else (issue #1107), and `Original Transaction ID` is not read either: the reference documents
+it generically, says nothing about it being populated on a refund, and a refund delivered as a *new*
+transaction pointing back at the original is a different design that issue #1107 puts out of scope —
+so reading it would be exactly the inference AGENTS.md § Nayax contract verification forbids.
+
+**The mapping onto the record the application already saves.** A CompletedSale and a
+CancelledOrDeclined outcome both carry a `NayaxLastSalesReport`, which is the type
+`ILatestNayaxSalesStore` already persists, plus the slot beside it:
+
+| `NayaxLastSalesReport` | SQS message |
+|---|---|
+| `TransactionID` | root `TransactionId` |
+| `MachineID` | root `MachineId` |
+| `TransactionStatusId` | `Data."Transaction Status ID"` (the supplied status #1103's store honours) |
+| `AuthorizationDateTimeGmt` | `Data."Authorization Time"`, through the `NayaxGmtTimestamp` GMT rule |
+| `MachineAuthorizationTime` | `Data."Machine AuTime"`, the raw machine wall clock, never read as an instant |
+| `SettlementValue` | `Data.SeValue` |
+| `ProductName` | `Data.Products[0]."Product Name"` |
+| `CurrencyCode` | `Data.Currency` |
+| `PaymentMethod` | `Data."Payment Method Description"` |
+| `ProductCostPrice` | `Data.Products[0]."Cost Price"` if present, else `Data."Cost Price"`, else null |
+| `MachineName` | `Data."Machine Name"` |
+| `NayaxProductId` | `Data.Products[0]."Product ID"` when it is a positive integer; otherwise null, and resolved by the reader from the slot |
+| (the slot, returned beside the report) | `Data.Products[0]."Product Code in Map"` |
+
+A missing optional column — currency, payment method, machine name, cost price, slot, product id —
+is `null` rather than a default, so nothing downstream reads a blank currency or a cost of zero as a
+fact. The cost price is read in both places because the reference lists `Cost Price` among the
+product fields while both the published example and the first real message carry it under `Data`;
+the item's own value wins. A `"Product ID"` that is not a positive integer is no identifier at all —
+`0` is a real slot but never a real product id — so it leaves the field unset instead of attaching
+the sale to a product id that cannot exist.
+
+**Deserialisation is an allow-list, and that is a security boundary rather than tidiness.** The
+message carries the consumer's card and identity — `Card String`, the card digit fields, `Card BIN`,
+`Card Type`, `Display Card Number`, `Card Holder Name`, `Card ID`, `Consumer ID`, `Token`,
+`Zip Code`, `User Password` and the discount card fields — and the payment processor's own
+references — `Merchant ID`, `Terminal ID`, `Authorization Code`, `Authorization RRN`,
+`PayServTransid`, `Device Number` and the device transaction id — and this application has no use
+for any of it.
+`NayaxSqsTransactionMessage`, `NayaxSqsTransactionData` and `NayaxSqsTransactionProduct` declare
+**only** the fields in the tables above, so nothing else is ever bound to a model and cannot reach
+an outcome, a reason, a log or an exception message later. Unknown extra keys are ignored, which is
+also what lets Nayax Core's selectable columns arrive without a code change. Every scalar member is
+a `JsonElement` read through `NayaxSqsJsonValues`, which answers a value only for the JSON kind the
+contract documents: a wrong type becomes a stated reason code rather than a thrown `JsonException`
+whose text quotes a position inside a card transaction, and the reason codes are fixed enum members
+that never carry a fragment of the payload. A unit test asserts the declared field set exactly, and
+two more parse the published example message and a fixture with the first real message's shape —
+whose card, consumer, merchant and terminal values are fictional but genuinely present — and assert
+that none of those values appears in any outcome. The owner's Nayax Core does currently send the
+card and customer columns (they should be switched off in the Transactions Report tab); the parser
+ignores them either way.
+
+**The slot becomes a product id through the machine's product map, when the message stated none.**
+`Inventory.Application.NayaxSqs.INayaxSqsSlotProductResolver` maps `(MachineId, slot)` to a
+`NayaxProductID` through `NayaxMachineProduct.MDBCode`, using the **cached** 60-second
+machine-products read ([issue #842](#the-machine-products-cache-issue-842)) rather than the fresh
+one, so a queue draining a hundred messages for one machine makes one Nayax call rather than a
+hundred — a product map changes when an operator reconfigures a machine, not between two
+transactions in the same minute. It answers nothing — a missing slot, a machine with no product map,
+a slot the map does not hold, a map entry carrying no product id, or two entries claiming the same
+slot — and a missing slot reads nothing at all. `NayaxProductId` is then left unset and the existing
+unambiguous-name fallback in `ProductMatcher.MatchLinked` applies exactly as it does today for a
+`lastSales` item whose provider id this business has recorded on no product. This lookup is the
+**fallback**: a message that states a usable `"Product ID"` is mapped straight onto that id, since
+it is the provider's own answer to the same question and the identifier the stored product links are
+keyed by. Before production consumption is switched on, parent #1100's rollout check also confirms
+that the same transaction imported by `lastSales` (Refresh) stores the same `NayaxProductID`; if the
+two differ, the parser stops reading `"Product ID"` and relies on this resolver alone.
+
+**The payment method is classified by the one classifier.** The mapped
+`Data."Payment Method Description"` goes to
+`Inventory.Domain.FinancialConfiguration.PaymentMethodClassifier`, which is where the
+card/cash/unknown decision is made for every path (AGENTS.md: no report-specific string
+matching). **No
+translation table exists, because none is needed**: the field is documented as "Payment Method Name",
+the same meaning as the `lastSales` payment method, and the descriptions the reference shows
+(`Prepaid Credit`, and the `Cash` and `Credit Card` values the application already knows) are
+already the ones the classifier recognises, so the mapping carries the string through unchanged. The
+first real message's `"Credit Card"` is one of those, and is already classified as card. If
+the real messages the rollout check records carry a description the classifier does not know, the
+translation belongs at this mapping — never in another report.
+
+**What is deliberately not supported here, and why.** `Void` is unsupported because the reference's
+field table does not describe it, so a message carrying `true` is refused rather than interpreted.
+Multivend is deferred by parent #1100: the existing store keeps one product per `TransactionID` and
+does not guarantee multivend quantities, so leaving these to the hourly `lastSales` run keeps that
+existing limitation rather than fixing it. Free vends are unsupported because neither the reference
+nor the delivery setup page says how a free transaction is marked — today's `lastSales` path imports
+a zero-value vend as cancelled (`250`), so it already consumes no stock, and a follow-up decides
+stock handling once a real sample exists. Pending-to-final updates (`55` or `80` followed by `12`)
+are unsupported until a sample shows whether Nayax sends a second message. Refunds are no longer
+unsupported: issue #1107 gives status `62` its own outcome, described in the section below.
+
+### Applying a Nayax SQS refund (issue #1107)
+
+A refund is the one thing in this application that **overwrites a stored transaction status**, and
+this section is the whole of how. The repository owner's decision of 8 November 2026 is that when
+Nayax refunds a sale the money is reversed — the sale leaves revenue, the card and cash totals,
+reconciliation and every completed-sale report, and the daily report keeps showing it in its refunded
+note, exactly as status `62` has always behaved — and **the item is still gone**: the machine
+dispensed it, the business no longer owns it, and the refund does not put it back.
+
+**One rule became two.** `Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy` now states both, over
+the same two columns and with the same two exclusions:
+
+| Question | Rule | Domain statement | EF form | Who reads it |
+|---|---|---|---|---|
+| Is it a completed sale? (money) | Status `12`, not `Conflict`/`OwnerExcluded` | `IsCountedSale` | `EfNayaxSalesQueries.CompletedSalePredicate` | Every report, revenue, the card/cash split, reconciliation, fees, site commissions, reorder/par needs, the dashboard, the timestamp repair |
+| Did it consume a unit? (stock and cost) | Status `12` **or** `62`, not `Conflict`/`OwnerExcluded` | `ConsumesStock` | `EfNayaxSalesQueries.StockConsumingSalePredicate` | `EfMachineStockLedgerStore`, `EfInventoryCostLedgerStore`, `CostSale`/`EfSaleCostingStore` |
+
+A test pins each Domain rule to its EF form over every status and every verification state, and
+`ReportingAdapterOwnershipTests` pins which reader selects on which predicate — because the split is
+only worth having if it stays where it was put. A report that moved to the stock filter would count
+refunded money as revenue; a costing reader that moved back to the completed-sale filter would hand a
+refunded unit back to inventory it never returned to. **Reorder is deliberately on the money side**: a
+refund is not demand. `MachineStockMovementKind.CompletedSale` was renamed `DispensedSale` for the
+same reason the split exists — the movement is the physical fact, and only a *completed* sale is
+money.
+
+**The delivery shape is an owner-approved assumption, not a documented contract.** The decision is to
+build on a refund arriving as the **same `TransactionId` delivered again with status `62`**. The SQS
+Transaction JSON reference documents `Transaction Status ID` as an `Integer` and enumerates no values
+at all (checked 8 November 2026), and says nothing about whether a refund is a new message or an
+update to the original — so `62` is this application's own established id and the delivery shape is
+**unverified**. Everything the application cannot place is therefore refused, which is what makes
+being wrong about it safe rather than expensive.
+
+`Inventory.Domain.NayaxSqs.NayaxSaleRefundPolicy` is the one place the decision is made, and the
+order below is the rule:
+
+| # | Decision | When | What happens |
+|---|---|---|---|
+| 1 | **Contradicted** | The machine, the amount or the product differs from the stored sale — whatever that sale's status is | Not applied; the two are not plainly the same transaction, and the message is kept as a dead-letter sample |
+| 2 | **AlreadyRefunded** | The stored sale is already `62` **and** the message agrees with it | Nothing is written and **no second audit row**: a genuine redelivery has no further effect |
+| 3 | **NotRefundable** | The stored sale is not status `12` | Not applied; moving a declined row to refunded would change a financial status on a guess |
+| 4 | **Apply** | None of the above | Status `12` → `62`, once, with one audit row |
+
+**The comparison comes before the status, and that ordering is itself a rule.** Deciding
+"already refunded" first swallowed the one message a person most needs: `AlreadyRefunded` is an
+acknowledged outcome, so a *second* status-`62` message for the same transaction naming a different
+machine, amount or product was deleted from the queue instead of being retained for dead-letter
+review. Under a delivery shape Nayax does not document, that message is the evidence the assumption
+is wrong. Comparing first keeps it, and costs the idempotency nothing: a genuine redelivery carries
+the same values, so it still answers `AlreadyRefunded` and still writes no second audit row.
+
+The machine and the amount are always compared; the product only when both sides carry one, on issue
+#1104's rule that a value missing on either side is *not compared* and is never read as agreement.
+Amounts are compared at two decimal places half away from zero, reusing
+`NayaxSaleProviderComparisonPolicy`'s own money constants. The comparison is of the **signed** amount:
+partial refunds are out of scope because no evidence exists that Nayax sends one, so a refund reported
+as a negated amount is refused and reaches the dead-letter queue as a sample rather than being read as
+a full refund of something else. The authorization instant is deliberately not compared — nothing
+documents whether a refund message repeats the original time or carries the refund's own.
+
+**The write.** `EfLatestNayaxSalesStore.ApplySqsRefundAsync` is one `BEGIN IMMEDIATE` transaction: it
+reads the sale by `(BusinessId, TransactionID)` inside the lock with the business half coming from the
+tenant query filter as everywhere else, and on `Apply` writes the status and appends one
+`NayaxSaleStatusChangeAudits` row — old status, new status, source message id, instant — in the
+**same** `SaveChanges`, so a refunded sale with no record of why is impossible. The only column it
+writes on a sale is the status: the product association, the amount, the instant, the costs, the
+provenance and the verification state are left exactly as they are, and it never inserts a sale.
+A refund naming a transaction this business has no sale for writes nothing at all — the *same*
+transaction id stored by another business is invisible to it. The read and the write being one
+operation is pinned by a concurrency test over a real SQLite **file** with two connections: two
+deliveries of one refund started together end with one `Applied`, one `AlreadyRefunded`, one status
+change and one audit row, because the loser's `BEGIN IMMEDIATE` waits for the winner's commit and
+then reads the committed `62`.
+
+**It records no pending inventory-cost rebuild, and that is the point of the split.** A sale consumes
+stock at `12` and at `62` alike, so moving between them changes no quantity, no inventory value and no
+sale cost; there is nothing to replay, and the reader therefore does not drain after a refund either.
+`NayaxSaleCountingPolicy.ChangesCounting` still answers the *verification* question that does need a
+replay, and the exclusions being shared is what makes it answer both rules at once.
+
+**What the reader does with each outcome** (`ProcessNayaxSqsSale`): a refund takes the same gates as a
+sale — the credential/plan gate and the machine-in-fleet check, before anything is written, because a
+refund applied for a business whose plan no longer includes the sales provider would be the one write
+that ignored a gate every other one honours. `Applied` and `AlreadyRefunded` are `Done`
+(`RefundApplied`, `RefundAlreadyApplied`); `NoMatchingSale`, `NotRefundable` and `Contradicted` are
+`Permanent` (`RefundUnmatched`, `RefundNotApplicable`, `RefundContradicted`), so the message is
+released towards the dead-letter queue as a sample instead of being deleted. A persistence failure is
+`Transient`, as it is for a sale.
+
+**Nothing else changes a stored status.** A status-`12` message for a sale already stored as `62` — a
+late redelivery, or `lastSales` returning the original — takes the existing enrich-only path, which
+has only ever filled a status that is `NULL`, so it cannot undo the refund or consume a second unit.
+The uploaded-export import is unchanged in the same way; what *did* change there is which sales it
+records a rebuild for, because an imported status-`62` row now consumes its unit and a replay nobody
+recorded is a figure nobody rebuilds.
+
+**Historical rows and no backfill.** The rule applies to all status-`62` rows with no cut-off date,
+and no migration rewrites one: each is picked up the next time its product's inventory cost is
+replayed. The only schema change is the additive audit table
+(`20261108020626_AddNayaxSaleStatusChangeAudits`). On deployment, a product with historical
+status-`62` sales loses one unit of `CostingQuantity` and its value per such sale when it is next
+replayed, because those units are now recognised as having left the business; no money total and no
+physical `QuantityInStock` moves.
+
+**Still out of scope**: returning a refunded item to stock, partial refunds, a refund delivered as a
+new transaction pointing back at the original, voids and cancellations of unsettled transactions,
+multivend, free vends, and any new report line for the cost of refunded items. The asymmetry that
+leaves is deliberate and was the owner's decision: a refunded sale's COGS stays recorded on the sale
+and appears in no completed-sale report total.
+
+### Nayax SQS sender identity (issue #1101)
+
+The section above is the *meaning* of one SQS message. This one is the question a shared queue has to
+answer before any message may be saved: **whose sale is this?** Parent #1100's owner decision of
+5 November 2026 is one shared Restockroo queue, one send-only AWS IAM user per business, and messages
+attributed by the SQS `SenderId` system attribute. This issue records that mapping; the queue reader
+that uses it is issue #1103, and nothing here reads the queue or adds an AWS SDK package.
+
+**Only a Super Admin may set it, and no business may see its own.** A business that could choose its
+own sender id could claim another business's sales — which is the whole reason this record is on the
+platform-admin surface and on no member-facing one. It is read and written through two endpoints:
+
+```text
+GET /api/super-admin/businesses/{businessId}/nayax-sqs-sender   the recorded sender, or 404
+PUT /api/super-admin/businesses/{businessId}/nayax-sqs-sender   record, change, switch or remove it
+```
+
+They sit on `SuperAdminNayaxSqsSenderController` behind `[Authorize]`,
+`[Authorize(Policy = PlatformAdminPolicy.Name)]`, `[RequiredScope("access_as_user")]` and
+`PlatformDiagnosticsEndpointAttribute` — class 2 of the five
+[endpoint authorization classes](#capability-authorization-issue-525), the same marker and the same
+policy as every other Super Admin surface, **not** a sixth class and **not** a second marker. An
+Owner, Manager or Operator is refused here exactly as a stranger is, because a business role is not
+platform authority; a role preview is refused by `RolePreviewMiddleware` like every other write; and a
+read-only support session is refused by its own HTTP-method rule and again by
+`BusinessOwnershipEnforcer`. **There is no `DELETE` route** — see Remove, below.
+
+**The table, and why it is tenant-owned.** `BusinessNayaxSqsSender` carries `BusinessId`,
+`AwsSenderId` (nullable), `IsEnabled`, `LastMessageReceivedAtUtc`, `Revision`, `CreatedAtUtc` and
+`UpdatedAtUtc`; `BusinessNayaxSqsSenderAudit` beside it carries the business key, both sides of the
+sender id, both sides of the enabled flag, the revision, the acting administrator's Entra
+`(tid, oid)` pair and the instant. Which AWS user sends a business's sales, and each decision about
+it, are facts about *that one business* — whose sales these are — so both are ordinary tenant-owned
+data: `ConfigureBusinessOwnership` gives each the business key, its index, the central query filter
+and the ownership stamp, `BusinessOwnershipCoverageTests` asserts both as owned, and **neither is a
+platform table**. Issue #1104's `LastReconciliationSucceededAtUtc` is deliberately *not* added by
+this migration; the migration test asserts its absence, so the next issue's column arrives with the
+issue that needs it. (#1104 added it, and #1106 reads it on both surfaces: this card, and the
+business's own Dashboard decision.)
+
+**Two uniqueness rules, and they are deliberately different.** One row per business is the ordinary
+per-business rule, a unique index led by the business key. One business per sender id is the **single
+declared exception** to "uniqueness is per business" (AGENTS.md § Tenant ownership and data isolation,
+the owner's approval of 6 November 2026): the index is over `AwsSenderId` **alone**, unique, and
+filtered to non-null values. The reasoning is the support session's own global id-hash index's —
+the value is set by a platform administrator and never by a business, so no business can take one to
+deny it to another, and the reader of #1103 matches a message's `SenderId` with no business to narrow
+the lookup by, so the question must have exactly one answer. The filter is load-bearing twice over: it
+frees a removed sender id for another business, and it lets any number of businesses hold no sender at
+all. `The_nayax_sqs_sender_id_is_unique_globally_rather_than_per_business` pins the shape and
+`The_global_uniqueness_rule_exempts_exactly_one_index` keeps the allowlist from growing.
+
+**An enabled mapping always has something to match on.** `IsEnabled` may be true only while
+`AwsSenderId` is not null. `Inventory.Domain.NayaxSqs.NayaxSqsSenderPolicy` refuses the request, and a
+check constraint (`CK_BusinessNayaxSqsSenders_EnabledNeedsSenderId`) refuses the row — so no path,
+including a future one, can leave a business's queue looking attributed when it is not.
+
+**What a sender id has to be.** 16 to 128 characters, **ASCII** letters and digits only, trimmed and
+otherwise stored exactly as entered and matched exactly. ASCII rather than Unicode on purpose: an AWS
+unique id is `[A-Z0-9]`, and `char.IsLetterOrDigit` would accept a Devanagari digit or a Cyrillic
+letter that looks Latin — which is how two visually identical ids could be recorded for two
+businesses with the global index right to allow both. Anything else is `400` with the policy's own
+sentence, which names the rule and never the value.
+
+**The two openings this surface needs, and nothing wider.** A platform-admin request carries a
+**denied** `BusinessScope`, so the central filter matches none of a business's sender rows and the
+central enforcer refuses every tenant-owned write. `IPlatformNayaxSqsSenderStore` is therefore backed
+by exactly two reviewed openings, each described in AGENTS.md § Tenant ownership and data isolation:
+
+- **the fifth denied-scope write lease.** `AppDbContext.BeginNayaxSqsSenderWrite(businessId)` lets
+  `BusinessOwnershipEnforcer` accept that one business's sender row and the audit row beside it, and
+  nothing else — an insert, and an update of the sender row, **never a delete of either**. The method
+  is `internal`, its only caller is `EfPlatformNayaxSqsSenderStore`, it can be taken only while the
+  scope is `Denied`, and only one lease may be open at a time, never beside a provisioning, matching,
+  review or plan-grant lease.
+- **the seventh reviewed `IgnoreQueryFilters` read.** `EfPlatformNayaxSqsSenderStore` reads
+  `BusinessNayaxSqsSenders` through one statement, in one place (`SendersOf`), pinned to the single
+  business id the route named, projecting that row's sender id, enabled flag, last-message instant,
+  **last-reconciliation-success instant** (issue #1106's one widening of this projection, required by
+  its acceptance criteria so the card can report whether that business's queue is verified), revision
+  and instants. No method takes a predicate, a column list, a page, a sort or **a sender id
+  to look up by**: "which business does this sender belong to?" is #1103's question and that issue
+  adds its own narrow lookup as the eighth reviewed path. The `Businesses` row read beside it is
+  structurally non-tenant-owned and is projected to its key and lifecycle status alone.
+
+`IPlatformBusinessDirectoryStore` is **not** widened, no unscoped `AppDbContext` and no
+`UnscopedBusinessScope` is introduced, and `BusinessScopeCompositionTests` still pass.
+
+**The expected-revision guard, including the first creation.** `PUT` takes
+`{ awsSenderId, isEnabled, expectedRevision }`, and `expectedRevision` is required in the body —
+`[JsonRequired]` — so an omitted field is refused rather than silently read as "create". The rule is
+one comparison against the row read inside the write transaction:
+
+- `null` succeeds only when no row exists for that business, and the new row gets `Revision = 1`;
+- otherwise the call must present the row's exact current revision, and on success the revision is
+  incremented;
+- anything else is `409` with `NayaxSqsSenderPolicy.StaleRevisionMessage` and **nothing is written** —
+  which covers `null` when a row already exists, a number when none does, and a different number.
+
+The read, the comparison and the write happen inside one `SqliteWriteLockTransaction`
+(`BEGIN IMMEDIATE`), so the write lock is held before the read the decision is made on. The read the
+use case takes *before* the transaction decides nothing: it exists to answer "no such business" with a
+`404` without taking a write lock on the caller's behalf. `NayaxSqsSenderConcurrencyTests` runs two
+writers on two connections to one real SQLite file and asserts the state they leave rather than which
+one won.
+
+**The lifecycle gate.** Only an `Active` business may have the answer to "whose sales are these?"
+changed. The status is re-read inside the write transaction and checked with the shared
+`ActiveBusinessWritePolicy.AllowsWrite`, so a business deactivated while the lock was awaited is
+refused too; the refusal is `409` with this surface's own sentence. It gates the **write**: the `GET`
+reports what is recorded for any business the route names, because reading the platform's own record
+changes nothing and withholding it would hide the evidence an administrator is looking for.
+
+**A duplicate is the index's answer, reported with no leak.** A sender id another business already
+holds is detected by the unique-index violation and surfaced as `409` with
+`NayaxSqsSenderPolicy.DuplicateSenderIdMessage`, which names and hints at **no** other business.
+There is deliberately no "is this id taken?" pre-check: that would be a cross-business read from the
+platform-admin surface, and the index answers the question without one.
+
+**Remove is an audited update, and nothing is deleted.** The plan-grant lease allows inserts and
+updates only, because an audit trail that can be removed is not one, and this surface keeps that rule.
+"Remove" is `PUT` with a null `awsSenderId` and `isEnabled: false`: it clears the id, switches the
+mapping off, increments the revision and appends an audit row. The row survives with its whole
+history, the cleared id is immediately free for another business because the unique index ignores
+nulls, and a later "Set" reuses the same row — its revision series continuing rather than restarting.
+
+**Every write is audited, in the same transaction.** The audit row — who, when, the old and new sender
+id, the old and new enabled flag, and the revision — is written in the **same `SaveChanges`** as the
+change, so a database never says whose sales may be attributed to an IAM user with no record of who
+said so, and never holds a record of a decision that rolled back. One structured `ILogger` event is
+emitted after the commit as every platform action emits one, and
+`PlatformNayaxSqsSenderAuditEntry` has **no field for the sender id on either side** and no field for
+a name of any kind — so even a sink that printed the whole entry could not emit an AWS identifier.
+
+**The sender id is an identifier, never a secret.** AWS publishes it about an IAM user, and an
+administrator reads it with `aws iam get-user --user-name <user> --query User.UserId` in AWS
+CloudShell. No AWS **access key**, secret or session token is entered, stored or logged anywhere in
+this application or this repository, and this table has no column for one.
+
+**The screen.** Super Admin → Businesses offers **Nayax SQS sender** on an `Active` business's row,
+which opens `BusinessNayaxSqsSenderCardComponent` — its own load, field, revision, remove confirmation
+and error, composed through `[businessId]`/`[businessName]` per
+[Page composition boundary](#page-composition-boundary). The card shows the recorded sender id (or
+"None"), On/Off, and the last message received in **Sydney time** (or "Never") — and, since issue
+#1106, that business's last successful reconciliation and the reader's own last successful poll,
+consecutive failures and dead-letter queue depth, so a recorded sender that is delivering nothing can
+be explained from here. It offers Set/Change,
+Turn off and Remove, and sends the revision it was loaded with — or `null` when the `GET` answered
+`404`, which is how the first row is created. Remove asks for confirmation and says plainly that the
+id becomes free for another business, and **every path that would remove the id reaches that one
+confirmation**: submitting a cleared field over a recorded sender is a removal, so it shows the same
+confirmation instead of committing one, and cancelling it restores the field. With nothing recorded
+a cleared field has nothing to remove, so the card asks for an id rather than writing an empty row.
+A `409` reloads the card and reports the server's own sentence;
+a `400` shows that sentence and keeps what was typed. The card decides nothing: every rule above is
+the server's, and the businesses table itself carries no sender, because the mapping is read through
+its own endpoint rather than by widening the directory.
+
+**What is deliberately not here.** The sender → business lookup, the queue reader, the AWS SDK and
+the App Service settings (#1103); the eligible-business list and `LastReconciliationSucceededAtUtc`
+(#1104); any route that deletes a sender or an audit row; creating IAM users or access keys from the
+application; letting a business view or edit its own sender id; and any change to
+`BusinessNayaxConnection`, the Nayax Lynx credentials, sales, costing or the Dashboard.
+
+**No Nayax API contract is touched by this issue.** Nothing here reads the queue, calls Nayax or
+models a Nayax request or response: an AWS IAM user id is AWS's identifier, not a Nayax field. The
+meaning of a message's own fields is the section above, where each one was verified against the Nayax
+developer portal.
+
+**What proves it.** `Inventory.UnitTests/Domain/NayaxSqs/NayaxSqsSenderPolicyTests` covers the id
+bounds, the ASCII rule with its confusable cases, the normalisation and the refusal wording.
+`Inventory.UnitTests/Application/PlatformNayaxSqs/ManageBusinessNayaxSqsSenderTests` covers the frame:
+the two reads, the lifecycle gate, every branch of the revision guard including a decision committed
+while the lock was awaited, remove-then-set, and what each refusal leaves unwritten and unaudited.
+`Inventory.IntegrationTests/Adapters/Persistence/EfPlatformNayaxSqsSenderStoreTests` is the relational
+half over two businesses and a denied scope: the pinned read and its projection, the ordinary read
+still matching nothing, the sender and audit rows committing together, the duplicate refused by the
+index, a removed id reused by another business, the check constraint, and everything the lease
+refuses — another tenant-owned row riding along, another business's row, a delete of either table, an
+audit update, a write with no lease, and a lease taken on a member's or a support session's scope or
+beside another lease. `AddBusinessNayaxSqsSendersMigrationTests` is the schema, both indexes, the
+check constraint and `Down`. `NayaxSqsSenderConcurrencyTests` is the race.
+`SuperAdminNayaxSqsSenderApiTests` is the HTTP boundary: both endpoints refused for an Owner, a
+Manager, an Operator, a stranger, an anonymous caller, a caller without the delegated scope and a
+member presenting a support-session id; the role preview refused the write; the first create, the
+revision refusals, Remove and the reuse of the id it freed, the duplicate with nothing leaked, the
+lifecycle gate, the audit rows, the log without the id, and the response's exactly seven declared
+properties. The Angular card and service have their own specs, and the Businesses page's spec pins the
+action and the toast.
+
+### Nayax SQS sales reader (issue #1103)
+
+The two sections above are the *meaning* of one SQS message (#1102) and the mapping that says *whose*
+it is (#1101). This one is the thing that moves messages: an in-process reader that polls the one
+shared Restockroo queue, attributes each message to a business, saves the sale and the inventory-cost
+rebuilds it needs, and deletes the message only once both are durably done. It is the main source of
+sales for parent #1100; the request-driven synchronization stays exactly as it is.
+
+**Why it is in this process at all.** [Azure Functions and background
+workloads](#azure-functions-and-background-workloads-decision-criteria-issue-68) lists "a genuinely
+event-driven trigger the API cannot receive" as one of the things that would reopen the no-Functions
+decision — and a queue the API *can* receive from is the other side of that test. The production store
+is a single SQLite file with one writer on the App Service's own `/home` mount, so a second host
+writing it is outside the supported envelope; receiving in the API keeps one writer, needs no second
+identity, configuration surface or telemetry source, and reads each business's credentials exactly as
+a request does. App Service **Always On** is what keeps the process alive to poll, and it is a human
+prerequisite. That workload's row in the table below answers the seven criteria.
+
+#### Settings, and what "not configured" means
+
+```text
+NayaxSqs__QueueUrl                  the main queue; absent means the reader does not start
+NayaxSqs__DeadLetterQueueUrl        read for its depth only
+NayaxSqs__Region                    the AWS region system name, e.g. ap-southeast-2
+NayaxSqs__AccessKeyId               the reader IAM user's key id
+NayaxSqs__SecretAccessKey           the reader IAM user's secret
+NayaxSqs__VisibilityTimeoutSeconds  default 120, matching the queue's own setting
+```
+
+In production every one of them is an App Service application setting or a Key Vault reference, set by
+a human, and none of them is in the repository (README.md § Nayax SQS sales reader). The hosted testing
+environment is deliberately given none (`docs/testing-environment.md`).
+
+There are three states and the difference between the last two matters. **Nothing configured** is not a
+misconfiguration: the reader logs one information line and returns, the API starts exactly as it did
+before, and that is the shipped state and every test host's state. **Everything configured** starts the
+loop. **A queue URL with no region or no credential pair** is a deployment that asked for the reader and
+would otherwise get an API that silently imports no sales, so registration fails at startup naming the
+missing setting — the same fail-closed shape as the Nayax base URL's check. No refusal, log line or
+exception ever prints a URL, a key id or a secret.
+
+#### What happens to one message
+
+1. **Receive.** One long poll (20 seconds, at most 10 messages), requesting the `SenderId` and
+   `ApproximateReceiveCount` system attributes. An empty result is a *successful* poll — the queue
+   answering and having nothing to hand over, which is the normal state of a quiet fleet.
+2. **Extend.** Immediately after the receive, every message in the batch has its visibility reset to
+   the full timeout, and again whenever half the timeout has elapsed — **including the ones still
+   waiting** behind earlier messages, because messages are processed one at a time on a single-writer
+   store and the tenth can wait a long time, and **including while one message is in flight**. That
+   last one is not a refinement: a single message can outlast the whole timeout by itself — a slow
+   Nayax call, a wait for SQLite's write lock, a cost replay over a product's whole history — and a
+   renewal that only ran between messages would renew nothing during the one operation that needs it,
+   exposing that message *and* every message waiting behind it to redelivery and climbing their
+   receive counts towards the dead-letter queue for nothing. The renewal is the reader's own await
+   (`INayaxSqsReaderPacing.WaitForRenewalAsync` waits for the renewal falling due or the message
+   finishing, whichever comes first), so nothing runs beside the business's own `AppDbContext` and the
+   only calls it makes are to the queue. A message whose extension *failed* is not processed in
+   this batch at all: the failure means another receiver may now hold it, and two readers working on
+   one transaction is the race the extension exists to prevent. A message whose extension failed while
+   it was **already in flight** is processed but deliberately **not acknowledged** — not deleted, and
+   not given a visibility this reader may have no standing to set — because its save is durable and
+   idempotent and the redelivery finishes it, while acknowledging under a lost lease cannot be undone.
+3. **Attribute.** The SQS `SenderId` is matched against the mapping a Super Admin recorded, through the
+   one reviewed cross-business lookup ([Nayax SQS sender identity](#nayax-sqs-sender-identity-issue-1101),
+   AGENTS.md § Tenant ownership and data isolation). It runs in a scope that has resolved **no**
+   business, which is why it is the one statement in the application that may ignore the tenant
+   filters. A missing, unknown or disabled sender, or a business that is not `Active`, is refused here —
+   before any business scope exists, and therefore before anything of any business is read or written.
+4. **Scope.** Everything else happens in a *second* service scope resolved to the one business that
+   lookup named, published the way [`ConnectedMachineSnapshotCommand`](#inventoryapi) publishes its
+   per-business context. From there the context, the tenant query filters, the ownership stamp, the
+   credential read, the status gate, the plan check and the Nayax call are all the ones a member of
+   that business would get. Nothing in a message chooses the business: not the machine id, not the
+   transaction id, not the product id. No unscoped `AppDbContext` and no `UnscopedBusinessScope` is
+   introduced, which `BusinessScopeCompositionTests` and `NayaxSqsReaderCompositionTests` both assert.
+5. **Read the message.** `NayaxSqsTransactionParser` (#1102) decides what it means, *before* any gate:
+   a prepaid top-up or a multivend needs no connection, no plan and no fleet read, and asking Nayax
+   about one would spend the business's own request.
+6. **Gate.** For the two kinds that are saved, all of these pass before anything is written: the
+   business's Nayax connection is usable and its plan includes `PlanFeature.SalesProviderIntegration`,
+   both through the existing `INayaxRequestCredentialProvider` exactly as the request-driven sync
+   applies it; and the message's machine is one of that business's machines — the cached fleet list
+   first, so a queue draining a hundred messages is not a hundred fleet reads, then **one** fresh read
+   so a machine added minutes ago is not refused for ten. A message that states no usable `Product ID`
+   has its slot resolved through the machine's product map (#1102).
+7. **Save.** One `BEGIN IMMEDIATE` transaction (`SqliteWriteLockTransaction`) reads the transaction by
+   `(BusinessId, TransactionID)` and either inserts the new `NayaxSales` row — with
+   `ReceivedViaSqsAtUtc`, `SqsFirstMessageId` and `SqsVerification = Unverified` on the same insert —
+   or applies the existing enrich-only path to the stored row, costs it, and records a pending
+   inventory-cost rebuild for every product it affects. All of it commits together or not at all.
+8. **Replay.** After the commit, never inside it — a replay is a long chronological read-and-write over
+   a product's whole history and holding the write lock for it would block every interactive request —
+   the reader drains that business's pending rebuild rows.
+9. **Decide.** The message is finished with only when **its own** products have no pending rebuild
+   left. A *different* product of the same business still failing deliberately does not hold it: this
+   sale is durably correct, and keeping the message would let one unreplayable product's history stop
+   every later sale from ever being acknowledged.
+10. **Delete, or not.** `DeleteMessage` uses the receipt handle from that message's **latest** receive
+    and is called only after step 9. Everything else leaves the message on the queue.
+
+**The supplied status is the one store rule this issue changed.** `EfLatestNayaxSalesStore` saved every
+inserted sale's status from its amount — positive is completed (`12`), anything else is cancelled
+(`250`) — because the `lastSales` payload carries no status field. An SQS message does, so a declined
+transaction that charged money would have been stored as a completed sale, counted as revenue and
+consumed a unit of costing inventory that was never sold. The store now saves a **supplied** status
+exactly as given on an insert; the amount rule applies only when none is supplied, which is every
+`lastSales` item; and on an enrichment a supplied status fills the column only while the stored one is
+`NULL`, so neither path overwrites a status the other decided. Stock consumption, costing and revenue
+continue to follow the saved status through `NayaxTransactionStatusClassifier` — only `12` consumes
+stock — and no other status rule changed. A later difference between the two paths is #1104's
+comparison to record.
+
+**Both save paths take the same write lock.** They each read "is this transaction stored?" and then
+insert, so without the lock a queued message and a Dashboard refresh of one transaction could both read
+"not stored" and the loser's whole save would be refused by the unique index on
+`(BusinessId, TransactionID)`. With it the second writer waits and then reads the first one's committed
+state, which turns the race into the enrich path instead of a lock error. The index stays the backstop
+under it, because a lock is not a constraint: the store also catches that refusal and retries once as
+the enrich-only path, so a concurrent insert is never surfaced as a failure and never counted twice.
+
+#### Pending inventory-cost rebuilds
+
+`PendingInventoryCostRebuilds` is a tenant-owned table holding `BusinessId`, `ProductId`,
+`FromInstantUtc` (the earliest instant still to replay), `Revision` (the version of the work),
+`CreatedAtUtc`, `AttemptCount`, `LastAttemptAtUtc` and `LastFailureCode`, with a unique index on
+`(BusinessId, ProductId)` and an oldest-first index on `(BusinessId, CreatedAtUtc)`.
+
+It exists because the replay was remembered rather than written down. A sale was saved and the replay
+ran afterwards from a dictionary; if the replay failed, the sale stayed saved and the work was simply
+forgotten — the next import found the transaction already stored, reported no affected products, and
+that product's costing position stayed stale until its next sale. A queue reader deleting a message on
+"already stored" would have lost it for good.
+
+- The row is written in the **same transaction as the sale**, and removed in the **same transaction as
+  the rebuilt costs**, so "the costs are rebuilt" and "there is nothing left to rebuild" cannot
+  disagree.
+- **A drain acknowledges only the work it actually replayed.** The replay runs *outside* the write
+  lock on purpose (step 8 above), so another writer — the other sales path, or a second drain, since
+  both drain every pending row of the business — can record another sale for the same product and
+  commit while it is running, *after* the replay has already read the costing inputs it is computing
+  from. The drain therefore reads the row again *inside* the write-locked transaction that removes it,
+  where no other writer can commit between the read and the removal, and removes it only while it
+  still holds the `Revision` that was replayed. When it does not, the transaction commits nothing at
+  all: the costs that replay staged were computed before the newer sale existed, so they are discarded
+  rather than written over what the next drain will write, the product is reported as still pending —
+  which it is — and the row stays as the standing record of what has to be replayed. Removing it by
+  key instead would have thrown the newly arrived work away for good, which is the one failure this
+  table exists to prevent. `NayaxSqsConcurrencyTests` covers the interleavings against a real database
+  **file** with two connections: an earlier sale, a sale at or after the replayed instant, and two
+  drains of one row.
+- **`Revision` is the comparison, and the instant cannot be.** Recording a pending rebuild only ever
+  moves `FromInstantUtc` earlier, so a sale at or after the instant the row already holds adds work
+  without changing any other column — an acknowledgement that compared the instant would succeed,
+  write costs computed without that sale in them and delete the work recorded for it, leaving the newer
+  sale replayed by nobody. Every enqueue therefore moves `Revision` on by one whether or not it moves
+  the instant, and the removal is conditional on that alone. Both conditions are in the query's own
+  `WHERE` clause and any instance of the row the context tracked earlier is detached first, so the
+  stored revision answers the comparison and never one read before another writer moved it. Recording
+  a *failed attempt* deliberately moves neither the instant nor the revision: an attempt is evidence
+  about a replay, not new work, and invalidating another drain's claim for it would discard a replay
+  that is still correct.
+- A second sale of the same product moves `FromInstantUtc` **earlier** and never later: a replay from
+  the earlier instant covers the later one, and the other way round would silently skip a sale's effect
+  on cost.
+- A replay that fails keeps its row with its attempt count, instant and a short failure *code* (the
+  data-quality sentence itself can name a product or a figure and belongs to the caller, not this
+  column).
+- A row whose instant is at or before the product's transition-baseline cutoff has nothing to replay
+  and is removed — that is the baseline doing its job, not a failure.
+- The table carries **no** foreign key to `Products`: a pending replay is transient work, and a
+  restricted key would make deleting a product depend on whether a background replay had caught up. It
+  records no quantity, cost, value or sale, so losing a row would mean a replay is not retried, never a
+  wrong figure.
+- **The request-driven synchronization records and drains the same rows.** The store is shared, so this
+  fixes the existing failure mode on that path too: `SyncLatestNayaxSales` now drains every pending row
+  after *every* persist rather than only the products its own batch touched, and raises a still-failing
+  product as the one `InventoryCostDataQualityException` it always did. See [Historical inventory
+  cost](#historical-inventory-cost).
+
+#### Queue outcomes
+
+| Kind | Examples | Action |
+|---|---|---|
+| Transient | `SQLITE_BUSY` after the busy timeout; a network or AWS failure; a Nayax timeout or failure; an unusable connection or a plan without the sales provider; a pending rebuild still failing | **Not deleted.** Visibility set to 30 s × receive count, capped at the visibility timeout |
+| Permanent | #1102 Invalid, Unsupported or FreeVend; a missing, unknown or disabled sender; a business that is not `Active`; a machine that is not the business's | **Not deleted.** Visibility set to 0, so the message reaches the dead-letter queue after the queue's own `maxReceiveCount` |
+| Done | a CompletedSale or CancelledOrDeclined saved with no pending rebuild; a duplicate whose rebuilds are clear; Revalue; Multivend | **Deleted** |
+
+Two of those rows need their reasoning stated. An **unusable connection or a downgraded plan is
+transient**, not permanent: an unknown sender and a foreign machine are statements about the *message*,
+while a disconnected business is a statement about *today* — reconnecting makes the very same message
+saveable, so the sale is parked for the next receive rather than pushed at the dead-letter queue. And a
+**failure nobody recognised is transient too**: deleting a message because this application threw
+something unexpected would lose a real sale, and the queue's own `maxReceiveCount` is what stops a
+message retrying forever. Nothing is ever deleted to get rid of it.
+
+A `ReceiveMessage` that fails is counted, logged by exception *type*, and backed off with jitter up to
+60 seconds; it never crashes the host. Shutdown stops polling and ends the loop: an in-flight message
+either finishes and is deleted or is left for redelivery, which is safe precisely because nothing is
+deleted before it is durably done.
+
+#### Reader health and the dead-letter queue
+
+`NayaxSqsReaderHealth` is a process-wide singleton recording `LastSuccessfulPollUtc` (any receive that
+returned without error, **including an empty one**), `ConsecutivePollFailures`,
+`LastMessageProcessedUtc` and the dead-letter queue depth with the instant it was read. It is in memory,
+which is correct here because the API runs as a single instance ([SQLite operating
+assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)): there is one reader and one
+place its state could live, and after a restart the record is empty until the first poll, which is a
+true statement rather than one recovered from somewhere. Issue #1106 is what reads it — for the
+Dashboard's live decision and on the Super Admin's sender card (see [Dashboard sales live from the
+Nayax SQS queue](#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106)). Separately,
+`BusinessNayaxSqsSender.LastMessageReceivedAtUtc` is stamped per business, as an ordinary tenant-owned
+update inside that business's own scope — one observability column, written after the sale's transaction
+has committed, and never the sender id, the flag or the revision, which are the Super Admin's alone.
+
+Every five minutes the reader reads the dead-letter queue's `ApproximateNumberOfMessages` through
+`GetQueueAttributes`, warns while the depth is above zero, and publishes it on the health record. It
+**never receives from or deletes from that queue** — there is no method on `INayaxSqsQueueClient` that
+could — and replaying it is the owner's own AWS console procedure after the cause has been fixed
+(README.md § Nayax SQS sales reader).
+
+#### Coverage and logging
+
+The reader records **no** provider data coverage: `IProviderDataCoverageStore` belongs to the
+request-driven sync, which knows what range it read, and a queue says nothing about the period it did
+not deliver. A reporting gap therefore stays reported as unverified rather than as a measured zero.
+
+A message body is a consumer's card transaction and a receipt handle is a capability to change or delete
+a queue message, so neither is logged, persisted or put in an exception message — nor is any card,
+customer, merchant, terminal or processor value from the body, nor an AWS key, nor a queue URL, nor the
+sender id. What a reader line carries is a queue message id, a business id, a count, a duration, a fixed
+reason code and an exception *type name*. That is structural rather than a matter of care:
+`INayaxSqsReaderLog` declares the fixed set of events and has no method with a parameter that could
+carry anything else, which `NayaxSqsReaderLoggingTests` asserts over its signatures as well as over
+captured output.
+
+#### Where the code is
+
+| Layer | What |
+|---|---|
+| `Inventory.Domain.NayaxSqs` | `NayaxSqsQueuePolicy` (visibility, the extension interval, the transient backoff, the jittered poll backoff), `NayaxSqsVerification` |
+| `Inventory.Application.NayaxSqs` | `NayaxSqsSalesReader` (the loop), `ProcessNayaxSqsSale` (one message in one business), `NayaxSqsReaderHealth`, and the ports: `INayaxSqsQueueClient`, `INayaxSqsSenderDirectory`, `INayaxSqsSenderActivityStore`, `INayaxSqsReaderScopes`, `INayaxSqsReaderSettings`, `INayaxSqsReaderPacing`, `INayaxSqsReaderLog` |
+| `Inventory.Infrastructure.NayaxSqs` | `AwsNayaxSqsQueueClient` (the only type holding `AWSSDK.SQS`, a queue URL or an AWS credential), `UnconfiguredNayaxSqsQueueClient`, `NayaxSqsOptions`/`NayaxSqsConfiguration`, `SystemNayaxSqsReaderPacing`, `LoggingNayaxSqsReaderLog` |
+| `Inventory.Infrastructure.Persistence` | `EfNayaxSqsSenderDirectory` (the one cross-business lookup), `EfNayaxSqsSenderActivityStore`, `EfLatestNayaxSalesStore`(`.Sqs`) |
+| `InventoryApi.Adapters.NayaxSqs` | `NayaxSqsSalesReaderWorker` (the hosted service), `ServiceScopeNayaxSqsReaderScopes` (the two scopes) |
+
+**What is deliberately not here.** Verification, conflicts and flagged sales — issue #1104 adds the
+first of those and is described in [Hourly Nayax sales
+reconciliation](#hourly-nayax-sales-reconciliation-issue-1104); Owner decisions (#1105); the Dashboard
+and Refresh (#1106); refunds (#1107), multivend rows and free-vend stock handling; creating queues or
+IAM users, CloudWatch alarms and replaying the dead-letter queue from the application; and Nayax SQS
+encryption, events and DEX deliveries. Production consumption must not be switched on until #1104 and
+#1105 are deployed (#1100's rollout rule).
+
+### Hourly Nayax sales reconciliation (issue #1104)
+
+Every hour, for each business on the queue, the application compares the sales SQS delivered with
+that business's own Nayax `lastSales`, using that business's own credentials. It is the half of parent
+#1100 that makes a queue-delivered sale *checkable*: issue #1103 stores a sale and marks it
+`Unverified`, and nothing until now moved it.
+
+**On its own it changed nothing about what counts.** As issue #1104 shipped, a verification state
+was evidence about a sale and never a reason to include or exclude it. Issue #1105 changed that for
+exactly two states, `Conflict` and `OwnerExcluded`; see
+[Owner decisions about flagged Nayax sales](#owner-decisions-about-flagged-nayax-sales-issue-1105).
+
+#### What is compared, and how
+
+When a `lastSales` item has the same `TransactionID` as a stored SQS row,
+`Inventory.Domain.NayaxSqs.NayaxSaleProviderComparisonPolicy` compares these fields and no others:
+
+| Field | Normalisation | Compared when |
+|---|---|---|
+| `MachineID` | exact integer | always |
+| Amount (`SettlementValue` vs the stored value) | decimal rounded to 2 places, half away from zero | always |
+| Authorization instant | both as UTC instants (the stored column vs `AuthorizationDateTimeGMT`); equal when no more than **1 second** apart | both present |
+| Currency | trimmed, upper-cased with the invariant culture | both present |
+| Product (`NayaxProductId`) | exact | both non-null |
+
+**A field that cannot be compared is recorded as *not compared*, and is never counted as a match.**
+That is the rule the whole model rests on: "verified" means *these specific fields were compared and
+were equal*, which is unanswerable if a missing value quietly reads as agreement. Two fields are
+normally not compared in practice, and both are honest rather than accidental. No sale column holds
+the currency the transaction was conducted in, so the stored side has none — issue #1104 adds no
+column to a sale. And the documented `lastSales` response
+(<https://devzone.nayax.com/reference/lynx/machines/get-last-sales-for-machine-by-machineid>) carries
+**no product identifier field** at all, so the provider side normally has none either; the comparison
+still compares both when a value is present, because this application's `lastSales` model has carried
+that property since before this issue. A product name is never compared: it is a label both sides may
+render differently, and the product identity is what the question is about.
+
+#### Evidence kept
+
+`NayaxSaleProviderEvidences` is a tenant-owned, **append-only** table of one row per observation, with
+its own `Id` — which is how issue #1105's Owner decision will name exactly the evidence it acted on —
+plus `BusinessId`, `NayaxSaleId`, `RunId`, `ObservedAtUtc`, the resulting state and a `Kind`:
+
+- **`Comparison`** — `lastSales` returned the same `TransactionID`. The row stores that item's values
+  **exactly as received** (machine, amount, authorization instant, currency, Nayax product id and
+  product name — not rounded, not trimmed, not upper-cased) and each field's own result: match,
+  mismatch or not compared. The normalisations belong to the comparison and are recorded as the
+  results beside the values, because a row that stored this application's own arithmetic would be
+  evidence about the wrong thing.
+- **`Absence`** — `lastSales` was read for the sale's machine and did not return the sale. The row
+  stores the machine that was read, the earliest and latest authorization instants among the items the
+  response returned for it and how many it returned, the sale's own authorization instant and its
+  `ReceivedViaSqsAtUtc`, the receipt-grace result, and whether the sale's instant lies strictly
+  between the earliest and latest returned instants (bracketed).
+
+**An `Absence` row records only what was observed, and no column says the provider's response was
+complete.** Nayax documents `lastSales` as "the most recent sales transactions for a specific
+machine": the contract states neither how many items it returns nor any authorization-time window it
+covers, so a transaction missing from it is **not** evidence that the transaction did not happen. No
+code treats it as completeness, and the absence of such a column is asserted rather than assumed.
+
+A row is written when a run changes a sale's state, or when its observation differs from that sale's
+latest evidence of the **same kind**. A repeated identical observation writes nothing — an hourly run
+re-reading the same rolling window would otherwise append an identical row every hour for every sale
+in it. **Every evidence write, and the state change it causes, happens in one
+`SqliteWriteLockTransaction` together with a re-read of the sale's current state**, so the
+authoritative read, the transition decided from it and the mutation are one operation — which is what
+will keep issue #1105's Owner decisions, which take the same write lock, from interleaving with a run.
+
+Two things make that re-read authoritative rather than nominal, and both are properties of
+`EfNayaxSaleProviderEvidenceStore.RecordAsync` rather than of its callers:
+
+- **The row is reloaded, not merely queried again.** One scoped `AppDbContext` serves a whole
+  business's run, and the save earlier in that same run (`EfLatestNayaxSalesStore`, issue #1103)
+  already loaded and tracked every sale the response spoke about. EF Core answers a later query for a
+  key it is already tracking with the instance it holds, without refreshing that instance's values
+  from the row the query returned, so a query alone would decide the write from values read before the
+  lock existed. The write therefore reloads the tracked entity inside the transaction, which replaces
+  its values *and its original values* with the committed row — and a row that has since been deleted
+  detaches, which the write reads as "nothing to say about this sale".
+- **The comparison is decided inside that transaction too**, by
+  `NayaxSaleProviderComparisonPolicy` applied to the values that reload returned. A field result is a
+  statement about the stored sale, so a result computed before the lock was taken would be a statement
+  about a sale that may have moved since. The use case therefore hands the write the `lastSales`
+  item's values and *no* field results; the policy remains the single place a comparison is made.
+
+An absence observation is decided before the write, because the two sale values it rests on — the
+authorization instant and `ReceivedViaSqsAtUtc` — are written once when the sale is stored and are not
+what a concurrent decision moves; the state it is evidence for is still applied to the state that
+transaction re-reads.
+
+#### States and transitions
+
+`NayaxSales.SqsVerification`:
+
+| State | Meaning |
+|---|---|
+| `null` | Not delivered by SQS — rows that existed before, and rows only `lastSales` delivered |
+| `Unverified` | Delivered by SQS, not compared yet |
+| `Verified` | The machine, the amount and the instant were compared and are equal; the currency and the product are either equal or recorded as not compared |
+| `Conflict` | An **authoritative contradiction**: the business's own `lastSales` returned the same `TransactionID` with a different machine, amount or product, and both values were present |
+| `NeedsInvestigation` | The instant or the currency differs, **or** an `Absence` row shows the sale was bracketed and outside the receipt grace |
+
+`Inventory.Domain.NayaxSqs.NayaxSqsVerificationTransitions` is the whole of which moves are permitted,
+and it is an allowlist rather than a fall-through:
+
+- `Unverified` → `Verified`, `Conflict` or `NeedsInvestigation`.
+- `NeedsInvestigation` → `Verified` on later matching evidence, or `Conflict` on a later contradiction.
+- `Verified` → `Conflict` or `NeedsInvestigation` on later contradicting evidence. The earlier
+  evidence is kept, so what the sale was verified by stays readable.
+- `Conflict` stays `Conflict` and new evidence is appended. Only an Owner decision (#1105) moves a row
+  out of it.
+- `null` is never moved into the model: a sale the queue never delivered has no delivery to verify.
+- An observation that decides no state — a comparison whose instant could not be compared — leaves the
+  state exactly as it was, and the evidence is still recorded.
+- An `Absence` whose sale is not bracketed, or is inside the **10-minute** receipt grace, writes no row
+  and changes nothing; the sale stays `Unverified`.
+
+Sales that `lastSales` returns but SQS never delivered are added exactly as they are today, with
+`SqsVerification` left `null`.
+
+#### The per-business lock, and the Busy outcome
+
+`Inventory.Application.SalesSync.NayaxSalesSyncLock` is one in-process lock per business, **shared**
+by the hourly run and every request-driven sync. Two runs for the same business would read the same
+rolling window, spend the business's Nayax allowance twice, replay the same products twice and record
+two pieces of evidence about one observation.
+
+- The hourly run uses **try-acquire**. A business whose sync is already running is skipped for this
+  hour, with no Nayax call and no write.
+- A request-driven sync waits up to **60 seconds**. Past that the use case answers a new bounded
+  **Busy** outcome: **no Nayax call, no write, no coverage record and no rate-limit claim**, so an
+  attempt that only ever waited does not cost the business one of its own refreshes. The controller
+  answers **`409 Conflict`** with problem details ("A sync for this business is already running. Try
+  again shortly."), kept distinct from `204`, `200` and `429` so each keeps its meaning, and carrying
+  no `Retry-After` because this is not a rationed request. The Angular `NayaxSalesSyncService` turns
+  `409` into a skip: no error, no retry.
+- **The lock is released only by the caller that acquired it.** `NayaxSalesSyncLease` carries an
+  explicit acquired flag and its `Dispose` is conditional on it, so a timed-out or cancelled waiter
+  never hands back a lock the holder is still working under — which would let a second run start
+  beside the first.
+- The **#843 freshness skip still happens before the lock is awaited**: a run with nothing to read
+  must not wait a minute to say so.
+
+#### A successful reconciliation
+
+`BusinessNayaxSqsSender.LastReconciliationSucceededAtUtc` (issue #1101's row, this issue's column) is
+set to the run's **start** instant, and only when the whole run for that business succeeded: the
+machine list and `lastSales` for **every** machine were read without error, persistence committed, all
+comparisons and absence evidence were recorded, and no pending inventory-cost rebuild was left behind.
+A skipped run — the lock was held, the allowance was spent, a gate refused it — or a partly failed run
+leaves the value unchanged, and a successful API read on its own never sets it. Issue #1106 reads it
+to decide whether the Dashboard may skip syncing, so a value that moved on a partial run would be a
+promise nothing kept.
+
+#### Eligibility, scopes and the order of a run
+
+Eligible businesses come from one further statement in issue #1103's reviewed sender-directory
+adapter — `EfNayaxSqsSenderDirectory.ListEligibleBusinessIdsAsync`, under the owner's approval of
+5 November 2026. It is one `IgnoreQueryFilters` read that projects **only `BusinessId`**, returns the
+businesses whose sender is enabled and whose own lifecycle is approved and active, and takes no
+predicate, page or sort. The rule is the one the message path already applies, so "whose sales do we
+accept?" and "whose sales do we verify?" cannot drift apart.
+
+The runner opens two kinds of scope, exactly as the queue reader does: the eligibility read runs in a
+scope that has resolved **no** business — the businesses are the answer rather than the input — and
+each business's run happens in a scope resolved to that one business, with no signed-in user, where
+the ordinary tenant filters and `BusinessOwnershipEnforcer` are fully in force. Inside that scope the
+connection, support-session and `PlanFeature.SalesProviderIntegration` gates apply through
+`INayaxRequestCredentialProvider` exactly as they do for a request; a refused business is skipped and
+logged.
+
+One business's run, in order: try-acquire the lease → resolve the credential gate → drain every
+pending inventory-cost rebuild this business has (#1103 — recovery work that makes no Nayax call) →
+`SyncLatestNayaxSales` with `force: true` and the lease already held, observing what it read → compare
+and record the evidence → record the success instant. A failure anywhere after the lease is an
+outcome rather than an exception, so one business's trouble never stops the others.
+
+#### Coverage
+
+Coverage is recorded by the existing policy of issue #730 and by nothing else: the hourly run is the
+same `SyncLatestNayaxSales` code path, so it claims `[the latest per-machine window start, the instant
+reading began)`, claims nothing for a run with undated items or no dated sale, and records nothing at
+all for a run that failed. **The hourly run does not claim to close every coverage gap**: a period
+`lastSales` did not demonstrably reach stays unverified, and SQS itself still records no coverage. See
+[Report availability model](#report-availability-model-issue-730).
+
+#### Where the code is
+
+| Layer | What |
+|---|---|
+| `Inventory.Domain.NayaxSqs` | `NayaxSaleProviderComparisonPolicy` (the normalisations and the field results), `NayaxSaleProviderAbsencePolicy` (bracketing and the receipt grace), `NayaxSqsVerificationTransitions`, `NayaxSqsVerification`, `NayaxSaleProviderEvidenceKind`, `NayaxSaleFieldComparison` |
+| `Inventory.Application.NayaxReconciliation` | `ReconcileNayaxSalesWithProvider` (one business's run), `NayaxSalesReconciliationRunner` (the sweep and its cadence), and the ports: `INayaxSaleProviderEvidenceStore`, `INayaxReconciliationSuccessStore`, `INayaxSalesReconciliationScopes`, `INayaxSalesReconciliationSchedule`, `INayaxSalesReconciliationLog` |
+| `Inventory.Application.SalesSync` | `NayaxSalesSyncLock`/`NayaxSalesSyncLease`, the `Busy` outcome, `NayaxSalesSyncLockMode` and `INayaxLastSalesObserver` on `SyncLatestNayaxSales` |
+| `Inventory.Infrastructure.Persistence` | `EfNayaxSaleProviderEvidenceStore` (the write-locked evidence writes, the authoritative reload of the sale and the comparison decided from it), `EfNayaxReconciliationSuccessStore`, the second statement in `EfNayaxSqsSenderDirectory` |
+| `Inventory.Infrastructure.NayaxReconciliation` | `SystemNayaxSalesReconciliationSchedule`, `LoggingNayaxSalesReconciliationLog` |
+| `InventoryApi.Adapters.NayaxReconciliation` | `NayaxSalesReconciliationWorker` (the hosted service), `ServiceScopeNayaxSalesReconciliationScopes` (the two scopes) |
+
+**What is deliberately not here.** Excluding any row from stock, costs or reports, Owner decisions and
+the Dashboard alert (#1105); the Dashboard "Live" state and how `LastReconciliationSucceededAtUtc` is
+read (#1106, the section below); refunds (#1107) and multivend; and a WebJob or CLI mode for this run.
+
+### Dashboard sales live from the Nayax SQS queue (issue #1106)
+
+The three sections above deliver a business's sales (#1103) and verify them (#1104). This one is what
+that buys the person looking at the Dashboard: for a business on the queue, opening the Dashboard
+stops calling Nayax for every machine — **but only while the queue path is demonstrably working.**
+The request-driven endpoint, its rate limit and its Refresh control are all unchanged; what changes is
+the answer an *unforced* call gets.
+
+#### When a business counts as live
+
+`Inventory.Domain.NayaxSqs.NayaxSqsLivePolicy` is the one rule, and all three conditions must hold:
+
+| Condition | Threshold | Where it comes from |
+|---|---|---|
+| The business has an **enabled SQS sender** | — | `BusinessNayaxSqsSender.AwsSenderId` and `IsEnabled` (#1101), read in the business's own scope. A row whose id a "Remove" cleared counts as no sender. |
+| The **reader is healthy** | last successful poll **less than 2 minutes** old, and `ConsecutivePollFailures` is `0` | `NayaxSqsReaderHealth` (#1103), the in-memory process-wide record. An **empty** poll counts as successful. |
+| The **hourly reconciliation fully succeeded** for that business | **less than 150 minutes** ago | `BusinessNayaxSqsSender.LastReconciliationSucceededAtUtc` (#1104, which is its only writer). `NULL` is stale. |
+
+**Why all three.** Skipping the on-load read means showing stored sales and telling the operator they
+are current, so the claim rests on evidence that the whole path works: an enabled sender says messages
+can be attributed to this business at all, a reader that polled moments ago without failing says the
+queue is answering *now*, and a reconciliation that fully succeeded says something has compared what
+the queue delivered against the provider's own record. An enabled sender alone, or a recent
+reconciliation alone, says nothing about whether the reader is running — which is why the first draft
+of this issue's rule was not enough.
+
+**The time since the last message is deliberately not a condition.** A quiet queue is the normal
+overnight state of a vending fleet, and making it a condition would send every quiet business back to
+one Nayax call per machine at breakfast, for sales nobody made. `LastMessageReceivedAtUtc` is
+*reported* and never tested.
+
+**Why 150 minutes, and what it tolerates.** The reconciliation runs hourly. A run succeeds at minute
+0; the runs due at 60 and 120 are both missed; the business stays live until minute 150 and goes stale
+then — a **30-minute grace after the second missed run**, not a limit that expires the moment one is
+missed. A 90-minute limit tolerates no missed run at all: when the run due at 60 is missed, the last
+success is already 90 minutes old. Both thresholds are the values proposed on issue #1106; they are
+stated once, as `NayaxSqsLivePolicy.PollWindow` and `NayaxSqsLivePolicy.ReconciliationWindow`.
+
+**After a restart a business is not live until the first successful poll.** The health record is in
+memory, which is correct here because the API runs as a single instance ([SQLite operating
+assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)); an empty record is a true
+statement rather than one recovered from somewhere, and the Dashboard falls back to today's sync in
+the meantime. The reconciliation instant is a column, so it survives the restart and is not what the
+business is waiting for.
+
+#### Where the decision sits in the order
+
+`SyncLatestNayaxSales` resolves the bounds in this order, and it is asserted:
+
+1. the **connection, status gate, support session and plan refusals** (#843, #551, #967) — an unusable
+   connection gets exactly its existing refusal and is never told its sales are live;
+2. the **live decision** — when it holds, the call answers *live via SQS* having read nothing from
+   Nayax, written nothing and claimed **no** rate-limit allowance, and recording no freshness either;
+3. the existing three-minute **recent-sync skip** (#843);
+4. the per-business **sync lock** (#1104) and then the **run allowance** (#681).
+
+A **forced** call — the Dashboard's Refresh — makes no live decision at all: it reads `lastSales`
+exactly as it does today, is still rationed by the limiter, and does not even read the sender row.
+When a business is **not** live, every one of these answers behaves exactly as it did before, and the
+reason travels beside it.
+
+#### What the response carries
+
+`POST /api/nayax-sales-sync` keeps `204` (the run happened), `409` (a sync is already running) and
+`429` (too many runs) with exactly their existing meanings. The `200` body gains three fields, and its
+existing two keep theirs:
+
+```text
+liveViaSqs                   bool     the sales arrive from the queue, so nothing was read
+lastSqsMessageReceivedAtUtc  instant? when the queue last delivered; null is a quiet queue, still live
+sqsNotLiveReason             code?    NoSender | SenderDisabled | ReaderNotPolling | ReaderFailing
+                                      | ReconciliationStale
+```
+
+The reason is a published code rather than an enum's number, as `MachineNeedUnavailableReasons` is. It
+is `null` when the business is live and on a forced run; a `204` carries no body at all, so a business
+that is not live and *did* run learns the reason from its next skipped call — which is how that answer
+already behaved. The response carries **no AWS sender id**: the member-facing read projects whether one
+is recorded and never which, because that identity is the Super Admin's record (#1101).
+
+#### What the screens show
+
+The Dashboard's sales freshness line reads **"Live from Nayax · last sale received \<Sydney time\>"**,
+or **"Live from Nayax · no sales received yet"** for a queue that has delivered nothing. It replaces
+the "Sales synced N min ago" label rather than appearing beside it: nothing was synchronized, so an age
+would be a false statement. Refresh is still offered and still forces a full read. Everything else on
+the page is unchanged — the persisted figures load exactly as before, because the reader has already
+stored the sales they are calculated from.
+
+The Super Admin's **Nayax SQS sender** card (#1101) additionally reports the reader's last successful
+poll, its consecutive failures and the dead-letter queue depth, plus that business's last successful
+reconciliation — each in Sydney time or "Never", and the depth as "Unknown" rather than `0` when none
+has been read. That is what lets an administrator explain a recorded sender that is having no effect.
+
+#### What this issue does not do
+
+It adds **no column and no migration**: `LastReconciliationSucceededAtUtc` is #1104's and is only read
+here. It does not remove the request-driven sync or its endpoint, change the rate-limit or freshness
+numbers or #1104's `409`, touch the reader's processing, the reconciliation or flagged-sale handling,
+or change any other screen that reads sales.
+
+#### Where the code is
+
+| Layer | What |
+|---|---|
+| `Inventory.Domain.NayaxSqs` | `NayaxSqsLivePolicy` (the three conditions and both thresholds), `NayaxSqsLiveState`, `NayaxSqsNotLiveReason` |
+| `Inventory.Application.NayaxSqs` | `INayaxSqsLiveStatusStore`/`NayaxSqsLiveSenderStatus` (the business's own stored half, with no sender id in it) |
+| `Inventory.Application.SalesSync` | the live decision and the `LiveViaSqs`/`LastSqsMessageReceivedAtUtc`/`SqsNotLiveReason` outcome fields on `SyncLatestNayaxSales` |
+| `Inventory.Infrastructure.Persistence` | `EfNayaxSqsLiveStatusStore` (an ordinary filtered tenant-owned read), the one widened column in `EfPlatformNayaxSqsSenderStore` |
+| `InventoryApi.DTOs` | `NayaxSalesRecentlySyncedResponse`'s three new fields and `NayaxSqsNotLiveReasons`, `SuperAdminNayaxSqsReaderHealthResponse` |
+| Angular | `NayaxSalesSyncService`'s result, the Dashboard's freshness line, `BusinessNayaxSqsSenderCardComponent`'s health rows |
+
 ## Incremental migration plan
 
 Each step is a separate, passing pull request. Existing endpoints stay operational throughout.
 
 Backend and frontend tracks can progress independently when their contracts do not change. A vertical feature change that touches both sides should still be delivered as one coherent, tested pull request.
+
+### Owner decisions about flagged Nayax sales (issue #1105)
+
+A queue-delivered sale that the business's own `lastSales` authoritatively contradicts stops
+counting until the business Owner decides what is true. A sale that is only missing from `lastSales`
+keeps counting and waits for the Owner, because a missing sale is never proof that it was fake.
+
+#### What counts
+
+A completed sale is status `12` **and** a `SqsVerification` that is not `Conflict` or
+`OwnerExcluded`. `Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy.IsCountedSale` is the rule and
+`EfNayaxSalesQueries.CompletedSalePredicate` its EF-translatable form; a test runs the predicate over
+every state and status and compares it with the policy. Every completed-sale read uses one of them:
+sale costing (`CostSale`, `NayaxCostableSale`), the inventory-cost replay, the machine-stock ledger,
+reorder needs, the site and machine dashboard facts, the timestamp repair projection and every report.
+An excluded status-12 sale is classified `NayaxTransactionStatus.ExcludedByReview`
+(`NayaxSaleCountingPolicy.Classify`), shown in the transaction report as "Not counted - contradicted by
+Nayax" or "Not counted - excluded by the owner", and counted as data quality in the daily,
+reconciliation and bookkeeping reports. The only automatic exclusion is #1104's authoritative
+contradiction; `NeedsInvestigation` counts.
+
+#### The decision table
+
+`NayaxSaleOwnerDecisionPolicy` is the table and nothing else:
+
+| Row state | Decision | Evidence it may name | Result |
+|---|---|---|---|
+| `Conflict` | Use Nayax's values | the latest `Comparison` | values replaced from the evidence; `OwnerCorrected` |
+| `Conflict` | Keep the SQS values (reason) | the latest `Comparison` | `OwnerConfirmed` |
+| `Conflict` or `NeedsInvestigation` | Don't count this sale (reason) | the latest `Comparison` or `Absence` | `OwnerExcluded` |
+| `NeedsInvestigation` | This sale is genuine (reason) | the latest `Comparison` or `Absence` | `OwnerConfirmed`, values unchanged |
+
+"This sale is genuine" is never allowed on a conflict, and neither conflict resolution may rest on an
+absence, which has no provider values to choose. `OwnerConfirmed` and `OwnerCorrected` are "Confirmed
+by owner" and never "Verified". A reason is at most 500 characters. The currency is not corrected,
+because no sale column holds one.
+
+#### Product resolution for "Use Nayax's values"
+
+The evidence's raw Nayax product id is written to `NayaxProductId` with `ProviderProductIdIsRaw =
+true`, and the local `ProductId` is resolved through `NayaxSaleProductResolver` - the shared,
+tenant-scoped resolution `EfLatestNayaxSalesStore` also uses for a new sale: the business's provider
+link map (`INayaxProductLinkStore.GetLocalProductIdsAsync`) and then `ProductMatcher.MatchLinked` with
+the evidence's product id and name. A Nayax product id is never assigned to `ProductId`. When the
+evidence carries neither an id nor a name, or nothing resolves, the decision is refused with 409
+("Nayax's product isn't linked to a product in this business. Link it first, or choose another
+decision.") and nothing changes. The three product columns change in the same transaction as the
+machine, amount and instant.
+
+#### One write-locked decision transaction
+
+`EfNayaxSaleReviewStore.DecideAsync` runs in one `SqliteWriteLockTransaction` (`BEGIN IMMEDIATE`):
+
+1. re-read the sale authoritatively (query, then reload) and its latest evidence id;
+2. refuse with 409 and write nothing when the state or the latest evidence id differs from what the
+   request presented, or the named evidence is not the latest row of its kind for that sale;
+3. resolve the product (for "Use Nayax's values");
+4. apply the correction or state change;
+5. write the `NayaxSaleOwnerDecisionAudits` row (who, when, reason, evidence id, state and values
+   before and after, counted amount before and after, and the imported reimbursement period the change
+   moved, with the difference);
+6. stage the pending inventory-cost rebuild for the old and the new product, from the earlier of the
+   old and new instants, whenever counting or a costed value changed.
+
+#1104's evidence write takes the same lock, so a decision and new evidence for the same sale are
+strictly ordered and whichever commits second sees the other; a race test on a real SQLite file runs
+both concurrently. After commit, `ReviewNayaxSales` drains the rebuilds through
+`ILatestNayaxSalesStore.RebuildInventoryCostsAsync`; a failed replay keeps its pending row and never
+undoes the decision. All reads and writes are ordinary tenant-scoped statements: no
+`IgnoreQueryFilters`, and another business's sale or evidence id is simply not found.
+
+#### Later evidence and superseded decisions
+
+An Owner state may move to `Conflict` or `NeedsInvestigation`
+(`NayaxSqsVerificationTransitions`), but `EfNayaxSaleProviderEvidenceStore` allows it only for a
+`Comparison` that contradicts the decided values and differs from the comparison the decision relied
+on: the latest comparison no newer than the decision audit's evidence id, read inside the evidence
+write's own transaction. Comparing with the latest comparison instead would let a contradiction the
+Owner already considered (A), followed by a matching comparison (B), supersede the decision when A
+came back. Deduplication of the evidence history still compares with the latest row. Matching
+evidence is recorded and changes nothing (a decided sale is never promoted to `Verified`); an absence
+never supersedes a decision. A superseded decision writes a `Superseded` audit row naming the new
+evidence, and the Dashboard alert shows again. Any evidence write that moves a sale into or out of the
+counted totals stages that product's rebuild in its own transaction, and the hourly run drains it
+after the comparison. A newly flagged or excluded row logs a warning with the business id, machine id
+and transaction id only.
+
+#### API and pages
+
+`NayaxSaleReviewController`: `GET api/nayax-sale-review` and `GET api/nayax-sale-review/summary`
+(`Dashboard.View`), and `POST api/nayax-sale-review/{saleId}/decision` (`Data.Repair`, Owner-only;
+refused for a read-only support session and a role preview by their method rules). The body presents
+`presentedState`, `presentedLatestEvidenceId`, the relied-on `evidenceId`, the `decision` and the
+`reason`. The Dashboard's Needs attention panel shows `NayaxSaleReviewAlertComponent` ("3 Nayax sales
+need your review · 1 is not being counted") while anything is `Conflict` or `NeedsInvestigation`; it
+links to `/nayax-sales-review`, which lists the sales with the stored values beside the evidence and
+the decision history, and offers the allowed decisions to an Owner only. The list is paged on the
+server in two separate views, `view=10` (needs review: exactly the `Conflict` and
+`NeedsInvestigation` sales the summary counts, the page's default) and `view=20` (decided), with
+`pageIndex` from 0 and `pageSize` from 1 to 100 (default 25), and answers the view's total beside the
+page; decided sales therefore never push a flagged sale out of reach. An absence is
+shown as what `lastSales` returned for the machine (count, earliest and latest, in business time),
+never as "missing from Nayax".
 
 ### Backend migration track
 
@@ -17518,16 +18891,18 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Verified snapshot upload to the private backup container — `backup-database --upload` | Same CLI mode, authenticating with `DefaultAzureCredential`: the App Service managed identity when a job runs it, the operator's own Azure sign-in when run by hand | Implemented (#332) | No. |
 | Scheduling that backup and upload | A triggered Linux App Service WebJob packaged into the existing `dotnet publish` output (`App_Data/jobs/triggered/database-backup/`), invoking `backup-database --upload` daily at 15:00 UTC and exiting with the command's own exit code | Implemented (#333); human App Service activation and verification outstanding — see [Scheduling the backup with an App Service WebJob](#scheduling-the-backup-with-an-app-service-webjob-issue-333) | No. The WebJob runs inside the App Service plan already paid for, ships with the existing deployment artifact, reaches the same `/home` database file, and inherits the same managed identity and application settings. This is the only workload in the table that genuinely cannot stay request-driven — a backup must happen whether or not anyone signs in — and it is the one a Function would most plausibly claim, so it is assessed explicitly under each criterion below. |
 | Backup retention, alerting and restore runbook | No compute at all. Retention is an Azure Blob lifecycle policy executed by the storage service, the two alerts are Azure Monitor log search rules, and restore stays a deliberate, human-run procedure with a non-production rehearsal; all of it is applied by a human, and the uploader's seam (`IBackupBlobContainer`) still exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally | Designed and documented (#334); human Azure setup outstanding — see [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334) | No, and no compute host either. Retention turned out to be a storage-lifecycle question, which is why it needs neither a WebJob nor a Function. |
-| Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187) | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
+| Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187). Since #1106 the on-load run is **skipped only while that business is live via SQS** — an enabled sender, a reader that polled successfully inside two minutes with no failures, and a reconciliation that fully succeeded inside 150 minutes (see [Dashboard sales live from the Nayax SQS queue](#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106)); any other business, and every forced Refresh, runs exactly as before | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
+| Nayax SQS sales reader — `Inventory.Application.NayaxSqs.NayaxSqsSalesReader` | In-process, in a hosted long-poll loop over the one shared Restockroo SQS queue: it attributes each message to a business by the SQS `SenderId`, then saves the sale and drains that business's pending inventory-cost rebuilds in a service scope resolved to it, and deletes the message only once both are durably done | Implemented (#1103); the queues, the IAM user, the `NayaxSqs__*` settings, the CloudWatch alarm and App Service **Always On** are outstanding human work — see [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103) | No, and a Function is the thing it must not be. It writes the `/home` SQLite file, so an out-of-process reader is outside the single-writer envelope; it needs each business's own stored Nayax credentials, which the API already resolves per call; and this is the one workload in the table that is genuinely **event-driven** — which is exactly the condition the "what would change this decision" list names, except that the API *can* receive from the queue itself, so receiving it here costs no second host, identity, configuration surface or telemetry source. It is assessed explicitly under each criterion below. |
+| Hourly Nayax sales reconciliation — `Inventory.Application.NayaxReconciliation.ReconcileNayaxSalesWithProvider` | In-process, in a hosted loop: about five minutes after startup and then every 60 minutes it runs once for each business whose SQS sender is enabled and whose own lifecycle is active, one business at a time, in a service scope resolved to that business. Each run reuses `SyncLatestNayaxSales` with `force: true` under a shared per-business lock, then compares what `lastSales` returned with the sales SQS delivered and records the evidence | Implemented (#1104); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104) | No, for the queue reader's reasons exactly: it writes the `/home` SQLite file, so an out-of-process runner is outside the single-writer envelope, and it needs each business's own stored Nayax credentials, which the API already resolves per call. It is the **third** scheduled workload and the first that is scheduled *in-process* rather than by the WebJob of issue #333 — because unlike the backup and the connected-machine counts it has to serialise against request-driven synchronizations through an in-memory lock, which a separate process could not share. It is assessed explicitly under each criterion below. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
 | Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
-| Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in the API's own single hosted drain: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |
+| Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in a hosted drain of its own: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |
 | Connected-machine counts — `snapshot-connected-machines` | `InventoryApi` CLI mode dispatched before the web host is built, invoking `Inventory.Application.ConnectedMachines.RecordConnectedMachineSnapshot` once per counted business; runnable by hand and intended for the same App Service WebJob mechanism as the backup (#333) | Implemented (#978); scheduling it in the App Service is outstanding human work — see [Counting connected machines](#counting-connected-machines-issue-978) | No. The published executable already is the job, it reaches the same `/home` database file and the same per-business credentials, and it is the single SQLite writer while it runs. It is the second workload that genuinely cannot stay request-driven — a day nobody signs in is still a day the account held machines — but it is **bounded and self-healing**: at most 100 fleet reads per run, one per business per day, and a missed run leaves the last complete count as a stale figure rather than a wrong one. |
 | Database schema migration | `DatabaseSchemaStartup` at API startup, plus the human-run `migrate-database` command | Implemented (#54, revised by #201) | No. |
 
-Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the two scheduled ones — the backup of issue #333 and the connected-machine counts of issue #978 — is started by a human, an operator in the application or an operator on the instance. The member display-name refresh of issue #524 is started by a human too, by making any request; it is only the one workload nobody *waits* for, and it finishes inside the same process moments later. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob that runs the published executable on a cron — which is why issue #978's daily count is a CLI mode of that same executable rather than a second mechanism: the slot already exists, and what a new scheduled workload needs is a cron entry and a human to set it, not another host.
+Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the two scheduled ones — the backup of issue #333 and the connected-machine counts of issue #978 — and the one event-driven one — the Nayax SQS sales reader of issue #1103 — is started by a human, an operator in the application or an operator on the instance. The member display-name refresh of issue #524 is started by a human too, by making any request; it is only the one workload nobody *waits* for, and it finishes inside the same process moments later. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob that runs the published executable on a cron — which is why issue #978's daily count is a CLI mode of that same executable rather than a second mechanism: the slot already exists, and what a new scheduled workload needs is a cron entry and a human to set it, not another host. Issue #1103's reader is the one workload that is neither: it is started by the host and woken by a queue, not by a schedule and not by a person, which is why it is a hosted service in the API rather than a cron entry.
 
 ### Decision criteria for any future background workload
 
@@ -17582,9 +18957,106 @@ This is a distinct question from retries, and must be answered separately: **aft
 
 A workload that fits none of these three is not ready to be scheduled on any host, and moving it to a Function would not make it ready. A failure that is invisible is the worst outcome in every mode, which is why the observability criterion and #334's alerting are prerequisites for trusting a schedule, not enhancements to it.
 
+#### The Nayax SQS sales reader against the seven criteria (issue #1103)
+
+The first workload in the table that is event-driven rather than request-driven or scheduled, so it is
+answered here criterion by criterion rather than left to the general paragraphs above.
+
+1. **Frequency.** It does not poll on a timer: it long-polls for 20 seconds at a time, which is SQS's
+   own documented maximum, so an idle fleet costs one held request rather than repeated ones and a vend
+   is picked up within seconds. There is no overlap to worry about because there is one loop and it
+   processes one message at a time — which the single-writer SQLite file requires anyway. Staleness is
+   the whole point of the feature: sales reach the application within seconds instead of on the next
+   Dashboard load.
+2. **Retries.** Nothing is retried in a loop here; the *queue* is the retry. A transient outcome sets
+   the message's visibility to 30 s × its receive count, capped at the visibility timeout, so the
+   backoff is counted by SQS's own `ApproximateReceiveCount` and therefore survives a restart. A
+   `ReceiveMessage` that fails backs off with jitter up to 60 s. Nayax calls still pass through
+   `NayaxResilienceHandler` as every other caller's do. A message that can never succeed is retried not
+   at all: its visibility is set to zero so the queue's `maxReceiveCount` carries it to the dead-letter
+   queue.
+3. **Idempotency.** A standard queue can deliver a message more than once, so this is the criterion the
+   whole design rests on: the duplicate is refused by the database's unique index on
+   `(BusinessId, TransactionID)`, the save is one `BEGIN IMMEDIATE` transaction, what still has to be
+   replayed is a durable row rather than a value in memory, and **the message is deleted last**. A
+   redelivery finds the sale stored, retries whatever is pending for it, and is deleted only once that
+   succeeds. Nothing is upserted and no recorded amount is changed.
+4. **Secrets.** This is the one place the model gets *worse* rather than better, and it is unavoidable:
+   SQS has no managed-identity path for a Nayax-operated sender, so the reader holds an AWS access key
+   pair. It is bounded in every direction available: App Service settings or Key Vault references and
+   never the repository; one IAM user whose policy is `ReceiveMessage`, `DeleteMessage`,
+   `ChangeMessageVisibility` and `GetQueueAttributes` on the main queue and only `GetQueueAttributes` on
+   the dead-letter queue; one adapter in the whole application that holds it, behind a port that offers
+   exactly those four operations and no way to name a queue; and nothing logs, publishes or persists it.
+   A Function App would need its own copy of the same pair plus its own identity and runtime storage, so
+   on this criterion too the existing host is the smaller surface.
+5. **Observability.** `NayaxSqsReaderHealth` records the last successful poll (empty polls included),
+   the consecutive failure count, the last message processed and the dead-letter depth, so "quiet" and
+   "stalled" are distinguishable — which is what issue #1106 shows. Every message emits one structured
+   line with its queue message id, its business id, its disposition and a fixed reason code, and the
+   dead-letter depth is warned about at any depth above zero. Nothing logged can carry a body, a receipt
+   handle, a card value or a key, which is enforced by the log port's own signatures.
+6. **Cost.** Long polling is one held request per 20 seconds, not a request per second. The fleet list
+   is answered from the existing per-business cache, so draining a hundred messages for one machine is
+   one Nayax call rather than a hundred. Nothing about the host is new: no deployment unit, no runtime
+   storage account, no role assignment, no second telemetry source.
+7. **Failure recovery.** **Self-healing**, and deliberately so. A message that was not finished with
+   stays on the queue and is redelivered; a sale that was saved but not replayed keeps a durable pending
+   row that the next receive — or the next request-driven synchronization — retries; and a message the
+   application can never save reaches the dead-letter queue, where it is retained for 14 days as a
+   sample a person can look at. The one recovery step that is *not* automated is replaying the
+   dead-letter queue, which is a human console procedure after the cause has been fixed, for the same
+   reason a database restore is: see README.md § Nayax SQS sales reader.
+
+#### The hourly Nayax sales reconciliation against the seven criteria (issue #1104)
+
+The third scheduled workload, and the first scheduled one that is **not** a WebJob, so it is answered
+here criterion by criterion rather than left to the general paragraphs above.
+
+1. **Frequency.** Every 60 minutes, the repository owner's decision of 5 November 2026, with the first
+   sweep about five minutes after startup so a deployment restart is not also a burst of Nayax reads
+   while the API is serving the requests that were waiting for it. The interval is measured from the
+   *end* of the previous sweep rather than on a wall clock, so a long sweep delays the next one
+   instead of overlapping it — and inside a sweep the businesses run one at a time, which the
+   single-writer SQLite file requires anyway. Staleness is bounded by the hour: a contradiction
+   between what SQS delivered and what Nayax's own record says is surfaced within one.
+2. **Retries.** Nothing is retried inside a run: **the next hour is the retry**, and it is safe to be,
+   because every step is idempotent and a run that did not finish records no success. A business whose
+   run failed keeps its previous `LastReconciliationSucceededAtUtc`, so what the next run reconciles
+   from is the state that really exists. Nayax calls still pass through `NayaxResilienceHandler` as
+   every other caller's do, and the per-business run limit of issue #681 applies to this run too — a
+   business that has spent its allowance is skipped until the next hour rather than queued.
+3. **Idempotency.** Re-running an hour changes nothing: the save deduplicates by
+   `(BusinessId, TransactionID)` exactly as the Dashboard's own sync does, each evidence write is one
+   `BEGIN IMMEDIATE` transaction that re-reads the sale's state, and a repeated identical observation
+   writes **no row at all**. The state transitions are an allowlist, so a second run cannot move a
+   sale somewhere the first one could not. Nothing is upserted and no recorded amount is changed.
+4. **Secrets.** No new secret of any kind. It reads each business's own stored Nayax credentials
+   through `INayaxRequestCredentialProvider` in that business's own scope — the same read a request
+   makes, with the same connection, support-session and plan gates — and it holds no AWS credential,
+   because it does not touch the queue.
+5. **Observability.** One structured line per business per sweep, carrying that business's key, the
+   run's outcome and **counts only**: read, added, verified, conflict, needs investigation, absence
+   rows, skipped, and whether the run counted as succeeded. A transaction id, an amount, a currency, a
+   machine or a product cannot reach a sink, which the log port's own signatures enforce. Beside the
+   log, `BusinessNayaxSqsSender.LastReconciliationSucceededAtUtc` is the durable answer to "when did
+   this business's reconciliation last fully succeed?", which is what issue #1106 reads.
+6. **Cost.** One Nayax call per machine plus one, per eligible business, per hour — the same shape the
+   Dashboard's own sync already has, and bounded by the same per-business run limit. A business whose
+   sync is already running is skipped for the hour rather than waiting, so a sweep never multiplies
+   the upstream calls. Nothing about the host is new: no deployment unit, no runtime storage account,
+   no role assignment, no second telemetry source.
+7. **Failure recovery.** **Self-healing.** A failed, skipped or partial run leaves the success instant
+   exactly as it was and changes nothing it had not already committed; the next hour reconciles the
+   same window again, because `lastSales` is a rolling window rather than a cursor. A pending
+   inventory-cost rebuild left behind by any path is drained at the start of the next run. There is no
+   state a human has to repair, and no step that is unsafe to repeat.
+
 ### Why "no Functions yet" is the answer today
 
 Applying the seven criteria to the inventory: six of the seven are satisfied by the existing model for every workload listed, and the seventh — secrets — is actively better in the existing model, because the backup path carries no credential at all and a Function App would introduce an identity, a role assignment and a token reference that do not exist today. The only workload that needs a non-interactive trigger is the scheduled backup, and a WebJob provides that trigger inside the existing host, with access to the `/home` database file that an out-of-process Function could not safely write anyway. No workload is blocked by the current API/automation model. Adding a second host would therefore buy no capability and cost deployment, identity, configuration and observability surface — so the default stated in issue #68 stands: **no Functions yet.**
+
+Issue #1103's queue reader is the first workload that tested that answer rather than merely fitting it, and the answer held for the reason the decision was written with: the trigger it needs is one the API can receive itself, and the thing it has to do once triggered is **write the single-writer SQLite file**, which is precisely what an out-of-process Function may not do. It is also the one workload that does not make the secrets criterion better — SQS offers no managed-identity path for a sender Nayax operates, so an AWS access key pair exists now where none did before — and a Function would have needed its own copy of that same pair on top of its own identity and runtime storage. The sub-section above answers all seven for it; the conclusion is unchanged.
 
 ### What would change this decision
 

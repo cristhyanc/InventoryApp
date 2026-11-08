@@ -14,9 +14,16 @@ namespace Inventory.Infrastructure.Persistence;
 /// (Persistence 8/8 of #153).
 ///
 /// The queries are the former <c>InventoryCostRebuildService</c>'s: the product's stock
-/// movements, the business's completed Nayax sales of that product, its costing repairs (issue
-/// #359) and its latest transition
+/// movements, the business's <em>stock-consuming</em> Nayax sales of that product, its costing
+/// repairs (issue #359) and its latest transition
 /// baseline, all read through <see cref="AppDbContext"/>'s business query filter.
+///
+/// <para>Which sales those are is <c>EfNayaxSalesQueries.StockConsumingSalePredicate</c> since issue
+/// #1107 - status 12 <em>or</em> status 62 - rather than the completed-sale filter. A refunded sale
+/// dispensed its unit and the business no longer owns it, so it keeps consuming exactly one unit at
+/// the cost its position in the replay gives it; what the refund reverses is money, and that is the
+/// completed-sale filter's job in the reports. The replay itself is unchanged: it consumes the sales
+/// it is given, chronologically, and knows nothing about statuses.</para>
 ///
 /// Which sales belong to the product is the persisted <c>NayaxSales.ProductId</c> association
 /// (issue #758, parent #329 decision A2c), so the predicate is part of the SQL rather than a
@@ -47,7 +54,7 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
         var saleQuery = forUpdate ? _db.NayaxSales.AsQueryable() : _db.NayaxSales.AsNoTracking();
         var adjustments = await adjustmentQuery.Where(x => x.ProductId == productId).ToListAsync(cancellationToken);
         var sales = await saleQuery
-            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .Where(EfNayaxSalesQueries.StockConsumingSalePredicate)
             .Where(s => s.ProductId == productId)
             .ToListAsync(cancellationToken);
         var repairs = await LoadRepairsAsync(productId, asOf: null, cancellationToken);
@@ -69,7 +76,7 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
             .Where(x => x.ProductId == productId && x.EffectiveAt <= asOf)
             .ToListAsync(cancellationToken);
         var sales = await _db.NayaxSales.AsNoTracking()
-            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .Where(EfNayaxSalesQueries.StockConsumingSalePredicate)
             .Where(s => s.MachineAuthorizationTime <= asOf)
             .Where(s => s.ProductId == productId)
             .ToListAsync(cancellationToken);

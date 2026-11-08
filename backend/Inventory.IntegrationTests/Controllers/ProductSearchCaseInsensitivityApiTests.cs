@@ -103,6 +103,27 @@ public sealed class ProductSearchCaseInsensitivityApiTests
         Assert.Empty(await ProductNamesAsync(response));
     }
 
+    /// <summary>
+    /// The spaces around a search are not part of it. A phone keyboard leaves one after a word
+    /// picked from its suggestions, and "cola " searched literally would miss "Coca Cola", whose
+    /// name ends in the word.
+    /// </summary>
+    [Theory]
+    [InlineData(AllProducts, "cola ")]
+    [InlineData(AllProducts, " cola")]
+    [InlineData(AllProducts, "  cola  ")]
+    [InlineData(LowStockAlerts, "cola ")]
+    [InlineData(LowStockAlerts, " cola")]
+    public async Task A_search_with_spaces_around_it_finds_the_product(string path, string search)
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated().GetAsync($"{path}?search={Uri.EscapeDataString(search)}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal([ApiFactory.ThresholdProductName], await ProductNamesAsync(response));
+    }
+
     private static async Task<IReadOnlyList<string>> ProductNamesAsync(HttpResponseMessage response)
     {
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());

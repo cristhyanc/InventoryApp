@@ -1,0 +1,60 @@
+{
+  "id": "REVIEW-004",
+  "title": "Dashboard SQS live skip: control case, forced Refresh is preserved",
+  "pullRequest": 1130,
+  "baseSha": "6616bf6a6691da8e4be98283e1afd1f48427d407",
+  "headSha": "c6bd56bf1be22dfb32dc23a9bc287c2b890bcc9f",
+  "context": {
+    "prTitle": "Dashboard stops syncing Nayax sales on load when SQS is live (#1106)",
+    "prSummary": "For a business on the shared Nayax SQS queue, an unforced POST /api/nayax-sales-sync answers \"live via SQS\" having read nothing from Nayax, written nothing and claimed no run allowance, but only while NayaxSqsLivePolicy finds an enabled sender, a healthy reader (last successful poll under 2 minutes old, no consecutive failures) and a reconciliation that fully succeeded under 150 minutes ago. The connection, status, support-session and plan refusals still come first. A forced Refresh makes no live decision and reads lastSales as before. The 200 body gains liveViaSqs, lastSqsMessageReceivedAtUtc and sqsNotLiveReason. The Super Admin sender card shows reader health; the Dashboard shows \"Live from Nayax\". Regenerates the Tailwind stylesheet.",
+    "linkedIssue": "#1106 \"[Agent task] Dashboard stops syncing Nayax sales on load when SQS is live\" (risk High: Nayax integration, public API contract; Medium: frontend)",
+    "acceptanceCriteria": [
+      "The unforced sync (Dashboard load) returns a new outcome, live via SQS, only when all of these are true: (1) the business has an enabled SQS sender (#1101); (2) the reader is healthy: NayaxSqsReaderHealth.LastSuccessfulPollUtc (#1103) is less than 2 minutes old and ConsecutivePollFailures is 0; (3) the hourly reconciliation last fully succeeded for that business less than 150 minutes ago, read from LastReconciliationSucceededAtUtc on the sender row (#1104; this issue only reads it).",
+      "Worked example of the 150-minute limit: a run succeeds at minute 0; the runs due at 60 and 120 are both missed; the business stays live until minute 150 and becomes stale then.",
+      "The live outcome reads nothing from Nayax, writes nothing and claims no rate-limit allowance.",
+      "The time since the last message is not a condition. A quiet queue is not a failure.",
+      "The connection, status, support-session and plan refusals are still resolved before this decision, in the order #843 asserts. An unusable connection gets its refusal, never \"live\".",
+      "Reader health is the in-memory, process-wide NayaxSqsReaderHealth from #1103. After a restart, the business is not live until the first successful poll, and the Dashboard falls back to today's sync in the meantime.",
+      "The last successful reconciliation is #1104's durable LastReconciliationSucceededAtUtc, so a restart does not make every business look stale.",
+      "The last message time per business is LastMessageReceivedAtUtc on the sender row (#1103).",
+      "This issue adds no column and no migration.",
+      "The response gains liveViaSqs (bool), lastSqsMessageReceivedAtUtc (nullable) and sqsNotLiveReason (nullable: NoSender, SenderDisabled, ReaderNotPolling, ReaderFailing, ReconciliationStale). Existing fields keep their meaning.",
+      "A forced sync (Refresh) runs lastSales exactly as today and is still rationed by the rate limiter.",
+      "When the business is not live, everything behaves exactly as today.",
+      "When liveViaSqs is true, the Dashboard's sales freshness line reads \"Live from Nayax · last sale received <Sydney time>\", or \"Live from Nayax · no sales received yet\". Otherwise it shows today's wording.",
+      "The Super Admin sender card (#1101) shows the reader health: last successful poll, consecutive failures and dead-letter queue depth, plus the last successful reconciliation (Sydney time, or \"Never\")."
+    ],
+    "outOfScope": [
+      "Adding or writing LastReconciliationSucceededAtUtc (#1104), or any other schema change.",
+      "Removing the request-driven sync or its endpoint.",
+      "Changing the rate-limit or freshness numbers, or #1104's Busy (409) outcome.",
+      "Any change to the reader's processing, the reconciliation or flagged-sale handling.",
+      "Other screens that read sales."
+    ],
+    "documentationImpact": "Decision: UPDATED. Evidence: docs/architecture.md (the \"Latest Nayax sales synchronization\" row and the Nayax integration section: the three live conditions, their sources, the not-live reasons and the 150-minute arithmetic), README.md (Dashboard freshness wording and the reader health on the Super Admin card) and AGENTS.md (Nayax section note on the live skip).",
+    "validation": "The merge-validation check (bash scripts/validate.sh: restore, C# format check, backend build with analyzers and warnings-as-errors, backend tests with coverage including architecture tests, NuGet vulnerability check, npm ci, Angular ESLint and production build) succeeded on exactly this head SHA. Treat it as the exact-SHA validation evidence for this review."
+  },
+  "expected": {
+    "verdict": "READY FOR HUMAN REVIEW",
+    "findings": [],
+    "forbiddenBlockers": [
+      {
+        "id": "invented-forced-refresh-blocker",
+        "summary": "Claims the live-via-SQS shortcut also skips, blocks or changes a forced Refresh. It does not: SyncLatestNayaxSales makes the live decision only for unforced requests, and SyncLatestNayaxSalesLiveViaSqsTests cover the forced path.",
+        "paths": [
+          "SyncLatestNayaxSales",
+          "NayaxSqsLivePolicy",
+          "NayaxSalesSyncController",
+          "dashboard",
+          "refresh",
+          "forc"
+        ],
+        "allOf": [
+          "forc|refresh",
+          "skip|bypass|block|short-?circuit|never reads|no longer|not read|suppress|live"
+        ]
+      }
+    ]
+  },
+  "source": "Control from the owner's review notes on PR #1130 (7 Nov 2026): the healthy-queue shortcut preserves the forced Refresh, and the reviewer should not invent a blocker. Checked in code: SyncLatestNayaxSales at this head makes the live decision only when force is false (\"var live = force ? null : ...\"), from commit 61f528a5. Merged as is."
+}

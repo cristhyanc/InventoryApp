@@ -156,21 +156,28 @@ public class ReportingAdapterOwnershipTests
     }
 
     /// <summary>
-    /// Acceptance criterion: the completed-sale predicate lives in Infrastructure persistence, not
-    /// in Domain. <c>Inventory.Domain.FinancialConfiguration.NayaxTransactionStatusIds.Completed</c>
-    /// stays the one authoritative "status 12 is an approved sale" rule (AGENTS.md § Sales, payment
-    /// methods and statuses); what must not follow it into Domain is the EF
-    /// <c>Expression&lt;Func&lt;NayaxSales, bool&gt;&gt;</c> that applies it to a persistence entity
-    /// inside a translated query.
+    /// Acceptance criterion: the sale predicates live in Infrastructure persistence, not in Domain.
+    /// <c>Inventory.Domain.FinancialConfiguration.NayaxTransactionStatusIds</c> stays the one
+    /// authoritative statement of what each status id means and
+    /// <c>Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy</c> the one statement of the two rules
+    /// over it (AGENTS.md § Sales, payment methods and statuses); what must not follow either into
+    /// Domain is the EF <c>Expression&lt;Func&lt;NayaxSales, bool&gt;&gt;</c> that applies it to a
+    /// persistence entity inside a translated query.
+    ///
+    /// <para>There are two since issue #1107 - the completed-sale filter for money and reports, and
+    /// the stock-consuming filter for machine stock and costing inventory - and this asserts both,
+    /// so a rule split into two cannot lose one half of its EF form.</para>
     /// </summary>
-    [Fact]
-    public void Completed_sale_predicate_lives_in_Infrastructure_persistence_not_in_Domain()
+    [Theory]
+    [InlineData("CompletedSalePredicate")]
+    [InlineData("StockConsumingSalePredicate")]
+    public void Sale_predicates_live_in_Infrastructure_persistence_not_in_Domain(string predicate)
     {
         var queries = Assert.Single(TypesNamed(InfrastructureAssembly, "EfNayaxSalesQueries"));
 
         Assert.Equal("Inventory.Infrastructure.Data", queries.Namespace);
         Assert.NotEmpty(queries.GetMember(
-            "CompletedSalePredicate",
+            predicate,
             System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static));
 
         var domainOffenders = DomainAssembly.GetTypes()
@@ -179,15 +186,59 @@ public class ReportingAdapterOwnershipTests
                     | System.Reflection.BindingFlags.NonPublic
                     | System.Reflection.BindingFlags.Static
                     | System.Reflection.BindingFlags.Instance))
-            .Where(member => member.Name == "CompletedSalePredicate")
+            .Where(member => member.Name == predicate)
             .Select(member => $"{member.DeclaringType?.FullName}.{member.Name}")
             .ToArray();
 
         Assert.True(
             domainOffenders.Length == 0,
-            "Inventory.Domain must not declare the completed-sale query predicate: a predicate over "
+            $"Inventory.Domain must not declare the {predicate} query predicate: a predicate over "
                 + "the EF NayaxSales entity is persistence, and Domain calculations stay free of EF "
                 + $"Core (AGENTS.md § Architecture rules). Offending member(s): {string.Join(", ", domainOffenders)}.");
+    }
+
+    /// <summary>
+    /// Which predicate each Infrastructure reader selects on (issue #1107). Stated as a list because
+    /// the split is only worth having if it stays where it was put: a report, a reorder need, a
+    /// dashboard figure or a fee calculation that moved to the stock filter would start counting
+    /// refunded money as revenue, and a costing or machine-stock reader that moved back to the
+    /// completed-sale filter would hand a refunded unit back to inventory it never returned to.
+    ///
+    /// <para>The three stock readers are the whole of the second list, and that is the owner's
+    /// decision of 8 November 2026: the refunded sale keeps its unit and its original cost, and only
+    /// money is reversed.</para>
+    /// </summary>
+    public static TheoryData<string, string, string> PredicateUsers() => new()
+    {
+        // Money, reports, reorder, dashboard, fees, commissions, timestamp repair: completed sales.
+        { "Reporting/Persistence", "EfReportingSharedQueries.cs", "CompletedSalePredicate" },
+        { "Reporting/Persistence", "EfNayaxProcessingFeeFactsProvider.cs", "CompletedSalePredicate" },
+        { "Persistence", "EfDashboardSummarySalesFactsProvider.cs", "CompletedSalePredicate" },
+        { "Persistence", "EfMachineRestockSyncCoverageStore.cs", "CompletedSalePredicate" },
+        { "Persistence", "EfNayaxSaleTimestampRepairStore.cs", "CompletedSalePredicate" },
+        { "Persistence", "EfSiteCommissionStore.cs", "CompletedSalePredicate" },
+
+        // Physical machine stock and business-owned costing inventory: status 12 or 62.
+        { "Persistence", "EfInventoryCostLedgerStore.cs", "StockConsumingSalePredicate" },
+        { "Persistence", "EfMachineStockLedgerStore.cs", "StockConsumingSalePredicate" },
+        { "Persistence", "EfSaleCostingStore.cs", "StockConsumingSalePredicate" },
+    };
+
+    [Theory]
+    [MemberData(nameof(PredicateUsers))]
+    public void Each_sale_reader_selects_on_the_predicate_its_question_needs(
+        string folder, string file, string expectedPredicate)
+    {
+        var other = expectedPredicate == "CompletedSalePredicate"
+            ? "StockConsumingSalePredicate"
+            : "CompletedSalePredicate";
+
+        var source = File.ReadAllText(
+            Path.Combine(BackendRoot, "Inventory.Infrastructure", Path.Combine(folder.Split('/')), file));
+
+        Assert.Contains($"EfNayaxSalesQueries.{expectedPredicate}", source, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            $".Where(EfNayaxSalesQueries.{other})", source, StringComparison.Ordinal);
     }
 
     public static TheoryData<string> RelocatedAdapterNames()
