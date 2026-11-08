@@ -337,9 +337,10 @@ local `claude` CLI is signed in to (roughly USD 0.30 to 3 per case).
 
 Per case: each expected finding is `caught` when a blocker or inline comment matches it (a match only
 in `suggestions` is reported as `onlySuggested` and is a miss); a match of a forbidden blocker is a
-false alarm; and the verdict must equal the expected one. Blockers the rubric neither expects nor
-forbids are listed as `otherBlockers` for a human to judge; on the `READY` control each one counts in
-`controlBlockers`. The summary gives known blockers caught, false alarms, verdict matches, how many
+false alarm; and the verdict must equal the expected one. On the `READY` control any blocker or
+inline comment fails the case, whether or not a forbidden matcher names it, and is counted in
+`controlBlockers`; suggestions do not. On the other cases, blockers the rubric neither expects nor
+forbids are listed as `otherBlockers` for a human to judge. The summary gives known blockers caught, false alarms, verdict matches, how many
 blockers name a `file:line` and a test (`actionableBlockers`, reported, not graded) and the cost the
 CLI reported. The model is never asked whether it passed. Exit codes: `0` every case passed, `1` a
 case failed, `2` usage or case error, `3` the CLI is missing. Results and their interpretation are in

@@ -344,6 +344,15 @@ export function gradeReviewCase(caseObj, outcome) {
     failures.push(`False-alarm blocker ${alarm.id}: ${alarm.text.slice(0, 300)}`);
   }
 
+  // On a clean control any blocker or inline change request is unwanted, whether or not a
+  // forbidden matcher names it, so each one fails the case (named false alarms are reported above).
+  if (caseObj.expected.verdict === 'READY FOR HUMAN REVIEW') {
+    const named = new Set(falseAlarms.map((alarm) => alarm.text));
+    for (const item of raised.filter((entry) => !named.has(entry.text))) {
+      failures.push(`Unexpected ${item.kind === 'inline' ? 'inline comment' : 'blocker'} on the clean control: ${item.text.slice(0, 300)}`);
+    }
+  }
+
   if (review.verdict !== caseObj.expected.verdict) {
     failures.push(`Verdict ${review.verdict}, expected ${caseObj.expected.verdict}.`);
   }
@@ -364,6 +373,7 @@ export function gradeReviewCase(caseObj, outcome) {
     // an unwanted blocker; on the other cases a human decides whether each is real.
     otherBlockers,
     blockerCount: blockers.length,
+    raisedCount: raised.length,
     actionableBlockers: blockers.filter((item) => isActionable(item.text)).length,
     review,
     providerMetadata: outcome.providerMetadata ?? null,
@@ -386,7 +396,7 @@ export function summarizeReviewResults(results, cases) {
     caughtFindings += (result.findings ?? []).filter((f) => f.caught).length;
     falseAlarms += (result.falseAlarms ?? []).length;
     if (caseObj.expected.verdict === 'READY FOR HUMAN REVIEW') {
-      controlBlockers += (result.otherBlockers ?? []).length;
+      controlBlockers += result.raisedCount ?? 0;
     }
     if (result.verdict === caseObj.expected.verdict) verdictMatches += 1;
     blockers += result.blockerCount ?? 0;

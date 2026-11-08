@@ -131,6 +131,36 @@ test('the control fails on the forbidden blocker and on a wrong verdict, and cou
   assert.ok(alarm.failures.some((f) => f.startsWith('Verdict')));
 });
 
+test('any blocker or inline comment on the clean control fails it, even one no forbidden matcher names', () => {
+  const caseObj = byId['REVIEW-004'];
+  const blocker = gradeReviewCase(caseObj, {
+    raw: review({ verdict: 'READY FOR HUMAN REVIEW', blockers: ['README.md:10 an unrelated invented problem.'] }),
+  });
+  assert.equal(blocker.status, 'FAIL');
+  assert.deepEqual(blocker.falseAlarms, []);
+  assert.ok(blocker.failures.some((f) => f.startsWith('Unexpected blocker on the clean control')));
+  const inline = gradeReviewCase(caseObj, {
+    raw: review({ verdict: 'READY FOR HUMAN REVIEW', inline_comments: [{ path: 'README.md', line: 3, body: 'change this' }] }),
+  });
+  assert.equal(inline.status, 'FAIL');
+  assert.ok(inline.failures.some((f) => f.startsWith('Unexpected inline comment on the clean control')));
+  const suggestion = gradeReviewCase(caseObj, { raw: review({ verdict: 'READY FOR HUMAN REVIEW', suggestions: ['consider a note'] }) });
+  assert.equal(suggestion.status, 'PASS');
+});
+
+test('a READY control with an unrelated blocker makes the eval exit nonzero', async () => {
+  const responses = Object.fromEntries(cases.map((c) => [c.id, review({ verdict: 'READY FOR HUMAN REVIEW' })]));
+  responses['REVIEW-004'] = review({ verdict: 'READY FOR HUMAN REVIEW', blockers: ['README.md:10 an unrelated invented problem.'] });
+  const logs = [];
+  const code = await main(['--provider', 'fixture', '--responses', 'unused.json', '--cases', 'REVIEW-004'], {
+    log: (m) => logs.push(m),
+    error: () => {},
+    providerFactory: () => createFixtureProvider(responses),
+  });
+  assert.equal(code, 1);
+  assert.match(logs.join('\n'), /Unexpected blocker on the clean control/);
+});
+
 test('malformed responses and provider errors fail the case', () => {
   const caseObj = byId['REVIEW-001'];
   assert.equal(gradeReviewCase(caseObj, { raw: 'not json' }).status, 'FAIL');
