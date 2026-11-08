@@ -100,6 +100,10 @@ run_step "Run agent eval corpus" \
 run_step "Test model-decision eval runner" \
     node --test "${repo_root}/scripts/run-agent-model-evals.test.mjs"
 
+# Unit tests only: the review-prompt evals themselves call a model and run on demand.
+run_step "Test review-prompt eval runner" \
+    node --test "${repo_root}/scripts/run-agent-review-evals.test.mjs"
+
 run_step "Test Project status sync" \
     node --test "${repo_root}/scripts/sync-project-status.test.mjs"
 
