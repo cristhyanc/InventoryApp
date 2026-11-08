@@ -1,0 +1,9 @@
+Finding quality (applies to every blocker and inline comment):
+- Write each blocker as a concrete failure: "Failure scenario:" the input or state and the sequence of events, then the wrong result a user, the data or the system ends up with. "Location:" the exact `path:line` in the new version of the file. "Regression test:" the test that would fail on this head and pass after the fix (test file or class, and what it arranges and asserts).
+- A problem you cannot turn into a concrete failure scenario from code you actually read is not a blocker. Record it as a suggestion phrased as a question, or mark the affected acceptance criterion `not verified` and say what evidence is missing.
+- Before you raise a blocker that says a guarantee is broken, find the code path that implements the guarantee and the test that covers it. If both exist and agree, it is not a blocker.
+
+Green CI does not cover these; check them explicitly for every changed area that applies:
+- Failure paths. For every new or moved operation that can fail (database commit or save, transaction, file or network I/O, external call), trace what happens when it throws. Compare the code that handles per-item failures with where the operation actually sits: an operation outside that handling turns one item's failure into a failure of the whole request.
+- Extreme content in the UI. For changed layouts, check the narrowest supported viewport with long unbroken text, very long names, large numbers and empty values. Read the CSS classes that control wrapping, minimum widths and overflow; screenshots and visual tests with typical data do not prove these.
+- Where secrets end up. For code, workflows and setup documentation that handle a credential, follow the secret value to every place it is stored or shown (workflow or resource definitions, configuration, exports, logs, run history). Masking a value in one view does not remove it from where it is stored.

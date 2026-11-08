@@ -272,6 +272,81 @@ not that the review model obeys them; the behavioural tests of the publisher its
 `scripts/agent-review-publication.test.mjs`. `INV-005` and `INV-006` have not been run through a
 model; see `baseline.md`.
 
+## Review-prompt evals (real pull requests)
+
+The model-decision evals give a model a short synthetic scenario. They cannot show whether the
+real review prompt finds a real bug in a real diff. `scripts/run-agent-review-evals.mjs` does that:
+it replays the review prompt from `agent-review.yml` against past pull request heads where the right
+answer is already known, and grades each review deterministically.
+
+### The cases
+
+Each file in `evals/agent/review/cases/` pins one pull request head and base by full SHA:
+
+| Case | Pull request | Expected | Known problem at that head |
+| --- | --- | --- | --- |
+| `REVIEW-001` | #1132 Sync Restock batching | `CHANGES REQUESTED` | `CommitAsync` sits outside the per-product failure handling, so a failed commit escapes the whole apply and later products never run (fixed by 8bee6fe8). |
+| `REVIEW-002` | #1131 Sites overview | `CHANGES REQUESTED` | A long unbroken site name cannot wrap in the mobile card and is clipped (fixed by 166292b8). |
+| `REVIEW-003` | #1133 Azure schedule | `CHANGES REQUESTED` | The setup guide puts the GitHub token literally in the Logic App HTTP action; secure inputs only hide run history (fixed by 72dd1c7b). |
+| `REVIEW-004` | #1130 Dashboard SQS | `READY FOR HUMAN REVIEW` | Control: the healthy-queue shortcut preserves the forced Refresh. A blocker claiming otherwise is a false alarm. |
+
+Merge validation passed on all four heads. A case holds what the reviewer is given (`context`: PR
+title and summary, acceptance criteria, exclusions, documentation-impact declaration and the CI
+result) and the hidden rubric (`expected`, `source`). `expected.findings` are the blockers the
+review must raise; `expected.forbiddenBlockers` are blockers it must not raise. Each is matched by
+case-insensitive patterns: one of `paths` and every one of `allOf` must appear in a single blocker or
+inline comment. The runner rejects a set without a `READY FOR HUMAN REVIEW` control, so an "always
+block" reviewer cannot pass. Add a case only with a confirmed answer: a later fix commit, or an owner
+decision, named in `source`.
+
+### Running it
+
+```bash
+node scripts/run-agent-review-evals.mjs --print-prompts --variant candidate          # show the prompts; calls nothing
+node scripts/run-agent-review-evals.mjs --provider claude-cli --variant current      # the prompt agent-review.yml runs today
+node scripts/run-agent-review-evals.mjs --provider claude-cli --variant candidate --concurrency 2 --output candidate.json
+node scripts/run-agent-review-evals.mjs --provider fixture --responses recorded.json # grade recorded reviews
+node --test scripts/run-agent-review-evals.test.mjs                                  # the runner's unit tests
+```
+
+`--cases ID,ID` runs a subset and `--timeout-ms` sets the per-case limit (default 40 minutes).
+Nothing runs unless someone types it: `--provider` has no default, validation runs only the unit
+tests, and no workflow runs the eval. Each live case is a full agentic review on the account the
+local `claude` CLI is signed in to (roughly USD 0.30 to 3 per case).
+
+### What is tested, and how it differs from the pipeline
+
+- **The prompt is the workflow's own.** Variant `current` is the `prompt: |` block of the
+  `review_agent` step in `agent-review.yml`, read at run time, with its GitHub expressions filled
+  from the case. The model, effort, turn limit and JSON schema come from the same step's
+  `claude_args`. Variant `candidate` inserts `evals/agent/review/candidate-prompt.md` before the
+  prompt's delivery instructions. A candidate that wins is copied into `agent-review.yml` in a
+  normal reviewed pull request and then checked in the real workflow.
+- **The reviewer can read the code.** Each case runs in a fresh temporary git repository holding
+  two commits copied by content from this repository: the base (also `origin/develop`) and the PR
+  head. The reviewer can read and search any file and run `git diff`, `git log`, `git show` and
+  `git status`. The repository shares no objects with this one, so later commits, the fix and these
+  case files are unreachable.
+- **No GitHub, network or MCP.** `gh`, the CI tools and the Nayax documentation tools are not
+  available. An "evaluation run" note after the prompt says so and gives the PR, issue and CI facts
+  from the case instead. Write tools, web tools and every other command are not allowed.
+
+### Grading and report
+
+Per case: each expected finding is `caught` when a blocker or inline comment matches it (a match only
+in `suggestions` is reported as `onlySuggested` and is a miss); a match of a forbidden blocker is a
+false alarm; and the verdict must equal the expected one. Blockers the rubric neither expects nor
+forbids are listed as `otherBlockers` for a human to judge; on the `READY` control each one counts in
+`controlBlockers`. The summary gives known blockers caught, false alarms, verdict matches, how many
+blockers name a `file:line` and a test (`actionableBlockers`, reported, not graded) and the cost the
+CLI reported. The model is never asked whether it passed. Exit codes: `0` every case passed, `1` a
+case failed, `2` usage or case error, `3` the CLI is missing. Results and their interpretation are in
+`baseline.md` ("Review-prompt evals").
+
+The candidate's checklist was written after reading these four bugs, so these cases can show that
+it finds them but not that it generalises. Judge a candidate on new cases it was not written from
+before relying on it.
+
 ## Regression/baseline workflow
 
 Re-run the deterministic evals (`node scripts/run-agent-evals.mjs`) whenever a pull request changes

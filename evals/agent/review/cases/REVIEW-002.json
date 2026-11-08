@@ -1,0 +1,49 @@
+{
+  "id": "REVIEW-002",
+  "title": "Sites overview: a long unbroken site name can be clipped in the mobile card",
+  "pullRequest": 1131,
+  "baseSha": "9b77befdd4e3b8b1959159af0a326e1f7fc048a6",
+  "headSha": "02784423ec7d4f15c77dc813fa9336b3c3b08876",
+  "context": {
+    "prTitle": "Redesign the Sites overview to match Products (#1128)",
+    "prSummary": "Redesigns the Sites overview (site-list component) to match the Products list: title with site and machine counts, toolbar with name search, All sites / Needs refill filter and refill-priority sort, a desktop table, compact mobile cards and stock chips. Adds unit tests, Playwright visual regression tests at desktop and mobile widths, synthetic-data screenshots and a docs/architecture.md section. A follow-up commit resolves SonarCloud findings.",
+    "linkedIssue": "#1128 \"[Agent task] Redesign the Sites overview to match Products\" (risk Medium: frontend-only behaviour)",
+    "acceptanceCriteria": [
+      "Show the Sites title, a compact site and machine count derived from actual overview data, and a toolbar with site-name search, All sites / Needs refill and a refill priority sort. Search and filter work together, including when no sites match. Clearly indicate the selected filter and sort.",
+      "Refill priority sorts sites with known empty counts first (more empty slots first), then by descending low count, with a deterministic name tie-break. Unknown counts do not imply a healthy site. The Needs refill filter includes sites with a known positive low or empty count, even if the other count is unavailable.",
+      "Desktop uses the existing Products visual patterns. Columns are Site, Machines, Stock level, Refill status, Sales today, Sales this week and vs last week. Align sales amounts and percentage changes to the right. The site name links to its existing detail route. Use one site link per row.",
+      "Mobile uses compact cards. Show linked site name, machine count and refill status first, then stock level, then today's and this week's sales side by side with weekly change next to weekly sales. Search, filter, sort and site links have at least 44px touch targets. Allow zoom and avoid horizontal scrolling.",
+      "Stock level uses a neutral progress bar and percentage when available. Use explicit text plus amber for low slots and red for empty slots. Show Stock OK only when both counts are known to be zero. Show Stock unavailable when neither count is known, or when no known count indicates a refill and the other count is missing. Preserve any known positive count and identify missing data when only one count is known. An unavailable percentage has no progress fill.",
+      "Show the actual weekly and comparison date ranges from the existing reporting logic, using the app's reporting timezone. Preserve sales calculations, access restrictions, provider availability behavior and missing-data states. Use existing report metadata or canonical period helpers and flag any backend dependency instead of guessing the dates.",
+      "Reuse the shared shell and existing loading/error patterns. Keep illustrative records, hard-coded sales dates, mock KPI cards, totals, sync claims, telemetry, footer and navigation out of the live view.",
+      "Verify a case where high overall stock and several low slots coexist. Low or empty slot counts should be more visually prominent than the stock percentage."
+    ],
+    "outOfScope": [
+      "Site detail redesign, machine or stock operations, new navigation.",
+      "Backend/API/schema changes, permission changes, provider integration changes.",
+      "Changes to sales, stock or reporting-period calculations."
+    ],
+    "documentationImpact": "Decision: UPDATED. Evidence: docs/architecture.md gains a Sites overview section describing the responsive overview, the refill filter and priority ordering, and known versus unavailable stock states; it records that the weekly date ranges need a backend change and are not shown.",
+    "validation": "The merge-validation check (bash scripts/validate.sh: restore, C# format check, backend build with analyzers and warnings-as-errors, backend tests with coverage including architecture tests, NuGet vulnerability check, npm ci, Angular ESLint and production build) succeeded on exactly this head SHA. Treat it as the exact-SHA validation evidence for this review."
+  },
+  "expected": {
+    "verdict": "CHANGES REQUESTED",
+    "findings": [
+      {
+        "id": "long-name-clipped-mobile",
+        "summary": "The mobile card keeps the last word of the site name and the arrow in a whitespace-nowrap span inside a link with min-w-[9rem], so a long unbroken site name cannot wrap and is clipped or overflows the card at narrow widths; the visual tests only use short names.",
+        "paths": [
+          "site-list",
+          "sites",
+          "card"
+        ],
+        "allOf": [
+          "long|unbroken|overflow|clip|truncat|wrap|nowrap|break",
+          "mobile|card|narrow|320|360|375|390|small screen|viewport"
+        ]
+      }
+    ],
+    "forbiddenBlockers": []
+  },
+  "source": "Found in review of PR #1131 at this head; fixed by commit 166292b8 \"Let long site names wrap in the mobile Sites cards (#1128 review)\", which removes the nowrap tail span, adds overflow-wrap:anywhere and min-w-0, a unit test and a 320px visual regression."
+}

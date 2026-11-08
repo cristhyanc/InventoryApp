@@ -35,7 +35,7 @@ problem:
 | **Guardrails** | What is an agent allowed to do at all? | `AGENTS.md`, `CLAUDE.md`, this document, the `.github/workflows/agent-*.yml` prompts and tool permissions, `scripts/validate-agent-workflows.mjs`. |
 | **CI validation** | Does this specific change build, test, and lint? | `scripts/validate.sh`/`scripts/validate.ps1`, `validate.yml`. |
 | **Final review** | Did this specific pull request actually honour the guardrails? A separate Claude invocation reviews the exact validated SHA; this is same-provider, not an independent provider review. | `agent-review.yml`. |
-| **Evals** | Do representative scenarios still resolve the way the guardrails say they should, across changes to the guardrails themselves? | `evals/agent/` (corpus and deterministic runner in `scripts/run-agent-evals.mjs`; on-demand model-decision runner in `scripts/run-agent-model-evals.mjs`; see `evals/agent/README.md`). |
+| **Evals** | Do representative scenarios still resolve the way the guardrails say they should, across changes to the guardrails themselves? | `evals/agent/` (corpus and deterministic runner in `scripts/run-agent-evals.mjs`; on-demand model-decision runner in `scripts/run-agent-model-evals.mjs`; on-demand review-prompt runner in `scripts/run-agent-review-evals.mjs`; see `evals/agent/README.md`). |
 
 Evals are the odd one out: they do not validate a specific pull request's diff, and today's
 deterministic runner does not simulate an agent's decision on a scenario at all. It checks that
@@ -64,6 +64,19 @@ Boundaries:
 - Results are advisory and carry their reproducibility metadata (eval and prompt version, git
   SHA, corpus hash, CLI version and reported models, timestamp). They never replace the
   deterministic evals, CI, the final review, or human approval, merge and deployment.
+
+**Review-prompt evals** (`node scripts/run-agent-review-evals.mjs --provider claude-cli --variant current|candidate`)
+replay the `agent-review.yml` review prompt against past pull request heads whose right answer is
+known: three heads that merge validation passed although they contained a bug a later commit fixed
+(#1132, #1131, #1133), and one head the review should pass without inventing a blocker (#1130).
+The prompt, model, effort, turn limit and schema are read from the workflow at run time; variant
+`candidate` adds `evals/agent/review/candidate-prompt.md`. Each case runs in a temporary repository
+holding only the PR's base and head snapshots, with local read tools and read-only `git` and no
+GitHub, network or MCP access, and is graded deterministically for known blockers caught, false
+alarms and verdict. The same boundaries as the model-decision evals apply: it runs only when typed,
+validation runs only its unit tests, it adds no secret, workflow or provider, and its results are
+advisory. A better candidate reaches the pipeline only through a reviewed change to
+`agent-review.yml`. See `evals/agent/README.md` § Review-prompt evals.
 
 `node scripts/run-agent-evals.mjs --mode model` still prints prompts for the hand-graded
 `requiresModelEvaluation` cases (`AUTH-006`, `INV-005`, `INV-006`), which are not in the

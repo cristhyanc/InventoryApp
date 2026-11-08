@@ -1,0 +1,54 @@
+{
+  "id": "REVIEW-001",
+  "title": "Sync Restock batching: a failed commit escapes the per-product failure handling",
+  "pullRequest": 1132,
+  "baseSha": "6616bf6a6691da8e4be98283e1afd1f48427d407",
+  "headSha": "c22e43e3fcabfee7a44fd15cffe7f2230c471dd1",
+  "context": {
+    "prTitle": "Rebuild each product's cost once per Sync Restock apply (#1127)",
+    "prSummary": "Applies the ticked Sync Restock events per product inside one SQLite write-locked transaction and rebuilds each product's cost once per apply request instead of once per event (ApplyMachineStockSync, EfMachineStockEventStore, ResolveMachineStockDuplicate). Clears tracked entities after each product. Adds integration tests for the per-product batch, its rollback and its races, and updates docs/architecture.md step 7.",
+    "linkedIssue": "#1127 \"[Agent task] Speed up Sync Restock apply: rebuild each product's cost once per batch\" (risk High: inventory/historical costing, financial calculations)",
+    "acceptanceCriteria": [
+      "Given ticked events that cover several products, when they are applied, then IRebuildProductCost.RebuildAsync runs exactly once per product that had at least one event applied, not once per event, and a product with no applied event is not rebuilt.",
+      "Given several ticked events for the same product, when they are applied, then each event is still recorded as its own MachineRefill movement with StockAdjustmentSource.Nayax, its own \"Nayax Sync Restock (EventLogID …)\" note and its own StockAdjustmentId on the event row, so every event stays individually auditable.",
+      "For each product, use the stored QuantityInStock read at the start of its locked transaction, minus the quantities of earlier accepted refills for that product in request order. Use this running balance for each stock check. An event that does not fit remains Unprocessed and returns InsufficientStock.",
+      "Acquire the SQLite write lock before the authoritative, tenant- and machine-scoped event and stock reads for each product batch. Revalidate eligibility and the matched product under the lock. Each accepted movement reduces the stock available to the next event before its eligibility is decided. A concurrent request for the same event observes the committed AlreadyApplied result and never writes a second movement.",
+      "For batches with no movement-write or cost-rebuild failure, starting from stored stock that agrees with its history, the final QuantityInStock, CostingQuantity, InventoryValue, AverageUnitCost and each movement's running position and cost match the existing one-by-one apply for the same events in the same order.",
+      "If recording a movement or rebuilding costs fails for a product, roll back its entire write transaction. Every event whose write was attempted or staged in that transaction returns the existing Error outcome and message, with no movement ID. Events already classified as non-writing retain their outcomes, including InsufficientStock. Other products continue. A non-writing outcome alone does not roll back accepted events. The event remains Unprocessed and can be retried.",
+      "Given every event outcome that does not reach a write (AlreadyApplied, ReconciledDuplicate, DuplicateRequiresResolution, NeedsReview, NegativeDiscrepancy, MatchedProductMissing, event not found), when the request runs, then it reports exactly the same outcome and message as today and causes no rebuild.",
+      "Given a request, when it returns, then the response lists one result per distinct requested event id, in the same order as today, with the same response shape (NayaxMachineStockApplyResponseDto) - no API contract change.",
+      "Given a product's transaction has committed, when the next product is processed, then the entities that product's rebuild loaded are no longer tracked by the request's context (verified by a test asserting the tracked count does not grow with the number of products already applied).",
+      "The \"Apply as separate restock\" path of ResolveMachineStockDuplicate uses the same SQLite write-locked save. Re-read and revalidate the event and stock under the lock before writing. Preserve the existing duplicate-action behaviour and response results, and prevent a second movement when this action races another apply of the same event.",
+      "docs/architecture.md § Nayax machine-stock event import and Sync Restock reconciliation (issue #183), step 7, describes the per-product transaction and single rebuild instead of \"one at a time, each in its own transaction\"."
+    ],
+    "outOfScope": [
+      "Any change to the cost replay itself (RebuildProductCost, WeightedAverageCostReplay, EfInventoryCostLedgerStore).",
+      "Changing what an event's movement is dated, its reason/source, its note, or which events are eligible.",
+      "The import/preview path, the Dashboard hourly fetch, and the restock reminder/coverage rules.",
+      "Any frontend change.",
+      "Changing the SQLite provider, journal mode, connection settings or hosting."
+    ],
+    "documentationImpact": "Decision: UPDATED. Evidence: docs/architecture.md § Nayax machine-stock event import and Sync Restock reconciliation, step 7, now describes the per-product transaction, the single rebuild per product, the running stock check, retryable InsufficientStock after rollback, the shared lock for the duplicate action and clearing tracked entities after each product.",
+    "validation": "The merge-validation check (bash scripts/validate.sh: restore, C# format check, backend build with analyzers and warnings-as-errors, backend tests with coverage including architecture tests, NuGet vulnerability check, npm ci, Angular ESLint and production build) succeeded on exactly this head SHA. Treat it as the exact-SHA validation evidence for this review."
+  },
+  "expected": {
+    "verdict": "CHANGES REQUESTED",
+    "findings": [
+      {
+        "id": "commit-failure-escapes",
+        "summary": "The per-product transaction's CommitAsync is outside the failure handling, so a failed commit throws out of the whole apply: the product's events do not get the Error outcome and later products are never applied.",
+        "paths": [
+          "ApplyMachineStockSync",
+          "ResolveMachineStockDuplicate",
+          "EfMachineStockEventStore"
+        ],
+        "allOf": [
+          "commit",
+          "throw|exception|escape|propagat|unhandled|abort|outside|not caught|uncaught|later product|other product|remaining product|next product|subsequent product"
+        ]
+      }
+    ],
+    "forbiddenBlockers": []
+  },
+  "source": "Found in review of PR #1132 at this head; fixed by commit 8bee6fe8 \"Keep a failed product commit inside its own Error outcome (#1127)\", which wraps CommitAsync in ApplyMachineStockSync and ResolveMachineStockDuplicate and adds MachineStockSyncCommitFailureTests."
+}
