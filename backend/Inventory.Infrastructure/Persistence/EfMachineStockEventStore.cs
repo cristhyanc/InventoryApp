@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Inventory.Application.Costing;
 using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
@@ -23,6 +24,23 @@ namespace Inventory.Infrastructure.Persistence;
 /// </summary>
 public sealed class EfMachineStockEventStore : IMachineStockEventStore
 {
+    /// <summary>
+    /// The one projection of a stored event into the state an apply attempt is decided from, shared
+    /// by the single-event and the whole-request reads.
+    /// </summary>
+    private static readonly Expression<Func<NayaxMachineStockEvent, MachineStockEventState>> EventState =
+        e => new MachineStockEventState(
+            e.Id,
+            e.NayaxEventLogId,
+            e.EventDateTimeGmt,
+            e.MatchStatus,
+            e.NeedsReviewReason,
+            e.ProcessingStatus,
+            e.MatchedProductId,
+            e.ParsedQuantity,
+            e.StockAdjustmentId,
+            e.DuplicateResolution);
+
     private readonly AppDbContext _db;
     private readonly IRecordInventoryMovement _recordMovement;
     private readonly IRebuildProductCost _rebuild;
@@ -153,21 +171,34 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
 
     public async Task<MachineStockEventState?> FindEventAsync(
         long nayaxMachineId, int eventId, CancellationToken cancellationToken) =>
-        await _db.NayaxMachineStockEvents
-            .AsNoTracking()
-            .Where(e => e.Id == eventId && e.MachineId == nayaxMachineId)
-            .Select(e => new MachineStockEventState(
-                e.Id,
-                e.NayaxEventLogId,
-                e.EventDateTimeGmt,
-                e.MatchStatus,
-                e.NeedsReviewReason,
-                e.ProcessingStatus,
-                e.MatchedProductId,
-                e.ParsedQuantity,
-                e.StockAdjustmentId,
-                e.DuplicateResolution))
+        await EventsOf(nayaxMachineId)
+            .Where(e => e.Id == eventId)
+            .Select(EventState)
             .FirstOrDefaultAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<MachineStockEventState>> FindEventsAsync(
+        long nayaxMachineId, IReadOnlyCollection<int> eventIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(eventIds);
+
+        if (eventIds.Count == 0)
+            return [];
+
+        return await EventsOf(nayaxMachineId)
+            .Where(e => eventIds.Contains(e.Id))
+            .Select(EventState)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The one machine- and tenant-scoped event read both <see cref="FindEventAsync"/> and
+    /// <see cref="FindEventsAsync"/> start from, so asking for a whole request's events cannot read
+    /// anything a single-event read would not.
+    /// </summary>
+    private IQueryable<NayaxMachineStockEvent> EventsOf(long nayaxMachineId) =>
+        _db.NayaxMachineStockEvents
+            .AsNoTracking()
+            .Where(e => e.MachineId == nayaxMachineId);
 
     public async Task<NayaxStockSyncProduct?> FindStorageProductAsync(
         long productId, CancellationToken cancellationToken)
@@ -181,66 +212,91 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         return product is null ? null : new NayaxStockSyncProduct(product.Id, product.Name, product.QuantityInStock);
     }
 
-    public async Task<MachineRefillApplication> ApplyRefillAsync(
-        int eventId,
+    public async Task<IMachineStockRefillWriteTransaction> BeginRefillWriteTransactionAsync(
+        CancellationToken cancellationToken) =>
+        await MachineStockRefillWriteTransaction.BeginAsync(_db, cancellationToken).ConfigureAwait(false);
+
+    public async Task<MachineRefillApplication> ApplyProductRefillsAsync(
         MachineIdentity machine,
-        long nayaxEventLogId,
         long productId,
-        int quantity,
-        NayaxDuplicateResolution duplicateResolution,
-        int? matchedManualStockAdjustmentId,
+        IReadOnlyList<MachineStockRefillRequest> refills,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(machine);
+        ArgumentNullException.ThrowIfNull(refills);
 
-        // The event is the provider's own row, found by the provider's machine number; the movement
-        // below is this application's and records the local machine (issue #741).
+        if (refills.Count == 0)
+            return new MachineRefillApplication(true, []);
+
+        // The events are the provider's own rows, found by the provider's machine number; the
+        // movements below are this application's and record the local machine (issue #741).
         var nayaxMachineId = machine.RequiredNayaxMachineId;
-        var entity = await _db.NayaxMachineStockEvents
-            .FirstOrDefaultAsync(e => e.Id == eventId && e.MachineId == nayaxMachineId, cancellationToken);
-        if (entity is null)
-            return new MachineRefillApplication(false, null);
 
-        await using var transaction = _db.Database.IsRelational()
-            ? await _db.Database.BeginTransactionAsync(cancellationToken)
-            : null;
         try
         {
-            var adjustment = await _recordMovement.RecordAsync(
-                new InventoryMovement(
-                    productId, -quantity, DomainStock.StockAdjustmentReason.MachineRefill,
-                    $"Nayax Sync Restock (EventLogID {nayaxEventLogId})",
-                    MachineId: machine.LocalMachineId,
-                    Source: DomainStock.StockAdjustmentSource.Nayax),
-                cancellationToken);
-
-            await _db.SaveChangesAsync(cancellationToken);
-
-            entity.ProcessingStatus = NayaxStockEventProcessingStatus.Applied;
-            entity.ProcessedAt = DateTime.UtcNow;
-            entity.StockAdjustmentId = adjustment.Id;
-
-            if (duplicateResolution != NayaxDuplicateResolution.None)
+            // Every event row first, before a single movement is staged, so a batch naming an event
+            // this machine does not have has staged nothing at all when it is refused.
+            var events = new List<(MachineStockRefillRequest Refill, NayaxMachineStockEvent Event)>();
+            foreach (var refill in refills)
             {
-                entity.DuplicateResolution = duplicateResolution;
-                entity.DuplicateResolvedAt = DateTime.UtcNow;
-                entity.MatchedManualStockAdjustmentId = matchedManualStockAdjustmentId;
+                var entity = await _db.NayaxMachineStockEvents.FirstOrDefaultAsync(
+                    e => e.Id == refill.EventId && e.MachineId == nayaxMachineId, cancellationToken);
+                if (entity is null)
+                    return new MachineRefillApplication(false, []);
+
+                events.Add((refill, entity));
             }
 
+            var applied = new List<(MachineStockRefillRequest Refill, NayaxMachineStockEvent Event, IStagedInventoryMovement Movement)>();
+            foreach (var (refill, entity) in events)
+            {
+                // Each event keeps its own movement, with its own EventLogID note: the batch is one
+                // transaction and one rebuild, never one merged movement. Each one is staged against
+                // the quantity the previous one left, exactly as separate saves left it.
+                var movement = await _recordMovement.RecordAsync(
+                    new InventoryMovement(
+                        productId, -refill.Quantity, DomainStock.StockAdjustmentReason.MachineRefill,
+                        $"Nayax Sync Restock (EventLogID {refill.NayaxEventLogId})",
+                        MachineId: machine.LocalMachineId,
+                        Source: DomainStock.StockAdjustmentSource.Nayax),
+                    cancellationToken);
+
+                applied.Add((refill, entity, movement));
+            }
+
+            // Saved once for the whole product, which is what gives every staged movement its id.
+            await _db.SaveChangesAsync(cancellationToken);
+
+            foreach (var (refill, entity, movement) in applied)
+            {
+                entity.ProcessingStatus = NayaxStockEventProcessingStatus.Applied;
+                entity.ProcessedAt = DateTime.UtcNow;
+                entity.StockAdjustmentId = movement.Id;
+
+                if (refill.DuplicateResolution != NayaxDuplicateResolution.None)
+                {
+                    entity.DuplicateResolution = refill.DuplicateResolution;
+                    entity.DuplicateResolvedAt = DateTime.UtcNow;
+                    entity.MatchedManualStockAdjustmentId = refill.MatchedManualStockAdjustmentId;
+                }
+            }
+
+            // Once for the product, however many of its events the batch applied (issue #1127): a
+            // rebuild replays the product's whole movement and sale history, so repeating it per
+            // event replayed the same history again for no new answer.
             await _rebuild.RebuildAsync(productId, cancellationToken: cancellationToken);
             await _db.SaveChangesAsync(cancellationToken);
 
-            if (transaction is not null)
-                await transaction.CommitAsync(cancellationToken);
-
-            return new MachineRefillApplication(true, adjustment.Id);
+            return new MachineRefillApplication(
+                true,
+                [.. applied.Select(x => new AppliedMachineRefill(x.Refill.EventId, x.Movement.Id))]);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
-            if (transaction is not null)
-                await transaction.RollbackAsync(cancellationToken);
+            // The caller owns the transaction, so its disposal is what discards these writes; what
+            // is left here is the unit of work, which must not carry the failed batch any further.
             _db.ChangeTracker.Clear();
-            return new MachineRefillApplication(false, null);
+            return new MachineRefillApplication(false, []);
         }
     }
 

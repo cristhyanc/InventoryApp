@@ -66,10 +66,46 @@ public sealed record MachineStockEventState(
     NayaxDuplicateResolution DuplicateResolution);
 
 /// <summary>
-/// The outcome of the store's single-event refill application. A failed application has recorded
-/// nothing at all: neither the inventory movement nor the event's processed state.
+/// One accepted event's refill, as the use case decided it: the event to mark processed, the
+/// movement's quantity, and - for the explicit duplicate override of issue #196 - the resolution to
+/// stamp and the manual refill it was resolved against.
 /// </summary>
-public sealed record MachineRefillApplication(bool Succeeded, int? StockAdjustmentId);
+public sealed record MachineStockRefillRequest(
+    int EventId,
+    long NayaxEventLogId,
+    int Quantity,
+    NayaxDuplicateResolution DuplicateResolution,
+    int? MatchedManualStockAdjustmentId);
+
+/// <summary>One recorded refill: the event it applied and the movement that was written for it.</summary>
+public sealed record AppliedMachineRefill(int EventId, int StockAdjustmentId);
+
+/// <summary>
+/// The outcome of one product's batch of refills. A failed batch has recorded nothing at all:
+/// neither any inventory movement nor any event's processed state, and
+/// <see cref="Applied"/> is empty.
+/// </summary>
+public sealed record MachineRefillApplication(bool Succeeded, IReadOnlyList<AppliedMachineRefill> Applied);
+
+/// <summary>
+/// The write transaction one product's batch of refills runs in (issue #1127). Disposing it without
+/// <see cref="CommitAsync"/> rolls back everything written through the connection it shares since it
+/// began - every movement of that product's batch, every event state it stamped, and the quantities
+/// and costs the product's single rebuild touched. Disposal also drops whatever the batch left
+/// tracked in the request's unit of work, so the history one product's rebuild loaded does not make
+/// the next product's saves slower.
+///
+/// <para>On SQLite it is a <c>BEGIN IMMEDIATE</c> transaction, so the write lock is taken when the
+/// transaction opens rather than at its first write. That is what makes the reads inside it
+/// authoritative: the event's own eligibility and the product's storage quantity both decide a
+/// write, and a deferred transaction would let two callers read the same answer and both act on it.
+/// It is the same shape and the same reason as
+/// <c>IPickListRefillStore.BeginWriteTransactionAsync</c> (issue #743).</para>
+/// </summary>
+public interface IMachineStockRefillWriteTransaction : IAsyncDisposable
+{
+    Task CommitAsync(CancellationToken cancellationToken);
+}
 
 /// <summary>
 /// Narrow persistence port for the machine Sync Restock workflow (issue #183), owned by the
@@ -126,28 +162,53 @@ public interface IMachineStockEventStore
 
     Task<MachineStockEventState?> FindEventAsync(long nayaxMachineId, int eventId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The stored state of each of <paramref name="eventIds"/> that exists for this machine, in no
+    /// particular order and with no entry at all for an id that does not (issue #1127). It is the
+    /// same machine- and tenant-scoped read as <see cref="FindEventAsync"/>, asked once for a whole
+    /// request instead of once per event.
+    /// </summary>
+    Task<IReadOnlyList<MachineStockEventState>> FindEventsAsync(
+        long nayaxMachineId, IReadOnlyCollection<int> eventIds, CancellationToken cancellationToken);
+
     Task<NayaxStockSyncProduct?> FindStorageProductAsync(long productId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Records the refill movement and the event's processed state together, in one transaction, so
-    /// an event can never be left marked processed without its inventory movement. The refill is a
-    /// machine transfer out of storage: it reduces storage quantity and must not change costing
-    /// quantity/value or create COGS. <paramref name="duplicateResolution"/> is
+    /// Opens the write transaction one product's batch of refills runs in (issue #1127). Every read
+    /// that decides those writes - the events' own stored state and the product's storage quantity -
+    /// must happen inside it.
+    /// </summary>
+    Task<IMachineStockRefillWriteTransaction> BeginRefillWriteTransactionAsync(
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records every refill of one product and each event's processed state together, so an event
+    /// can never be left marked processed without its inventory movement, and rebuilds that
+    /// product's cost exactly <strong>once</strong> for the whole batch (issue #1127). Each refill
+    /// is still its own <c>MachineRefill</c> movement with its own note and its own
+    /// <c>StockAdjustmentId</c> on the event row, so every event stays individually auditable.
+    ///
+    /// <para>The refill is a machine transfer out of storage: it reduces storage quantity and must
+    /// not change costing quantity/value or create COGS.
+    /// <see cref="MachineStockRefillRequest.DuplicateResolution"/> is
     /// <see cref="NayaxDuplicateResolution.None"/> for an ordinary (non-duplicate) apply, or
     /// <see cref="NayaxDuplicateResolution.AppliedAsSeparateRestock"/> when the operator explicitly
     /// overrode a possible-duplicate warning (issue #196); in that case
-    /// <paramref name="matchedManualStockAdjustmentId"/> is the manual refill the override was
-    /// resolved against, persisted alongside the movement for auditability. The event is found by
-    /// the machine's Nayax number and the movement records its local id (issue #741).
+    /// <see cref="MachineStockRefillRequest.MatchedManualStockAdjustmentId"/> is the manual refill
+    /// the override was resolved against, persisted alongside the movement for auditability. The
+    /// events are found by the machine's Nayax number and the movements record its local id
+    /// (issue #741).</para>
+    ///
+    /// <para>It saves inside the caller's transaction and deliberately does <b>not</b> commit: the
+    /// caller opened the transaction and owns the commit, so a failure here - a movement that cannot
+    /// be recorded or a fatal costing data-quality issue - is answered with
+    /// <c>Succeeded: false</c> and the caller's disposal discards every write of that product's
+    /// batch.</para>
     /// </summary>
-    Task<MachineRefillApplication> ApplyRefillAsync(
-        int eventId,
+    Task<MachineRefillApplication> ApplyProductRefillsAsync(
         Machines.MachineIdentity machine,
-        long nayaxEventLogId,
         long productId,
-        int quantity,
-        NayaxDuplicateResolution duplicateResolution,
-        int? matchedManualStockAdjustmentId,
+        IReadOnlyList<MachineStockRefillRequest> refills,
         CancellationToken cancellationToken);
 
     /// <summary>

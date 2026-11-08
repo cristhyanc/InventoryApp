@@ -209,18 +209,28 @@ public class MachinesControllerTests
     [Fact]
     public async Task ApplySyncRestock_passes_the_requested_event_ids_through()
     {
+        var transaction = new Mock<IMachineStockRefillWriteTransaction>();
         var store = new Mock<IMachineStockEventStore>();
-        store.Setup(x => x.FindEventAsync(MachineId, 7, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MachineStockEventState(
-                7, 5001, DateTime.UtcNow, NayaxStockEventMatchStatus.Matched, null,
-                NayaxStockEventProcessingStatus.Unprocessed, 200, 2, null, NayaxDuplicateResolution.None));
+        store.Setup(x => x.FindEventsAsync(
+                MachineId, It.Is<IReadOnlyCollection<int>>(ids => ids.SequenceEqual(new[] { 7 })), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new MachineStockEventState(
+                    7, 5001, DateTime.UtcNow, NayaxStockEventMatchStatus.Matched, null,
+                    NayaxStockEventProcessingStatus.Unprocessed, 200, 2, null, NayaxDuplicateResolution.None),
+            ]);
         store.Setup(x => x.FindStorageProductAsync(200, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new NayaxStockSyncProduct(200, "Coke 375mL", 10));
         store.Setup(x => x.GetManualMachineRefillsAsync(LocalMachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        store.Setup(x => x.ApplyRefillAsync(
-                7, Machine, 5001, 200, 2, NayaxDuplicateResolution.None, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MachineRefillApplication(true, 99));
+        store.Setup(x => x.BeginRefillWriteTransactionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(transaction.Object);
+        store.Setup(x => x.ApplyProductRefillsAsync(
+                Machine,
+                200,
+                It.Is<IReadOnlyList<MachineStockRefillRequest>>(refills =>
+                    refills.Single() == new MachineStockRefillRequest(7, 5001, 2, NayaxDuplicateResolution.None, null)),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineRefillApplication(true, [new AppliedMachineRefill(7, 99)]));
 
         var result = await Controller(store.Object)
             .ApplySyncRestock(LocalMachineId, new NayaxStockEventApplyRequestDto([7]), CancellationToken.None);
@@ -232,6 +242,9 @@ public class MachinesControllerTests
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, applied.Outcome);
         Assert.Equal(99, applied.StockAdjustmentId);
         store.VerifyAll();
+
+        // The movement and its rebuild are committed, not left to the transaction's disposal.
+        transaction.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

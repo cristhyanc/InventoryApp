@@ -16239,22 +16239,52 @@ that meaning.
     Checking a box never itself reconciles anything - only this explicit action does - and
     **Select all applicable** is unrelated: it still selects only the checkbox-eligible ids
     `isReadyToApply` computes, for **Apply selected**.
-7. **Apply only what is accepted.** `POST /api/machines/{id}/sync-restock/apply` runs
+7. **Apply only what is accepted, one transaction and one cost rebuild per product** (issue #1127).
+   `POST /api/machines/{id}/sync-restock/apply` runs
    `Inventory.Application.MachineStockSync.ApplyMachineStockSync` over exactly the event ids the
-   operator selects, one at a time, each in its own transaction. `NayaxMachineStockApplyPolicy` is
-   the deterministic Domain rule that decides each one. A validated positive event is applied
-   through the same `IRecordInventoryMovement` movement logic as every other stock
-   adjustment, as a `StockAdjustmentReason.MachineRefill` with
-   `StockAdjustmentSource.Nayax` - it reduces `QuantityInStock` but never touches costing
-   quantity/value, the same invariant an internal transfer already preserves. If the requested
-   quantity exceeds available storage, the event is left `Unprocessed` (not partially applied, and
-   storage is never made negative); the operator corrects storage or records the missing purchase
-   through the existing inventory/purchase workflows and retries. A negative event is never
-   "applied" at all - it is retained as a discrepancy/shrinkage candidate for review and never
-   increases storage. A failure while applying one event (for example, a costing-rebuild data-
-   quality failure) rolls back that event's own transaction only, so it is never left marked
-   processed without its inventory movement, and it does not stop the other selected events in the
-   batch from applying.
+   operator selects. The request is grouped by the matched product, and each product's accepted
+   events are written together in **one** transaction that ends with a **single**
+   `IRebuildProductCost.RebuildAsync` for that product - replaying a product's whole movement and
+   sale history is what an apply actually costs, so ten ticked events for one product mean one
+   replay of it, not ten. Every event is still its own `StockAdjustmentReason.MachineRefill`
+   movement with `StockAdjustmentSource.Nayax`, its own `Nayax Sync Restock (EventLogID …)` note and
+   its own `StockAdjustmentId` on the event row, so each one stays individually auditable, and the
+   response still reports one result per distinct requested event id in request order. Entities the
+   batch left tracked - including the history its rebuild loaded - are dropped once its transaction
+   has ended, so what each later product's `SaveChanges` has to examine does not grow with the
+   products already applied.
+
+   `NayaxMachineStockApplyPolicy` is the deterministic Domain rule that decides each event, and it
+   is applied **inside** that product's write lock: the transaction is `BEGIN IMMEDIATE` on SQLite
+   (`SqliteWriteLockTransaction`, the same lock issue #743's pick-list refill takes), taken before
+   the authoritative, tenant- and machine-scoped reads of the events and the product, because
+   whether an event may be applied is decided from facts that decide a write. Two simultaneous
+   applies of one event therefore serialise: the loser waits, re-reads the winner's committed state
+   and reports `Already applied.` with that one movement's id, never a second deduction. Within one
+   batch each event's stock check is made against the quantity read at the start of that
+   transaction less the refills the batch has already accepted, so a batch can never take more units
+   out of storage than it holds. A validated positive event is applied through the same
+   `IRecordInventoryMovement` movement logic as every other stock adjustment - it reduces
+   `QuantityInStock` but never touches costing quantity/value, the same invariant an internal
+   transfer already preserves. If the requested quantity exceeds the storage left to it, the event is
+   left `Unprocessed` (not partially applied, and storage is never made negative); the operator
+   corrects storage or records the missing purchase through the existing inventory/purchase
+   workflows and retries. A negative event is never "applied" at all - it is retained as a
+   discrepancy/shrinkage candidate for review and never increases storage.
+
+   A failure while writing or committing one product's batch (for example, a costing-rebuild
+   data-quality failure, or a commit the database refuses) rolls back that product's whole transaction, so no event is left marked processed
+   without its inventory movement: every event whose write that transaction had staged reports the
+   `Error` outcome with no movement id, and the other products are applied independently. An event
+   the policy already refused keeps its own outcome - including an `InsufficientStock` decided
+   against the storage left at the time of its check, which stays in the response even though the
+   rollback has since restored that stock; the event is still `Unprocessed` and is simply retried.
+   The "Apply as separate restock" duplicate resolution of step 6 writes through the same
+   write-locked save and re-reads and revalidates the event and the product inside it, so it cannot
+   record a second movement when it races another apply of the same event either; a failed write
+   or commit there returns the same `Error` and leaves the event unresolved, so it can be chosen
+   again. A cancelled request is the one failure that is not reported per event: it stops the
+   apply.
 8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
    page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
    [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
@@ -16348,13 +16378,19 @@ this feature is added to the legacy `InventoryApi/Services` layer:
   #242), their request/response DTOs, and the narrow `IMachineStockEventStore` persistence
   port (extended with `ReconcileAsManualDuplicateAsync` - whose matched-manual-adjustment
   parameter became nullable under issue #242, for a bulk-resolved event the app never flagged -
-  and an `ApplyRefillAsync` that also persists the duplicate-resolution columns, and with
-  `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
-  `MachineStockEventsPage` result - issue #206). The Nayax read stays on the existing
+  with `GetUnprocessedEventsAsync`'s `fromDateGmt`/`includeReconciled` filters and
+  `MachineStockEventsPage` result - issue #206 - and, since issue #1127, with the per-product write
+  transaction (`BeginRefillWriteTransactionAsync`/`IMachineStockRefillWriteTransaction`), the
+  whole-request event read `FindEventsAsync` and the batch `ApplyProductRefillsAsync`, which records
+  one product's accepted refills and the duplicate-resolution columns of each and rebuilds that
+  product's cost once; the use cases decide every event and own the commit, so no policy moved
+  behind the port). The Nayax read stays on the existing
   `Inventory.Application.Nayax.INayaxLynxClient` port.
 - **Infrastructure/adapters.** `Inventory.Infrastructure.Nayax.NayaxLynxClient` remains the Nayax
   HTTP adapter. `Inventory.Infrastructure.Persistence.EfMachineStockEventStore` implements the
-  persistence port over `AppDbContext`, owns the per-event transaction, and reuses
+  persistence port over `AppDbContext`, owns the per-product write-locked transaction
+  (`MachineStockRefillWriteTransaction` over the shared `SqliteWriteLockTransaction`, which also
+  drops what the batch left tracked when it is disposed), and reuses
   the Application `IRecordInventoryMovement`/`IRebuildProductCost` use cases (issue #296) so the
   refill inherits the established movement and costing invariants instead of re-implementing them.
   Like `EfSupplierStore` and `EfLocalCatalogSnapshotProvider` it was an API-owned adapter until
