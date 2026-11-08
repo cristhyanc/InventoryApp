@@ -769,6 +769,98 @@ public class PriceCollectorWorkListTests
 
     #endregion
 
+    #region Supplier search terms (issue #1138)
+
+    /// <summary>
+    /// One JB Metro connector entry reaches every JB Metro site, a site's own entry replaces it as a
+    /// whole for that site only, and a supplier on another connector receives nothing - which is the
+    /// existing search. Scheduling is untouched: there is still exactly one work item per supplier.
+    /// </summary>
+    [Fact]
+    public async Task Each_work_item_carries_only_its_effective_search_terms()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        var coles = fixture.SupplierPresetId;
+        await fixture.SetSupplierCollectionAsync(coles, SupplierPriceConnector.Varnmill, connectorKey: "coles");
+        var bankstown = await fixture.SeedSupplierPresetAsync("JB Metro Bankstown");
+        await fixture.SetSupplierCollectionAsync(bankstown, SupplierPriceConnector.JbMetro, url: "https://bankstown.example");
+        var parramatta = await fixture.SeedSupplierPresetAsync("JB Metro Parramatta");
+        await fixture.SetSupplierCollectionAsync(parramatta, SupplierPriceConnector.JbMetro, url: "https://parramatta.example");
+        var penrith = await fixture.SeedSupplierPresetAsync("JB Metro Penrith");
+        await fixture.SetSupplierCollectionAsync(penrith, SupplierPriceConnector.JbMetro, url: "https://penrith.example");
+
+        var smiths = await fixture.SeedMasterProductAsync("Smiths", "Original", 45m, MasterProductSizeUnit.Gram);
+        var tracking = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        await fixture.MatchAsync(tracking.Id, smiths);
+
+        await SetSearchTermsAsync(fixture, smiths,
+        [
+            new SupplierSearchTermsSubmission(null, SupplierPriceConnector.JbMetro, ["Smiths Plain", "Smiths"], ["Plain"]),
+            new SupplierSearchTermsSubmission(penrith, null, ["Smiths Chips"], []),
+        ]);
+
+        var product = Assert.Single((await IssueAsync(fixture)).MatchedProducts);
+        var bySupplier = product.WorkItems.ToDictionary(item => item.SupplierPresetId);
+
+        Assert.Equal(4, product.WorkItems.Count);
+        Assert.Null(bySupplier[coles].SearchTerms);
+        foreach (var site in new[] { bankstown, parramatta })
+        {
+            Assert.Equal(["Smiths Plain", "Smiths"], bySupplier[site].SearchTerms!.SearchPhrases);
+            Assert.Equal(["Plain"], bySupplier[site].SearchTerms!.FlavourAliases);
+        }
+
+        Assert.Equal(["Smiths Chips"], bySupplier[penrith].SearchTerms!.SearchPhrases);
+        Assert.Empty(bySupplier[penrith].SearchTerms!.FlavourAliases);
+    }
+
+    /// <summary>
+    /// Search terms are the product's own: a second tracked product without any, and a waiting
+    /// product, carry none, so their searches are exactly what they were.
+    /// </summary>
+    [Fact]
+    public async Task Products_without_search_terms_and_waiting_products_carry_none()
+    {
+        await using var fixture = await PriceCatalogueFixture.CreateWithNoCollectableSuppliersAsync();
+        await fixture.SetSupplierCollectionAsync(fixture.SupplierPresetId, SupplierPriceConnector.JbMetro, url: "https://jb.example");
+
+        var smiths = await fixture.SeedMasterProductAsync("Smiths", "Original", 45m, MasterProductSizeUnit.Gram);
+        var cola = await fixture.SeedMasterProductAsync("Coca-Cola", "Classic");
+        var mine = await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessColaId);
+        var theirs = await fixture.TrackAsync(fixture.SecondBusinessId, fixture.SecondBusinessColaId);
+        await fixture.MatchAsync(mine.Id, smiths);
+        await fixture.MatchAsync(theirs.Id, cola);
+        await fixture.TrackAsync(fixture.FirstBusinessId, fixture.FirstBusinessPepsiId);
+
+        await SetSearchTermsAsync(fixture, smiths,
+            [new SupplierSearchTermsSubmission(null, SupplierPriceConnector.JbMetro, ["Smiths Plain"], ["Plain"])]);
+
+        var workList = await IssueAsync(fixture);
+
+        Assert.NotNull(Assert.Single(workList.MatchedProducts.Single(product => product.MasterProductId == smiths).WorkItems).SearchTerms);
+        Assert.Null(Assert.Single(workList.MatchedProducts.Single(product => product.MasterProductId == cola).WorkItems).SearchTerms);
+        Assert.Null(Assert.Single(Assert.Single(workList.WaitingProducts).WorkItems).SearchTerms);
+    }
+
+    private static async Task SetSearchTermsAsync(
+        PriceCatalogueFixture fixture,
+        long masterProductId,
+        IReadOnlyList<SupplierSearchTermsSubmission?> terms)
+    {
+        var stored = await fixture.MasterProductAsync(masterProductId);
+
+        await fixture.DeniedMasterProductWriteStore().UpdateAsync(
+            masterProductId,
+            new MasterProductEdit(
+                MasterProductPolicy.Normalise(stored!.Brand, stored.Name, stored.SizeValue, stored.SizeUnit),
+                stored.UpdatedAtUtc,
+                SupplierSearchTermsPolicy.Normalise(terms)),
+            stored.UpdatedAtUtc.AddMinutes(1),
+            CancellationToken.None);
+    }
+
+    #endregion
+
     private static Task<PriceCollectorWorkList> IssueAsync(
         PriceCatalogueFixture fixture,
         FakeClock? clock = null,

@@ -68,8 +68,12 @@ const workList = (overrides = {}) => ({
       ],
       knownListingsOmitted: false,
       workItems: [
-        { workItemId: 7001, supplierPresetId: 3 },
-        { workItemId: 7002, supplierPresetId: 4 },
+        { workItemId: 7001, supplierPresetId: 3, searchTerms: null },
+        {
+          workItemId: 7002,
+          supplierPresetId: 4,
+          searchTerms: { searchPhrases: ['Coke Classic', 'Coke'], flavourAliases: ['Original'] },
+        },
       ],
     },
   ],
@@ -98,6 +102,28 @@ afterEach(async () => {
 });
 
 const envFor = (baseUrl, token = TOKEN) => ({ [API_BASE_URL_ENV]: baseUrl, [API_TOKEN_ENV]: token });
+
+describe('configured search terms (issue #1138)', () => {
+  it('passes each search exactly its own phrases in order and its aliases, and null where none apply', () => {
+    const printed = summariseWorkList(workList());
+    const byWorkItem = new Map(printed.searches.map((search) => [search.workItemId, search.searchTerms]));
+
+    assert.equal(byWorkItem.get(7001), null);
+    assert.deepEqual(byWorkItem.get(7002), { searchPhrases: ['Coke Classic', 'Coke'], flavourAliases: ['Original'] });
+    // A waiting product has no master product to configure, and an item that predates the field
+    // (no searchTerms at all) is the existing search.
+    assert.equal(byWorkItem.get(7003), null);
+  });
+
+  it('keeps an aliases-only entry as an entry with no phrases rather than inventing or dropping one', () => {
+    const list = workList();
+    list.matchedProducts[0].workItems[0].searchTerms = { searchPhrases: [], flavourAliases: ['Plain'] };
+
+    const search = summariseWorkList(list).searches.find((entry) => entry.workItemId === 7001);
+
+    assert.deepEqual(search.searchTerms, { searchPhrases: [], flavourAliases: ['Plain'] });
+  });
+});
 
 describe('the work list it prints', () => {
   it('prints every product-and-supplier search with its work-item id', async () => {

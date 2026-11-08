@@ -68,6 +68,19 @@ public class MasterProduct
     /// </summary>
     public string NormalisedKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The Super Admin's supplier search terms for this product (issue #1138): per supplier preset or
+    /// per connector, the phrases the collector searches with and the flavour aliases it may accept,
+    /// stored as JSON by <c>SupplierSearchTermsJson</c> and <see langword="null"/> when there are none.
+    ///
+    /// <para>A column of this row rather than a table of its own, because the terms are a fact about
+    /// the product and no business, so they belong to the one platform table that already describes
+    /// it; a separate table would be a new platform table. Only the Master Products edit writes it,
+    /// and only the collector work list reads it, through <c>SupplierSearchTermsPolicy.EffectiveFor</c>.
+    /// Nothing here is a price, and nothing here is about a business.</para>
+    /// </summary>
+    public string? SupplierSearchTerms { get; set; }
+
     /// <summary>When the master product was created, from the application clock.</summary>
     public DateTime CreatedAtUtc { get; set; }
 

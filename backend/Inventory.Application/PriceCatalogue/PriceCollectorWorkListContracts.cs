@@ -24,7 +24,25 @@ public sealed record PriceCollectorSupplier(
 /// The id every result row about this product and this supplier must reference (#937).
 /// </param>
 /// <param name="SupplierPresetId">The supplier this piece of work is for.</param>
-public sealed record PriceCollectorWorkItemHandle(long WorkItemId, int SupplierPresetId);
+/// <param name="SearchTerms">
+/// The one search-terms entry that applies to this product at this supplier (issue #1138): the
+/// supplier's own entry, otherwise its connector's, otherwise <see langword="null"/> - and always
+/// <see langword="null"/> for a waiting product, which has no master product to configure. Only the
+/// effective entry travels; the others stay on the master product.
+/// </param>
+public sealed record PriceCollectorWorkItemHandle(
+    long WorkItemId,
+    int SupplierPresetId,
+    PriceCollectorSearchTerms? SearchTerms = null);
+
+/// <summary>
+/// The configured search phrases and flavour aliases one work item carries (issue #1138), in the
+/// order they are to be tried. A phrase is a separate search; an alias is matching evidence only.
+/// Nothing here is a price, and nothing here is about a business.
+/// </summary>
+public sealed record PriceCollectorSearchTerms(
+    IReadOnlyList<string> SearchPhrases,
+    IReadOnlyList<string> FlavourAliases);
 
 /// <summary>
 /// One listing the catalogue already holds, as the collector reads it in order to recognise a listing

@@ -1,5 +1,6 @@
 using Inventory.Application.PriceCatalogue;
 using Inventory.Domain.PriceCatalogue;
+using Inventory.Domain.Suppliers;
 using Microsoft.AspNetCore.Mvc;
 
 namespace InventoryApi.DTOs;
@@ -52,16 +53,67 @@ public sealed record SuperAdminCreateMasterProductRequest(
 ///
 /// <para>The master product's own id is the route value and is deliberately not in the body: a
 /// request that carried both could disagree with itself.</para>
+///
+/// <para><see cref="SupplierSearchTerms"/> (issue #1138) replaces the product's supplier search terms
+/// as a whole when it is sent - an empty array removes them all - and leaves them as they are when it
+/// is omitted or <c>null</c>.</para>
 /// </summary>
 public sealed record SuperAdminUpdateMasterProductRequest(
     string? Brand,
     string? Name,
     decimal SizeValue,
     MasterProductSizeUnit SizeUnit,
-    DateTime? LastChangedAtUtc)
+    DateTime? LastChangedAtUtc,
+    IReadOnlyList<SuperAdminSupplierSearchTermsRequest?>? SupplierSearchTerms = null)
 {
     public MasterProductEditSubmission ToSubmission() =>
-        new(Brand, Name, SizeValue, SizeUnit, LastChangedAtUtc);
+        new(
+            Brand,
+            Name,
+            SizeValue,
+            SizeUnit,
+            LastChangedAtUtc,
+            SupplierSearchTerms is null
+                ? null
+                : [.. SupplierSearchTerms.Select(entry => entry?.ToSubmission())]);
+}
+
+/// <summary>
+/// One supplier search-terms entry as <c>PUT api/super-admin/master-products/{id}</c> receives it
+/// (issue #1138): exactly one of <see cref="SupplierPresetId"/> or <see cref="PriceConnector"/>, at
+/// most two search phrases in the order they are to be tried, and the flavour aliases that supplier
+/// uses. Every value is checked by <c>SupplierSearchTermsPolicy</c>, not trusted.
+/// </summary>
+public sealed record SuperAdminSupplierSearchTermsRequest(
+    int? SupplierPresetId,
+    SupplierPriceConnector? PriceConnector,
+    IReadOnlyList<string?>? SearchPhrases,
+    IReadOnlyList<string?>? FlavourAliases)
+{
+    public SupplierSearchTermsSubmission ToSubmission() =>
+        new(SupplierPresetId, PriceConnector, SearchPhrases, FlavourAliases);
+}
+
+/// <summary>
+/// One stored supplier search-terms entry (issue #1138), as the Super Admin catalogue publishes it:
+/// its target, its phrases in search order and its flavour aliases, already trimmed and deduplicated.
+/// </summary>
+public sealed record SuperAdminSupplierSearchTermsResponse(
+    int? SupplierPresetId,
+    SupplierPriceConnector? PriceConnector,
+    IReadOnlyList<string> SearchPhrases,
+    IReadOnlyList<string> FlavourAliases)
+{
+    public static SuperAdminSupplierSearchTermsResponse From(SupplierSearchTerms entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        return new SuperAdminSupplierSearchTermsResponse(
+            entry.SupplierPresetId,
+            entry.PriceConnector,
+            [.. entry.SearchPhrases],
+            [.. entry.FlavourAliases]);
+    }
 }
 
 /// <summary>
@@ -110,7 +162,8 @@ public sealed record SuperAdminMasterProductResponse(
     MasterProductSizeUnit SizeUnit,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
-    SuperAdminMasterProductListingCountsResponse ListingCounts)
+    SuperAdminMasterProductListingCountsResponse ListingCounts,
+    IReadOnlyList<SuperAdminSupplierSearchTermsResponse> SupplierSearchTerms)
 {
     public static SuperAdminMasterProductResponse From(CataloguedMasterProduct product)
     {
@@ -124,7 +177,8 @@ public sealed record SuperAdminMasterProductResponse(
             product.SizeUnit,
             product.CreatedAtUtc,
             product.UpdatedAtUtc,
-            SuperAdminMasterProductListingCountsResponse.From(product.ListingCounts));
+            SuperAdminMasterProductListingCountsResponse.From(product.ListingCounts),
+            [.. product.SupplierSearchTerms.Select(SuperAdminSupplierSearchTermsResponse.From)]);
     }
 }
 

@@ -168,18 +168,31 @@ public sealed class EfPriceCatalogueWorkListStore : IPriceCatalogueWorkListStore
         // cursor the next run starts after is a stored master product id, so the order products are
         // issued in has to be the order of those ids. It is as deterministic as the comparison key
         // would have been and does not depend on any collation.
-        return await _db.MasterProducts
+        var rows = await _db.MasterProducts
             .AsNoTracking()
             .Where(master => trackedMasterProductIds.Contains(master.Id))
             .OrderBy(master => master.Id)
-            .Select(master => new TrackedMasterProduct(
+            .Select(master => new
+            {
                 master.Id,
                 master.Brand,
                 master.Name,
                 master.SizeValue,
-                master.SizeUnit))
+                master.SizeUnit,
+                master.SupplierSearchTerms,
+            })
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        // The search terms are this platform row's own column (issue #1138), read with it and
+        // decoded here; which entry a work item receives is the use case's decision.
+        return rows.ConvertAll(master => new TrackedMasterProduct(
+            master.Id,
+            master.Brand,
+            master.Name,
+            master.SizeValue,
+            master.SizeUnit,
+            SupplierSearchTermsJson.Deserialize(master.SupplierSearchTerms)));
     }
 
     /// <inheritdoc />

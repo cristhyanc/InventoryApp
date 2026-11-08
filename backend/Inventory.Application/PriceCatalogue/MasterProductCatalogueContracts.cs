@@ -79,6 +79,10 @@ public sealed record MasterProductListingCounts(
 /// <para>The normalised key the database compares by is deliberately not published, for the reason the
 /// supplier presets do not publish theirs: whether two descriptions are the same product is the
 /// database's answer and not a decision any client makes.</para>
+///
+/// <para><see cref="SupplierSearchTerms"/> (issue #1138) are the Super Admin's own search phrases and
+/// flavour aliases for this product, per supplier or per connector, in the order they were saved, and
+/// empty when there are none.</para>
 /// </summary>
 public sealed record CataloguedMasterProduct(
     long Id,
@@ -88,7 +92,8 @@ public sealed record CataloguedMasterProduct(
     MasterProductSizeUnit SizeUnit,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
-    MasterProductListingCounts ListingCounts);
+    MasterProductListingCounts ListingCounts,
+    IReadOnlyList<SupplierSearchTerms> SupplierSearchTerms);
 
 /// <summary>
 /// What the store answers for one page: the products of the requested slice, and how many the search
@@ -122,13 +127,19 @@ public sealed record MasterProductSubmission(
 /// is refused rather than applied, so two Super Admin tabs cannot overwrite each other silently
 /// (<c>MasterProductEditPolicy</c>). It is nullable because a request may omit it, which is an
 /// incomplete request rather than a stale one.</para>
+///
+/// <para><see cref="SupplierSearchTerms"/> (issue #1138) replaces the product's supplier search
+/// terms as a whole when it is given - an empty list removes them all - and leaves them exactly as
+/// they are when it is <see langword="null"/>, so a client that predates them cannot erase them by
+/// correcting a brand.</para>
 /// </summary>
 public sealed record MasterProductEditSubmission(
     string? Brand,
     string? Name,
     decimal SizeValue,
     MasterProductSizeUnit SizeUnit,
-    DateTime? ExpectedUpdatedAtUtc);
+    DateTime? ExpectedUpdatedAtUtc,
+    IReadOnlyList<SupplierSearchTermsSubmission?>? SupplierSearchTerms = null);
 
 /// <summary>
 /// One validated correction as the persistence port receives it (issue #1024): the description that
@@ -137,10 +148,15 @@ public sealed record MasterProductEditSubmission(
 /// <para>The expected instant travels with the description rather than beside it, because the
 /// comparison and the write are one operation: the store reads the row, compares, and writes inside
 /// one transaction.</para>
+///
+/// <para><see cref="SupplierSearchTerms"/> are the validated replacement terms, or
+/// <see langword="null"/> to keep the stored ones (issue #1138). Whether each named supplier preset
+/// exists is the store's question, inside the same transaction.</para>
 /// </summary>
 public sealed record MasterProductEdit(
     NormalisedMasterProduct Description,
-    DateTime ExpectedUpdatedAtUtc);
+    DateTime ExpectedUpdatedAtUtc,
+    IReadOnlyList<SupplierSearchTerms>? SupplierSearchTerms = null);
 
 /// <summary>
 /// One bounded page of the shared catalogue. <see cref="Page"/>/<see cref="PageSize"/> are the

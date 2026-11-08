@@ -21,6 +21,14 @@
 //
 //   node scripts/price-collector/pagination.mjs --internal-paging --returned 12 --item-limit 50 \
 //     --row-count 2
+//
+// A work item searched with configured phrases (#1138) answers its one file from both searches with
+// `--configured-phrases` (see configuredPhrasesOutcome):
+//
+//   node scripts/price-collector/pagination.mjs --configured-phrases truncated,0,1,1,true \
+//     complete,1,1,1,false
+//
+// Each search is `<outcome>,<rowCount>,<pagesRead>,<pageCap>,<moreAvailable>[,<failureReason>]`.
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -122,6 +130,100 @@ export function internalPagingOutcome({ returned, itemLimit, completenessProven 
   return { paging: { pagesRead: 1, pageCap: 1, moreAvailable }, ...answered };
 }
 
+const OUTCOME_VALUES = Object.freeze(Object.values(SEARCH_OUTCOMES));
+
+function checkedPaging(paging, where) {
+  if (paging === null || typeof paging !== 'object' || Array.isArray(paging)) {
+    throw new Error(`${where} needs a paging record.`);
+  }
+  notNegativeWholeNumber(paging.pagesRead, `${where} pages-read count`);
+  positiveWholeNumber(paging.pageCap, `${where} page cap`);
+  if (typeof paging.moreAvailable !== 'boolean') throw new Error(`${where} paging needs moreAvailable.`);
+  return { pagesRead: paging.pagesRead, pageCap: paging.pageCap, moreAvailable: paging.moreAvailable };
+}
+
+function checkedConfiguredSearch(search, index) {
+  const where = `Search ${index + 1}`;
+  if (search === null || typeof search !== 'object' || Array.isArray(search)) {
+    throw new Error(`${where} must be an object.`);
+  }
+  if (!OUTCOME_VALUES.includes(search.outcome)) {
+    throw new Error(`${where} outcome must be one of: ${OUTCOME_VALUES.join(', ')}.`);
+  }
+  notNegativeWholeNumber(search.rowCount, `${where} row count`);
+  const failed = search.outcome === SEARCH_OUTCOMES.failed;
+  if (failed && !FAILURE_REASON_VALUES.includes(search.failureReason)) {
+    throw new Error(`${where} failure reason must be one of: ${FAILURE_REASON_VALUES.join(', ')}.`);
+  }
+  if ((failed || search.outcome === SEARCH_OUTCOMES.noMatches) && search.rowCount > 0) {
+    throw new Error(`${where} cannot hold rows with outcome ${search.outcome}.`);
+  }
+  return {
+    outcome: search.outcome,
+    rowCount: search.rowCount,
+    failureReason: failed ? search.failureReason : null,
+    paging: checkedPaging(search.paging, where),
+  };
+}
+
+/**
+ * The one answer a work item gives when it was searched with **configured search phrases** (issue
+ * #1138): up to two searches, in phrase order, each already answered on its own by
+ * `searchOutcomeFor` / `internalPagingOutcome` (its `paging`, `outcome`, `failureReason` and the
+ * number of real-match rows it found).
+ *
+ * The rule, so the file a work item writes is consistent under the existing result contract:
+ *
+ * - **The rows** are those of the search that found the real matches - the last search, because
+ *   the collector stops at the first one that finds any. `rowsFromSearch` names it (1-based), or is
+ *   `null` when no search found one.
+ * - **A failed search ends the work item.** The next phrase is not searched after a failure, so a
+ *   failure can only be the last search, and the item is `failed` with that reason and no rows.
+ * - **`truncated` when any search was cut short**, whatever the others found: a capped first search
+ *   with no match followed by a fully read fallback with a match is `truncated` and keeps the
+ *   fallback's rows, because the first search may have held a listing nobody looked at.
+ * - **`no_matches` only when every search was read to the end and none found a real match;**
+ *   `complete` when every search was read to the end and the last one found the matches.
+ * - **`paging` is the paging of the search that decided the outcome**: for `truncated`, the first
+ *   search that was cut short (so a truncated item never carries a fallback's
+ *   `moreAvailable: false` while its own reason is the earlier search's cap); otherwise the paging of
+ *   the search whose rows are reported, or of the last search when there are none.
+ */
+export function configuredPhrasesOutcome(searches) {
+  if (!Array.isArray(searches) || searches.length === 0 || searches.length > 2) {
+    throw new Error('Configured phrases are answered from one or two searches.');
+  }
+  const answered = searches.map((search, index) => checkedConfiguredSearch(search, index));
+  const last = answered.length - 1;
+
+  answered.forEach((search, index) => {
+    if (index < last && search.outcome === SEARCH_OUTCOMES.failed) {
+      throw new Error('No phrase is searched after a failed search, so only the last search can fail.');
+    }
+    if (index < last && search.rowCount > 0) {
+      throw new Error('The next phrase is searched only when no real match was found, so only the last search can hold rows.');
+    }
+  });
+
+  const final = answered[last];
+  if (final.outcome === SEARCH_OUTCOMES.failed) {
+    return { outcome: SEARCH_OUTCOMES.failed, failureReason: final.failureReason, paging: final.paging, rowsFromSearch: null };
+  }
+
+  const rowsFromSearch = final.rowCount > 0 ? answered.length : null;
+  const cutShort = answered.find((search) => search.outcome === SEARCH_OUTCOMES.truncated);
+  if (cutShort) {
+    return { outcome: SEARCH_OUTCOMES.truncated, failureReason: null, paging: cutShort.paging, rowsFromSearch };
+  }
+
+  return {
+    outcome: rowsFromSearch === null ? SEARCH_OUTCOMES.noMatches : SEARCH_OUTCOMES.complete,
+    failureReason: null,
+    paging: final.paging,
+    rowsFromSearch,
+  };
+}
+
 const NUMERIC_OPTIONS = Object.freeze({
   '--returned': 'returned',
   '--page-size': 'pageSize',
@@ -188,9 +290,33 @@ function answerInternalPaging(values, flags, failure) {
   };
 }
 
+/**
+ * One search of `--configured-phrases`, written as
+ * `<outcome>,<rowCount>,<pagesRead>,<pageCap>,<moreAvailable>[,<failureReason>]` - plain words and
+ * numbers, so the run's command guard accepts it without quoting.
+ */
+function configuredSearchFromToken(token, index) {
+  const parts = token.split(',');
+  if (parts.length < 5 || parts.length > 6 || !['true', 'false'].includes(parts[4])) {
+    throw new Error(
+      `Search ${index + 1} must be written <outcome>,<rowCount>,<pagesRead>,<pageCap>,<moreAvailable>[,<failureReason>].`);
+  }
+  const number = (raw) => (/^\d+$/.test(raw) ? Number(raw) : Number.NaN);
+  return {
+    outcome: parts[0],
+    rowCount: number(parts[1]),
+    paging: { pagesRead: number(parts[2]), pageCap: number(parts[3]), moreAvailable: parts[4] === 'true' },
+    failureReason: parts[5] ?? null,
+  };
+}
+
 /** One invocation: the page decision and the outcome it implies, as JSON on stdout. */
 export function runPagination(argv) {
   try {
+    if (argv?.[0] === '--configured-phrases') {
+      const searches = argv.slice(1).map((token, index) => configuredSearchFromToken(String(token), index));
+      return { exitCode: 0, out: JSON.stringify(configuredPhrasesOutcome(searches)), err: '' };
+    }
     const { values, flags, failure } = parsePaginationArguments(argv ?? []);
     if (flags.internalPaging) {
       return { exitCode: 0, out: JSON.stringify(answerInternalPaging(values, flags, failure)), err: '' };

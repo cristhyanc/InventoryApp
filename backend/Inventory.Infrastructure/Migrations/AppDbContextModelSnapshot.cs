@@ -1198,6 +1198,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<decimal>("SizeValue")
                         .HasColumnType("decimal(18,3)");
 
+                    b.Property<string>("SupplierSearchTerms")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("TEXT");
 

@@ -157,6 +157,9 @@ public sealed class IssuePriceCollectorWorkList
         }
 
         var handles = HandlesByProduct(issued);
+        var connectors = suppliers.ToDictionary(
+            supplier => supplier.SupplierPresetId,
+            supplier => supplier.PriceConnector);
 
         // The products this run actually carries work for. With schedule=all that is every planned
         // product; with schedule=due the write dropped the pairs that were covered or in flight, so a
@@ -228,7 +231,9 @@ public sealed class IssuePriceCollectorWorkList
                     ? [.. own.Select(KnownListing)]
                     : [],
                 knownListings.MasterProductsBeyondLimit.Contains(product.Id),
-                handles.MatchedProducts.TryGetValue(product.Id, out var ownWork) ? ownWork : []))],
+                handles.MatchedProducts.TryGetValue(product.Id, out var ownWork)
+                    ? WithSearchTerms(ownWork, product, connectors)
+                    : []))],
             [.. plan.WaitingProducts
                 .Where(product => handles.WaitingProducts.ContainsKey(product.WaitingKey))
                 .Select(product => new PriceCollectorWaitingProduct(
@@ -469,6 +474,39 @@ public sealed class IssuePriceCollectorWorkList
                 entry => entry.Key,
                 entry => (IReadOnlyList<PriceCollectorWorkItemHandle>)entry.Value,
                 StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Each work item of a matched product with the one search-terms entry that applies to it at its
+    /// own supplier (issue #1138) - the preset's own entry before its connector's, never both - and
+    /// no entry at all where none applies, which is the existing search.
+    /// </summary>
+    private static IReadOnlyList<PriceCollectorWorkItemHandle> WithSearchTerms(
+        IReadOnlyList<PriceCollectorWorkItemHandle> work,
+        TrackedMasterProduct product,
+        IReadOnlyDictionary<int, Domain.Suppliers.SupplierPriceConnector?> connectors)
+    {
+        if (product.SupplierSearchTerms.Count == 0)
+        {
+            return work;
+        }
+
+        return [.. work.Select(handle =>
+        {
+            var effective = SupplierSearchTermsPolicy.EffectiveFor(
+                product.SupplierSearchTerms,
+                handle.SupplierPresetId,
+                connectors.GetValueOrDefault(handle.SupplierPresetId));
+
+            return effective is null
+                ? handle
+                : handle with
+                {
+                    SearchTerms = new PriceCollectorSearchTerms(
+                        [.. effective.SearchPhrases],
+                        [.. effective.FlavourAliases]),
+                };
+        })];
     }
 
     private static PriceCollectorKnownListing KnownListing(TrackedSupplierListing listing) =>

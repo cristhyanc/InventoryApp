@@ -219,12 +219,18 @@ public sealed class UpdateMasterProduct
             submission.SizeValue,
             submission.SizeUnit);
 
+        // Validated before the transaction for the reason the description is: text this catalogue
+        // cannot store is refused without taking the write lock. Null keeps the stored terms.
+        var searchTerms = submission.SupplierSearchTerms is null
+            ? null
+            : SupplierSearchTermsPolicy.Normalise(submission.SupplierSearchTerms);
+
         var changedAtUtc = _clock.UtcNow;
 
         var updated = await _store
             .UpdateAsync(
                 masterProductId,
-                new MasterProductEdit(description, expectedUpdatedAtUtc),
+                new MasterProductEdit(description, expectedUpdatedAtUtc, searchTerms),
                 changedAtUtc,
                 cancellationToken)
             .ConfigureAwait(false);
