@@ -169,6 +169,22 @@ internal static class NayaxSqsRealMessage
         Edited(root => Apply(root, [(key, json)]));
 
     /// <summary>
+    /// The real message with <paramref name="dataFields"/> applied to its <c>Data</c> object
+    /// <em>and</em> <paramref name="productFields"/> to its single product entry, on the same terms
+    /// as the two methods above. Needed by the refund cases of issue #1107, which have to vary the
+    /// status and the product entry in one message. A separate name rather than an overload, so the
+    /// <c>cref</c>s above stay unambiguous.
+    /// </summary>
+    public static string ReceivedWithDataAndProduct(
+        (string Key, string? Json)[] dataFields, (string Key, string? Json)[] productFields) =>
+        Edited(root =>
+        {
+            var data = root["Data"]!.AsObject();
+            Apply(data, dataFields);
+            Apply(data["Products"]!.AsArray()[0]!.AsObject(), productFields);
+        });
+
+    /// <summary>
     /// The document edited through <see cref="JsonNode"/> rather than by string surgery, so that a
     /// replaced key really replaces the original instead of producing a document carrying the key
     /// twice, and so the exact numeric text - the four-decimal amounts and the sixteen-digit card

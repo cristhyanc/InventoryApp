@@ -48,13 +48,15 @@ public class ProcessNayaxSqsSaleTests
     }
 
     /// <summary>
-    /// A refund, a pending status, an unrecognised status, a void and a negative amount are issue
-    /// #1102's unsupported outcomes, and a free vend waits for a real sample. None of them reaches a
-    /// Nayax call: the message is read before any gate, so a transaction this application will never
+    /// A pending status, an unrecognised status, a void and a negative amount are issue #1102's
+    /// unsupported outcomes, and a free vend waits for a real sample. None of them reaches a Nayax
+    /// call: the message is read before any gate, so a transaction this application will never
     /// consume costs the business nothing.
+    ///
+    /// <para>Status <c>62</c> was one of these until issue #1107 and no longer is: a refund now has
+    /// its own outcome and its own gated write, which the refund cases further down cover.</para>
     /// </summary>
     [Theory]
-    [InlineData("Transaction Status ID", "62")]
     [InlineData("Transaction Status ID", "55")]
     [InlineData("Transaction Status ID", "999")]
     [InlineData("SeValue", "-3.50")]
@@ -355,6 +357,159 @@ public class ProcessNayaxSqsSaleTests
         Assert.Equal(NayaxSqsProcessingReason.Saved, outcome.Reason);
     }
 
+    #region Refunds (issue #1107)
+
+    /// <summary>
+    /// A refund takes the same gates as a sale and then a different write: the store is asked to
+    /// apply it against the transaction the message names, with the message's own machine, amount and
+    /// product travelling to the comparison and the message id and instant to the audit row. Nothing
+    /// is persisted as a sale and no rebuild is drained - status <c>12</c> and status <c>62</c> both
+    /// consume stock, so the change moves no quantity, value or cost and there is nothing to replay.
+    /// </summary>
+    [Fact]
+    public async Task A_refund_is_applied_against_the_transaction_it_names_and_saves_no_sale()
+    {
+        var harness = new Harness();
+
+        var outcome = await harness.Handle(
+            NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")));
+
+        Assert.Equal(NayaxSqsDisposition.Done, outcome.Disposition);
+        Assert.Equal(NayaxSqsProcessingReason.RefundApplied, outcome.Reason);
+
+        var refund = Assert.Single(harness.Refunds);
+        Assert.Equal(4100000001L, refund.TransactionId);
+        Assert.Equal(MachineId, refund.MachineId);
+        Assert.Equal(3.5m, refund.SettlementValue);
+        Assert.Equal(NayaxProductId, refund.NayaxProductId);
+        Assert.Equal(MessageId, refund.MessageId);
+        Assert.Equal(Now, refund.ReceivedAtUtc);
+
+        harness.AssertNoSaleSaved();
+        harness.Store.Verify(
+            x => x.RebuildInventoryCostsAsync(It.IsAny<CancellationToken>()), Times.Never);
+
+        // A message from this business's sender still stamps the last-message instant.
+        Assert.Equal([Now], harness.SenderActivity.Stamps);
+    }
+
+    /// <summary>
+    /// A refund resolves no product, so the machine's product map is never read for one - not even
+    /// when the message states no usable <c>"Product ID"</c>. There is no product to match: the
+    /// refund names a sale that already records one.
+    /// </summary>
+    [Fact]
+    public async Task A_refund_never_reads_the_machines_product_map()
+    {
+        var harness = new Harness();
+        harness.Slots.Resolve = 7788;
+
+        await harness.Handle(
+            NayaxSqsRealMessage.ReceivedWithDataAndProduct(
+                dataFields: [("Transaction Status ID", "62")], productFields: [("Product ID", null)]));
+
+        Assert.Empty(harness.Slots.Lookups);
+        Assert.Null(Assert.Single(harness.Refunds).NayaxProductId);
+    }
+
+    /// <summary>
+    /// The refund outcomes the store reports, and what the reader does with each of them. Applied and
+    /// already-applied are finished with; everything the store could not place is <em>permanent</em>,
+    /// because retrying cannot make this business's stored sales say something else and a sample of a
+    /// refund this application could not apply is exactly what belongs in the dead-letter queue.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxSqsRefundApplication.Applied, NayaxSqsDisposition.Done, NayaxSqsProcessingReason.RefundApplied)]
+    [InlineData(NayaxSqsRefundApplication.AlreadyRefunded, NayaxSqsDisposition.Done, NayaxSqsProcessingReason.RefundAlreadyApplied)]
+    [InlineData(NayaxSqsRefundApplication.NoMatchingSale, NayaxSqsDisposition.Permanent, NayaxSqsProcessingReason.RefundUnmatched)]
+    [InlineData(NayaxSqsRefundApplication.NotRefundable, NayaxSqsDisposition.Permanent, NayaxSqsProcessingReason.RefundNotApplicable)]
+    [InlineData(NayaxSqsRefundApplication.Contradicted, NayaxSqsDisposition.Permanent, NayaxSqsProcessingReason.RefundContradicted)]
+    public async Task Each_refund_outcome_has_its_own_disposition_and_reason(
+        NayaxSqsRefundApplication applied,
+        NayaxSqsDisposition expectedDisposition,
+        NayaxSqsProcessingReason expectedReason)
+    {
+        var harness = new Harness();
+        harness.WithRefund(applied);
+
+        var outcome = await harness.Handle(
+            NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")));
+
+        Assert.Equal(expectedDisposition, outcome.Disposition);
+        Assert.Equal(expectedReason, outcome.Reason);
+        harness.AssertNoSaleSaved();
+    }
+
+    /// <summary>
+    /// A refund this application could not place leaves the sender's last-message stamp alone, which
+    /// keeps that instant meaning "the queue delivered something we understood".
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxSqsRefundApplication.NoMatchingSale)]
+    [InlineData(NayaxSqsRefundApplication.Contradicted)]
+    public async Task A_refund_that_was_not_applied_stamps_nothing(NayaxSqsRefundApplication applied)
+    {
+        var harness = new Harness();
+        harness.WithRefund(applied);
+
+        await harness.Handle(NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")));
+
+        Assert.Empty(harness.SenderActivity.Stamps);
+    }
+
+    /// <summary>
+    /// A refund still passes every gate a sale passes, before anything is written: a business with no
+    /// usable connection or no sales-provider plan is transient, and a machine that is not the
+    /// business's is permanently refused. A refund applied for a business whose plan no longer
+    /// includes the provider would be the one write that ignored a gate every other one honours.
+    /// </summary>
+    [Fact]
+    public async Task A_refund_is_gated_exactly_as_a_sale_is()
+    {
+        var disconnected = new Harness
+        {
+            Credentials = FakeNayaxOperationCredentials.Refusing(NayaxConnectionStatus.NeedsAttention),
+        };
+
+        var refused = await disconnected.Handle(
+            NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")));
+
+        Assert.Equal(NayaxSqsDisposition.Transient, refused.Disposition);
+        Assert.Equal(NayaxSqsProcessingReason.ConnectionUnavailable, refused.Reason);
+        Assert.Empty(disconnected.Refunds);
+
+        var foreignMachine = new Harness();
+        foreignMachine.WithFleet(cached: [9999], fresh: [9999]);
+
+        var rejected = await foreignMachine.Handle(
+            NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")));
+
+        Assert.Equal(NayaxSqsDisposition.Permanent, rejected.Disposition);
+        Assert.Equal(NayaxSqsProcessingReason.MachineNotInFleet, rejected.Reason);
+        Assert.Empty(foreignMachine.Refunds);
+    }
+
+    /// <summary>
+    /// A persistence failure while applying a refund is transient and nothing was changed: the next
+    /// receive is the retry, exactly as it is for a sale.
+    /// </summary>
+    [Fact]
+    public async Task A_store_failure_while_applying_a_refund_is_transient()
+    {
+        var harness = new Harness();
+        harness.Store
+            .Setup(x => x.ApplySqsRefundAsync(It.IsAny<NayaxSqsRefundInput>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("database is locked"));
+
+        var outcome = await harness.Handle(
+            NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")));
+
+        Assert.Equal(NayaxSqsDisposition.Transient, outcome.Disposition);
+        Assert.Equal(NayaxSqsProcessingReason.StoreUnavailable, outcome.Reason);
+    }
+
+    #endregion
+
     /// <summary>
     /// Shutdown propagates rather than becoming a disposition: an in-flight message is either
     /// finished and deleted or left for redelivery, never reported as a failure of its own.
@@ -383,6 +538,7 @@ public class ProcessNayaxSqsSaleTests
             Store = new Mock<ILatestNayaxSalesStore>();
             WithPersisted(inserted: true, affectedProductIds: []);
             WithDrain(stillPending: []);
+            WithRefund(NayaxSqsRefundApplication.Applied);
 
             Nayax = new Mock<INayaxLynxClient>();
             WithFleet(cached: [MachineId], fresh: [MachineId]);
@@ -408,6 +564,9 @@ public class ProcessNayaxSqsSaleTests
 
         /// <summary>Every message the store was asked to save, in order.</summary>
         public List<NayaxSqsSaleInput> Saved { get; } = [];
+
+        /// <summary>Every refund the store was asked to apply, in order (issue #1107).</summary>
+        public List<NayaxSqsRefundInput> Refunds { get; } = [];
 
         public Task<NayaxSqsProcessingOutcome> Handle(
             string? body, CancellationToken cancellationToken = default) =>
@@ -442,8 +601,30 @@ public class ProcessNayaxSqsSaleTests
                 .ReturnsAsync(new InventoryCostRebuildDrainResult(stillPending, []));
         }
 
+        public void WithRefund(NayaxSqsRefundApplication applied)
+        {
+            Store.Setup(x => x.ApplySqsRefundAsync(
+                    It.IsAny<NayaxSqsRefundInput>(), It.IsAny<CancellationToken>()))
+                .Callback<NayaxSqsRefundInput, CancellationToken>((input, _) => Refunds.Add(input))
+                .ReturnsAsync(applied);
+        }
+
         /// <summary>Nothing reached the store, which is what "before anything is saved" has to mean.</summary>
         public void AssertNothingSaved()
+        {
+            AssertNoSaleSaved();
+            Assert.Empty(Refunds);
+            Store.Verify(
+                x => x.ApplySqsRefundAsync(
+                    It.IsAny<NayaxSqsRefundInput>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+
+        /// <summary>
+        /// No sale was stored and no replay was drained - what a refund has to leave true, because a
+        /// refund is evidence about a sale and never a sale.
+        /// </summary>
+        public void AssertNoSaleSaved()
         {
             Assert.Empty(Saved);
             Store.Verify(

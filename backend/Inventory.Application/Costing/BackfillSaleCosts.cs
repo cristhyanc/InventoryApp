@@ -24,7 +24,8 @@ public sealed class BackfillSaleCosts
         bool force = false,
         CancellationToken cancellationToken = default)
     {
-        var sales = await _store.LoadCompletedSalesAsync(new CompletedSaleSelection(), forUpdate: !dryRun, cancellationToken);
+        var sales = await _store.LoadStockConsumingSalesAsync(
+            new StockConsumingSaleSelection(), forUpdate: !dryRun, cancellationToken);
         var costed = 0;
         var estimated = 0;
         var pending = 0;

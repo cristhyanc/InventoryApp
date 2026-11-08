@@ -98,6 +98,43 @@ public enum NayaxSqsProcessingReason
 
     /// <summary>A Nayax read the gates or the slot lookup needed failed or timed out.</summary>
     ProviderUnavailable,
+
+    /// <summary>
+    /// A refund moved a stored sale from status <c>12</c> to status <c>62</c>, once, with an audit
+    /// row (issue #1107). The money is reversed in every completed-sale total and the unit stays
+    /// consumed.
+    /// </summary>
+    RefundApplied,
+
+    /// <summary>
+    /// A redelivery of a refund already applied: the sale is stored as status <c>62</c> and the
+    /// message agrees with it about the machine, the amount and the product. Nothing changed and
+    /// nothing was audited again, so the message is finished with. A second message that
+    /// <em>disagrees</em> with that sale is <see cref="RefundContradicted"/> instead, and is kept
+    /// rather than acknowledged.
+    /// </summary>
+    RefundAlreadyApplied,
+
+    /// <summary>
+    /// A refund naming a transaction this business has no sale for. Nothing is saved - a refund never
+    /// becomes a sale - and the message is released towards the dead-letter queue as a sample,
+    /// because that is the safe outcome if the refund delivery shape this is built on is wrong.
+    /// </summary>
+    RefundUnmatched,
+
+    /// <summary>
+    /// A refund whose machine, amount or product contradicts the sale it names, so the two are not
+    /// plainly the same transaction. Nothing is changed and the message is kept as a sample -
+    /// whatever that sale's status is, the already refunded one included.
+    /// </summary>
+    RefundContradicted,
+
+    /// <summary>
+    /// A refund naming a stored sale that is not a status-<c>12</c> sale - pending, cancelled,
+    /// declined, unknown or without a status. There is nothing to refund, and moving such a row to
+    /// refunded on a message alone would change a financial status on a guess.
+    /// </summary>
+    RefundNotApplicable,
 }
 
 /// <summary>

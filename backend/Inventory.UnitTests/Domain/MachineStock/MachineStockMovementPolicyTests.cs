@@ -46,11 +46,11 @@ public class MachineStockMovementPolicyTests
     }
 
     [Fact]
-    public void One_completed_sale_dispenses_exactly_one_unit()
+    public void One_dispensed_sale_takes_exactly_one_unit_out_of_the_machine()
     {
         var movement = MachineStockMovementPolicy.FromSale(new MachineSaleFact(9001, 500, At));
 
-        Assert.Equal(MachineStockMovementKind.CompletedSale, movement.Kind);
+        Assert.Equal(MachineStockMovementKind.DispensedSale, movement.Kind);
         Assert.Equal(-1, movement.MachineQuantityChange);
         Assert.Equal(9001, movement.SourceId);
     }
@@ -69,8 +69,8 @@ public class MachineStockMovementPolicyTests
     [InlineData(MachineStockMovementKind.Refill, false)]
     [InlineData(MachineStockMovementKind.ReturnToStorage, false)]
     [InlineData(MachineStockMovementKind.CountedReconciliation, false)]
-    [InlineData(MachineStockMovementKind.CompletedSale, true)]
-    public void Only_a_completed_sale_consumes_business_owned_costing_inventory(
+    [InlineData(MachineStockMovementKind.DispensedSale, true)]
+    public void Only_a_dispensed_sale_consumes_business_owned_costing_inventory(
         MachineStockMovementKind kind, bool consumes) =>
         Assert.Equal(consumes, MachineStockMovementPolicy.ConsumesBusinessCostingInventory(kind));
 }

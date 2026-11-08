@@ -51,7 +51,17 @@ public enum NayaxSqsOutcomeKind
     FreeVend,
 
     /// <summary>A completed sale, saved as one.</summary>
-    CompletedSale
+    CompletedSale,
+
+    /// <summary>
+    /// A refund of a transaction this application may already have stored (issue #1107, status
+    /// <c>62</c>). It is <strong>never saved as a sale</strong>: it can only move a sale this
+    /// business already has from status <c>12</c> to status <c>62</c>, and a message matching none is
+    /// left for the dead-letter queue exactly as it was before this outcome existed.
+    ///
+    /// <para>Appended last so no declared ordinal moves.</para>
+    /// </summary>
+    Refund
 }
 
 /// <summary>
@@ -117,7 +127,12 @@ public enum NayaxSqsRejectionReason
     /// <summary><c>Data."Settlment Failed"</c> is true: the settlement process failed.</summary>
     SettlementFailed,
 
-    /// <summary>Status <c>62</c>: refunded. Refund semantics are issue #1107.</summary>
+    /// <summary>
+    /// Status <c>62</c>: refunded. Kept as a declared value although no outcome carries it any more -
+    /// issue #1107 gave a refund its own <see cref="NayaxSqsOutcomeKind.Refund"/> outcome, so a
+    /// refund is no longer a rejection. Removing the member would move the ordinals of every reason
+    /// after it, and these codes reach a log.
+    /// </summary>
     Refunded,
 
     /// <summary>
@@ -148,9 +163,12 @@ public enum NayaxSqsRejectionReason
 /// the sale record this application already knows how to save, or an explicit "do not save" with a
 /// reason (issue #1102).
 ///
-/// <para><see cref="Report"/> and <see cref="ProductSlot"/> are present only for
-/// <see cref="NayaxSqsOutcomeKind.CompletedSale"/> and
-/// <see cref="NayaxSqsOutcomeKind.CancelledOrDeclined"/> - the two kinds that are saved. The slot
+/// <para><see cref="Report"/> is present for <see cref="NayaxSqsOutcomeKind.CompletedSale"/>,
+/// <see cref="NayaxSqsOutcomeKind.CancelledOrDeclined"/> - the two kinds that are saved - and
+/// <see cref="NayaxSqsOutcomeKind.Refund"/>, which saves nothing and carries the report only so the
+/// three values that identify the transaction can be compared with the stored sale.
+/// <see cref="ProductSlot"/> is present only for the two saved kinds: a refund resolves no product
+/// at all, so it carries no slot to resolve one from. The slot
 /// travels beside the report rather than inside it because <see cref="NayaxLastSalesReport"/> models
 /// the <c>lastSales</c> payload, which has no slot: an SQS message carries the machine's MDB code as
 /// well as Nayax's product id, and turning the slot into a product id when the message stated no
@@ -219,4 +237,12 @@ public sealed record NayaxSqsTransactionOutcome
     public static NayaxSqsTransactionOutcome CompletedSale(
         NayaxLastSalesReport report, int? productSlot) =>
         new(NayaxSqsOutcomeKind.CompletedSale, NayaxSqsRejectionReason.None, report, productSlot);
+
+    /// <summary>
+    /// A refund of a transaction this business may already have stored (issue #1107). It carries no
+    /// slot: a refund never resolves a product and never becomes a sale, so there is nothing for the
+    /// machine's product map to answer.
+    /// </summary>
+    public static NayaxSqsTransactionOutcome Refund(NayaxLastSalesReport report) =>
+        new(NayaxSqsOutcomeKind.Refund, NayaxSqsRejectionReason.None, report, productSlot: null);
 }

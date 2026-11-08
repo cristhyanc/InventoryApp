@@ -14,9 +14,12 @@ public interface ICostSale
 
 /// <summary>
 /// Decides one sale's historical cost (issue #297, child 3 of #149), moved unchanged from the
-/// former <c>InventoryApi.Services.SaleCostingService.CostSaleAsync</c>. A sale that is not
-/// completed (status ID 12) is left uncosted and pending. A completed sale already costed or
-/// legacy-estimated with both costs present is kept unless forced. Otherwise the precedence is:
+/// former <c>InventoryApi.Services.SaleCostingService.CostSaleAsync</c>. A sale that consumed no
+/// unit is left uncosted and pending; which sales consumed one is
+/// <see cref="NayaxSaleCountingPolicy.ConsumesStock"/> - status 12 or status 62, neither excluded by
+/// review (issue #1107), because a refunded sale dispensed its unit and keeps the cost it was sold
+/// at. A sale already costed or legacy-estimated with both costs present is kept unless forced.
+/// Otherwise the precedence is:
 /// the internal inventory-ledger (AVCO) cost immediately before the sale, unless the product is
 /// unresolved or the sale is at or before its transition-baseline cutoff; otherwise the
 /// transaction-level Nayax <c>Product Cost Price</c>; otherwise uncosted - an error when the
@@ -47,7 +50,7 @@ public sealed class CostSale : ICostSale
     {
         ArgumentNullException.ThrowIfNull(sale);
 
-        if (!NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification))
+        if (!NayaxSaleCountingPolicy.ConsumesStock(sale.TransactionStatusId, sale.SqsVerification))
             return new SaleCostAssignment(null, SaleCostStatus.Pending, SaleCostOrigin.Unknown);
 
         if (!force &&
