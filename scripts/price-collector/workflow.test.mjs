@@ -77,6 +77,34 @@ test('the JB Metro search words prompt.md recommends pass the guard, and the pun
   }
 });
 
+test('the prompt states the configured search terms contract (issue #1138)', () => {
+  const prompt = readFileSync(new URL('./prompt.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+  // Retry on an empty search and on a non-empty search with no valid match, in order, never joined.
+  assert.match(prompt, /Search the \*\*first phrase as written\*\*/);
+  assert.match(prompt, /\*\*Search the next phrase\*\* when the first search returned \*\*no product at all\*\*, \*\*or\*\* returned products but \*\*none of them is a real match\*\*/);
+  assert.match(prompt, /Never join two phrases into one search, never search the same phrase twice/);
+  assert.match(prompt, /the configured phrases \*\*are\*\* the at-most-two wordings for this work item/);
+  assert.match(prompt, /A search whose `searchTerms` is `null` is searched exactly as step 1 says/);
+  // Paging outcomes are preserved across both searches.
+  assert.match(prompt, /`no_matches` \*\*only\*\* when every search you made was read to the end/);
+  assert.match(prompt, /if any of them was cut short, the outcome is `truncated`, never `no_matches`/);
+  // The alias is matching evidence only and every other identity check still applies.
+  assert.match(prompt, /They are \*\*never search words\*\*/);
+  assert.match(prompt, /the \*\*brand\*\* must agree, the \*\*product type\*\* must agree .* the \*\*individual unit size\*\* must agree, and a title that names any \*\*other\*\* flavour or variant is still a different product/);
+  assert.match(prompt, /An alias never applies to another product or another supplier/);
+  assert.match(prompt, /Keep the supplier's own `title` and `variant` exactly as published/);
+  // The offline Smith's example: the 45 g Plain is eligible, the 27 g and another 45 g flavour are not.
+  assert.match(prompt, /`45G SMITH'S PLAIN` — \*\*keep\*\*/);
+  assert.match(prompt, /`27G SMITH'S PLAIN` — \*\*reject\*\*: the individual unit size is 27 g/);
+  assert.match(prompt, /`45G SMITH'S SALT & VINEGAR`, `45G SMITH'S CHEESE & ONION` — \*\*reject\*\*: a different flavour/);
+});
+
+test('the configured Smith\'s phrases pass the JB Metro guard as written', () => {
+  for (const words of ['Smiths Plain', 'Smiths']) {
+    assert.equal(permittedCommand(`node scripts/price-collector/jbmetro-lookup.mjs --search "${words}" https://www.jbmetro.com.au`), true, words);
+  }
+});
+
 test('tool policy refuses arbitrary shell, command substitution, redirects, extra tools and background commands', async () => {
   assert.equal(permittedCommand('node scripts/price-collector/read-work.mjs'), true);
   assert.equal(permittedCommand('node scripts/price-collector/jbmetro-lookup.mjs --search "Coke Classic" https://www.jbmetro.com.au'), true);

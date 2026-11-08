@@ -159,12 +159,17 @@ public sealed record TrackedSupplierListing(
 /// <param name="Name">Its name or variant.</param>
 /// <param name="SizeValue">The size of one item.</param>
 /// <param name="SizeUnit">What that size is measured in.</param>
+/// <param name="SupplierSearchTerms">
+/// The Super Admin's supplier search terms for it (issue #1138), every entry; which one a work item
+/// receives is <see cref="SupplierSearchTermsPolicy.EffectiveFor"/>'s decision, not the store's.
+/// </param>
 public sealed record TrackedMasterProduct(
     long Id,
     string Brand,
     string Name,
     decimal SizeValue,
-    MasterProductSizeUnit SizeUnit);
+    MasterProductSizeUnit SizeUnit,
+    IReadOnlyList<SupplierSearchTerms> SupplierSearchTerms);
 
 /// <summary>
 /// The listings of the master products one run is issued for, bounded per product (issue #924).

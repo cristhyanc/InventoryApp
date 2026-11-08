@@ -13,10 +13,12 @@ namespace Inventory.Infrastructure.Persistence;
 /// #817): adding one master product to the shared catalogue, and correcting the brand, name or size of
 /// one that exists.
 ///
-/// <para><strong>One table written, one read, and nothing else at all.</strong>
+/// <para><strong>One table written, two read, and nothing else at all.</strong>
 /// <c>MasterProducts</c> is written - this and <see cref="EfPriceCatalogueReviewStore"/> are its two
 /// writers, and there is no third. <c>SupplierListings</c> is read for exactly one question: how many
-/// of this product's listings are confirmed, which is what decides whether its size may change. No
+/// of this product's listings are confirmed, which is what decides whether its size may change.
+/// <c>SupplierPresets</c>, another platform table, is read for one more since issue #1138: whether
+/// every supplier a saved search-terms entry names exists. No
 /// observation, suggestion or collector row is touched, and <strong>nothing tenant-owned is read or
 /// written</strong>: no <c>Product</c>, no <c>ProductPriceTracking</c>, no <c>Business</c>. So a
 /// business's own product names, sizes, stock, costs, purchases and mappings are exactly as they were
@@ -158,6 +160,14 @@ public sealed class EfMasterProductCatalogueWriteStore : IMasterProductCatalogue
         await RefuseDuplicateAsync(description.NormalisedKey, masterProductId, cancellationToken)
             .ConfigureAwait(false);
 
+        if (edit.SupplierSearchTerms is { } searchTerms)
+        {
+            // Inside the lock, like every other question this edit asks: a supplier deleted while
+            // the page was open must not be saved as the target of a search entry.
+            await RequireSupplierPresetsExistAsync(searchTerms, cancellationToken).ConfigureAwait(false);
+            stored.SupplierSearchTerms = SupplierSearchTermsJson.Serialize(searchTerms);
+        }
+
         stored.Brand = description.Brand;
         stored.Name = description.Name;
         stored.SizeValue = description.SizeValue;
@@ -169,6 +179,36 @@ public sealed class EfMasterProductCatalogueWriteStore : IMasterProductCatalogue
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
         return Describe(stored, counts);
+    }
+
+    /// <summary>
+    /// Refuses search terms that name a supplier preset no row has (issue #1138). Connector entries
+    /// need no read: the connector is a closed list the Domain already checked.
+    /// </summary>
+    private async Task RequireSupplierPresetsExistAsync(
+        IReadOnlyList<SupplierSearchTerms> searchTerms,
+        CancellationToken cancellationToken)
+    {
+        var presetIds = searchTerms
+            .Where(entry => entry.SupplierPresetId is not null)
+            .Select(entry => entry.SupplierPresetId!.Value)
+            .Distinct()
+            .ToList();
+
+        if (presetIds.Count == 0)
+        {
+            return;
+        }
+
+        var found = await _db.SupplierPresets
+            .AsNoTracking()
+            .CountAsync(preset => presetIds.Contains(preset.Id), cancellationToken)
+            .ConfigureAwait(false);
+
+        if (found != presetIds.Count)
+        {
+            throw new DomainValidationException(SupplierSearchTermsPolicy.UnknownSupplierPresetMessage);
+        }
     }
 
     /// <summary>
@@ -280,5 +320,6 @@ public sealed class EfMasterProductCatalogueWriteStore : IMasterProductCatalogue
             master.SizeUnit,
             master.CreatedAtUtc,
             master.UpdatedAtUtc,
-            counts);
+            counts,
+            SupplierSearchTermsJson.Deserialize(master.SupplierSearchTerms));
 }

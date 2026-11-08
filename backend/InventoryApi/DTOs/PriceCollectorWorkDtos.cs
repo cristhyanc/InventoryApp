@@ -38,14 +38,40 @@ public sealed record PriceCollectorSupplierResponse(
 /// <summary>
 /// One issued piece of work (issue #924): the id a result row about this product and this supplier
 /// must reference (#937), and the supplier it is for.
+///
+/// <para><c>searchTerms</c> (issue #1138) is the one configured search-terms entry that applies to
+/// this product at this supplier, or <c>null</c> when none does - then the collector searches exactly
+/// as it always has.</para>
 /// </summary>
-public sealed record PriceCollectorWorkItemResponse(long WorkItemId, int SupplierPresetId)
+public sealed record PriceCollectorWorkItemResponse(
+    long WorkItemId,
+    int SupplierPresetId,
+    PriceCollectorSearchTermsResponse? SearchTerms)
 {
     public static PriceCollectorWorkItemResponse From(PriceCollectorWorkItemHandle handle)
     {
         ArgumentNullException.ThrowIfNull(handle);
 
-        return new PriceCollectorWorkItemResponse(handle.WorkItemId, handle.SupplierPresetId);
+        return new PriceCollectorWorkItemResponse(
+            handle.WorkItemId,
+            handle.SupplierPresetId,
+            handle.SearchTerms is null ? null : PriceCollectorSearchTermsResponse.From(handle.SearchTerms));
+    }
+}
+
+/// <summary>
+/// The search phrases, in the order they are to be tried, and the flavour aliases one work item
+/// carries (issue #1138). Each phrase is its own search; an alias is matching evidence only.
+/// </summary>
+public sealed record PriceCollectorSearchTermsResponse(
+    IReadOnlyList<string> SearchPhrases,
+    IReadOnlyList<string> FlavourAliases)
+{
+    public static PriceCollectorSearchTermsResponse From(PriceCollectorSearchTerms terms)
+    {
+        ArgumentNullException.ThrowIfNull(terms);
+
+        return new PriceCollectorSearchTermsResponse([.. terms.SearchPhrases], [.. terms.FlavourAliases]);
     }
 }
 
