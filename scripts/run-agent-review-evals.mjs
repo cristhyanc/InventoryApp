@@ -31,6 +31,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { runProcess } from './run-agent-model-evals.mjs';
+
 export const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 export const DEFAULT_CASES_DIR = resolve(repositoryRoot, 'evals/agent/review/cases');
 export const REVIEW_WORKFLOW = resolve(repositoryRoot, '.github/workflows/agent-review.yml');
@@ -81,7 +83,7 @@ export function extractReviewStep(workflowText) {
       }
       body.push(line);
     }
-    while (body.length > 0 && body[body.length - 1].trim() === '') {
+    while (body.length > 0 && body.at(-1).trim() === '') {
       body.pop();
     }
     const indent = Math.min(...body.filter((line) => line.trim() !== '').map((line) => line.length - line.trimStart().length));
@@ -90,7 +92,7 @@ export function extractReviewStep(workflowText) {
   const prompt = block('prompt');
   const args = block('claude_args');
   const pick = (pattern, name) => {
-    const match = args.match(pattern);
+    const match = pattern.exec(args);
     if (!match) {
       throw new Error(`The review_agent claude_args have no ${name}.`);
     }
@@ -108,7 +110,8 @@ export function extractReviewStep(workflowText) {
 /** Replaces each GitHub expression in the prompt; an expression nobody mapped is an error. */
 export function resolveExpressions(prompt, values) {
   const unresolved = new Set();
-  const text = prompt.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (whole, expression) => {
+  const text = prompt.replace(/\$\{\{([^}]*)\}\}/g, (whole, inner) => {
+    const expression = inner.trim();
     if (!Object.hasOwn(values, expression)) {
       unresolved.add(expression);
       return whole;
@@ -200,6 +203,34 @@ function validateMatcher(matcher, where, errors) {
   }
 }
 
+function validateContext(c, where, errors) {
+  for (const key of ['prTitle', 'prSummary', 'linkedIssue', 'documentationImpact', 'validation']) {
+    if (!isNonEmptyString(c?.[key])) errors.push(`${where}: context.${key} is required.`);
+  }
+  for (const key of ['acceptanceCriteria', 'outOfScope']) {
+    if (!Array.isArray(c?.[key]) || c[key].length === 0 || !c[key].every(isNonEmptyString)) {
+      errors.push(`${where}: context.${key} must be a non-empty list of strings.`);
+    }
+  }
+}
+
+function validateExpected(e, where, errors) {
+  if (!VERDICTS.includes(e?.verdict)) errors.push(`${where}: expected.verdict must be one of ${VERDICTS.join(', ')}.`);
+  const findings = Array.isArray(e?.findings) ? e.findings : null;
+  const forbidden = Array.isArray(e?.forbiddenBlockers) ? e.forbiddenBlockers : null;
+  if (!findings) errors.push(`${where}: expected.findings must be an array.`);
+  if (!forbidden) errors.push(`${where}: expected.forbiddenBlockers must be an array.`);
+  (findings ?? []).forEach((m, i) => validateMatcher(m, `${where} expected.findings[${i}]`, errors));
+  (forbidden ?? []).forEach((m, i) => validateMatcher(m, `${where} expected.forbiddenBlockers[${i}]`, errors));
+  const count = (findings ?? []).length;
+  if (e?.verdict === 'CHANGES REQUESTED' && count === 0) {
+    errors.push(`${where}: a CHANGES REQUESTED case needs at least one expected finding.`);
+  }
+  if (e?.verdict === 'READY FOR HUMAN REVIEW' && count > 0) {
+    errors.push(`${where}: a READY FOR HUMAN REVIEW case cannot expect a blocking finding.`);
+  }
+}
+
 /** Returns a list of problems with one case; an empty list means the case is valid. */
 export function validateReviewCase(caseObj) {
   const errors = [];
@@ -210,27 +241,8 @@ export function validateReviewCase(caseObj) {
   for (const key of ['baseSha', 'headSha']) {
     if (!SHA.test(caseObj?.[key] ?? '')) errors.push(`${where}: ${key} must be a full 40-character SHA.`);
   }
-  const c = caseObj?.context;
-  for (const key of ['prTitle', 'prSummary', 'linkedIssue', 'documentationImpact', 'validation']) {
-    if (!isNonEmptyString(c?.[key])) errors.push(`${where}: context.${key} is required.`);
-  }
-  for (const key of ['acceptanceCriteria', 'outOfScope']) {
-    if (!Array.isArray(c?.[key]) || c[key].length === 0 || !c[key].every(isNonEmptyString)) {
-      errors.push(`${where}: context.${key} must be a non-empty list of strings.`);
-    }
-  }
-  const e = caseObj?.expected;
-  if (!VERDICTS.includes(e?.verdict)) errors.push(`${where}: expected.verdict must be one of ${VERDICTS.join(', ')}.`);
-  if (!Array.isArray(e?.findings)) errors.push(`${where}: expected.findings must be an array.`);
-  if (!Array.isArray(e?.forbiddenBlockers)) errors.push(`${where}: expected.forbiddenBlockers must be an array.`);
-  (e?.findings ?? []).forEach((m, i) => validateMatcher(m, `${where} expected.findings[${i}]`, errors));
-  (e?.forbiddenBlockers ?? []).forEach((m, i) => validateMatcher(m, `${where} expected.forbiddenBlockers[${i}]`, errors));
-  if (e?.verdict === 'CHANGES REQUESTED' && (e?.findings ?? []).length === 0) {
-    errors.push(`${where}: a CHANGES REQUESTED case needs at least one expected finding.`);
-  }
-  if (e?.verdict === 'READY FOR HUMAN REVIEW' && (e?.findings ?? []).length > 0) {
-    errors.push(`${where}: a READY FOR HUMAN REVIEW case cannot expect a blocking finding.`);
-  }
+  validateContext(caseObj?.context, where, errors);
+  validateExpected(caseObj?.expected, where, errors);
   if (!isNonEmptyString(caseObj?.source)) errors.push(`${where}: source (how the right answer is known) is required.`);
   return errors;
 }
@@ -300,7 +312,7 @@ export function matches(matcher, text) {
 // A blocker is "actionable" when it names a file:line and a test, which is what the candidate
 // prompt asks for. Reported for both variants; it does not decide pass or fail.
 export function isActionable(text) {
-  return /[\w./-]+\.\w+:\d+/.test(text) && /\btests?\b/i.test(text);
+  return /\.\w+:\d+/.test(text) && /\btests?\b/i.test(text);
 }
 
 export function gradeReviewCase(caseObj, outcome) {
@@ -398,8 +410,12 @@ export function summarizeReviewResults(results, cases) {
 
 // --- Isolated repository ------------------------------------------------------------------------
 
+// Absolute paths, never a lookup on PATH; override them for a machine that keeps git or tar elsewhere.
+const GIT_PATH = process.env.REVIEW_EVAL_GIT_PATH || '/usr/bin/git';
+const TAR_PATH = process.env.REVIEW_EVAL_TAR_PATH || '/usr/bin/tar';
+
 function git(args, options) {
-  return execFileSync('git', args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, ...options });
+  return execFileSync(GIT_PATH, args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, ...options });
 }
 
 const SNAPSHOT_ENV = {
@@ -413,7 +429,7 @@ const SNAPSHOT_ENV = {
 
 function extractSnapshot(sha, dir, root) {
   const archive = git(['archive', '--format=tar', sha], { cwd: root });
-  execFileSync('tar', ['-x', '-C', dir], { input: archive, maxBuffer: 256 * 1024 * 1024 });
+  execFileSync(TAR_PATH, ['-x', '-C', dir], { input: archive, maxBuffer: 256 * 1024 * 1024 });
 }
 
 /**
@@ -466,40 +482,6 @@ export function claudeReviewArgs(reviewStep) {
     '--disable-slash-commands',
     '--no-session-persistence',
   ];
-}
-
-function runProcess(spawnImpl, command, args, { cwd, input, timeoutMs }) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    let child;
-    try {
-      child = spawnImpl(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
-    } catch (error) {
-      rejectPromise(error);
-      return;
-    }
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      rejectPromise(new Error(`${command} timed out after ${timeoutMs} ms`));
-    }, timeoutMs);
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk;
-    });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      rejectPromise(error);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolvePromise({ code, stdout, stderr });
-    });
-    child.stdin.on('error', () => {});
-    child.stdin.end(input ?? '');
-  });
 }
 
 export function createClaudeCliProvider({
@@ -564,14 +546,14 @@ export function createFixtureProvider(responses) {
 async function mapWithConcurrency(items, limit, work) {
   const results = new Array(items.length);
   let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      results[index] = await work(items[index]);
-    }
-  });
-  await Promise.all(workers);
+  const worker = async () => {
+    if (next >= items.length) return;
+    const index = next;
+    next += 1;
+    results[index] = await work(items[index]);
+    await worker();
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
 }
 
@@ -659,53 +641,60 @@ export function parseArgs(argv) {
   return options;
 }
 
+function loadInputs(options) {
+  let cases = loadReviewCases();
+  if (options.cases) {
+    const unknown = options.cases.filter((id) => !cases.some((c) => c.id === id));
+    if (unknown.length > 0) throw new Error(`Unknown case id(s): ${unknown.join(', ')}`);
+    cases = cases.filter((c) => options.cases.includes(c.id));
+  }
+  return {
+    cases,
+    reviewStep: extractReviewStep(readFileSync(REVIEW_WORKFLOW, 'utf8')),
+    addendum: readFileSync(CANDIDATE_ADDENDUM, 'utf8'),
+  };
+}
+
+function createProvider(options) {
+  if (options.provider === 'fixture') {
+    return createFixtureProvider(JSON.parse(readFileSync(options.responses, 'utf8')));
+  }
+  return createClaudeCliProvider({ timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+}
+
+async function runAndReport(options, inputs, provider, log) {
+  const report = await runReviewEvals({
+    ...inputs,
+    provider,
+    variant: options.variant,
+    concurrency: options.concurrency,
+    log: options.json ? () => {} : log,
+  });
+  if (options.output) writeFileSync(options.output, `${JSON.stringify(report, null, 2)}\n`);
+  log(options.json ? JSON.stringify(report, null, 2) : formatReport(report));
+  return report.summary.passed === report.summary.cases ? 0 : 1;
+}
+
 export async function main(argv, { log = console.log, error = console.error, providerFactory } = {}) {
   let options;
+  let inputs;
   try {
     options = parseArgs(argv);
-  } catch (e) {
-    error(e.message);
-    return 2;
-  }
-  let cases;
-  let reviewStep;
-  let addendum;
-  try {
-    cases = loadReviewCases();
-    if (options.cases) {
-      const unknown = options.cases.filter((id) => !cases.some((c) => c.id === id));
-      if (unknown.length > 0) throw new Error(`Unknown case id(s): ${unknown.join(', ')}`);
-      cases = cases.filter((c) => options.cases.includes(c.id));
-    }
-    reviewStep = extractReviewStep(readFileSync(REVIEW_WORKFLOW, 'utf8'));
-    addendum = readFileSync(CANDIDATE_ADDENDUM, 'utf8');
+    inputs = loadInputs(options);
   } catch (e) {
     error(e.message);
     return 2;
   }
   if (options.printPrompts) {
-    for (const caseObj of cases) {
+    for (const caseObj of inputs.cases) {
       log(`===== ${caseObj.id} (${options.variant}) =====`);
-      log(buildReviewPrompt(caseObj, { reviewStep, variant: options.variant, addendum }));
+      log(buildReviewPrompt(caseObj, { ...inputs, variant: options.variant }));
     }
     return 0;
   }
-  const provider = providerFactory
-    ? providerFactory(options)
-    : options.provider === 'fixture'
-      ? createFixtureProvider(JSON.parse(readFileSync(options.responses, 'utf8')))
-      : createClaudeCliProvider({ timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS });
-  let report;
+  const provider = (providerFactory ?? createProvider)(options);
   try {
-    report = await runReviewEvals({
-      cases,
-      provider,
-      reviewStep,
-      variant: options.variant,
-      addendum,
-      concurrency: options.concurrency,
-      log: options.json ? () => {} : log,
-    });
+    return await runAndReport(options, inputs, provider, log);
   } catch (e) {
     if (e instanceof ProviderUnavailableError) {
       error(e.message);
@@ -713,9 +702,6 @@ export async function main(argv, { log = console.log, error = console.error, pro
     }
     throw e;
   }
-  if (options.output) writeFileSync(options.output, `${JSON.stringify(report, null, 2)}\n`);
-  log(options.json ? JSON.stringify(report, null, 2) : formatReport(report));
-  return report.summary.passed === report.summary.cases ? 0 : 1;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

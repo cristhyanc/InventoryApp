@@ -477,7 +477,8 @@ export function claudeCliArgs({ model } = {}) {
   return args;
 }
 
-function runProcess(spawnImpl, command, args, { cwd, input, timeoutMs }) {
+/** Runs one child process with stdin, collecting stdout and stderr, with a timeout. */
+export function runProcess(spawnImpl, command, args, { cwd, input, timeoutMs }) {
   return new Promise((resolvePromise, rejectPromise) => {
     let child;
     try {

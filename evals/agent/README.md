@@ -310,6 +310,8 @@ node --test scripts/run-agent-review-evals.test.mjs                             
 ```
 
 `--cases ID,ID` runs a subset and `--timeout-ms` sets the per-case limit (default 40 minutes).
+`git` and `tar` are run from `/usr/bin` by absolute path; set `REVIEW_EVAL_GIT_PATH` or
+`REVIEW_EVAL_TAR_PATH` on a machine that keeps them elsewhere.
 Nothing runs unless someone types it: `--provider` has no default, validation runs only the unit
 tests, and no workflow runs the eval. Each live case is a full agentic review on the account the
 local `claude` CLI is signed in to (roughly USD 0.30 to 3 per case).
