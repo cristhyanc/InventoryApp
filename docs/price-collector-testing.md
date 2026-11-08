@@ -203,7 +203,10 @@ that contain every word typed, so in run 41558756584 full names such as `Cheezel
 `M&M's Peanut 46g` found nothing although JB Metro lists `45G CHEEZELS` and Coles lists
 `M&M's Peanut Milk Chocolate Snack Bag 46g`. `prompt.md` now has Claude search with the brand and
 one or two product words, with no size, and check the size and variant when it picks matches. A
-search that returns nothing is tried once more with fewer words; that second call counts towards
+search that returns nothing, or nothing of the right size, is tried once more with fewer words, and
+a plain flavour such as `Original` is searched by the brand alone, because JB Metro lists Smith's
+Original 45g as `45G SMITH'S PLAIN` and `Smiths Original` never found it (run 42417968670, owner
+decision, 8 November 2026); that second call counts towards
 the run's Apify call cap (600) and, at Kmart and BIG W, is charged like any other search. JB Metro
 search words are written without apostrophes or `&`, because the command guard refuses them.
 

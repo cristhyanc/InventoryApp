@@ -157,9 +157,14 @@ One entry of `searches` is one product at one supplier, identified by its `workI
      Noodles`. Examples: `Cheezels`, `Nobbys Jerky`, `Smiths Salt Vinegar`, `m&m peanut`, `Indomie`.
    - The size and the variant are checked in step 3 when you choose the matches, not in the
      search words. A short search returns more noise, and that is expected.
-   - **If a search returns no product at all, search once more with fewer words** (the brand
-     alone, or the brand and one word), at the same supplier, and use that second answer. Never
-     more than two different search wordings for one work item. Both searches count towards the run's call cap.
+   - When the product's own name is a plain flavour such as `Original`, search **the brand
+     alone**: suppliers name the same flavour differently. JB Metro lists Smith's Original 45g as
+     `45G SMITH'S PLAIN`, so `Smiths Original` finds other Smith's packs but never that one, while
+     `Smiths` finds it (production run 42417968670, owner decision, 8 November 2026).
+   - **If a search returns no product at all, or no product of the size you are looking for,
+     search once more with fewer words** (the brand alone, or the brand and one word), at the same
+     supplier, and use that second answer. Never more than two different search wordings for one
+     work item. Both searches count towards the run's call cap.
    - For JB Metro, write the search words with **letters, digits and spaces only** (`Nobbys
      Peanuts`, not `Nobby's Peanuts`; `M M Peanut`, not `M&M's Peanut`), and always use the
      `--search "<words>" <siteUrl>` form. The guard refuses apostrophes, `&` and other symbols in
