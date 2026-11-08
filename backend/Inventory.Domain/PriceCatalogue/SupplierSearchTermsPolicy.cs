@@ -129,57 +129,68 @@ public static class SupplierSearchTermsPolicy
 
         foreach (var submission in submissions)
         {
-            if (submission is null
-                || (submission.SupplierPresetId is null) == (submission.PriceConnector is null))
-            {
-                throw new DomainValidationException(TargetRequiredMessage);
-            }
-
-            if (submission.PriceConnector is { } connector && !Enum.IsDefined(connector))
-            {
-                throw new DomainValidationException(UnknownConnectorMessage);
-            }
-
-            if (submission.SupplierPresetId is { } presetId && presetId <= 0)
-            {
-                throw new DomainValidationException(UnknownSupplierPresetMessage);
-            }
-
-            var added = submission.SupplierPresetId is { } preset
+            var added = RequireTarget(submission) is { } preset
                 ? presets.Add(preset)
-                : connectors.Add(submission.PriceConnector!.Value);
+                : connectors.Add(submission!.PriceConnector!.Value);
 
             if (!added)
             {
                 throw new DomainValidationException(DuplicateTargetMessage);
             }
 
-            var phrases = CleanList(submission.SearchPhrases, MaxSearchPhraseLength, PhraseTooLongMessage);
-            var aliases = CleanList(submission.FlavourAliases, MaxFlavourAliasLength, AliasTooLongMessage);
-
-            if (phrases.Count > MaxSearchPhrasesPerEntry)
-            {
-                throw new DomainValidationException(TooManyPhrasesMessage);
-            }
-
-            if (aliases.Count > MaxFlavourAliasesPerEntry)
-            {
-                throw new DomainValidationException(TooManyAliasesMessage);
-            }
-
-            if (phrases.Count == 0 && aliases.Count == 0)
-            {
-                throw new DomainValidationException(EmptyEntryMessage);
-            }
-
-            entries.Add(new SupplierSearchTerms(
-                submission.SupplierPresetId,
-                submission.PriceConnector,
-                phrases,
-                aliases));
+            entries.Add(CleanEntry(submission!));
         }
 
         return entries;
+    }
+
+    /// <summary>
+    /// Refuses an entry that does not name exactly one valid target, answering the preset it names
+    /// or <see langword="null"/> when it names a connector.
+    /// </summary>
+    private static int? RequireTarget(SupplierSearchTermsSubmission? submission)
+    {
+        if (submission is null
+            || (submission.SupplierPresetId is null) == (submission.PriceConnector is null))
+        {
+            throw new DomainValidationException(TargetRequiredMessage);
+        }
+
+        if (submission.PriceConnector is { } connector && !Enum.IsDefined(connector))
+        {
+            throw new DomainValidationException(UnknownConnectorMessage);
+        }
+
+        if (submission.SupplierPresetId is { } presetId && presetId <= 0)
+        {
+            throw new DomainValidationException(UnknownSupplierPresetMessage);
+        }
+
+        return submission.SupplierPresetId;
+    }
+
+    /// <summary>Cleans one entry's phrases and aliases and applies their limits.</summary>
+    private static SupplierSearchTerms CleanEntry(SupplierSearchTermsSubmission submission)
+    {
+        var phrases = CleanList(submission.SearchPhrases, MaxSearchPhraseLength, PhraseTooLongMessage);
+        var aliases = CleanList(submission.FlavourAliases, MaxFlavourAliasLength, AliasTooLongMessage);
+
+        if (phrases.Count > MaxSearchPhrasesPerEntry)
+        {
+            throw new DomainValidationException(TooManyPhrasesMessage);
+        }
+
+        if (aliases.Count > MaxFlavourAliasesPerEntry)
+        {
+            throw new DomainValidationException(TooManyAliasesMessage);
+        }
+
+        if (phrases.Count == 0 && aliases.Count == 0)
+        {
+            throw new DomainValidationException(EmptyEntryMessage);
+        }
+
+        return new SupplierSearchTerms(submission.SupplierPresetId, submission.PriceConnector, phrases, aliases);
     }
 
     /// <summary>

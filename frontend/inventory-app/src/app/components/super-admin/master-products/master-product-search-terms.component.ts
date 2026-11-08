@@ -66,12 +66,7 @@ export class MasterProductSearchTermsComponent implements OnChanges {
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['entries']) {
       this.rows = (this.entries ?? []).map((entry) => ({
-        target:
-          entry.supplierPresetId !== null
-            ? presetKey(entry.supplierPresetId)
-            : entry.priceConnector !== null
-              ? connectorKey(entry.priceConnector)
-              : '',
+        target: targetKeyOf(entry),
         phrases: [...entry.searchPhrases],
         aliases: [...entry.flavourAliases]
       }));
@@ -184,4 +179,13 @@ export class MasterProductSearchTermsComponent implements OnChanges {
       }))
     );
   }
+}
+
+/** The editor's key for an entry's target, or '' when it names none. */
+function targetKeyOf(entry: SupplierSearchTerms): string {
+  if (entry.supplierPresetId !== null) {
+    return presetKey(entry.supplierPresetId);
+  }
+
+  return entry.priceConnector !== null ? connectorKey(entry.priceConnector) : '';
 }
