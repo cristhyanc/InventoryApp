@@ -8531,9 +8531,11 @@ Physical storage stock and costing inventory answer different questions:
 - `CostingQuantity`: total business-owned quantity still carrying inventory value.
 - `InventoryValue`: remaining value used with `CostingQuantity` to derive AVCO.
 
-A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Completed sales and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
+A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Sales that dispensed a unit and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
 
-Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the completed sales and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
+**Which sales consume costing inventory is one rule, and since issue #1107 it is not the completed-sale rule.** `NayaxSaleCountingPolicy.ConsumesStock` - status `12` **or** status `62`, neither `Conflict` nor `OwnerExcluded` - is what `EfInventoryCostLedgerStore` and `EfSaleCostingStore` select on, through `EfNayaxSalesQueries.StockConsumingSalePredicate`. A refunded sale therefore keeps the unit it consumed and keeps the cost it was sold at: the replay is chronological and the sale stays exactly where it was, so its `UnitCostAtSale`, the product's `CostingQuantity` and its `InventoryValue` come out identical before and after the refund. What the refund reverses is money, which every report reads live through the completed-sale rule instead. `WeightedAverageCostReplay` itself is unchanged - it consumes the sales it is given and knows nothing about statuses. There is deliberately **no separate "cost of refunded items" line**, so a refunded sale's COGS stays recorded on the sale and appears in no completed-sale report total; that asymmetry was the owner's decision of 8 November 2026. Existing status-`62` rows follow the rule with no backfill: each is picked up the next time its product is replayed, and a product with historical refunds therefore loses one unit of `CostingQuantity` and its value per such sale at that point. See [Applying a Nayax SQS refund](#applying-a-nayax-sqs-refund-issue-1107).
+
+Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the sales that dispensed a unit and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
 Historical sale cost precedence is:
 
@@ -12713,17 +12715,27 @@ proposes no correction - identifying shrinkage is the point, so writing it away 
 | --- | --- | --- | --- |
 | Refill | `StockAdjustment`, reason `MachineRefill`, negative quantity, machine recorded | `+n` | unchanged |
 | Return to storage | the same movement with a positive quantity | `-n` | unchanged |
-| Completed sale | `NayaxSales` with status `12` for that machine | `-1` per transaction | reduced once, by the sale-costing path |
+| Dispensed sale | `NayaxSales` with status `12` **or `62`** for that machine, not `Conflict`/`OwnerExcluded` | `-1` per transaction | reduced once, by the sale-costing path |
 | Counted reconciliation | `MachineStockCount` (the one table this feature adds) | sets the level | unchanged |
 
 `Inventory.Domain.MachineStock.MachineStockMovementPolicy` is the single place a fact becomes a
-movement and the single statement of which kinds consume costing inventory (only a completed sale -
+movement and the single statement of which kinds consume costing inventory (only a dispensed sale -
 and the ledger never performs that consumption itself). Because the ledger *reads* the refill
-movements and the completed sales rather than writing its own copies, a refill cannot be counted
+movements and the dispensed sales rather than writing its own copies, a refill cannot be counted
 twice and a sale cannot create COGS twice: there is only one record of each event to begin with, and
-nothing to keep in step. One completed transaction dispenses one unit, which is exactly the quantity
+nothing to keep in step. One such transaction dispenses one unit, which is exactly the quantity
 `WeightedAverageCostReplay` consumes from costing inventory for that sale, so the physical and
 costing ledgers cannot disagree about quantity.
+
+**A refunded sale is one of those movements** (issue #1107). The kind was called `CompletedSale`
+until the owner's refund decision of 8 November 2026; it is `DispensedSale` now, because status `62`
+dispensed its unit as surely as status `12` did and only a *completed* sale is money. Which sales the
+store reads is `NayaxSaleCountingPolicy.ConsumesStock` through
+`EfNayaxSalesQueries.StockConsumingSalePredicate`, so a refund reverses money without the unit coming
+back to this machine - returning a refunded item to stock is explicitly not what a refund means here.
+The unattributed-sale data-quality count covers those sales too, and its issue code
+(`UnattributedCompletedSales`) is left as it is because it is a published contract. See
+[Applying a Nayax SQS refund](#applying-a-nayax-sqs-refund-issue-1107).
 
 **Nothing is inferred from incomplete inputs.** `Inventory.Domain.MachineStock.MachineStockLedger`
 replays a machine's movements in effective-instant order (ties: refills, returns, sales, then the
@@ -12927,6 +12939,10 @@ mapping](#domain-and-application-error-mapping).
 4. Historical cost is persisted on each sale with its status and source.
 5. Unknown products, statuses, payment methods, or missing costs remain visible.
 
+Rule 3 is about **money**. Since issue #1107 it is not the same question as "did this sale consume a
+unit?", which is status `12` *or* status `62`: see [Applying a Nayax SQS
+refund](#applying-a-nayax-sqs-refund-issue-1107).
+
 Sales reach the application three ways, and all three follow those five rules: the operator uploads a
 Nayax transaction export (`POST api/imports/nayax-sales`, below); the home dashboard synchronises each
 machine's latest transactions (see [Home dashboard coordinated Sites/Machines sales
@@ -12938,12 +12954,13 @@ implementation rather than two that can disagree. The one thing a queued message
 its **status**: it states its own `Transaction Status ID` and the store saves exactly that, while the
 settlement-value rule stays for the payload that states none.
 
-A completed sale reduces business-owned costing inventory exactly once, here, and nowhere else. The
-[machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) also
-deducts that sale from the machine's *physical* expected stock - one unit per completed transaction,
-the same quantity this path consumes from costing inventory - by reading the same completed-sale row.
-It records no movement and no cost of its own, so a machine's physical ledger can never become a
-second deduction of COGS.
+A sale that dispensed a unit - status `12` or `62`, neither excluded by review - reduces
+business-owned costing inventory exactly once, here, and nowhere else. The [machine stock
+ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) also deducts that
+sale from the machine's *physical* expected stock - one unit per such transaction, the same quantity
+this path consumes from costing inventory - by reading the same row through the same rule. It records
+no movement and no cost of its own, so a machine's physical ledger can never become a second
+deduction of COGS.
 
 #### Uploaded transaction export import (issue #301)
 
@@ -16898,7 +16915,8 @@ whose cancel type contradicts its status is a free vend.
 | 1 | **Invalid** (reason code) | Not JSON; `TransactionId` or `MachineId` missing or not an integer; `Data` missing; `Data.SeValue` missing, null or not a number; `Data."Transaction Status ID"` missing or not an integer; `Data."Authorization Time"` missing or unreadable; `Data.Products` missing or empty; `Data."Transaction ID"` or `Data."Machine ID"` present and different from the root value | Permanent failure |
 | 2 | **Revalue** | `Is Revalue Transaction` or `Is Revalue Reward Transaction` is true | Acknowledged and deleted; a prepaid credit top-up is not a product sale |
 | 3 | **Multivend** | `Is Multivend` is true, or `Data.Products` holds more than one item | Deleted; the hourly `lastSales` run imports it |
-| 4 | **Unsupported** (reason code) | Root `Void` true; `Settlment Failed` true; status `62` (refunded); status pending (`55`, `80`); status not in `NayaxTransactionStatusIds`; `SeValue` negative | Permanent failure; kept in the dead-letter queue as a sample |
+| 4 | **Unsupported** (reason code) | Root `Void` true; `Settlment Failed` true; status pending (`55`, `80`); status not in `NayaxTransactionStatusIds`; `SeValue` negative | Permanent failure; kept in the dead-letter queue as a sample |
+| 4a | **Refund** (issue #1107) | Status `62` | Never saved as a sale; it can only move a sale this business already stored from status `12` to `62` — see [Applying a Nayax SQS refund](#applying-a-nayax-sqs-refund-issue-1107) |
 | 5 | **CancelledOrDeclined** | Status `26`, `28`, `31` or `250` | Saved as a non-completed row with that status, visible in status reporting |
 | 6 | **FreeVend** | Status `12` and `SeValue` exactly `0` | Permanent failure, until a real free vend sample exists |
 | 7 | **CompletedSale** | Status `12`, `SeValue` > 0, and `Cancel Type` `255`, null or absent | Saved as a completed sale |
@@ -16948,7 +16966,10 @@ instant.
 **`Is Refund Card` is not read, because it is not refund evidence.** The reference documents it as
 "Bit indicating if this is a Nayax Refund Card" — the instrument, not the transaction. An otherwise
 completed sale paid for with one is a completed sale. A refund is recognised by status `62` and by
-nothing else, and stays unsupported here; reversing money without returning stock is issue #1107.
+nothing else (issue #1107), and `Original Transaction ID` is not read either: the reference documents
+it generically, says nothing about it being populated on a refund, and a refund delivered as a *new*
+transaction pointing back at the original is a different design that issue #1107 puts out of scope —
+so reading it would be exactly the inference AGENTS.md § Nayax contract verification forbids.
 
 **The mapping onto the record the application already saves.** A CompletedSale and a
 CancelledOrDeclined outcome both carry a `NayaxLastSalesReport`, which is the type
@@ -17037,7 +17058,107 @@ existing limitation rather than fixing it. Free vends are unsupported because ne
 nor the delivery setup page says how a free transaction is marked — today's `lastSales` path imports
 a zero-value vend as cancelled (`250`), so it already consumes no stock, and a follow-up decides
 stock handling once a real sample exists. Pending-to-final updates (`55` or `80` followed by `12`)
-are unsupported until a sample shows whether Nayax sends a second message. Refunds are issue #1107.
+are unsupported until a sample shows whether Nayax sends a second message. Refunds are no longer
+unsupported: issue #1107 gives status `62` its own outcome, described in the section below.
+
+### Applying a Nayax SQS refund (issue #1107)
+
+A refund is the one thing in this application that **overwrites a stored transaction status**, and
+this section is the whole of how. The repository owner's decision of 8 November 2026 is that when
+Nayax refunds a sale the money is reversed — the sale leaves revenue, the card and cash totals,
+reconciliation and every completed-sale report, and the daily report keeps showing it in its refunded
+note, exactly as status `62` has always behaved — and **the item is still gone**: the machine
+dispensed it, the business no longer owns it, and the refund does not put it back.
+
+**One rule became two.** `Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy` now states both, over
+the same two columns and with the same two exclusions:
+
+| Question | Rule | Domain statement | EF form | Who reads it |
+|---|---|---|---|---|
+| Is it a completed sale? (money) | Status `12`, not `Conflict`/`OwnerExcluded` | `IsCountedSale` | `EfNayaxSalesQueries.CompletedSalePredicate` | Every report, revenue, the card/cash split, reconciliation, fees, site commissions, reorder/par needs, the dashboard, the timestamp repair |
+| Did it consume a unit? (stock and cost) | Status `12` **or** `62`, not `Conflict`/`OwnerExcluded` | `ConsumesStock` | `EfNayaxSalesQueries.StockConsumingSalePredicate` | `EfMachineStockLedgerStore`, `EfInventoryCostLedgerStore`, `CostSale`/`EfSaleCostingStore` |
+
+A test pins each Domain rule to its EF form over every status and every verification state, and
+`ReportingAdapterOwnershipTests` pins which reader selects on which predicate — because the split is
+only worth having if it stays where it was put. A report that moved to the stock filter would count
+refunded money as revenue; a costing reader that moved back to the completed-sale filter would hand a
+refunded unit back to inventory it never returned to. **Reorder is deliberately on the money side**: a
+refund is not demand. `MachineStockMovementKind.CompletedSale` was renamed `DispensedSale` for the
+same reason the split exists — the movement is the physical fact, and only a *completed* sale is
+money.
+
+**The delivery shape is an owner-approved assumption, not a documented contract.** The decision is to
+build on a refund arriving as the **same `TransactionId` delivered again with status `62`**. The SQS
+Transaction JSON reference documents `Transaction Status ID` as an `Integer` and enumerates no values
+at all (checked 8 November 2026), and says nothing about whether a refund is a new message or an
+update to the original — so `62` is this application's own established id and the delivery shape is
+**unverified**. Everything the application cannot place is therefore refused, which is what makes
+being wrong about it safe rather than expensive.
+
+`Inventory.Domain.NayaxSqs.NayaxSaleRefundPolicy` is the one place the decision is made, and the
+order below is the rule:
+
+| # | Decision | When | What happens |
+|---|---|---|---|
+| 1 | **AlreadyRefunded** | The stored sale is already `62` | Nothing is written and **no second audit row**; this ordering is the idempotency |
+| 2 | **NotRefundable** | The stored sale is not status `12` | Not applied; moving a declined row to refunded would change a financial status on a guess |
+| 3 | **Contradicted** | The machine, the amount or the product differs from the stored sale | Not applied; the two are not plainly the same transaction |
+| 4 | **Apply** | None of the above | Status `12` → `62`, once, with one audit row |
+
+The machine and the amount are always compared; the product only when both sides carry one, on issue
+#1104's rule that a value missing on either side is *not compared* and is never read as agreement.
+Amounts are compared at two decimal places half away from zero, reusing
+`NayaxSaleProviderComparisonPolicy`'s own money constants. The comparison is of the **signed** amount:
+partial refunds are out of scope because no evidence exists that Nayax sends one, so a refund reported
+as a negated amount is refused and reaches the dead-letter queue as a sample rather than being read as
+a full refund of something else. The authorization instant is deliberately not compared — nothing
+documents whether a refund message repeats the original time or carries the refund's own.
+
+**The write.** `EfLatestNayaxSalesStore.ApplySqsRefundAsync` is one `BEGIN IMMEDIATE` transaction: it
+reads the sale by `(BusinessId, TransactionID)` inside the lock with the business half coming from the
+tenant query filter as everywhere else, and on `Apply` writes the status and appends one
+`NayaxSaleStatusChangeAudits` row — old status, new status, source message id, instant — in the
+**same** `SaveChanges`, so a refunded sale with no record of why is impossible. The only column it
+writes on a sale is the status: the product association, the amount, the instant, the costs, the
+provenance and the verification state are left exactly as they are, and it never inserts a sale.
+A refund naming a transaction this business has no sale for writes nothing at all — the *same*
+transaction id stored by another business is invisible to it.
+
+**It records no pending inventory-cost rebuild, and that is the point of the split.** A sale consumes
+stock at `12` and at `62` alike, so moving between them changes no quantity, no inventory value and no
+sale cost; there is nothing to replay, and the reader therefore does not drain after a refund either.
+`NayaxSaleCountingPolicy.ChangesCounting` still answers the *verification* question that does need a
+replay, and the exclusions being shared is what makes it answer both rules at once.
+
+**What the reader does with each outcome** (`ProcessNayaxSqsSale`): a refund takes the same gates as a
+sale — the credential/plan gate and the machine-in-fleet check, before anything is written, because a
+refund applied for a business whose plan no longer includes the sales provider would be the one write
+that ignored a gate every other one honours. `Applied` and `AlreadyRefunded` are `Done`
+(`RefundApplied`, `RefundAlreadyApplied`); `NoMatchingSale`, `NotRefundable` and `Contradicted` are
+`Permanent` (`RefundUnmatched`, `RefundNotApplicable`, `RefundContradicted`), so the message is
+released towards the dead-letter queue as a sample instead of being deleted. A persistence failure is
+`Transient`, as it is for a sale.
+
+**Nothing else changes a stored status.** A status-`12` message for a sale already stored as `62` — a
+late redelivery, or `lastSales` returning the original — takes the existing enrich-only path, which
+has only ever filled a status that is `NULL`, so it cannot undo the refund or consume a second unit.
+The uploaded-export import is unchanged in the same way; what *did* change there is which sales it
+records a rebuild for, because an imported status-`62` row now consumes its unit and a replay nobody
+recorded is a figure nobody rebuilds.
+
+**Historical rows and no backfill.** The rule applies to all status-`62` rows with no cut-off date,
+and no migration rewrites one: each is picked up the next time its product's inventory cost is
+replayed. The only schema change is the additive audit table
+(`20261108020626_AddNayaxSaleStatusChangeAudits`). On deployment, a product with historical
+status-`62` sales loses one unit of `CostingQuantity` and its value per such sale when it is next
+replayed, because those units are now recognised as having left the business; no money total and no
+physical `QuantityInStock` moves.
+
+**Still out of scope**: returning a refunded item to stock, partial refunds, a refund delivered as a
+new transaction pointing back at the original, voids and cancellations of unsettled transactions,
+multivend, free vends, and any new report line for the cost of refunded items. The asymmetry that
+leaves is deliberate and was the owner's decision: a refunded sale's COGS stays recorded on the sale
+and appears in no completed-sale report total.
 
 ### Nayax SQS sender identity (issue #1101)
 

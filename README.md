@@ -1092,9 +1092,11 @@ one transaction was **not** imported, so it is worth looking at every time.
    business has that AWS IAM user recorded, or the mapping is switched off — fix it on the Super Admin
    card), `BusinessNotActive` (the business is not approved and trading), `MachineNotInFleet` (the
    machine the message names is not one of that business's machines in Nayax), `MessageRefused` (the
-   message is not a transaction this application consumes — a free vend, a refund, a void, a pending or
+   message is not a transaction this application consumes — a free vend, a void, a pending or
    unrecognised status — see [docs/architecture.md § Nayax SQS transaction
-   messages](docs/architecture.md#nayax-sqs-transaction-messages-issue-1102)), and
+   messages](docs/architecture.md#nayax-sqs-transaction-messages-issue-1102)),
+   `RefundUnmatched`, `RefundContradicted` or `RefundNotApplicable` (a refund this application could
+   not place against one of your stored sales — see [Refunded sales](#refunded-sales-issue-1107)), and
    `ConnectionUnavailable` or `RebuildPending` (the business's Nayax connection or plan, or a product's
    cost history, needs attention first).
 2. **Look at a sample if you must.** Use the AWS console's **Poll for messages** on the *dead-letter*
@@ -1116,6 +1118,36 @@ Messages that are genuinely not sales this application consumes — a free vend,
 dead-letter queue as the sample that decides what to do about them. Deleting them is a decision, not
 housekeeping.
 
+## Refunded sales (issue #1107)
+
+When Nayax refunds a sale, **the money comes off your reports and the item stays gone.**
+
+- **The money is reversed.** The sale stops counting as a completed sale: it leaves gross sales, the
+  card and cash totals, reconciliation and every completed-sale total — on its own original sale date,
+  not the refund's — and the daily report shows it in its refunded note and count, exactly as a
+  refunded transaction has always been shown. Nothing is hidden: the sale is still there in the
+  transaction report as refunded.
+- **The stock stays used.** The machine dispensed the item and you no longer have it, so the sale keeps
+  using up its unit at the cost it was sold at. Your costing quantity and inventory value do not go
+  back up, and nothing is added back to your storeroom count. If you did get the item back, that is a
+  separate stock movement you record yourself.
+- **It is not treated as demand.** Reorder suggestions and par/needs figures still use completed sales
+  only, so a refund does not ask you to buy another one.
+- **It happens once.** The queue can deliver the same message more than once; the second delivery
+  changes nothing. A later copy of the original sale cannot undo the refund either.
+- **A refund it cannot place is kept, not guessed at.** If a refund names a transaction you have no
+  sale for, or disagrees with the stored sale's machine, amount or product, nothing is changed and the
+  message is kept in the dead-letter queue as a sample (reason codes `RefundUnmatched`,
+  `RefundContradicted`, `RefundNotApplicable`). That is deliberate: partial refunds are not supported,
+  and a refund the application cannot match is for a person to look at.
+- **Refunds already in your history count the same way.** Older refunded sales start using up their
+  unit the next time that product's cost history is replayed, which happens on its own as that product
+  sells. You may see a product's costing quantity and inventory value drop by one unit per past refund
+  at that point. Your storeroom count and your reported sales figures do not change.
+
+The design, including what is deliberately not supported, is [docs/architecture.md § Applying a Nayax
+SQS refund](docs/architecture.md#applying-a-nayax-sqs-refund-issue-1107).
+
 ## The hourly Nayax sales reconciliation (issue #1104)
 
 Every hour, for each business whose SQS sender is recorded and switched on and whose own account is
@@ -1132,8 +1164,9 @@ restart and then every 60 minutes, one business at a time. **Always On** is the 
 queue reader has, and for the same reason: an idled process runs nothing.
 
 **It changes no figure.** A verified, conflicting or flagged sale still counts exactly as it did
-before — stock, costs and reports follow the sale's own status, not its verification state. Acting on
-a conflict is issue #1105's work.
+before — stock, costs and reports follow the sale's own status, not its verification state, except
+that a contradicted or owner-excluded sale is kept out of both (issues #1105 and #1107). Acting on a
+conflict is issue #1105's work.
 
 **Nothing is proved by a sale being missing.** Nayax documents `lastSales` as "the most recent sales"
 for a machine, with no stated count and no promised window, so a transaction the response did not
