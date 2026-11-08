@@ -443,9 +443,10 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     /// carrying no authoritative instant, which is never imported at a guessed time.
     /// </param>
     /// <param name="Inserted">Whether <em>this</em> application created the row.</param>
-    /// <param name="CompletedSaleProductId">
+    /// <param name="StockConsumingProductId">
     /// The local product the stored row consumes costing inventory for, or <see langword="null"/> when
-    /// the row is not a completed sale or resolved no product.
+    /// the row consumed no unit (<see cref="NayaxSaleCountingPolicy.ConsumesStock"/>) or resolved no
+    /// product.
     ///
     /// <para>It is reported for an <em>already stored</em> row as well as for a freshly inserted one,
     /// and that is what makes a redelivered queue message wait: the message's own transaction is
@@ -455,10 +456,10 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     /// window would otherwise queue a replay for every sale in it on every synchronization.</para>
     /// </param>
     private readonly record struct SaleApplication(
-        bool Stored, bool Inserted, long? CompletedSaleProductId);
+        bool Stored, bool Inserted, long? StockConsumingProductId);
 
     /// <summary>
-    /// Stores or enriches one sale and, when it is a completed sale against a resolved product,
+    /// Stores or enriches one sale and, when it consumed a unit against a resolved product,
     /// contributes that product's earliest affected instant to <paramref name="affected"/>.
     ///
     /// <para><strong>The status rule is here and nowhere else.</strong>
@@ -510,7 +511,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         // item carrying no authoritative instant is not imported at a guessed time; the rolling
         // last-sales window returns the transaction again on the next refresh.
         if (sale.AuthorizationInstantUtc is not { } authorizedUtc)
-            return new SaleApplication(Stored: false, Inserted: false, CompletedSaleProductId: null);
+            return new SaleApplication(Stored: false, Inserted: false, StockConsumingProductId: null);
 
         var added = new NayaxSales
         {
@@ -544,16 +545,19 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         _db.NayaxSales.Add(added);
         await _saleCosting.CostAsync(added, cancellationToken: cancellationToken);
 
-        var insertedCompleted =
-            NayaxSaleCountingPolicy.IsCountedSale(added.TransactionStatusId, added.SqsVerification);
+        // What has to be replayed is a costing question, so it is the stock rule that decides it
+        // (issue #1107): a status-62 row the uploaded export carries consumes a unit, and a replay
+        // nobody recorded is a figure nobody rebuilds.
+        var insertedConsumesStock =
+            NayaxSaleCountingPolicy.ConsumesStock(added.TransactionStatusId, added.SqsVerification);
 
-        if (insertedCompleted && matchedProductId is not null)
+        if (insertedConsumesStock && matchedProductId is not null)
             RecordAffected(affected, matchedProductId.Value, added.MachineAuthorizationTime);
 
         return new SaleApplication(
             Stored: true,
             Inserted: true,
-            CompletedSaleProductId: insertedCompleted ? matchedProductId : null);
+            StockConsumingProductId: insertedConsumesStock ? matchedProductId : null);
     }
 
     /// <summary>
@@ -601,7 +605,7 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             await _saleCosting.CostAsync(
                 existing,
                 cancellationToken: cancellationToken);
-            if (NayaxSaleCountingPolicy.IsCountedSale(existing.TransactionStatusId, existing.SqsVerification))
+            if (NayaxSaleCountingPolicy.ConsumesStock(existing.TransactionStatusId, existing.SqsVerification))
             {
                 // The association persisted on the row (issue #758) - never a match re-made
                 // from the provider's product id or the reported name. A sale whose product a
@@ -616,8 +620,8 @@ public sealed partial class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         return new SaleApplication(
             Stored: true,
             Inserted: false,
-            CompletedSaleProductId:
-                NayaxSaleCountingPolicy.IsCountedSale(existing.TransactionStatusId, existing.SqsVerification)
+            StockConsumingProductId:
+                NayaxSaleCountingPolicy.ConsumesStock(existing.TransactionStatusId, existing.SqsVerification)
                     ? existing.ProductId
                     : null);
     }

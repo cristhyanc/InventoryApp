@@ -2,6 +2,7 @@ using Inventory.Application;
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.NayaxSqs;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
@@ -109,12 +110,64 @@ public class SaleCostingUseCaseTests
         Assert.Equal(new SaleCostAssignment(null, SaleCostStatus.Pending, SaleCostOrigin.Unknown), cost);
     }
 
-    [Fact]
-    public async Task A_sale_that_is_not_completed_is_left_uncosted_and_pending_even_when_forced()
+    /// <summary>
+    /// A sale that consumed no unit has no historical cost, even when forced: there is nothing to
+    /// cost. Which sales those are is <c>NayaxSaleCountingPolicy.ConsumesStock</c>, so this covers
+    /// every status that dispensed nothing - pending, cancelled, declined, unrecognised and none at
+    /// all.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxTransactionStatusIds.PendingSettlementNotFinal)]
+    [InlineData(NayaxTransactionStatusIds.PendingBatch)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined26)]
+    [InlineData(NayaxTransactionStatusIds.CancelledOrDeclined250)]
+    [InlineData(21)]
+    [InlineData(null)]
+    public async Task A_sale_that_consumed_no_unit_is_left_uncosted_and_pending_even_when_forced(
+        int? transactionStatusId)
     {
         var store = new FakeStore();
         var sale = Sale(1, productId: 10, nayaxCost: 1.10m, unitCost: 1m, status: SaleCostStatus.Costed,
+            transactionStatusId: transactionStatusId);
+
+        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale, force: true);
+
+        Assert.Equal(new SaleCostAssignment(null, SaleCostStatus.Pending, SaleCostOrigin.Unknown), cost);
+    }
+
+    /// <summary>
+    /// A <strong>refunded</strong> sale is costed, and that is issue #1107's split: its money is
+    /// reversed but the machine dispensed its unit, so it carries the historical cost a completed
+    /// sale at the same instant would - from the inventory ledger, by the same precedence. Before the
+    /// split it was left uncosted and pending here, which would now leave a consumed unit with no
+    /// recorded cost.
+    /// </summary>
+    [Fact]
+    public async Task A_refunded_sale_is_costed_exactly_as_a_completed_one_is()
+    {
+        var store = new FakeStore();
+        var sale = Sale(1, productId: 10, nayaxCost: 1.10m,
             transactionStatusId: NayaxTransactionStatusIds.Refunded);
+
+        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
+
+        Assert.Equal(
+            new SaleCostAssignment(1.50m, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger), cost);
+    }
+
+    /// <summary>
+    /// And a refunded sale the review excludes is costed by neither rule: a sale the business's own
+    /// <c>lastSales</c> contradicted, or that its Owner excluded, says nothing reliable about what
+    /// left the machine.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxSqsVerification.Conflict)]
+    [InlineData(NayaxSqsVerification.OwnerExcluded)]
+    public async Task A_refunded_sale_excluded_by_review_is_left_uncosted(NayaxSqsVerification excluded)
+    {
+        var store = new FakeStore();
+        var sale = Sale(1, productId: 10, nayaxCost: 1.10m,
+            transactionStatusId: NayaxTransactionStatusIds.Refunded, sqsVerification: excluded);
 
         var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale, force: true);
 
@@ -281,7 +334,7 @@ public class SaleCostingUseCaseTests
         var result = await new BackfillNayaxHistoricalSaleCosts(store).Handle(
             dryRun: false, from: from, to: to, productId: 10);
 
-        Assert.Equal(new CompletedSaleSelection(false, from, to), store.LastSelection);
+        Assert.Equal(new StockConsumingSaleSelection(false, from, to), store.LastSelection);
         Assert.Equal(1, result.SalesReviewed);
         Assert.Equal([1L], store.Staged.Keys);
     }
@@ -329,11 +382,13 @@ public class SaleCostingUseCaseTests
         decimal? unitCost = null,
         SaleCostStatus status = SaleCostStatus.Pending,
         string? productName = "Snack",
-        int? transactionStatusId = NayaxTransactionStatusIds.Completed) =>
+        int? transactionStatusId = NayaxTransactionStatusIds.Completed,
+        NayaxSqsVerification? sqsVerification = null) =>
         new()
         {
             TransactionId = transactionId,
             TransactionStatusId = transactionStatusId,
+            SqsVerification = sqsVerification,
             // The persisted association (issue #758) and, beside it, the raw provider id the sale
             // arrived with. Costing reads only the former.
             ProductId = productId,
@@ -351,15 +406,15 @@ public class SaleCostingUseCaseTests
         public List<CostableSale> Sales { get; } = [];
         public Dictionary<long, DateTime> Cutoffs { get; } = [];
         public Dictionary<long, SaleCostAssignment> Staged { get; } = [];
-        public CompletedSaleSelection? LastSelection { get; private set; }
+        public StockConsumingSaleSelection? LastSelection { get; private set; }
         public bool LastLoadForUpdate { get; private set; }
         public int SaveCount { get; private set; }
 
         public Task<DateTime?> GetTransitionCutoffAsync(long productId, CancellationToken cancellationToken) =>
             Task.FromResult(Cutoffs.TryGetValue(productId, out var cutoff) ? cutoff : (DateTime?)null);
 
-        public Task<IReadOnlyList<CostableSale>> LoadCompletedSalesAsync(
-            CompletedSaleSelection selection, bool forUpdate, CancellationToken cancellationToken)
+        public Task<IReadOnlyList<CostableSale>> LoadStockConsumingSalesAsync(
+            StockConsumingSaleSelection selection, bool forUpdate, CancellationToken cancellationToken)
         {
             LastSelection = selection;
             LastLoadForUpdate = forUpdate;

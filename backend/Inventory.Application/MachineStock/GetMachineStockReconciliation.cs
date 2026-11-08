@@ -147,7 +147,11 @@ public sealed class GetMachineStockReconciliation
         {
             issues.Add(new MachineStockDataQualityIssue(
                 MachineStockDataQualityIssueCodes.UnattributedCompletedSales,
-                $"{facts.UnattributedCompletedSaleCount} completed sale(s) on this machine could not be "
+
+                // "sale(s)" rather than "completed sale(s)" since issue #1107: a refunded sale
+                // dispensed its unit too, so the count is of stock-consuming sales. The issue *code*
+                // is a published contract and is deliberately left as it is.
+                $"{facts.UnattributedCompletedSaleCount} sale(s) on this machine could not be "
                     + "matched to a catalogue product, so the units they dispensed are not deducted from "
                     + "any product's expected stock."));
         }
