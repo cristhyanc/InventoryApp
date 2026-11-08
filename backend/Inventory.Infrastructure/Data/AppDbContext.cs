@@ -670,6 +670,15 @@ public class AppDbContext : DbContext
         Set<NayaxSaleOwnerDecisionAudit>();
 
     /// <summary>
+    /// The append-only trail of stored sale statuses a Nayax SQS message changed (issue #1107):
+    /// today that is applying a refund, which moves a sale from status <c>12</c> to status <c>62</c>
+    /// and is the one thing in this application that overwrites a decided status. Written in the same
+    /// <c>SaveChanges</c> as the change it records. See <see cref="NayaxSaleStatusChangeAudit"/>.
+    /// </summary>
+    public DbSet<NayaxSaleStatusChangeAudit> NayaxSaleStatusChangeAudits =>
+        Set<NayaxSaleStatusChangeAudit>();
+
+    /// <summary>
     /// Append-only records of stored Nayax sale instants repaired from authoritative source evidence
     /// (issue #472). Nothing in the application updates or deletes a row in this set; see
     /// <see cref="NayaxSaleTimestampRepair"/>.
@@ -933,6 +942,7 @@ public class AppDbContext : DbContext
         ConfigurePendingInventoryCostRebuilds(modelBuilder);
         ConfigureNayaxSaleProviderEvidence(modelBuilder);
         ConfigureNayaxSaleOwnerDecisionAudit(modelBuilder);
+        ConfigureNayaxSaleStatusChangeAudit(modelBuilder);
         ConfigureProviderCatalogueReview(modelBuilder);
 
         modelBuilder.Entity<Product>()
@@ -3164,6 +3174,14 @@ public class AppDbContext : DbContext
     /// receipt handle</strong>, deliberately: a handle is a capability to change or delete a queue
     /// message and belongs in no row and no log.</para>
     /// </summary>
+    /// <summary>
+    /// How long a stored SQS message id may be. An SQS message id is a 100-character-or-less
+    /// identifier; 128 leaves room without inviting anything larger to be stored under this name.
+    /// One constant because two columns hold one - the sale's own provenance and issue #1107's
+    /// status-change audit.
+    /// </summary>
+    private const int SqsMessageIdMaxLength = 128;
+
     private static void ConfigureSqsSaleProvenance(ModelBuilder modelBuilder)
     {
         var sale = modelBuilder.Entity<NayaxSales>();
@@ -3174,9 +3192,7 @@ public class AppDbContext : DbContext
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
 
-        // An SQS message id is a 100-character-or-less identifier; 128 leaves room without inviting
-        // anything larger to be stored under this name.
-        sale.Property(x => x.SqsFirstMessageId).HasMaxLength(128);
+        sale.Property(x => x.SqsFirstMessageId).HasMaxLength(SqsMessageIdMaxLength);
     }
 
     /// <summary>
@@ -3313,6 +3329,24 @@ public class AppDbContext : DbContext
                     ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                     : fromProvider);
         }
+    }
+
+    /// <summary>
+    /// Maps the append-only status-change trail of issue #1107. One index, for the one read: a sale's
+    /// status changes in order. No foreign key to the sale, for the reason
+    /// <see cref="ConfigureNayaxSaleOwnerDecisionAudit"/> declares none. The message id is bounded to
+    /// the same 128 characters as <c>NayaxSales.SqsFirstMessageId</c>, because it is the same kind of
+    /// identifier, and the instant is persisted UTC and marked UTC on the way out.
+    /// </summary>
+    private static void ConfigureNayaxSaleStatusChangeAudit(ModelBuilder modelBuilder)
+    {
+        var audit = modelBuilder.Entity<NayaxSaleStatusChangeAudit>();
+
+        audit.HasIndex(x => new { x.BusinessId, x.NayaxSaleId, x.Id });
+        audit.Property(x => x.SourceMessageId).IsRequired().HasMaxLength(SqsMessageIdMaxLength);
+        audit.Property(x => x.OccurredAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>

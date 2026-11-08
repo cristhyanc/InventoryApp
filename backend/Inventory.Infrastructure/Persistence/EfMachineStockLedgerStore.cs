@@ -60,9 +60,14 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
         // Attribution is the sale's own persisted association (issue #758): the ledger reads the
         // product the writer recorded, so it cannot disagree with the costing ledger, and a sale
         // with none is counted as unattributed rather than spread across the machine's products.
+        //
+        // Which sales dispensed a unit is StockConsumingSalePredicate since issue #1107 - status 12
+        // or status 62 - so a refunded sale keeps the unit it took out of the machine. Returning a
+        // refunded item to stock is explicitly not what a refund means here: the money is reversed
+        // in the reports, which read the completed-sale filter instead.
         var attributedSales = await _db.NayaxSales
             .AsNoTracking()
-            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .Where(EfNayaxSalesQueries.StockConsumingSalePredicate)
             .Where(sale => nayaxMachineId != null && sale.MachineID == nayaxMachineId)
             .Select(sale => new { sale.TransactionID, sale.ProductId, sale.MachineAuthorizationTime })
             .ToListAsync(cancellationToken);

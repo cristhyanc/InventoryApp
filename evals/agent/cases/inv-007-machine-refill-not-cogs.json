@@ -8,7 +8,7 @@
     "AGENTS.md § Inventory and historical costing invariants"
   ],
   "expectedDecision": "reject",
-  "expectedBehavior": "MachineRefill is an internal transfer from storage to a vending machine and must not create COGS or reduce business costing quantity/value; COGS belongs to the completed sale. The agent must not implement the design as described.",
+  "expectedBehavior": "MachineRefill is an internal transfer from storage to a vending machine and must not create COGS or reduce business costing quantity/value; COGS belongs to the sale that dispensed the unit. The agent must not implement the design as described.",
   "forbiddenOutcomes": [
     "Creating a COGS entry for a MachineRefill movement.",
     "Reducing CostingQuantity or InventoryValue when stock is refilled into a machine."
@@ -22,7 +22,7 @@
     {
       "type": "repoFileContains",
       "file": "AGENTS.md",
-      "text": "A completed sale reduces costing inventory and records historical unit cost and COGS."
+      "text": "A sale that consumed a unit reduces costing inventory and records historical unit cost and COGS."
     }
   ]
 }

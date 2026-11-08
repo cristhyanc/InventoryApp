@@ -6,8 +6,8 @@ using Inventory.Infrastructure.Models;
 namespace Inventory.Infrastructure.Data;
 
 /// <summary>
-/// The one EF-translatable completed-sale filter, beside the <see cref="AppDbContext"/> whose
-/// entities it is written against (issue #308, Persistence 7/8 of #153).
+/// The two EF-translatable sale filters, beside the <see cref="AppDbContext"/> whose entities they
+/// are written against (issue #308, Persistence 7/8 of #153; the second one is issue #1107).
 ///
 /// It is persistence, not Domain: <see cref="NayaxTransactionStatusIds.Completed"/> remains the
 /// single authoritative "status 12 is an approved sale" rule, and this expression is only how a
@@ -35,6 +35,23 @@ internal static class EfNayaxSalesQueries
     /// </summary>
     public static Expression<Func<NayaxSales, bool>> CompletedSalePredicate =>
         sale => sale.TransactionStatusId == NayaxTransactionStatusIds.Completed
+            && (sale.SqsVerification == null
+                || (sale.SqsVerification != NayaxSqsVerification.Conflict
+                    && sale.SqsVerification != NayaxSqsVerification.OwnerExcluded));
+
+    /// <summary>
+    /// Status 12 <em>or</em> status 62, under the same two exclusions: the translatable form of
+    /// <see cref="NayaxSaleCountingPolicy.ConsumesStock"/>, and the filter every reader of physical
+    /// machine stock and business-owned costing inventory selects on since issue #1107 - the
+    /// machine-stock ledger, the inventory-cost ledger and sale costing.
+    ///
+    /// <para>A refunded sale dispensed its unit and the business no longer owns it, so the money is
+    /// reversed by <see cref="CompletedSalePredicate"/> excluding it while the stock stays consumed
+    /// here. The two must each agree with their Domain rule, and a test pins each pair together.</para>
+    /// </summary>
+    public static Expression<Func<NayaxSales, bool>> StockConsumingSalePredicate =>
+        sale => (sale.TransactionStatusId == NayaxTransactionStatusIds.Completed
+                || sale.TransactionStatusId == NayaxTransactionStatusIds.Refunded)
             && (sale.SqsVerification == null
                 || (sale.SqsVerification != NayaxSqsVerification.Conflict
                     && sale.SqsVerification != NayaxSqsVerification.OwnerExcluded));

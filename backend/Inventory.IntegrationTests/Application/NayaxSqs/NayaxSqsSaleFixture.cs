@@ -220,6 +220,29 @@ internal sealed class NayaxSqsSaleFixture : IAsyncDisposable
             messageId,
             receivedAtUtc ?? ReceivedAtUtc);
 
+    /// <summary>
+    /// One queued refund message, as the store is asked to apply it (issue #1107). The defaults match
+    /// <see cref="SqsSale"/>'s, so a case states only the value it is varying - which is how the
+    /// "machine, amount or product differs" cases read as the one difference they are about.
+    /// </summary>
+    public static NayaxSqsRefundInput SqsRefund(
+        long transactionId = TransactionId,
+        long machineId = MachineId,
+        decimal settlementValue = 3.5m,
+        long? nayaxProductId = NayaxProductId,
+        string messageId = "refund-message-1",
+        DateTime? receivedAtUtc = null) =>
+        new(
+            transactionId,
+            machineId,
+            settlementValue,
+            nayaxProductId,
+            messageId,
+            receivedAtUtc ?? RefundReceivedAtUtc);
+
+    /// <summary>When the reader accepted the refund message: after the sale, as a refund is.</summary>
+    public static readonly DateTime RefundReceivedAtUtc = new(2026, 11, 6, 9, 15, 0, DateTimeKind.Utc);
+
     /// <summary>One <c>lastSales</c> item, which supplies no status at all.</summary>
     public static Inventory.Application.Nayax.NayaxLastSalesReport LastSalesItem(
         decimal settlementValue = 3.5m,

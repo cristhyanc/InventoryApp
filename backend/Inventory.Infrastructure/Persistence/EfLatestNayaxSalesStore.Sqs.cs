@@ -122,8 +122,8 @@ public sealed partial class EfLatestNayaxSalesStore
 
             // What has to be clear before the message may be deleted: this sale's own product, for an
             // already stored row as much as for a freshly inserted one. See
-            // SaleApplication.CompletedSaleProductId.
-            application.CompletedSaleProductId is { } productId ? [productId] : []);
+            // SaleApplication.StockConsumingProductId.
+            application.StockConsumingProductId is { } productId ? [productId] : []);
     }
 
     /// <summary>

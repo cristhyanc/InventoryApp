@@ -27,8 +27,8 @@ public sealed class BackfillNayaxHistoricalSaleCosts
     {
         // Filtered on the persisted sale-to-product association (issue #758), never on a match
         // re-made here: an unresolved sale belongs to no product and is in no product's backfill.
-        var sales = (await _store.LoadCompletedSalesAsync(
-                new CompletedSaleSelection(From: from, To: to), forUpdate: !dryRun, cancellationToken))
+        var sales = (await _store.LoadStockConsumingSalesAsync(
+                new StockConsumingSaleSelection(From: from, To: to), forUpdate: !dryRun, cancellationToken))
             .Where(s => !productId.HasValue || s.ProductId == productId.Value)
             .ToList();
         var withNayaxCost = sales.Count(s => s.NayaxProductCostPrice.HasValue);

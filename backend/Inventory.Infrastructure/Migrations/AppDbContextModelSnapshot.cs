@@ -1705,6 +1705,44 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("NayaxSaleProviderEvidences");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleStatusChangeAudit", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("NayaxSaleId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("NewTransactionStatusId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("PreviousTransactionStatusId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SourceMessageId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("TransactionId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "NayaxSaleId", "Id");
+
+                    b.ToTable("NayaxSaleStatusChangeAudits");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleTimestampRepair", b =>
                 {
                     b.Property<int>("Id")

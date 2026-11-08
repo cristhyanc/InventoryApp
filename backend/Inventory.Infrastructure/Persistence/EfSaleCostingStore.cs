@@ -11,11 +11,15 @@ namespace Inventory.Infrastructure.Persistence;
 /// <see cref="NayaxSales"/>/<see cref="Product"/> persistence models it depends on, which moved
 /// there in issue #307; this adapter followed them in issue #309 (Persistence 8/8 of #153).
 ///
-/// The queries are unchanged from the former <c>SaleCostingService</c>: the product catalogue, the
-/// product's transition-baseline cutoff and the completed (status ID 12) sales ordered by
-/// authorization time, all read through <see cref="AppDbContext"/>'s business query filter. Each
-/// loaded sale keeps a reference to its row, so <see cref="StageCost"/> writes the decision of a
-/// sale-costing use case back onto exactly that tracked row. It applies no costing rule of its own.
+/// The queries are the former <c>SaleCostingService</c>'s: the product catalogue, the product's
+/// transition-baseline cutoff and the sales that consumed a unit, ordered by authorization time, all
+/// read through <see cref="AppDbContext"/>'s business query filter. Each loaded sale keeps a
+/// reference to its row, so <see cref="StageCost"/> writes the decision of a sale-costing use case
+/// back onto exactly that tracked row. It applies no costing rule of its own.
+///
+/// <para>Which sales those are is <c>EfNayaxSalesQueries.StockConsumingSalePredicate</c> since issue
+/// #1107 - status 12 <em>or</em> status 62 - rather than completed sales alone: a refunded sale
+/// dispensed its unit and keeps its historical cost, because what a refund reverses is money.</para>
 /// </summary>
 public sealed class EfSaleCostingStore : ISaleCostingStore
 {
@@ -29,13 +33,13 @@ public sealed class EfSaleCostingStore : ISaleCostingStore
             .Select(x => (DateTime?)x.CutoffAt)
             .SingleOrDefaultAsync(cancellationToken);
 
-    public async Task<IReadOnlyList<CostableSale>> LoadCompletedSalesAsync(
-        CompletedSaleSelection selection, bool forUpdate, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<CostableSale>> LoadStockConsumingSalesAsync(
+        StockConsumingSaleSelection selection, bool forUpdate, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(selection);
 
         var query = (forUpdate ? _db.NayaxSales.AsQueryable() : _db.NayaxSales.AsNoTracking())
-            .Where(EfNayaxSalesQueries.CompletedSalePredicate);
+            .Where(EfNayaxSalesQueries.StockConsumingSalePredicate);
         if (selection.PendingOnly)
             query = query.Where(s => s.CostingStatus == SaleCostingStatus.Pending);
         if (selection.From.HasValue)

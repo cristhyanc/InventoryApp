@@ -37,9 +37,9 @@ public class CostableSale
 
     /// <summary>
     /// The sale's queue-delivery verification state, or <c>null</c> for a sale the queue did not
-    /// deliver. Read only through <see cref="Domain.NayaxSqs.NayaxSaleCountingPolicy"/>: a status-12
-    /// sale the business's own <c>lastSales</c> contradicted, or that its Owner excluded, is not a
-    /// completed sale and is neither costed nor counted (issue #1105).
+    /// deliver. Read only through <see cref="Domain.NayaxSqs.NayaxSaleCountingPolicy"/>: a sale the
+    /// business's own <c>lastSales</c> contradicted, or that its Owner excluded, consumes no costing
+    /// inventory and is neither costed nor counted (issue #1105).
     /// </summary>
     public Domain.NayaxSqs.NayaxSqsVerification? SqsVerification { get; init; }
 
@@ -73,11 +73,16 @@ public class CostableSale
 /// </summary>
 public sealed record SaleCostAssignment(decimal? UnitCost, SaleCostStatus Status, SaleCostOrigin Source);
 
-/// <summary>Which completed sales a sale-costing use case loads.</summary>
+/// <summary>
+/// Which of the caller's stock-consuming sales a sale-costing use case loads. Named for the rule it
+/// selects on (<see cref="Domain.NayaxSqs.NayaxSaleCountingPolicy.ConsumesStock"/>) rather than for
+/// completed sales, because since issue #1107 a refunded sale has a historical cost too: it
+/// dispensed its unit, the business no longer owns it, and only the money was reversed.
+/// </summary>
 /// <param name="PendingOnly">Only sales whose costing status is still <see cref="SaleCostStatus.Pending"/>.</param>
 /// <param name="From">Inclusive lower bound on the authorization time, when set.</param>
 /// <param name="To">Inclusive upper bound on the authorization time, when set.</param>
-public sealed record CompletedSaleSelection(bool PendingOnly = false, DateTime? From = null, DateTime? To = null);
+public sealed record StockConsumingSaleSelection(bool PendingOnly = false, DateTime? From = null, DateTime? To = null);
 
 /// <summary>
 /// Narrow persistence port for historical sale costing (issue #297), owned by the Application
@@ -90,12 +95,13 @@ public interface ISaleCostingStore
     Task<DateTime?> GetTransitionCutoffAsync(long productId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// The caller's completed sales (status ID 12 only) matching <paramref name="selection"/>,
-    /// ordered by authorization time. With <paramref name="forUpdate"/> the rows are change-tracked
-    /// so <see cref="StageCost"/> can update them; without it (a dry run) nothing is tracked.
+    /// The caller's stock-consuming sales (status ID 12 or 62, neither excluded by review) matching
+    /// <paramref name="selection"/>, ordered by authorization time. With
+    /// <paramref name="forUpdate"/> the rows are change-tracked so <see cref="StageCost"/> can
+    /// update them; without it (a dry run) nothing is tracked.
     /// </summary>
-    Task<IReadOnlyList<CostableSale>> LoadCompletedSalesAsync(
-        CompletedSaleSelection selection, bool forUpdate, CancellationToken cancellationToken);
+    Task<IReadOnlyList<CostableSale>> LoadStockConsumingSalesAsync(
+        StockConsumingSaleSelection selection, bool forUpdate, CancellationToken cancellationToken);
 
     /// <summary>Stages <paramref name="cost"/> onto a sale loaded for update.</summary>
     void StageCost(CostableSale sale, SaleCostAssignment cost);

@@ -31,14 +31,22 @@ public enum MachineStockMovementKind
     ReturnToStorage = 1,
 
     /// <summary>
-    /// One completed Nayax sale (status 12): the machine dispensed one unit, so machine stock falls
-    /// by exactly one. It is the only kind that consumes business-owned costing inventory, and the
-    /// ledger never performs that consumption itself - the sale-costing path does it exactly once
-    /// (see <see cref="Inventory.Domain.Costing.WeightedAverageCostReplay"/>). The ledger reads the
-    /// same completed-sale fact rather than recording a second movement for it, so there is nothing
-    /// to double count.
+    /// One Nayax sale that dispensed a unit, so machine stock falls by exactly one. It is the only
+    /// kind that consumes business-owned costing inventory, and the ledger never performs that
+    /// consumption itself - the sale-costing path does it exactly once (see
+    /// <see cref="Inventory.Domain.Costing.WeightedAverageCostReplay"/>). The ledger reads the same
+    /// persisted sale fact rather than recording a second movement for it, so there is nothing to
+    /// double count.
+    ///
+    /// <para><strong>Which sales those are is one rule and it is not this enum's</strong>:
+    /// <see cref="Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy.ConsumesStock"/> - status
+    /// <c>12</c> or status <c>62</c>, neither excluded by review. It was named
+    /// <c>CompletedSale</c> until issue #1107, when the owner decided that a refunded sale keeps the
+    /// unit it dispensed while its money is reversed: the movement is the same physical fact either
+    /// way, and only a <em>completed</em> sale is money, so the kind is named for what the machine
+    /// did rather than for what the transaction counts as.</para>
     /// </summary>
-    CompletedSale = 2,
+    DispensedSale = 2,
 
     /// <summary>
     /// An operator's physical count of what is actually in the machine. It is an observation, not a
@@ -62,10 +70,15 @@ public sealed record MachineRefillFact(
     int StockAdjustmentId, long ProductId, int StorageQuantityChange, DateTime EffectiveAtUtc);
 
 /// <summary>
-/// One completed sale dispensed by the machine, identified by its Nayax transaction id. The product
+/// One sale the machine dispensed a unit for, identified by its Nayax transaction id. The product
 /// is the one the sale was attributed to by <see cref="Inventory.Domain.Reporting.ProductMatching.ProductMatcher"/>,
 /// the same attribution the costing ledger uses, so a sale cannot count against one product here
 /// and another one there.
+///
+/// <para>Which sales the store reads is
+/// <see cref="Inventory.Domain.NayaxSqs.NayaxSaleCountingPolicy.ConsumesStock"/> since issue #1107,
+/// so a refunded sale is one of these: the unit left the machine and the refund did not put it
+/// back.</para>
 /// </summary>
 public sealed record MachineSaleFact(long TransactionId, long ProductId, DateTime AuthorizationTimeUtc);
 
@@ -111,16 +124,16 @@ public static class MachineStockMovementPolicy
 {
     /// <summary>
     /// Whether this kind consumes business-owned costing inventory (<c>CostingQuantity</c>,
-    /// <c>InventoryValue</c>, COGS). Only a completed sale does. A refill and a return to storage
+    /// <c>InventoryValue</c>, COGS). Only a dispensed sale does. A refill and a return to storage
     /// are internal transfers between two locations the business already owns, and a count is an
     /// observation.
     ///
     /// This is a statement about the movement's meaning, not an instruction to this ledger: the
     /// machine-stock ledger writes no cost at all. The sale-costing path remains the only writer of
-    /// <c>UnitCostAtSale</c>/<c>CostOfGoodsSold</c>, and it records them once per completed sale.
+    /// <c>UnitCostAtSale</c>/<c>CostOfGoodsSold</c>, and it records them once per dispensed sale.
     /// </summary>
     public static bool ConsumesBusinessCostingInventory(MachineStockMovementKind kind) =>
-        kind == MachineStockMovementKind.CompletedSale;
+        kind == MachineStockMovementKind.DispensedSale;
 
     /// <summary>
     /// The movement a persisted machine-refill adjustment represents: a transfer into the machine
@@ -143,17 +156,18 @@ public static class MachineStockMovementPolicy
     }
 
     /// <summary>
-    /// The movement one completed sale represents: exactly one unit out of the machine. One
-    /// completed transaction dispenses one unit, which is the same quantity the weighted-average
-    /// cost replay consumes from costing inventory for that sale, so the physical ledger and the
-    /// costing ledger cannot drift apart on quantity.
+    /// The movement one dispensed sale represents: exactly one unit out of the machine. One such
+    /// transaction dispenses one unit, which is the same quantity the weighted-average cost replay
+    /// consumes from costing inventory for that sale, so the physical ledger and the costing ledger
+    /// cannot drift apart on quantity - including for a refunded sale, which both of them keep
+    /// consuming (issue #1107).
     /// </summary>
     public static MachineStockMovement FromSale(MachineSaleFact fact)
     {
         ArgumentNullException.ThrowIfNull(fact);
 
         return new MachineStockMovement(
-            MachineStockMovementKind.CompletedSale,
+            MachineStockMovementKind.DispensedSale,
             fact.ProductId,
             fact.AuthorizationTimeUtc,
             fact.TransactionId,

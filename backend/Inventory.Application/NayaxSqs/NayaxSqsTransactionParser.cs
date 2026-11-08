@@ -24,8 +24,10 @@ namespace Inventory.Application.NayaxSqs;
 ///   <item><strong>Revalue</strong> - a prepaid credit top-up, not a product sale.</item>
 ///   <item><strong>Multivend</strong> - by the flag or by more than one product; deferred by parent
 ///   #1100 to the hourly <c>lastSales</c> run.</item>
-///   <item><strong>Unsupported</strong> - <c>Void</c>, a failed settlement, a refund, a pending
-///   status, an unrecognised status, or a negative amount.</item>
+///   <item><strong>Unsupported</strong> - <c>Void</c>, a failed settlement, a pending status, an
+///   unrecognised status, or a negative amount.</item>
+///   <item><strong>Refund</strong> - status <c>62</c> (issue #1107). Never saved as a sale: it can
+///   only move a sale this business already stored from status <c>12</c> to status <c>62</c>.</item>
 ///   <item><strong>CancelledOrDeclined</strong> - status <c>26</c>, <c>28</c>, <c>31</c> or
 ///   <c>250</c>, saved as a non-completed row so it stays visible in status reporting.</item>
 ///   <item><strong>FreeVend</strong> - approved and charging exactly nothing; unsupported until a
@@ -47,7 +49,12 @@ namespace Inventory.Application.NayaxSqs;
 ///
 /// <para><strong>Nothing here reads <c>Is Refund Card</c></strong>, which marks a Nayax Refund Card
 /// rather than a refunded transaction. A refund is recognised by status <c>62</c> and by nothing
-/// else; reading the card flag as refund evidence would quietly stop counting real sales.</para>
+/// else; reading the card flag as refund evidence would quietly stop counting real sales. Nothing
+/// here reads <c>Original Transaction ID</c> either (issue #1107): a refund delivered as a <em>new</em>
+/// transaction pointing back at the original is a different design that is explicitly out of scope,
+/// and the documentation neither says that field is populated on a refund nor what a refund message
+/// looks like at all, so reading it would be exactly the inference AGENTS.md § Nayax contract
+/// verification forbids.</para>
 ///
 /// <para><strong>Every boolean flag is false unless the message says <c>true</c></strong>. The
 /// first real message sends <c>Settlment Failed</c> and <c>Is Revalue Reward Transaction</c> as
@@ -235,7 +242,6 @@ public static class NayaxSqsTransactionParser
         var status = NayaxTransactionStatusClassifier.Classify(fields.TransactionStatusId);
         var statusReason = status switch
         {
-            NayaxTransactionStatus.Refunded => NayaxSqsRejectionReason.Refunded,
             NayaxTransactionStatus.Pending => NayaxSqsRejectionReason.PendingStatus,
             NayaxTransactionStatus.Unknown => NayaxSqsRejectionReason.UnrecognisedStatus,
             _ => NayaxSqsRejectionReason.None
@@ -256,6 +262,14 @@ public static class NayaxSqsTransactionParser
             fields.AuthorizedAtGmt,
             fields.Data,
             product);
+
+        // Rule 4a: a refund (issue #1107). It is not a sale and is never saved as one - it can only
+        // move a sale this business already stored from status 12 to status 62 - so it carries the
+        // report for the comparison and no slot to resolve a product from. It sits before the
+        // cancelled/declined branch and after the negative-amount refusal, which keeps the parser's
+        // standing rule that no negative amount passes this point.
+        if (status == NayaxTransactionStatus.Refunded)
+            return NayaxSqsTransactionOutcome.Refund(report);
 
         // Rule 5: cancelled and declined rows are saved too, carrying the status the message
         // reported, so they stay visible in status reporting instead of being discarded.

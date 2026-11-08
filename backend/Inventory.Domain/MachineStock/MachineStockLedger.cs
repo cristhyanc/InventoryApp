@@ -232,7 +232,7 @@ public static class MachineStockLedger
                     expected += movement.MachineQuantityChange;
                     break;
 
-                default: // MachineStockMovementKind.CompletedSale
+                default: // MachineStockMovementKind.DispensedSale
                     sold += -movement.MachineQuantityChange;
                     expected += movement.MachineQuantityChange;
                     break;
@@ -283,7 +283,7 @@ public static class MachineStockLedger
     {
         MachineStockMovementKind.Refill => RefillPriority,
         MachineStockMovementKind.ReturnToStorage => ReturnPriority,
-        MachineStockMovementKind.CompletedSale => SalePriority,
+        MachineStockMovementKind.DispensedSale => SalePriority,
         _ => CountPriority
     };
 }
