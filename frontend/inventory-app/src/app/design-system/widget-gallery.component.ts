@@ -28,7 +28,7 @@ import { ToastService, ToastType } from '../services/toast.service';
 export class WidgetGalleryComponent {
   /**
    * Long enough that a toast is still on screen when the screenshot is taken; the real callers
-   * keep the service's 4s default.
+   * keep the service's 5s default (issue #1142).
    */
   private static readonly screenshotToastDurationMs = 600_000;
 
