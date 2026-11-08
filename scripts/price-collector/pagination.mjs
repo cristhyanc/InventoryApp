@@ -193,7 +193,7 @@ export function configuredPhrasesOutcome(searches) {
   if (!Array.isArray(searches) || searches.length === 0 || searches.length > 2) {
     throw new Error('Configured phrases are answered from one or two searches.');
   }
-  const answered = searches.map(checkedConfiguredSearch);
+  const answered = searches.map((search, index) => checkedConfiguredSearch(search, index));
   const last = answered.length - 1;
 
   answered.forEach((search, index) => {
