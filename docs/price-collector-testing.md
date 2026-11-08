@@ -443,34 +443,55 @@ it waits until the reviewer approves it.
 
 Do this after the change is released to **main**. Nothing here goes into the repository.
 
-1. **Create a GitHub token that can only start workflows.** GitHub → Settings → Developer settings →
-   Personal access tokens → **Fine-grained tokens** → Generate new token. Name it
-   `Restockroo price collector schedule`, choose an expiry (put a reminder in your calendar before
+1. **Create a fine-grained GitHub token for this repository's Actions only.** GitHub → Settings →
+   Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token. Name
+   it `Restockroo price collector schedule`, choose an expiry (put a reminder in your calendar before
    it ends), Repository access **Only select repositories** → `cristhyanc/InventoryApp`, and under
    Repository permissions set **Actions** to **Read and write**. Leave every other permission at
-   No access. Copy the token; GitHub shows it once.
-2. **Create the Logic App.** Azure Portal → Create a resource → **Logic App** → plan type
+   No access. This token cannot read or change code, secrets, variables, environments or settings,
+   but repository-level Actions write is broader than starting this one workflow: it can also
+   start, cancel, re-run and delete runs of **any** workflow in the repository, and enable or
+   disable workflows. Treat it as a credential and keep it only in Key Vault (step 2). Copy it;
+   GitHub shows it once, and it must never be pasted into the Logic App itself.
+2. **Store the token in Key Vault.** Azure Portal → your Key Vault (or create one in the
+   production resource group) → **Objects → Secrets → Generate/Import**. Name it
+   `price-collector-dispatch-token` and paste the token as the value. Nothing else holds the token.
+3. **Create the Logic App.** Azure Portal → Create a resource → **Logic App** → plan type
    **Consumption** (billed per action, a few cents a month at one run a day). Use the production
    resource group and region, and name it, for example, `restockroo-price-collector-schedule`.
-3. **Add the trigger.** In the designer choose **Schedule → Recurrence**: Interval `1`, Frequency
+   Then open **Settings → Identity**, turn the **System assigned** identity **On** and save.
+   In the Key Vault, give that identity read access to secrets only: with the Azure RBAC
+   permission model, **Access control (IAM) → Add role assignment → Key Vault Secrets User** →
+   the Logic App's managed identity; with the access-policy model, an access policy with only the
+   **Get** secret permission.
+4. **Add the trigger.** In the designer choose **Schedule → Recurrence**: Interval `1`, Frequency
    `Day`, Time zone **(UTC+10:00) Canberra, Melbourne, Sydney** (`AUS Eastern Standard Time`, which
    follows daylight saving), At these hours `5`, At these minutes `0`.
-4. **Add the action.** **HTTP**, Method `POST`, URI
+5. **Read the token from Key Vault.** Add the **Azure Key Vault → Get secret** action. Create its
+   connection with **Managed identity** authentication (the Logic App's system-assigned identity)
+   and your vault name, and choose the secret `price-collector-dispatch-token`. Open this action's
+   **Settings** and turn on **Secure outputs**, so the secret value is never shown in run history.
+6. **Add the call to GitHub.** Add an **HTTP** action after it: Method `POST`, URI
    `https://api.github.com/repos/cristhyanc/InventoryApp/actions/workflows/price-collector.yml/dispatches`,
    Headers `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`,
-   `User-Agent: restockroo-price-collector-schedule` and `Authorization: Bearer <the token>`, Body:
+   `User-Agent: restockroo-price-collector-schedule` and `Authorization` with the value `Bearer `
+   followed by the **value** output of the Get secret step, picked from the dynamic content list
+   (in code view `Bearer @{body('Get_secret')?['value']}`). Never type the token itself here. Body:
 
    ```json
    { "ref": "main", "inputs": { "scheduled_run": "true" } }
    ```
 
-   Open the action's **Settings** and turn on **Secure inputs** and **Secure outputs**, so the token
-   never appears in the Logic App's run history. Save.
-5. **Test it once.** With `PRICE_COLLECTOR_SCHEDULE_ENABLED` set to `true`, select **Run trigger →
+   Open the HTTP action's **Settings** and turn on **Secure inputs** and **Secure outputs**, so the
+   header that carries the secret never appears in run history either. Save. The Logic App's
+   definition (code view) now holds only the reference to the secret, never its value.
+7. **Test it once.** With `PRICE_COLLECTOR_SCHEDULE_ENABLED` set to `true`, select **Run trigger →
    Run** in the Logic App. GitHub answers `204 No Content`, and a run named
-   **Price collector (daily schedule)** appears under Actions. A `401` means the token is wrong or
+   **Price collector (daily schedule)** appears under Actions. A failed **Get secret** step means
+   the identity has no read access to the secret; from GitHub, a `401` means the token is wrong or
    expired, a `403` that it lacks the Actions permission, and a `422` that `main` does not have this
-   workflow change yet.
+   workflow change yet. To renew the token, generate a new one and add it as a new version of the
+   same Key Vault secret; the Logic App reads the latest version, so nothing else changes.
 
 **Switching it on or off:** in GitHub → Settings → Secrets and variables → Actions → Variables,
 `PRICE_COLLECTOR_SCHEDULE_ENABLED` set to `true` is on; deleting it, or any other value, is off.

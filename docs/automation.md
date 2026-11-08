@@ -1085,7 +1085,9 @@ private workspace, state and CLI installation.
 The workflow's only trigger is `workflow_dispatch`. The daily run is started by an Azure Logic App at
 05:00 Sydney time (owner decision, 8 November 2026, because GitHub's cron started runs hours late),
 which calls the dispatch API on `main` with the input `scheduled_run: true` and a fine-grained token
-that holds only the Actions permission on this repository; the workflow does not check the hour. The
+that holds only the Actions permission on this repository (read from Key Vault by the Logic App's
+managed identity; Actions write also lets it manage other workflows' runs and enable or disable
+workflows, so it is kept only in Key Vault); the workflow does not check the hour. The
 first job, `gate`, has `permissions: {}`, no environment and no secret. For a `scheduled_run` run it
 reads the repository variable `PRICE_COLLECTOR_SCHEDULE_ENABLED` and ends green unless it is exactly
 `true`, so a switched-off daily run never requests the protected environment; it refuses a daily run
