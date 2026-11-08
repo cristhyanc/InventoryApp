@@ -75,6 +75,71 @@ public sealed record NayaxSqsSalePersistResult(
     IReadOnlyCollection<long> AffectedProductIds);
 
 /// <summary>
+/// One Nayax SQS refund message, as the store is asked to apply it (issue #1107).
+///
+/// <para><strong>It is a separate record from the sale input for the reason that one is separate from
+/// a <c>lastSales</c> item.</strong> A refund is never saved as a sale: it carries no instant to
+/// store, no product to resolve, no provenance to stamp and no cost to compute, and the only thing
+/// it can do is move a sale this business already stored from status <c>12</c> to status <c>62</c>.
+/// Giving it its own input type is what makes "a refund message cannot insert a sale" true by
+/// construction rather than by a branch somebody has to keep.</para>
+/// </summary>
+/// <param name="TransactionId">
+/// The message's own <c>TransactionId</c>, which is the whole of how the refund is matched: the
+/// stored sale is read by <c>(BusinessId, TransactionID)</c>, with the business half coming from the
+/// tenant query filter as everywhere else.
+/// </param>
+/// <param name="MachineId">The message's machine, compared with the stored sale's.</param>
+/// <param name="SettlementValue">The message's amount, compared with the stored sale's.</param>
+/// <param name="NayaxProductId">
+/// The provider's own product id the message stated, or <see langword="null"/> when it stated none,
+/// in which case the product is recorded as not compared rather than as agreement.
+/// </param>
+/// <param name="MessageId">
+/// The queue's own id for the delivery, recorded on the audit row as the refund's source. It is the
+/// one identifier of a message that is safe to persist and to log.
+/// </param>
+/// <param name="ReceivedAtUtc">When the reader accepted the message; the audit row's instant.</param>
+public sealed record NayaxSqsRefundInput(
+    long TransactionId,
+    long MachineId,
+    decimal SettlementValue,
+    long? NayaxProductId,
+    string MessageId,
+    DateTime ReceivedAtUtc);
+
+/// <summary>What applying one refund message did (issue #1107).</summary>
+public enum NayaxSqsRefundApplication
+{
+    /// <summary>The stored sale moved from <c>12</c> to <c>62</c> and one audit row was written.</summary>
+    Applied = 10,
+
+    /// <summary>
+    /// The stored sale was already <c>62</c>. Nothing changed and nothing was audited again, which is
+    /// what makes a redelivered refund have no further effect.
+    /// </summary>
+    AlreadyRefunded = 20,
+
+    /// <summary>
+    /// This business has no sale with that transaction id. Nothing is saved - a refund never becomes
+    /// a sale - and the message is left for the dead-letter queue as a sample.
+    /// </summary>
+    NoMatchingSale = 30,
+
+    /// <summary>
+    /// A sale is stored and it is not a status-<c>12</c> sale, so there is nothing to refund.
+    /// Nothing is changed.
+    /// </summary>
+    NotRefundable = 40,
+
+    /// <summary>
+    /// A sale is stored and its machine, amount or product contradicts the message, so the two are
+    /// not plainly the same transaction. Nothing is changed and the message is kept as a sample.
+    /// </summary>
+    Contradicted = 50,
+}
+
+/// <summary>
 /// What draining this business's pending inventory-cost rebuilds did (issue #1103).
 /// </summary>
 /// <param name="StillPendingProductIds">
@@ -154,6 +219,34 @@ public interface ILatestNayaxSalesStore
     /// </summary>
     Task<NayaxSqsSalePersistResult> PersistSqsSaleAsync(
         NayaxSqsSaleInput sale, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Applies one Nayax SQS refund message (issue #1107) in <strong>one write-locked
+    /// transaction</strong>: it reads the sale by <c>(BusinessId, TransactionID)</c>, decides through
+    /// <c>NayaxSaleRefundPolicy</c> whether the refund belongs to it, and - only for
+    /// <see cref="NayaxSqsRefundApplication.Applied"/> - moves the stored status from <c>12</c> to
+    /// <c>62</c> and appends one audit row in the <em>same</em> <c>SaveChanges</c>, so the status
+    /// change and its audit commit together or not at all.
+    ///
+    /// <para><strong>It never inserts a sale and never changes anything else.</strong> A transaction
+    /// id this business has no sale for is <see cref="NayaxSqsRefundApplication.NoMatchingSale"/>;
+    /// nothing is written, and a refund is never stored as a transaction of its own. The product
+    /// association, the amount, the instant, the costs and the verification state of the sale it does
+    /// find are left exactly as they are: the only column it writes on a sale is the status.</para>
+    ///
+    /// <para><strong>It records no pending inventory-cost rebuild, and that is the point of the rule
+    /// split.</strong> Status <c>12</c> and status <c>62</c> both consume stock
+    /// (<c>NayaxSaleCountingPolicy.ConsumesStock</c>), so moving between them changes no quantity, no
+    /// inventory value and no sale cost - there is nothing to replay. What the refund changes is
+    /// whether the sale is a completed sale, and every figure that depends on <em>that</em> is read
+    /// live from the completed-sale filter rather than stored.</para>
+    ///
+    /// <para><strong>Applying it twice is applying it once.</strong> A redelivery finds the sale
+    /// already at <c>62</c> and answers <see cref="NayaxSqsRefundApplication.AlreadyRefunded"/>
+    /// having written nothing, so there is no second status change and no second audit row.</para>
+    /// </summary>
+    Task<NayaxSqsRefundApplication> ApplySqsRefundAsync(
+        NayaxSqsRefundInput refund, CancellationToken cancellationToken);
 
     /// <summary>
     /// Replays the inventory cost of every product this business has a <em>pending rebuild</em>

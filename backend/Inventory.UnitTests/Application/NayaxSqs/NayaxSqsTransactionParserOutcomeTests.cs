@@ -188,13 +188,22 @@ public class NayaxSqsTransactionParserOutcomeTests
         // Rule 4: unsupported.
         { "a void transaction", Message(isVoid: "true"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.VoidTransaction },
         { "a failed settlement", Message(settlmentFailed: "true"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.SettlementFailed },
-        { "a refunded transaction", Message(transactionStatusId: "62"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.Refunded },
         { "a transaction pending settlement", Message(transactionStatusId: "55"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.PendingStatus },
         { "a transaction pending batch", Message(transactionStatusId: "80"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.PendingStatus },
         { "an unknown status id", Message(transactionStatusId: "99"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.UnrecognisedStatus },
         { "a zero status id", Message(transactionStatusId: "0"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.UnrecognisedStatus },
         { "a negative amount", Message(settlementValue: "-1.0000"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.NegativeSettlementValue },
         { "a negative amount on a declined transaction", Message(transactionStatusId: "26", settlementValue: "-1.0000"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.NegativeSettlementValue },
+        { "a negative amount on a refund", Message(transactionStatusId: "62", settlementValue: "-1.0000"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.NegativeSettlementValue },
+
+        // Rule 4a: the refund of issue #1107, after the negative-amount refusal and before the
+        // cancelled/declined branch. It is never saved as a sale, so a cancel reason that would
+        // contradict an approved status says nothing about it.
+        { "a refunded transaction", Message(transactionStatusId: "62"), NayaxSqsOutcomeKind.Refund, NayaxSqsRejectionReason.None },
+        { "a refund with a cancel reason", Message(transactionStatusId: "62", cancelType: "3"), NayaxSqsOutcomeKind.Refund, NayaxSqsRejectionReason.None },
+        { "a refund charging nothing", Message(transactionStatusId: "62", settlementValue: "0"), NayaxSqsOutcomeKind.Refund, NayaxSqsRejectionReason.None },
+        { "a void refund", Message(transactionStatusId: "62", isVoid: "true"), NayaxSqsOutcomeKind.Unsupported, NayaxSqsRejectionReason.VoidTransaction },
+        { "a revalue that is also refunded", Message(transactionStatusId: "62", isRevalueTransaction: "true"), NayaxSqsOutcomeKind.Revalue, NayaxSqsRejectionReason.None },
 
         // Rule 5: cancelled or declined, including when a cancel reason is also present.
         { "status 26", Message(transactionStatusId: "26"), NayaxSqsOutcomeKind.CancelledOrDeclined, NayaxSqsRejectionReason.None },
@@ -240,27 +249,53 @@ public class NayaxSqsTransactionParserOutcomeTests
     }
 
     /// <summary>
-    /// Only the two saved kinds carry a report, and every other kind carries none - so no consumer
-    /// can save a revalue, a multivend or a rejected message by reading a report that happened to
-    /// be there.
+    /// Only the two saved kinds and the refund carry a report, and every other kind carries none -
+    /// so no consumer can save a revalue, a multivend or a rejected message by reading a report that
+    /// happened to be there. A refund's report is not a sale to save either: it is the three values
+    /// its comparison with the stored sale is made on (issue #1107), and the
+    /// <see cref="NayaxSqsOutcomeKind.Refund"/> kind is what keeps the two apart.
     /// </summary>
     [Theory]
     [MemberData(nameof(ClassifiedMessages))]
-    public void Only_a_saved_outcome_carries_a_report(
+    public void Only_a_saved_outcome_or_a_refund_carries_a_report(
         string because,
         string body,
         NayaxSqsOutcomeKind expectedKind,
         NayaxSqsRejectionReason expectedReason)
     {
         var outcome = NayaxSqsTransactionParser.Parse(body);
-        var saved = expectedKind
+        var carriesReport = expectedKind
+            is NayaxSqsOutcomeKind.CompletedSale
+            or NayaxSqsOutcomeKind.CancelledOrDeclined
+            or NayaxSqsOutcomeKind.Refund;
+
+        Assert.True(
+            carriesReport == (outcome.Report is not null),
+            $"A message with {because} is {expectedKind} ({expectedReason}), so it must "
+                + $"{(carriesReport ? "carry" : "carry no")} report.");
+    }
+
+    /// <summary>
+    /// And only the two <em>saved</em> kinds carry a product slot: a refund resolves no product, so a
+    /// consumer cannot read a slot off one and ask the machine's product map about it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ClassifiedMessages))]
+    public void Only_a_saved_outcome_carries_a_product_slot(
+        string because,
+        string body,
+        NayaxSqsOutcomeKind expectedKind,
+        NayaxSqsRejectionReason expectedReason)
+    {
+        var outcome = NayaxSqsTransactionParser.Parse(body);
+        var carriesSlot = expectedKind
             is NayaxSqsOutcomeKind.CompletedSale
             or NayaxSqsOutcomeKind.CancelledOrDeclined;
 
         Assert.True(
-            saved == (outcome.Report is not null),
+            carriesSlot == (outcome.ProductSlot is not null),
             $"A message with {because} is {expectedKind} ({expectedReason}), so it must "
-                + $"{(saved ? "carry" : "carry no")} report.");
+                + $"{(carriesSlot ? "carry" : "carry no")} product slot.");
     }
 
     /// <summary>
@@ -314,15 +349,47 @@ public class NayaxSqsTransactionParserOutcomeTests
     }
 
     /// <summary>
-    /// A refunded transaction is recognised by its status id (<c>62</c>) and nothing else, and stays
-    /// unsupported here: reversing money is issue #1107.
+    /// A refunded transaction is recognised by its status id (<c>62</c>) and nothing else, and is its
+    /// own outcome since issue #1107. It carries the report - the three values that say which
+    /// transaction it is about - and <strong>no product slot</strong>: a refund resolves no product,
+    /// so there is nothing for the machine's product map to be asked.
     /// </summary>
     [Fact]
-    public void A_refund_is_recognised_by_its_status_and_is_unsupported()
+    public void A_refund_is_recognised_by_its_status_and_carries_a_report_with_no_slot()
     {
-        var outcome = NayaxSqsTransactionParser.Parse(Message(transactionStatusId: "62"));
+        var outcome = NayaxSqsTransactionParser.Parse(
+            NayaxSqsRealMessage.ReceivedWith(("Transaction Status ID", "62")));
 
-        Assert.Equal(NayaxSqsOutcomeKind.Unsupported, outcome.Kind);
-        Assert.Equal(NayaxSqsRejectionReason.Refunded, outcome.Reason);
+        Assert.Equal(NayaxSqsOutcomeKind.Refund, outcome.Kind);
+        Assert.Equal(NayaxSqsRejectionReason.None, outcome.Reason);
+
+        // No slot: a refund resolves no product, so it carries nothing the machine's product map
+        // could be asked about.
+        Assert.Null(outcome.ProductSlot);
+
+        // And the three values the comparison is made on, exactly as reported.
+        Assert.Equal(62, outcome.Report!.TransactionStatusId);
+        Assert.Equal(4100000001L, outcome.Report.TransactionID);
+        Assert.Equal(4200001L, outcome.Report.MachineID);
+        Assert.Equal(3.5000m, outcome.Report.SettlementValue);
+        Assert.Equal(4300001L, outcome.Report.NayaxProductId);
+    }
+
+    /// <summary>
+    /// <c>Original Transaction ID</c> is never read (AGENTS.md § Nayax contract verification): the
+    /// documentation does not say it is populated on a refund, and a refund delivered as a new
+    /// transaction pointing back at the original is explicitly a different design. A message carrying
+    /// one is classified exactly as it would be without it, and the transaction the refund is about
+    /// stays the message's own <c>TransactionId</c>.
+    /// </summary>
+    [Fact]
+    public void A_refund_carrying_an_original_transaction_id_is_classified_without_reading_it()
+    {
+        var outcome = NayaxSqsTransactionParser.Parse(
+            NayaxSqsRealMessage.ReceivedWith(
+                ("Transaction Status ID", "62"), ("Original Transaction ID", "4100000000")));
+
+        Assert.Equal(NayaxSqsOutcomeKind.Refund, outcome.Kind);
+        Assert.Equal(4100000001L, outcome.Report!.TransactionID);
     }
 }

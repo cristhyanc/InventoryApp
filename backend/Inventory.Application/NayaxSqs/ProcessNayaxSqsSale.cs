@@ -6,8 +6,8 @@ namespace Inventory.Application.NayaxSqs;
 
 /// <summary>
 /// Everything one Nayax SQS message causes inside <strong>one</strong> business (issue #1103): the
-/// gates it has to pass, the sale it is saved as, and the inventory-cost rebuilds that sale needs,
-/// ending in the one answer the reader acts on.
+/// gates it has to pass, the sale it is saved as or the refund it applies (issue #1107), and the
+/// inventory-cost rebuilds that sale needs, ending in the one answer the reader acts on.
 ///
 /// <para><strong>It is resolved from a service scope whose current business is already that
 /// business</strong>, published the way <c>ConnectedMachineSnapshotCommand</c> publishes its
@@ -98,18 +98,90 @@ public sealed class ProcessNayaxSqsSale
                 break;
         }
 
-        // Only the two saved kinds reach here, and the parser guarantees both carry a report and a
-        // classified status.
+        // Only the two saved kinds and the refund reach here, and the parser guarantees each of them
+        // carries a report and a classified status.
         var report = parsed.Report!;
 
-        var gate = await ResolveProviderFactsAsync(report, parsed.ProductSlot, cancellationToken)
+        // The refund resolves no product, so it is gated with no slot: the parser gives it none, and
+        // passing none here is what keeps a refund from ever reading a machine's product map.
+        var gate = await ResolveProviderFactsAsync(
+                report,
+                parsed.Kind is NayaxSqsOutcomeKind.Refund ? null : parsed.ProductSlot,
+                cancellationToken)
             .ConfigureAwait(false);
         if (gate is { } refusal)
         {
             return refusal;
         }
 
-        return await SaveAndReplayAsync(messageId, report, cancellationToken).ConfigureAwait(false);
+        // A refund takes the same gates as a sale and then a different write: the connection, the
+        // plan and the machine are statements about this business and this machine either way, and a
+        // refund applied for a business whose plan no longer includes the sales provider would be the
+        // one write that ignored a gate every other one honours.
+        return parsed.Kind is NayaxSqsOutcomeKind.Refund
+            ? await ApplyRefundAsync(messageId, report, cancellationToken).ConfigureAwait(false)
+            : await SaveAndReplayAsync(messageId, report, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The refund half (issue #1107): one write-locked transaction that moves a stored status-12 sale
+    /// of this business to status 62, once, with an audit row - and does nothing at all in every other
+    /// case.
+    ///
+    /// <para><strong>There is no rebuild drain afterwards and that is deliberate.</strong> A sale
+    /// consumes stock at status 12 and at status 62 alike, so this change moves no quantity, no
+    /// inventory value and no sale cost: there is nothing pending to wait for, and draining would
+    /// make a message's acknowledgement depend on another product's unrelated failure.</para>
+    ///
+    /// <para>An unmatched or contradicted refund is <em>permanent</em>, not transient: retrying
+    /// cannot make this business's stored sales say something else, and the dead-letter queue is where
+    /// a sample of a refund this application could not place belongs - which is the whole safety net
+    /// under the unverified assumption that a refund arrives as the same transaction id with a new
+    /// status.</para>
+    /// </summary>
+    private async Task<NayaxSqsProcessingOutcome> ApplyRefundAsync(
+        string messageId,
+        NayaxLastSalesReport report,
+        CancellationToken cancellationToken)
+    {
+        NayaxSqsRefundApplication applied;
+
+        try
+        {
+            applied = await _store
+                .ApplySqsRefundAsync(
+                    new NayaxSqsRefundInput(
+                        report.TransactionID,
+                        report.MachineID,
+                        report.SettlementValue,
+                        report.NayaxProductId,
+                        messageId,
+                        _clock.UtcNow),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (NotCancellation(exception, cancellationToken))
+        {
+            return NayaxSqsProcessingOutcome.Transient(NayaxSqsProcessingReason.StoreUnavailable);
+        }
+
+        if (applied is NayaxSqsRefundApplication.Applied or NayaxSqsRefundApplication.AlreadyRefunded)
+        {
+            await RecordSenderActivityAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return applied switch
+        {
+            NayaxSqsRefundApplication.Applied =>
+                NayaxSqsProcessingOutcome.Done(NayaxSqsProcessingReason.RefundApplied),
+            NayaxSqsRefundApplication.AlreadyRefunded =>
+                NayaxSqsProcessingOutcome.Done(NayaxSqsProcessingReason.RefundAlreadyApplied),
+            NayaxSqsRefundApplication.NoMatchingSale =>
+                NayaxSqsProcessingOutcome.Permanent(NayaxSqsProcessingReason.RefundUnmatched),
+            NayaxSqsRefundApplication.NotRefundable =>
+                NayaxSqsProcessingOutcome.Permanent(NayaxSqsProcessingReason.RefundNotApplicable),
+            _ => NayaxSqsProcessingOutcome.Permanent(NayaxSqsProcessingReason.RefundContradicted),
+        };
     }
 
     /// <summary>
