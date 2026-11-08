@@ -8260,7 +8260,11 @@ link at all. The same `cheapestSupplierSummaryView` and template serve the deskt
 narrow-screen card (`layout="card"`), so a View link can never differ between them. Dashboard and
 Needs Ordering compose `CheapestSupplierCellComponent` instead (see
 [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930))
-and are untouched by this: they keep the comparison-only Link column inside the popup.
+and are untouched by this: they keep the comparison-only Link column inside the popup. Since the
+owner's request of 9 November 2026, Needs Ordering also shows the same View links: the cell takes
+an opt-in `showProductLinks` input (off by default, so the Dashboard is unchanged) and renders one
+`View ↗` anchor per cheapest offer with a `productUrl`, naming the supplier in a tie, only while the
+cell shows a cheapest price. The anchors sit beside the cell's comparison button, never inside it.
 
 The general Cheapest supplier guidance (observed prices, stock may differ) is one
 `HelpToggletipComponent` on the column heading and on each card rather than a note in every cell.
