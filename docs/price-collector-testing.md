@@ -102,10 +102,15 @@ no pack field, so `prompt.md` has Claude take the pack from the count in the tit
 (`Kinder Bueno Bar 43g`). Without it a single bar had no per-unit price and could never be the
 cheapest. A pack or multipack whose count the title does not state still has no pack quantity.
 
-Kmart and BIG W are capped at **10 results on 1 page** per search, in every run (owner decision,
-1 November 2026). Both actors charge per result: full run 41264033898 asked for 50 and 48 and cost
-about US$0.14 per Kmart and up to US$0.21 per BIG W search (US$1.33 of the run's US$1.35 Apify
-spend, from the Apify Console), while every match they returned was in the top 5 of its search.
+Kmart and BIG W are capped at **5 results on 1 page** per search, in every run (owner decisions,
+1 November 2026 for 10 results and 7 November 2026 for 5). Both actors charge per result: full run
+41264033898 asked for 50 and 48 and cost about US$0.14 per Kmart and up to US$0.21 per BIG W search
+(US$1.33 of the run's US$1.35 Apify spend, from the Apify Console), while every match they returned
+was in the top 5 of its search. At 5 results a search costs about US$0.04 on either actor (start fee
+plus 5 results), so 70 products cost about US$2.70-2.80 a run. Each actor's `maxItems` is one total
+for the whole call, not a per-search limit, so the collector keeps one call per search: putting every
+search in one call would either stop after 5 products or, with a larger total, return a full 48-result
+page per search and cost more.
 Varnmill cost about US$0.02 for 15 searches and keeps its 50-result pages.
 
 BIG W and Kmart are searched **once a week** (owner decision, 1 November 2026): BIG W on Thursdays,

@@ -248,9 +248,11 @@ public class OperatorReadableFinancialFigureTests
         "POST api/SupplierOrders/{id:int}/cancel",
         // Status codes and a ProblemDetails, plus - since issue #843 - the recent-sync answer
         // `NayaxSalesRecentlySyncedResponse`, which carries one flag and the instant the sales last
-        // finished synchronizing. Neither is a sales, revenue, profit, margin or valuation figure:
-        // it says *when* the figures the Dashboard already shows this Operator were read, which is
-        // the same freshness statement the page itself renders.
+        // finished synchronizing, and - since issue #1106 - whether those sales arrive live from the
+        // SQS queue, when that queue last delivered and why it is not live. None of them is a sales,
+        // revenue, profit, margin or valuation figure: together they say *when and how* the figures
+        // the Dashboard already shows this Operator were read, which is the same freshness statement
+        // the page itself renders.
         "POST api/nayax-sales-sync",
         "PUT api/Categories/{id:long}",
         "PUT api/Products/{id:long}",

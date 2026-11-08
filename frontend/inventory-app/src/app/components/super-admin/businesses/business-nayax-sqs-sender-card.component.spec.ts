@@ -12,6 +12,12 @@ const recorded: SuperAdminNayaxSqsSender = {
   awsSenderId: 'AIDAEXAMPLEUSERID123',
   isEnabled: true,
   lastMessageReceivedAtUtc: '2026-11-05T22:10:00Z',
+  lastReconciliationSucceededAtUtc: '2026-11-05T21:00:00Z',
+  readerHealth: {
+    lastSuccessfulPollUtc: '2026-11-05T22:11:40Z',
+    consecutivePollFailures: 0,
+    deadLetterQueueDepth: 0
+  },
   revision: 3,
   createdAtUtc: '2026-11-01T01:00:00Z',
   updatedAtUtc: '2026-11-06T03:45:00Z'
@@ -81,12 +87,61 @@ describe('BusinessNayaxSqsSenderCardComponent (issue #1101)', () => {
     expect(text(host, 'last-message')).toContain('9:10');
   });
 
+  /**
+   * The reader health and the business's own last successful reconciliation (issue #1106). They are
+   * on this card because together with an enabled sender they are exactly what decides whether that
+   * business's Dashboard stops calling Nayax on load - so a recorded sender that is having no such
+   * effect can be explained from here.
+   */
+  it('shows the reader health and the last successful reconciliation in Sydney time', async () => {
+    const { host } = await render({ get: () => of(recorded) });
+
+    // 2026-11-05T21:00Z is 08:00 on 6 November in Sydney (AEDT).
+    expect(text(host, 'last-reconciliation')).toContain('06/11/2026');
+    expect(text(host, 'last-reconciliation')).toContain('8:00');
+
+    // 22:11:40Z is 09:11 on the 6th.
+    expect(text(host, 'reader-last-poll')).toContain('06/11/2026');
+    expect(text(host, 'reader-last-poll')).toContain('9:11');
+
+    expect(text(host, 'reader-failures')).toBe('0');
+    expect(text(host, 'dead-letter-depth')).toBe('0');
+  });
+
+  /**
+   * A reader that has never polled, failures piling up, no dead-letter depth read and a business
+   * whose reconciliation has never succeeded: each is reported as what it is, and the depth reads
+   * "Unknown" rather than zero - which would say the opposite of what is known.
+   */
+  it('reports an unstarted reader and a failing one without inventing a zero', async () => {
+    const { host } = await render({
+      get: () =>
+        of({
+          ...recorded,
+          lastReconciliationSucceededAtUtc: null,
+          readerHealth: {
+            lastSuccessfulPollUtc: null,
+            consecutivePollFailures: 3,
+            deadLetterQueueDepth: null
+          }
+        })
+    });
+
+    expect(text(host, 'last-reconciliation')).toBe('Never');
+    expect(text(host, 'reader-last-poll')).toBe('Never');
+    expect(text(host, 'reader-failures')).toBe('3');
+    expect(text(host, 'dead-letter-depth')).toBe('Unknown');
+  });
+
   it('shows None and Never for a business nothing has been recorded for', async () => {
     const { host } = await render({ get: () => throwError(() => notFound()) });
 
     expect(text(host, 'current-sender')).toBe('None');
     expect(text(host, 'current-status')).toBe('Off');
     expect(text(host, 'last-message')).toBe('Never');
+    expect(text(host, 'last-reconciliation')).toBe('Never');
+    expect(text(host, 'reader-last-poll')).toBe('Never');
+    expect(text(host, 'dead-letter-depth')).toBe('Unknown');
     // A 404 is not an error here, so no load failure is shown.
     expect(host.textContent).not.toContain('Unable to load');
   });

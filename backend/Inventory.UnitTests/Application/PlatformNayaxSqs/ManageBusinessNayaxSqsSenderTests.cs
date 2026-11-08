@@ -1,3 +1,4 @@
+using Inventory.Application.NayaxSqs;
 using Inventory.Application.PlatformNayaxSqs;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
@@ -448,6 +449,7 @@ public class ManageBusinessNayaxSqsSenderTests
             FakeAuthenticatedActorAccessor.NotAuthenticated(),
             store,
             new FakePlatformNayaxSqsSenderAudit(),
+            new NayaxSqsReaderHealth(),
             new FakeClock(DecidedAt));
 
         await Assert.ThrowsAsync<BusinessAccessDeniedException>(() => subject.SetAsync(
@@ -500,6 +502,7 @@ public class ManageBusinessNayaxSqsSenderTests
             senderId,
             isEnabled,
             LastMessageReceivedAtUtc: DecidedAt.AddDays(-1),
+            LastReconciliationSucceededAtUtc: DecidedAt.AddHours(-1),
             revision,
             CreatedAtUtc: DecidedAt.AddDays(-7),
             UpdatedAtUtc: DecidedAt.AddDays(-2));
@@ -511,5 +514,6 @@ public class ManageBusinessNayaxSqsSenderTests
             FakeAuthenticatedActorAccessor.Identified(Administrator()),
             store,
             audit ?? new FakePlatformNayaxSqsSenderAudit(),
+            new NayaxSqsReaderHealth(),
             new FakeClock(DecidedAt));
 }

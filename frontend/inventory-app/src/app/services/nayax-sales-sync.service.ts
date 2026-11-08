@@ -5,24 +5,39 @@ import { catchError } from 'rxjs/operators';
 import { ConfigService } from './config.service';
 
 /**
+ * Why a business's sales are not arriving live from the shared Nayax SQS queue, exactly as the API
+ * publishes it (issue #1106). A union of the server's own codes rather than a free string, so a
+ * caller that branches on one cannot invent a sixth.
+ */
+export type NayaxSqsNotLiveReason =
+  | 'NoSender'
+  | 'SenderDisabled'
+  | 'ReaderNotPolling'
+  | 'ReaderFailing'
+  | 'ReconciliationStale';
+
+/**
  * What the synchronization answered (issue #843). The endpoint has two success answers and they
- * mean different things to the Dashboard: `204` is "it ran", and `200` with a body is "this business
- * synchronized less than three minutes ago, so nothing was read" - which is not a failure and not
- * the `429` run limit either.
+ * mean different things to the Dashboard: `204` is "it ran", and `200` with a body is "there was
+ * nothing to read" - which is not a failure and not the `429` run limit either.
  *
  * Since issue #1104 there is a third answer that is also not a failure: `409`, "a sync for this
  * business is already running". It reaches the caller as a skip for the reason the `200` does - the
  * figures loaded next are the ones the run in progress is producing - and {@link wasBusy} is what
  * tells the two apart for anything that needs to.
  *
- * `lastSyncedAtUtc` is the server's own instant and is only carried by the `200` skip; for a run,
- * the caller knows when it finished because it was waiting for it, and a `409` carries no instant at
- * all because the run that holds the lock has not finished yet.
+ * Since issue #1106 a `200` has a second reason: this business's sales arrive **live from SQS**, so
+ * the server read nothing at all. {@link liveViaSqs} is what tells that apart from the three-minute
+ * skip, and the two are never both true.
+ *
+ * `lastSyncedAtUtc` is the server's own instant and is only carried by the recent-sync skip; for a
+ * run, the caller knows when it finished because it was waiting for it, and a `409` carries no
+ * instant at all because the run that holds the lock has not finished yet.
  */
 export interface NayaxSalesSyncResult {
   /**
    * Whether the server skipped the run - because the sales were already recent, or because a sync
-   * for this business was already running.
+   * for this business was already running. It is `false` for the live skip, which is its own answer.
    */
   wasRecentlySynced: boolean;
   /**
@@ -32,12 +47,31 @@ export interface NayaxSalesSyncResult {
   wasBusy: boolean;
   /** When the last fully successful synchronization finished, as a true instant, or `null`. */
   lastSyncedAtUtc: string | null;
+  /**
+   * Whether this business's sales arrive live from the shared Nayax SQS queue, so nothing was read,
+   * written or rationed (issue #1106).
+   */
+  liveViaSqs: boolean;
+  /**
+   * When a message from this business's SQS sender was last accepted, or `null` when none ever has -
+   * a queue that has delivered nothing yet, which is still live. It is never a condition of being
+   * live: a quiet queue is not a failure.
+   */
+  lastSqsMessageReceivedAtUtc: string | null;
+  /**
+   * Why the business is not live via SQS, or `null` when it is live or when the server made no live
+   * decision at all - which is every forced Refresh.
+   */
+  sqsNotLiveReason: NayaxSqsNotLiveReason | null;
 }
 
 /** The `200` body of a skipped run, exactly as `NayaxSalesRecentlySyncedResponse` publishes it. */
 interface NayaxSalesRecentlySyncedBody {
   wasRecentlySynced?: boolean;
-  lastSyncedAtUtc?: string;
+  lastSyncedAtUtc?: string | null;
+  liveViaSqs?: boolean;
+  lastSqsMessageReceivedAtUtc?: string | null;
+  sqsNotLiveReason?: NayaxSqsNotLiveReason | null;
 }
 
 /**
@@ -74,11 +108,23 @@ export class NayaxSalesSyncService {
       map((body) => ({
         wasRecentlySynced: body?.wasRecentlySynced === true,
         wasBusy: false,
-        lastSyncedAtUtc: body?.lastSyncedAtUtc ?? null
+        lastSyncedAtUtc: body?.lastSyncedAtUtc ?? null,
+        liveViaSqs: body?.liveViaSqs === true,
+        lastSqsMessageReceivedAtUtc: body?.lastSqsMessageReceivedAtUtc ?? null,
+        sqsNotLiveReason: body?.sqsNotLiveReason ?? null
       })),
       catchError((error: unknown) => {
         if (error instanceof HttpErrorResponse && error.status === 409) {
-          return of({ wasRecentlySynced: true, wasBusy: true, lastSyncedAtUtc: null });
+          return of({
+            wasRecentlySynced: true,
+            wasBusy: true,
+            lastSyncedAtUtc: null,
+            // A busy run is not a statement about the queue: the server made no live decision, so
+            // nothing here claims one either.
+            liveViaSqs: false,
+            lastSqsMessageReceivedAtUtc: null,
+            sqsNotLiveReason: null
+          });
         }
         throw error;
       })

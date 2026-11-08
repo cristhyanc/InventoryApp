@@ -689,9 +689,15 @@ describe('verified retailer input contracts', () => {
       assert.match(answer.reason, new RegExp(`${field} may be at most ${cap}`));
     });
 
-    it(`caps ${actor} at 10 results on one page, because it charges per result (owner decision, 1 November 2026)`, () => {
-      assert.equal(limits.actors[actor].pageSize, 10);
+    it(`caps ${actor} at 5 results on one page, because it charges per result (owner decisions, 1 and 7 November 2026)`, () => {
+      assert.equal(limits.actors[actor].pageSize, 5);
       assert.equal(limits.actors[actor].maxPages, 1);
+      const allowed = decideApify({ actor, input: { ...query, maxItems: 5 } }, { rules: confirming(actor) });
+      assert.equal(allowed.decision, 'allow');
+      assert.equal(inputOf(allowed).maxItems, 5);
+      const refused = decideApify({ actor, input: { ...query, maxItems: 6 } }, { rules: confirming(actor) });
+      assert.equal(refused.decision, 'deny');
+      assert.match(refused.reason, /maxItems/);
     });
 
     it(`refuses a zero or malformed ${field} for ${actor}, which these actors read as every page`, () => {
