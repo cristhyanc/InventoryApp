@@ -5,6 +5,11 @@ import {
   SuperAdminMasterProductsService
 } from '../../../services/super-admin-master-products.service';
 import { MasterProductSizeUnit } from '../../../services/super-admin-price-catalogue-review.service';
+import {
+  SuperAdminSupplierPreset,
+  SuperAdminSupplierPresetsService,
+  SupplierPriceConnector
+} from '../../../services/super-admin-supplier-presets.service';
 import { MasterProductFormComponent } from './master-product-form.component';
 
 function product(overrides: Partial<SuperAdminMasterProduct> = {}): SuperAdminMasterProduct {
@@ -17,17 +22,22 @@ function product(overrides: Partial<SuperAdminMasterProduct> = {}): SuperAdminMa
     createdAtUtc: '2026-10-28T00:00:00Z',
     updatedAtUtc: '2026-10-31T01:02:03Z',
     listingCounts: { proposed: 1, confirmed: 0, needsReview: 0, rejected: 0, total: 1 },
+    supplierSearchTerms: [],
     ...overrides
   };
 }
 
 async function render(
   service: Partial<SuperAdminMasterProductsService>,
-  editing: SuperAdminMasterProduct | null = null
+  editing: SuperAdminMasterProduct | null = null,
+  presets: Partial<SuperAdminSupplierPresetsService> = { list: jest.fn(() => of([])) }
 ) {
   await TestBed.configureTestingModule({
     imports: [MasterProductFormComponent],
-    providers: [{ provide: SuperAdminMasterProductsService, useValue: service }]
+    providers: [
+      { provide: SuperAdminMasterProductsService, useValue: service },
+      { provide: SuperAdminSupplierPresetsService, useValue: presets }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(MasterProductFormComponent);
@@ -386,5 +396,84 @@ describe('MasterProductFormComponent (issue #1024)', () => {
     const text = host.textContent ?? '';
     expect(text).not.toMatch(/\bbusinesses?\b/i);
     expect(text).not.toMatch(/tracking/i);
+  });
+
+  describe('supplier search terms (issue #1138)', () => {
+    const jbMetroSite: SuperAdminSupplierPreset = {
+      id: 12,
+      name: 'JB Metro Bankstown',
+      priceConnector: SupplierPriceConnector.JbMetro
+    } as SuperAdminSupplierPreset;
+
+    const stored = {
+      supplierPresetId: null,
+      priceConnector: SupplierPriceConnector.JbMetro,
+      searchPhrases: ['Smiths Plain', 'Smiths'],
+      flavourAliases: ['Plain']
+    };
+
+    it('shows the stored entries on a correction and offers nothing on a create', async () => {
+      const editing = await render({}, product({ supplierSearchTerms: [stored] }), {
+        list: jest.fn(() => of([jbMetroSite]))
+      });
+      const phrases = Array.from(
+        editing.host.querySelectorAll<HTMLInputElement>('[data-testid="search-terms-phrase"]')
+      );
+      await editing.fixture.whenStable();
+      expect(phrases.map((input) => input.value)).toEqual(['Smiths Plain', 'Smiths']);
+      expect(testId(editing.host, 'search-terms-help').textContent).toContain('separate search');
+
+      TestBed.resetTestingModule();
+      const adding = await render({});
+      expect(adding.host.querySelector('[data-testid="search-terms"]')).toBeNull();
+    });
+
+    it('leaves the stored entries alone when nobody changed them', async () => {
+      const update = jest.fn(() => of(product()));
+      const { component } = await render({ update }, product({ supplierSearchTerms: [stored] }));
+
+      component.submit();
+
+      expect(update).toHaveBeenCalledWith(7, expect.not.objectContaining({ supplierSearchTerms: expect.anything() }));
+    });
+
+    it('sends the whole edited list with the correction', async () => {
+      const update = jest.fn(() => of(product()));
+      const { component } = await render({ update }, product({ supplierSearchTerms: [stored] }));
+
+      const reordered = [{ ...stored, searchPhrases: ['Smiths', 'Smiths Plain'] }];
+      component.searchTermsChanged(reordered);
+      component.submit();
+
+      expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ supplierSearchTerms: reordered }));
+
+      component.searchTermsChanged([]);
+      component.submit();
+      expect(update).toHaveBeenLastCalledWith(7, expect.objectContaining({ supplierSearchTerms: [] }));
+    });
+
+    it('withholds an entry that names neither a supplier nor a connector', async () => {
+      const update = jest.fn(() => of(product()));
+      const { component, fixture, host } = await render({ update }, product());
+
+      component.searchTermsChanged([
+        { supplierPresetId: null, priceConnector: null, searchPhrases: ['Smiths'], flavourAliases: [] }
+      ]);
+      component.submit();
+      fixture.detectChanges();
+
+      expect(update).not.toHaveBeenCalled();
+      expect(testId(host, 'master-product-form-error').textContent).toContain('Choose a supplier or a connector');
+    });
+
+    it('still lets connector entries be edited when the supplier list cannot be read', async () => {
+      const { fixture, host } = await render({}, product(), {
+        list: jest.fn(() => throwError(() => new Error('down')))
+      });
+      fixture.detectChanges();
+
+      expect(testId(host, 'master-product-form-presets-error').textContent).toContain('connector entries');
+      expect(host.querySelector('[data-testid="search-terms-add-entry"]')).not.toBeNull();
+    });
   });
 });

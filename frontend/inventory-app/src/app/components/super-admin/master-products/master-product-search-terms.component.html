@@ -1,0 +1,137 @@
+<section class="mt-4" data-testid="search-terms">
+  <h3 class="text-sm font-semibold">Supplier search terms</h3>
+  <p class="text-sm value-muted mt-1" data-testid="search-terms-help">
+    Use these when a supplier names this product differently. Each search phrase is a separate search, tried in order:
+    the second phrase is searched only when the first finds nothing, or finds nothing that is this product. Flavour
+    aliases are other words the supplier uses for this product's flavour (for example Plain for Original). They are
+    only used to recognise the product in results, never as search words, and the brand, type and size must still
+    match. An entry for one supplier replaces the entry for its connector. Products without an entry are searched as
+    before.
+  </p>
+
+  @for (row of rows; track $index; let i = $index) {
+    <fieldset class="mt-3 rounded border p-3" data-testid="search-terms-entry">
+      <legend class="sr-only">Supplier search entry {{ i + 1 }}</legend>
+      <div class="flex flex-wrap items-end gap-3">
+        <label class="text-sm" [for]="'search-terms-target-' + i">
+          Applies to
+          <select
+            class="ml-2"
+            [id]="'search-terms-target-' + i"
+            [ngModel]="row.target"
+            [ngModelOptions]="{ standalone: true }"
+            (ngModelChange)="setTarget(i, $event)"
+            data-testid="search-terms-target"
+          >
+            <option value="" disabled>Choose a supplier or connector</option>
+            @for (option of targetOptions; track option.key) {
+              <option [value]="option.key" [disabled]="isTaken(option.key, i)">{{ option.label }}</option>
+            }
+          </select>
+        </label>
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          (click)="removeEntry(i)"
+          data-testid="search-terms-remove-entry"
+        >
+          Remove entry
+        </button>
+      </div>
+
+      <div class="mt-2">
+        <p class="text-sm">Search phrases, in search order</p>
+        @for (phrase of row.phrases; track $index; let p = $index) {
+          <div class="mt-1 flex flex-wrap items-center gap-2">
+            <label class="text-sm" [for]="'search-terms-phrase-' + i + '-' + p">
+              Phrase {{ p + 1 }}
+              <input
+                class="ml-2"
+                type="text"
+                maxlength="100"
+                autocomplete="off"
+                [id]="'search-terms-phrase-' + i + '-' + p"
+                [ngModel]="phrase"
+                [ngModelOptions]="{ standalone: true }"
+                (ngModelChange)="setPhrase(i, p, $event)"
+                data-testid="search-terms-phrase"
+              />
+            </label>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              [disabled]="p === 0"
+              (click)="movePhraseUp(i, p)"
+              [attr.aria-label]="'Move phrase ' + (p + 1) + ' up'"
+              data-testid="search-terms-phrase-up"
+            >
+              Move up
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              (click)="removePhrase(i, p)"
+              [attr.aria-label]="'Remove phrase ' + (p + 1)"
+              data-testid="search-terms-phrase-remove"
+            >
+              Remove
+            </button>
+          </div>
+        }
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm mt-1"
+          [disabled]="row.phrases.length >= maxPhrases"
+          (click)="addPhrase(i)"
+          data-testid="search-terms-add-phrase"
+        >
+          Add phrase
+        </button>
+      </div>
+
+      <div class="mt-2">
+        <p class="text-sm">Flavour aliases</p>
+        @for (alias of row.aliases; track $index; let a = $index) {
+          <div class="mt-1 flex flex-wrap items-center gap-2">
+            <label class="text-sm" [for]="'search-terms-alias-' + i + '-' + a">
+              Alias {{ a + 1 }}
+              <input
+                class="ml-2"
+                type="text"
+                maxlength="60"
+                autocomplete="off"
+                [id]="'search-terms-alias-' + i + '-' + a"
+                [ngModel]="alias"
+                [ngModelOptions]="{ standalone: true }"
+                (ngModelChange)="setAlias(i, a, $event)"
+                data-testid="search-terms-alias"
+              />
+            </label>
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              (click)="removeAlias(i, a)"
+              [attr.aria-label]="'Remove alias ' + (a + 1)"
+              data-testid="search-terms-alias-remove"
+            >
+              Remove
+            </button>
+          </div>
+        }
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm mt-1"
+          [disabled]="row.aliases.length >= maxAliases"
+          (click)="addAlias(i)"
+          data-testid="search-terms-add-alias"
+        >
+          Add alias
+        </button>
+      </div>
+    </fieldset>
+  }
+
+  <button type="button" class="btn btn-secondary btn-sm mt-3" (click)="addEntry()" data-testid="search-terms-add-entry">
+    Add supplier search entry
+  </button>
+</section>

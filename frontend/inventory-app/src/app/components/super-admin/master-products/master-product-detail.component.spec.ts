@@ -50,7 +50,8 @@ function detail(listings: readonly SuperAdminMasterProductListing[]): SuperAdmin
         needsReview: 0,
         rejected: 0,
         total: listings.length
-      }
+      },
+      supplierSearchTerms: []
     },
     listings
   };

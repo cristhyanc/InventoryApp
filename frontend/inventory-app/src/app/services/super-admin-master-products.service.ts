@@ -3,6 +3,30 @@ import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { ConfigService } from './config.service';
 import { MasterProductSizeUnit, SupplierListingMatchStatus, SupplierPriceBasis } from './super-admin-price-catalogue-review.service';
+import { SupplierPriceConnector } from './super-admin-supplier-presets.service';
+
+/** The most search phrases one entry may hold: the collector never searches more than two wordings. */
+export const MAX_SEARCH_PHRASES_PER_ENTRY = 2;
+
+/** The most flavour aliases one entry may hold (backend `SupplierSearchTermsPolicy`). */
+export const MAX_FLAVOUR_ALIASES_PER_ENTRY = 5;
+
+/**
+ * One master product's supplier search terms for one supplier, or for every supplier on one connector
+ * (issue #1138): the phrases the collector searches with, in order, and the words that supplier uses
+ * for the product's flavour.
+ *
+ * Exactly one of `supplierPresetId` and `priceConnector` is set. A supplier's own entry replaces its
+ * connector's entry as a whole. Each phrase is its own search; an alias is only ever used to decide
+ * whether a result is this product, never as search words. The server trims, deduplicates and checks
+ * every value and answers what it stored.
+ */
+export interface SupplierSearchTerms {
+  readonly supplierPresetId: number | null;
+  readonly priceConnector: SupplierPriceConnector | null;
+  readonly searchPhrases: readonly string[];
+  readonly flavourAliases: readonly string[];
+}
 
 /**
  * The default page the server serves when a request asks for no size, and the largest it will serve
@@ -43,6 +67,8 @@ export interface SuperAdminMasterProduct {
   readonly createdAtUtc: string;
   readonly updatedAtUtc: string;
   readonly listingCounts: MasterProductListingCounts;
+  /** The supplier search terms (issue #1138), in the order saved; empty when there are none. */
+  readonly supplierSearchTerms: readonly SupplierSearchTerms[];
 }
 
 /**
@@ -125,6 +151,11 @@ export interface NewMasterProduct {
  */
 export interface MasterProductCorrection extends NewMasterProduct {
   readonly lastChangedAtUtc: string;
+  /**
+   * The product's supplier search terms as a whole (issue #1138): an empty array removes them all,
+   * and leaving the field out keeps what is stored.
+   */
+  readonly supplierSearchTerms?: readonly SupplierSearchTerms[];
 }
 
 /**
