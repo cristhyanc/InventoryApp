@@ -370,14 +370,14 @@ search wording for one supplier, or for every supplier on one connector, without
 In **Super Admin → Master products**, open the product and press **Edit**. Under **Supplier search
 terms**:
 
-1. Press **Add entry** and choose a target: one supplier (for example *JB Metro Penrith*) or a whole
+1. Press **Add supplier search entry** and choose a target: one supplier (for example *JB Metro Penrith*) or a whole
    connector (for example *All JB Metro suppliers*, which covers all three JB Metro sites and no
    other connector).
 2. Add up to **two search phrases**, in the order they should be tried. A third is refused by the
    page and by the API, because the collector never searches more than two wordings for one product
-   at one supplier. Use **Move up** to reorder.
+   at one supplier. Use **Move up** to reorder and **Remove** to drop one.
 3. Add up to five **flavour aliases**: the supplier's other word for the product's flavour.
-4. Press **Save**. Removing every entry and saving clears the product's configuration.
+4. Press **Save**. Pressing **Remove entry** on every entry and saving clears the product's configuration.
 
 Phrases and aliases are trimmed, inner spaces are collapsed, blanks are dropped and a repeat that
 differs only by case is dropped. Only one entry per supplier and one per connector is allowed.
