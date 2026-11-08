@@ -167,14 +167,20 @@ public sealed class ResolveMachineStockDuplicate
         {
             // Returned without committing: the transaction's disposal discards the movement and the
             // resolution state together, exactly as they would have been written together.
-            return new(
-                locked.Id,
-                NayaxStockEventApplyOutcome.Error,
-                "Failed to apply this event; no inventory movement was recorded.",
-                null);
+            return ApplyMachineStockSync.Failed(locked.Id);
         }
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A failed commit wrote nothing either: the disposal rolls the movement and the
+            // resolution back together and the event stays unresolved, so it reports the same
+            // failure. A cancelled request is not caught here.
+            return ApplyMachineStockSync.Failed(locked.Id);
+        }
 
         return new(
             locked.Id,

@@ -16218,8 +16218,8 @@ that meaning.
    workflows and retries. A negative event is never "applied" at all - it is retained as a
    discrepancy/shrinkage candidate for review and never increases storage.
 
-   A failure while writing one product's batch (for example, a costing-rebuild data-quality
-   failure) rolls back that product's whole transaction, so no event is left marked processed
+   A failure while writing or committing one product's batch (for example, a costing-rebuild
+   data-quality failure, or a commit the database refuses) rolls back that product's whole transaction, so no event is left marked processed
    without its inventory movement: every event whose write that transaction had staged reports the
    `Error` outcome with no movement id, and the other products are applied independently. An event
    the policy already refused keeps its own outcome - including an `InsufficientStock` decided
@@ -16227,7 +16227,10 @@ that meaning.
    rollback has since restored that stock; the event is still `Unprocessed` and is simply retried.
    The "Apply as separate restock" duplicate resolution of step 6 writes through the same
    write-locked save and re-reads and revalidates the event and the product inside it, so it cannot
-   record a second movement when it races another apply of the same event either.
+   record a second movement when it races another apply of the same event either; a failed write
+   or commit there returns the same `Error` and leaves the event unresolved, so it can be chosen
+   again. A cancelled request is the one failure that is not reported per event: it stops the
+   apply.
 8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
    page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
    [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)

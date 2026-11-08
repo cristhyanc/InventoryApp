@@ -28,8 +28,8 @@ namespace Inventory.Application.MachineStockSync;
 /// themselves: every accepted refill reduces the storage available to the next event before its
 /// eligibility is decided, so a batch can never take more units out of storage than it holds.</para>
 ///
-/// <para><strong>A failure is scoped to its product.</strong> A movement that cannot be recorded or
-/// a fatal costing data-quality issue leaves that product's transaction uncommitted, so every event
+/// <para><strong>A failure is scoped to its product.</strong> A movement that cannot be recorded,
+/// a fatal costing data-quality issue or a commit that fails leaves that product's transaction uncommitted, so every event
 /// whose write it had staged reports the established <c>Error</c> outcome with no movement id, and
 /// the other products are applied independently. An event the policy already refused keeps its own
 /// outcome - including <c>InsufficientStock</c>, which was decided against the storage left at the
@@ -155,7 +155,7 @@ public sealed class ApplyMachineStockSync
                 NayaxDuplicateResolution.None,
                 MatchedManualStockAdjustmentId: null));
 
-            available = availableToThisEvent!.Value - state.ParsedQuantity!.Value;
+            available = availableToThisEvent!.Value - state.ParsedQuantity.Value;
 
             // The movement id is filled in from the write below; until it commits there is none.
             results[eventId] = new(eventId, NayaxStockEventApplyOutcome.Applied, ruling.Message, null);
@@ -174,18 +174,24 @@ public sealed class ApplyMachineStockSync
         {
             // Returned without committing: the transaction's disposal is what discards every write
             // this batch staged, so each of them reports the same failure and no movement id.
-            foreach (var refill in accepted)
-            {
-                results[refill.EventId] = new(
-                    refill.EventId,
-                    NayaxStockEventApplyOutcome.Error,
-                    "Failed to apply this event; no inventory movement was recorded.",
-                    null);
-            }
-
+            ReportFailed(accepted, results);
             return;
         }
 
+        try
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A commit that fails is the same failure as a write that fails: nothing this batch
+            // staged was committed, the transaction's disposal rolls it back, and the next product
+            // is still applied. A cancelled request is not caught here and stops the whole apply.
+            ReportFailed(accepted, results);
+            return;
+        }
+
+        // Only now are the movement ids real: they are reported once the batch has committed.
         foreach (var applied in application.Applied)
         {
             results[applied.EventId] = results[applied.EventId] with
@@ -193,9 +199,20 @@ public sealed class ApplyMachineStockSync
                 StockAdjustmentId = applied.StockAdjustmentId,
             };
         }
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    private static void ReportFailed(
+        IEnumerable<MachineStockRefillRequest> accepted, Dictionary<int, NayaxStockEventApplyResultDto> results)
+    {
+        foreach (var eventId in accepted.Select(refill => refill.EventId))
+        {
+            results[eventId] = Failed(eventId);
+        }
+    }
+
+    /// <summary>The established outcome for an event whose write was attempted but not committed.</summary>
+    internal static NayaxStockEventApplyResultDto Failed(int eventId) =>
+        new(eventId, NayaxStockEventApplyOutcome.Error, "Failed to apply this event; no inventory movement was recorded.", null);
 
     private static NayaxStockEventApplyResultDto NotFound(int eventId) =>
         new(eventId, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
