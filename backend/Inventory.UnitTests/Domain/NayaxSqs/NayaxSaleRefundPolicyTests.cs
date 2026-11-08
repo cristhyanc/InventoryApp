@@ -31,24 +31,71 @@ public class NayaxSaleRefundPolicyTests
     }
 
     /// <summary>
-    /// A sale already at <c>62</c> answers "already refunded" and is never compared into a different
-    /// answer. That ordering <em>is</em> the idempotency: a redelivery of the message that applied
-    /// the refund cannot produce a second status change or a second audit row.
+    /// A <em>genuine</em> redelivery - the same values delivered again against a sale already at
+    /// <c>62</c> - answers "already refunded". That is the idempotency: it cannot produce a second
+    /// status change or a second audit row.
     /// </summary>
     [Fact]
-    public void A_refund_of_an_already_refunded_sale_changes_nothing()
+    public void A_redelivery_of_the_refund_that_was_applied_changes_nothing()
     {
         Assert.Equal(
             NayaxSaleRefundDecision.AlreadyRefunded,
             NayaxSaleRefundPolicy.Decide(NayaxTransactionStatusIds.Refunded, Stored(), Message()).Decision);
 
-        // Even with values that would otherwise contradict: the sale is refunded either way, and a
-        // second message is not a reason to reopen a settled financial status.
+        // A message that stated no product id is still a redelivery: a value missing on either side is
+        // not compared and is no disagreement about anything.
         Assert.Equal(
             NayaxSaleRefundDecision.AlreadyRefunded,
             NayaxSaleRefundPolicy
-                .Decide(NayaxTransactionStatusIds.Refunded, Stored(), Message(machineId: 9999))
+                .Decide(NayaxTransactionStatusIds.Refunded, Stored(), Message(nayaxProductId: null))
                 .Decision);
+    }
+
+    /// <summary>
+    /// <strong>A second refund message that disagrees with an already refunded sale is a
+    /// contradiction, not a redelivery.</strong>
+    ///
+    /// <para>Answering "already refunded" before looking at the compared fields swallowed it: the
+    /// reader acknowledges that outcome, so a status-<c>62</c> message naming a different machine,
+    /// amount or product for a transaction already refunded disappeared from the queue instead of
+    /// being kept for dead-letter review. Under a delivery shape Nayax does not document, that
+    /// message is the evidence that the assumption is wrong, and losing it is the one thing this
+    /// policy exists to prevent.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("another machine", 9999L, 3.5, NayaxProductId)]
+    [InlineData("a smaller amount", MachineId, 1.75, NayaxProductId)]
+    [InlineData("another product", MachineId, 3.5, 7777L)]
+    public void A_second_refund_message_that_disagrees_with_a_refunded_sale_is_a_contradiction(
+        string because, long machineId, double settlementValue, long nayaxProductId)
+    {
+        var decided = NayaxSaleRefundPolicy.Decide(
+            NayaxTransactionStatusIds.Refunded,
+            Stored(),
+            Message(machineId, (decimal)settlementValue, nayaxProductId));
+
+        Assert.True(
+            decided.Decision == NayaxSaleRefundDecision.Contradicted,
+            $"A second refund message naming {because} must be kept for dead-letter review, "
+                + $"but the policy decided {decided.Decision}.");
+    }
+
+    /// <summary>
+    /// And the contradiction is decided first for <em>every</em> stored status: a message that
+    /// disagrees about what was sold is not plainly about the sale it names, so the stored status has
+    /// nothing to decide.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxTransactionStatusIds.Completed)]
+    [InlineData(NayaxTransactionStatusIds.Refunded)]
+    [InlineData(26)]
+    [InlineData(250)]
+    [InlineData(null)]
+    public void A_contradiction_is_decided_before_the_stored_status(int? storedStatusId)
+    {
+        Assert.Equal(
+            NayaxSaleRefundDecision.Contradicted,
+            NayaxSaleRefundPolicy.Decide(storedStatusId, Stored(), Message(machineId: 9999)).Decision);
     }
 
     /// <summary>

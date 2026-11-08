@@ -107,9 +107,11 @@ public enum NayaxSqsProcessingReason
     RefundApplied,
 
     /// <summary>
-    /// A refund for a sale already stored as status <c>62</c>: a redelivery, or a second message for
-    /// the same transaction. Nothing changed and nothing was audited again, so the message is
-    /// finished with.
+    /// A redelivery of a refund already applied: the sale is stored as status <c>62</c> and the
+    /// message agrees with it about the machine, the amount and the product. Nothing changed and
+    /// nothing was audited again, so the message is finished with. A second message that
+    /// <em>disagrees</em> with that sale is <see cref="RefundContradicted"/> instead, and is kept
+    /// rather than acknowledged.
     /// </summary>
     RefundAlreadyApplied,
 
@@ -122,7 +124,8 @@ public enum NayaxSqsProcessingReason
 
     /// <summary>
     /// A refund whose machine, amount or product contradicts the sale it names, so the two are not
-    /// plainly the same transaction. Nothing is changed and the message is kept as a sample.
+    /// plainly the same transaction. Nothing is changed and the message is kept as a sample -
+    /// whatever that sale's status is, the already refunded one included.
     /// </summary>
     RefundContradicted,
 

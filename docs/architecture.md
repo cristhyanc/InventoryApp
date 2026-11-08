@@ -17100,10 +17100,18 @@ order below is the rule:
 
 | # | Decision | When | What happens |
 |---|---|---|---|
-| 1 | **AlreadyRefunded** | The stored sale is already `62` | Nothing is written and **no second audit row**; this ordering is the idempotency |
-| 2 | **NotRefundable** | The stored sale is not status `12` | Not applied; moving a declined row to refunded would change a financial status on a guess |
-| 3 | **Contradicted** | The machine, the amount or the product differs from the stored sale | Not applied; the two are not plainly the same transaction |
+| 1 | **Contradicted** | The machine, the amount or the product differs from the stored sale — whatever that sale's status is | Not applied; the two are not plainly the same transaction, and the message is kept as a dead-letter sample |
+| 2 | **AlreadyRefunded** | The stored sale is already `62` **and** the message agrees with it | Nothing is written and **no second audit row**: a genuine redelivery has no further effect |
+| 3 | **NotRefundable** | The stored sale is not status `12` | Not applied; moving a declined row to refunded would change a financial status on a guess |
 | 4 | **Apply** | None of the above | Status `12` → `62`, once, with one audit row |
+
+**The comparison comes before the status, and that ordering is itself a rule.** Deciding
+"already refunded" first swallowed the one message a person most needs: `AlreadyRefunded` is an
+acknowledged outcome, so a *second* status-`62` message for the same transaction naming a different
+machine, amount or product was deleted from the queue instead of being retained for dead-letter
+review. Under a delivery shape Nayax does not document, that message is the evidence the assumption
+is wrong. Comparing first keeps it, and costs the idempotency nothing: a genuine redelivery carries
+the same values, so it still answers `AlreadyRefunded` and still writes no second audit row.
 
 The machine and the amount are always compared; the product only when both sides carry one, on issue
 #1104's rule that a value missing on either side is *not compared* and is never read as agreement.
@@ -17122,7 +17130,11 @@ tenant query filter as everywhere else, and on `Apply` writes the status and app
 writes on a sale is the status: the product association, the amount, the instant, the costs, the
 provenance and the verification state are left exactly as they are, and it never inserts a sale.
 A refund naming a transaction this business has no sale for writes nothing at all — the *same*
-transaction id stored by another business is invisible to it.
+transaction id stored by another business is invisible to it. The read and the write being one
+operation is pinned by a concurrency test over a real SQLite **file** with two connections: two
+deliveries of one refund started together end with one `Applied`, one `AlreadyRefunded`, one status
+change and one audit row, because the loser's `BEGIN IMMEDIATE` waits for the winner's commit and
+then reads the committed `62`.
 
 **It records no pending inventory-cost rebuild, and that is the point of the split.** A sale consumes
 stock at `12` and at `62` alike, so moving between them changes no quantity, no inventory value and no

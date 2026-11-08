@@ -115,8 +115,10 @@ public enum NayaxSqsRefundApplication
     Applied = 10,
 
     /// <summary>
-    /// The stored sale was already <c>62</c>. Nothing changed and nothing was audited again, which is
-    /// what makes a redelivered refund have no further effect.
+    /// The stored sale was already <c>62</c> and the message agreed with it. Nothing changed and
+    /// nothing was audited again, which is what makes a redelivered refund have no further effect. A
+    /// later message that disagrees about the machine, the amount or the product is
+    /// <see cref="Contradicted"/> instead.
     /// </summary>
     AlreadyRefunded = 20,
 
@@ -243,7 +245,11 @@ public interface ILatestNayaxSalesStore
     ///
     /// <para><strong>Applying it twice is applying it once.</strong> A redelivery finds the sale
     /// already at <c>62</c> and answers <see cref="NayaxSqsRefundApplication.AlreadyRefunded"/>
-    /// having written nothing, so there is no second status change and no second audit row.</para>
+    /// having written nothing, so there is no second status change and no second audit row. A second
+    /// message that <em>disagrees</em> with that sale is not a redelivery and is not swallowed by it:
+    /// the comparison is made first, so it answers
+    /// <see cref="NayaxSqsRefundApplication.Contradicted"/> and the message is kept as a
+    /// dead-letter sample.</para>
     /// </summary>
     Task<NayaxSqsRefundApplication> ApplySqsRefundAsync(
         NayaxSqsRefundInput refund, CancellationToken cancellationToken);

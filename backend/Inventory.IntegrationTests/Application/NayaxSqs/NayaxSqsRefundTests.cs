@@ -32,7 +32,9 @@ namespace InventoryApi.Tests.Application.NayaxSqs;
 /// <para>A real SQLite database rather than the EF InMemory provider, for the reasons
 /// <see cref="NayaxSqsSaleFixture"/> gives: the status update is one <c>BEGIN IMMEDIATE</c>
 /// transaction, the audit row commits with it, and the figures these cases assert come out of
-/// translated queries over a relational schema.</para>
+/// translated queries over a relational schema. The concurrent-delivery case goes further and runs
+/// over a real SQLite <em>file</em> with two connections, because two writers - and therefore the
+/// write lock the "apply once" guarantee rests on - do not exist on one shared connection.</para>
 /// </summary>
 public class NayaxSqsRefundTests
 {
@@ -142,6 +144,54 @@ public class NayaxSqsRefundTests
         Assert.Equal("refund-message-1", audit.SourceMessageId);
 
         // And still exactly one unit consumed, at its original cost.
+        Assert.Equal((10, 9, 18m, 2m), await PositionAsync(fixture));
+    }
+
+    /// <summary>
+    /// <strong>The same refund delivered twice at once is applied once.</strong> A standard queue can
+    /// deliver one message more than once, and two receivers can hold the two copies at the same
+    /// instant - so "apply once" has to survive the state changing between this method's own read and
+    /// its write, not merely between two sequential calls.
+    ///
+    /// <para>Two deliveries over a real SQLite <strong>file</strong> with two connections, which is
+    /// the only way two writers and SQLite's own locking exist at all (a shared in-memory database has
+    /// one connection and therefore no contention to have). Both open the same <c>BEGIN IMMEDIATE</c>
+    /// transaction, so the loser waits for the winner's commit and then reads the committed status
+    /// <c>62</c> - and answers "already refunded" rather than writing a second status change, a second
+    /// audit row or a second consumed unit. Which connection wins is genuinely up to SQLite; what is
+    /// asserted is that the outcome does not depend on the answer.</para>
+    /// </summary>
+    [Fact]
+    public async Task Two_deliveries_of_one_refund_at_once_apply_it_once_and_audit_it_once()
+    {
+        await using var fixture = await NayaxSqsSaleFixture.OnDiskAsync();
+        await PersistCompletedSaleAsync(fixture);
+
+        await using var first = fixture.Context();
+        await using var second = fixture.SecondWriter();
+
+        var both = await Task.WhenAll(
+            Task.Run(() => NayaxSqsSaleFixture.Store(first).ApplySqsRefundAsync(
+                NayaxSqsSaleFixture.SqsRefund(messageId: "refund-message-1"), CancellationToken.None)),
+            Task.Run(() => NayaxSqsSaleFixture.Store(second).ApplySqsRefundAsync(
+                NayaxSqsSaleFixture.SqsRefund(messageId: "refund-message-2"), CancellationToken.None)));
+
+        Assert.Single(both.Where(applied => applied == NayaxSqsRefundApplication.Applied));
+        Assert.Single(both.Where(applied => applied == NayaxSqsRefundApplication.AlreadyRefunded));
+
+        await using var read = fixture.Context();
+        Assert.Equal(
+            NayaxTransactionStatusIds.Refunded,
+            (await read.NayaxSales.AsNoTracking().SingleAsync()).TransactionStatusId);
+
+        // One audit row, recording the move from the completed status - never two, and never one
+        // claiming 62 was the previous status, which is what a second write would have recorded.
+        var audit = Assert.Single(await read.NayaxSaleStatusChangeAudits.AsNoTracking().ToListAsync());
+        Assert.Equal(NayaxTransactionStatusIds.Completed, audit.PreviousTransactionStatusId);
+        Assert.Equal(NayaxTransactionStatusIds.Refunded, audit.NewTransactionStatusId);
+
+        // Nothing to replay, and still exactly the one unit consumed at its original cost.
+        Assert.Empty(await read.PendingInventoryCostRebuilds.AsNoTracking().ToListAsync());
         Assert.Equal((10, 9, 18m, 2m), await PositionAsync(fixture));
     }
 
@@ -269,6 +319,61 @@ public class NayaxSqsRefundTests
         // Still a completed sale, so still exactly the one unit it consumed - and still counted.
         Assert.Equal((10, 9, 18m, 2m), await PositionAsync(fixture));
         Assert.NotEmpty(await ProfitabilityRowsAsync(fixture));
+    }
+
+    /// <summary>
+    /// <strong>And a contradicting message is kept even when the sale is already refunded.</strong>
+    ///
+    /// <para>The policy used to answer "already refunded" before looking at the compared fields, and
+    /// the reader acknowledges that outcome - so a second status-<c>62</c> message for the same
+    /// transaction naming a different machine, amount or product was deleted from the queue instead
+    /// of being retained for dead-letter review. It is now a contradiction, which
+    /// <c>ProcessNayaxSqsSale</c> reports as <c>Permanent</c>/<c>RefundContradicted</c> and therefore
+    /// releases towards the dead-letter queue. Under a delivery shape Nayax does not document, that
+    /// message is the evidence that the assumption is wrong.</para>
+    ///
+    /// <para>Nothing about the already refunded sale moves either: the refund that was applied keeps
+    /// its one audit row, so the genuine-redelivery guarantee is untouched by this.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("another machine", 9999999L, 3.5, NayaxSqsSaleFixture.NayaxProductId)]
+    [InlineData("a smaller amount", NayaxSqsSaleFixture.MachineId, 1.5, NayaxSqsSaleFixture.NayaxProductId)]
+    [InlineData("a negated amount", NayaxSqsSaleFixture.MachineId, -3.5, NayaxSqsSaleFixture.NayaxProductId)]
+    [InlineData("another product", NayaxSqsSaleFixture.MachineId, 3.5, 7777777L)]
+    public async Task A_contradicting_message_is_kept_even_when_the_sale_is_already_refunded(
+        string because, long machineId, double settlementValue, long nayaxProductId)
+    {
+        await using var fixture = await NayaxSqsSaleFixture.InMemoryAsync();
+        await PersistCompletedSaleAsync(fixture);
+        await ApplyRefundAsync(fixture);
+
+        NayaxSqsRefundApplication applied;
+        await using (var db = fixture.Context())
+        {
+            applied = await NayaxSqsSaleFixture.Store(db).ApplySqsRefundAsync(
+                NayaxSqsSaleFixture.SqsRefund(
+                    machineId: machineId,
+                    settlementValue: (decimal)settlementValue,
+                    nayaxProductId: nayaxProductId,
+                    messageId: "refund-message-2"),
+                CancellationToken.None);
+        }
+
+        Assert.True(
+            applied == NayaxSqsRefundApplication.Contradicted,
+            $"A second refund message naming {because} must be kept for dead-letter review, "
+                + $"but the store answered {applied}.");
+
+        await using var read = fixture.Context();
+        Assert.Equal(
+            NayaxTransactionStatusIds.Refunded,
+            (await read.NayaxSales.AsNoTracking().SingleAsync()).TransactionStatusId);
+
+        // The refund that was applied, and only it: no second status change and no second audit row.
+        var audit = Assert.Single(await read.NayaxSaleStatusChangeAudits.AsNoTracking().ToListAsync());
+        Assert.Equal("refund-message-1", audit.SourceMessageId);
+
+        Assert.Equal((10, 9, 18m, 2m), await PositionAsync(fixture));
     }
 
     /// <summary>

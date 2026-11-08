@@ -1138,8 +1138,10 @@ When Nayax refunds a sale, **the money comes off your reports and the item stays
 - **A refund it cannot place is kept, not guessed at.** If a refund names a transaction you have no
   sale for, or disagrees with the stored sale's machine, amount or product, nothing is changed and the
   message is kept in the dead-letter queue as a sample (reason codes `RefundUnmatched`,
-  `RefundContradicted`, `RefundNotApplicable`). That is deliberate: partial refunds are not supported,
-  and a refund the application cannot match is for a person to look at.
+  `RefundContradicted`, `RefundNotApplicable`). That holds even when the sale is already refunded: a
+  second refund message that disagrees about what was sold is kept for you to look at rather than
+  treated as a repeat of the first. That is deliberate: partial refunds are not supported, and a
+  refund the application cannot match is for a person to look at.
 - **Refunds already in your history count the same way.** Older refunded sales start using up their
   unit the next time that product's cost history is replayed, which happens on its own as that product
   sells. You may see a product's costing quantity and inventory value drop by one unit per past refund

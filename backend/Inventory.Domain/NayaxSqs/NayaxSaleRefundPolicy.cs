@@ -4,7 +4,7 @@ namespace Inventory.Domain.NayaxSqs;
 
 /// <summary>
 /// What a status-<c>62</c> Nayax SQS message does to the sale it names (issue #1107). One answer per
-/// message, and the order below is the rule.
+/// message; <see cref="NayaxSaleRefundPolicy.Decide"/> states the order they are decided in.
 /// </summary>
 public enum NayaxSaleRefundDecision
 {
@@ -14,9 +14,11 @@ public enum NayaxSaleRefundDecision
     Apply = 10,
 
     /// <summary>
-    /// The stored sale is already status <c>62</c>: a redelivery, or a second refund message for the
-    /// same transaction. Nothing changes and nothing is audited a second time - that is what makes
-    /// applying a refund idempotent without a second table to look in.
+    /// The stored sale is already status <c>62</c> <em>and the message agrees with it</em>: a genuine
+    /// redelivery of the refund that was already applied. Nothing changes and nothing is audited a
+    /// second time - that is what makes applying a refund idempotent without a second table to look
+    /// in. A later message that disagrees about the machine, the amount or the product is
+    /// <see cref="Contradicted"/> instead, not a redelivery.
     /// </summary>
     AlreadyRefunded = 20,
 
@@ -32,6 +34,11 @@ public enum NayaxSaleRefundDecision
     /// The message and the stored sale disagree about the machine, the amount or the product. The
     /// two are then not plainly the same transaction - whatever the transaction id says - so nothing
     /// is applied and the message is kept as a dead-letter sample for a person to look at.
+    ///
+    /// <para>This answer is given <strong>whatever the stored sale's status is</strong>, the already
+    /// refunded one included: a second status-<c>62</c> message for one transaction that disagrees
+    /// about what was sold is the sample a person most needs to see, and it is the undocumented
+    /// delivery shape's loudest contradiction.</para>
     /// </summary>
     Contradicted = 40,
 }
@@ -95,7 +102,9 @@ public sealed record NayaxSaleRefundResult(
 public static class NayaxSaleRefundPolicy
 {
     /// <summary>
-    /// Decides what a refund message does to the sale it names.
+    /// Decides what a refund message does to the sale it names. The order is the rule: a
+    /// contradiction, then an already refunded sale, then a sale that is not a completed sale, and
+    /// only then the refund itself.
     /// </summary>
     /// <param name="storedTransactionStatusId">The stored sale's current status.</param>
     /// <param name="stored">The stored sale's own values.</param>
@@ -110,18 +119,27 @@ public static class NayaxSaleRefundPolicy
 
         var fields = Compare(stored, refund);
 
-        // Already refunded comes first, and that ordering is the idempotency: a redelivery of the
-        // message that applied the refund answers "already refunded" rather than being compared
-        // again, so a second audit row is impossible even if the values were read differently.
+        // A contradiction comes first, and it comes first for every stored status - the already
+        // refunded one included. A message that disagrees about the machine, the amount or the
+        // product is not plainly about the sale it names at all, so the stored status has nothing to
+        // decide, and the message has to reach a person. Answering "already refunded" before looking
+        // at the compared fields lost exactly that: the reader acknowledges that outcome, so a second
+        // status-62 message for one transaction naming a different machine, amount or product
+        // disappeared from the queue instead of being kept as the dead-letter sample the issue
+        // requires - and under an undocumented delivery shape, that message is the evidence.
+        if (Contradicts(fields))
+            return new NayaxSaleRefundResult(NayaxSaleRefundDecision.Contradicted, fields);
+
+        // Then an already refunded sale, and that is the idempotency: a genuine redelivery - the same
+        // values delivered again - answers "already refunded" having changed nothing, so a second
+        // status change and a second audit row are impossible.
         if (storedTransactionStatusId == NayaxTransactionStatusIds.Refunded)
             return new NayaxSaleRefundResult(NayaxSaleRefundDecision.AlreadyRefunded, fields);
 
         if (storedTransactionStatusId != NayaxTransactionStatusIds.Completed)
             return new NayaxSaleRefundResult(NayaxSaleRefundDecision.NotRefundable, fields);
 
-        return new NayaxSaleRefundResult(
-            Contradicts(fields) ? NayaxSaleRefundDecision.Contradicted : NayaxSaleRefundDecision.Apply,
-            fields);
+        return new NayaxSaleRefundResult(NayaxSaleRefundDecision.Apply, fields);
     }
 
     /// <summary>
