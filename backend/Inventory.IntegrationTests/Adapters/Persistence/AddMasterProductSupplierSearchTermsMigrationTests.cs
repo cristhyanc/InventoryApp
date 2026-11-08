@@ -16,7 +16,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 public class AddMasterProductSupplierSearchTermsMigrationTests
 {
     /// <summary>The migration immediately before this one: the state <c>Down</c> returns to.</summary>
-    private const string PreviousMigration = "20261107100349_AddNayaxSaleOwnerDecisions";
+    private const string PreviousMigration = "20261108020626_AddNayaxSaleStatusChangeAudits";
 
     private const string TargetMigration = "AddMasterProductSupplierSearchTerms";
 
