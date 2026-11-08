@@ -159,10 +159,24 @@ One entry of `searches` is one product at one supplier, identified by its `workI
      the run's call cap.
    - **When `searchTerms.searchPhrases` is empty**, only aliases were configured: word the search
      exactly as step 1 says.
-   - **Paging and the outcome cover every search you made for the work item.** Report the rows of
-     the search that found the real matches, with that search's `paging`. The outcome is
-     `no_matches` **only** when every search you made was read to the end (step 2) and none found
-     a real match; if any of them was cut short, the outcome is `truncated`, never `no_matches`.
+   - **One file answers every search you made for the work item**, by this rule (it is
+     `configuredPhrasesOutcome` in `scripts/price-collector/pagination.mjs`; answer each search on
+     its own first, as step 2 says, then ask
+     `node scripts/price-collector/pagination.mjs --configured-phrases <search 1> [<search 2>]`,
+     each search written `<outcome>,<rowCount>,<pagesRead>,<pageCap>,<moreAvailable>[,<failureReason>]`,
+     and write what it reports):
+     - **Rows**: only the rows of the search that found the real matches — always the last one,
+       because you stop at the first search that finds any.
+     - **`truncated`** when **any** search was cut short, even if a later one found matches. A capped
+       first search with no match followed by a fully read fallback with a match is `truncated`
+       **and keeps the fallback's rows**: the first search may have held a listing nobody looked at.
+       Its `paging` is the paging of the **first search that was cut short**, so the file's paging
+       says why it is truncated (never the fallback's `moreAvailable: false` beside `truncated`).
+     - **`no_matches`** only when **every** search was read to the end and none found a real match,
+       with the last search's `paging`; **`complete`** when every search was read to the end and the
+       last found the matches, with that search's `paging`.
+     - **A failed search ends the work item**: do not search the next phrase after it; the file is
+       `failed` with that search's reason and no rows.
    - **Flavour aliases** (`searchTerms.flavourAliases`) are words this supplier uses for this
      product's own variant: `Plain` for Smith's `Original` at JB Metro. They are **never search
      words**; they are used only in step 3, when deciding whether a result is this product.

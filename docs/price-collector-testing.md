@@ -395,6 +395,13 @@ Bankstown and Liverpool keep the connector entry. Products with no entry search 
   result that is a valid match, the next distinct phrase is tried. Phrases are never joined, the
   two-wording limit still holds, and the known-listing fallback, truncated-versus-no-match reporting,
   budgets and guards are unchanged.
+- **One file answers both searches** (`configuredPhrasesOutcome` in
+  `scripts/price-collector/pagination.mjs`, also `pagination.mjs --configured-phrases`). The rows
+  come from the search that found the matches. The item is `truncated` when any search was cut
+  short, even if the fallback then found the product: a capped first search with no match and a
+  fully read fallback with a match keeps the fallback's rows, reports `truncated`, and carries the
+  capped search's `paging`. It is `no_matches` only when every search was read to the end and none
+  matched. A failed search ends the item as `failed`; the next phrase is not searched after it.
 - **Aliases are evidence, never queries.** An alias only lets a result's flavour word stand for the
   master product's flavour. Brand, product type, individual unit size and variant must still agree,
   the supplier's original title is still reported, and every match still waits for Super Admin
