@@ -8,11 +8,13 @@ import { describe, it } from 'node:test';
 import {
   SEARCH_FAILURE_REASONS,
   SEARCH_OUTCOMES,
+  configuredPhrasesOutcome,
   internalPagingOutcome,
   runPagination,
   searchOutcomeFor,
   shouldRequestNextPage,
 } from './pagination.mjs';
+import { validateResultFile } from './output-schema.mjs';
 
 describe('shouldRequestNextPage', () => {
   it('asks for another page when the actor filled the page', () => {
@@ -185,5 +187,81 @@ describe('the command line', () => {
     assert.equal(answer.exitCode, 2);
     assert.equal(answer.out, '');
     assert.match(answer.err, /--guess/);
+  });
+});
+
+describe('configuredPhrasesOutcome (issue #1138)', () => {
+  const capped = { outcome: 'truncated', rowCount: 0, paging: { pagesRead: 1, pageCap: 1, moreAvailable: true } };
+  const exhaustedEmpty = { outcome: 'no_matches', rowCount: 0, paging: { pagesRead: 1, pageCap: 1, moreAvailable: false } };
+  const exhaustedMatch = { outcome: 'complete', rowCount: 1, paging: { pagesRead: 1, pageCap: 1, moreAvailable: false } };
+
+  const fileFor = (answer, rowCount) => ({
+    runId: 41,
+    workItemId: 7001,
+    supplierPresetId: 3,
+    outcome: answer.outcome,
+    ...(answer.failureReason ? { failureReason: answer.failureReason } : {}),
+    paging: answer.paging,
+    rows: Array.from({ length: rowCount }, (_, index) => ({
+      supplierProductId: `jbmetro:${index + 1}`,
+      packPrice: 2.5,
+      currency: 'AUD',
+      priceBasis: 'exclusive_of_gst',
+      stockStatus: 'in_stock',
+    })),
+  });
+
+  it('keeps a successful fallback\'s rows but reports the item truncated, with the capped search\'s paging', () => {
+    const answer = configuredPhrasesOutcome([capped, exhaustedMatch]);
+    assert.deepEqual(answer, {
+      outcome: SEARCH_OUTCOMES.truncated,
+      failureReason: null,
+      paging: capped.paging,
+      rowsFromSearch: 2,
+    });
+    // The file it describes is valid under the existing result contract.
+    const checked = validateResultFile(fileFor(answer, 1));
+    assert.equal(checked.ok, true, checked.problems?.join(' | '));
+  });
+
+  it('is no_matches only when every search was read to the end and none matched', () => {
+    assert.equal(configuredPhrasesOutcome([exhaustedEmpty, exhaustedEmpty]).outcome, SEARCH_OUTCOMES.noMatches);
+    assert.equal(configuredPhrasesOutcome([capped, exhaustedEmpty]).outcome, SEARCH_OUTCOMES.truncated);
+    assert.equal(configuredPhrasesOutcome([exhaustedEmpty, capped]).outcome, SEARCH_OUTCOMES.truncated);
+    assert.deepEqual(configuredPhrasesOutcome([exhaustedEmpty, capped]).paging, capped.paging);
+  });
+
+  it('is complete, with the matching search\'s paging, when every search was read to the end', () => {
+    const answer = configuredPhrasesOutcome([exhaustedEmpty, exhaustedMatch]);
+    assert.equal(answer.outcome, SEARCH_OUTCOMES.complete);
+    assert.deepEqual(answer.paging, exhaustedMatch.paging);
+    assert.equal(answer.rowsFromSearch, 2);
+    assert.equal(configuredPhrasesOutcome([exhaustedMatch]).outcome, SEARCH_OUTCOMES.complete);
+  });
+
+  it('ends the item at a failed search and refuses a search after a failure or a match', () => {
+    const failed = { outcome: 'failed', failureReason: 'timeout', rowCount: 0, paging: { pagesRead: 0, pageCap: 1, moreAvailable: false } };
+    const answer = configuredPhrasesOutcome([capped, failed]);
+    assert.equal(answer.outcome, SEARCH_OUTCOMES.failed);
+    assert.equal(answer.failureReason, 'timeout');
+    assert.equal(answer.rowsFromSearch, null);
+    assert.throws(() => configuredPhrasesOutcome([failed, exhaustedMatch]), /only the last search can fail/);
+    assert.throws(() => configuredPhrasesOutcome([exhaustedMatch, exhaustedMatch]), /only the last search can hold rows/);
+    assert.throws(() => configuredPhrasesOutcome([]), /one or two searches/);
+    assert.throws(() => configuredPhrasesOutcome([exhaustedEmpty, exhaustedEmpty, exhaustedEmpty]), /one or two searches/);
+    assert.throws(() => configuredPhrasesOutcome([{ ...exhaustedEmpty, rowCount: 2 }]), /cannot hold rows/);
+  });
+
+  it('answers the same rule from the command line, in words the run guard accepts', () => {
+    const answer = runPagination(['--configured-phrases', 'truncated,0,1,1,true', 'complete,1,1,1,false']);
+    assert.equal(answer.exitCode, 0);
+    assert.deepEqual(JSON.parse(answer.out), {
+      outcome: 'truncated',
+      failureReason: null,
+      paging: { pagesRead: 1, pageCap: 1, moreAvailable: true },
+      rowsFromSearch: 2,
+    });
+    assert.equal(runPagination(['--configured-phrases', 'complete,1,1,1,maybe']).exitCode, 2);
+    assert.equal(runPagination(['--configured-phrases']).exitCode, 2);
   });
 });

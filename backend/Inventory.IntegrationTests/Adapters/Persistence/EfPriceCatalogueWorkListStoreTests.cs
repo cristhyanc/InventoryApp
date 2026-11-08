@@ -360,7 +360,9 @@ public class EfPriceCatalogueWorkListStoreTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(["Brand", "Id", "Name", "SizeUnit", "SizeValue"], published);
+        // SupplierSearchTerms (issue #1138) is the master product's own column - search phrases and
+        // flavour aliases per supplier or connector - and carries no business either.
+        Assert.Equal(["Brand", "Id", "Name", "SizeUnit", "SizeValue", "SupplierSearchTerms"], published);
     }
 
     #endregion

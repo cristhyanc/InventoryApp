@@ -3,13 +3,19 @@ import { Component, EventEmitter, Input, OnChanges, OnDestroy, Output } from '@a
 import { FormsModule } from '@angular/forms';
 import {
   SuperAdminMasterProduct,
-  SuperAdminMasterProductsService
+  SuperAdminMasterProductsService,
+  SupplierSearchTerms
 } from '../../../services/super-admin-master-products.service';
+import {
+  SuperAdminSupplierPreset,
+  SuperAdminSupplierPresetsService
+} from '../../../services/super-admin-supplier-presets.service';
 import {
   MASTER_PRODUCT_SIZE_UNIT_LABELS,
   MasterProductSizeUnit
 } from '../../../services/super-admin-price-catalogue-review.service';
 import { extractReviewErrorMessage } from '../price-catalogue-review/review-error';
+import { MasterProductSearchTermsComponent } from './master-product-search-terms.component';
 
 /**
  * The one form that adds a master product to the shared catalogue and corrects one (issue #1024,
@@ -51,7 +57,7 @@ import { extractReviewErrorMessage } from '../price-catalogue-review/review-erro
 @Component({
   selector: 'app-super-admin-master-product-form',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, MasterProductSearchTermsComponent],
   templateUrl: './master-product-form.component.html'
 })
 export class MasterProductFormComponent implements OnChanges, OnDestroy {
@@ -79,6 +85,23 @@ export class MasterProductFormComponent implements OnChanges, OnDestroy {
   submitting = false;
   error: string | null = null;
 
+  /**
+   * The supplier search terms the editor starts from (issue #1138): the stored ones of the product
+   * being corrected. A new array only when the form becomes another product's form.
+   */
+  storedSearchTerms: readonly SupplierSearchTerms[] = [];
+
+  /**
+   * The search terms as the editor last reported them, or `null` while nobody has changed them -
+   * then a correction leaves the stored terms exactly as they are rather than resending them.
+   */
+  editedSearchTerms: SupplierSearchTerms[] | null = null;
+
+  /** The supplier presets a search entry may name, read once when a correction is first opened. */
+  supplierPresets: readonly SuperAdminSupplierPreset[] = [];
+  supplierPresetsError: string | null = null;
+  private supplierPresetsRequested = false;
+
   readonly sizeUnits = Object.entries(MASTER_PRODUCT_SIZE_UNIT_LABELS).map(([value, label]) => ({
     value: Number(value) as MasterProductSizeUnit,
     label
@@ -93,7 +116,10 @@ export class MasterProductFormComponent implements OnChanges, OnDestroy {
    */
   private submission = 0;
 
-  constructor(private readonly masterProducts: SuperAdminMasterProductsService) {}
+  constructor(
+    private readonly masterProducts: SuperAdminMasterProductsService,
+    private readonly supplierPresetsService: SuperAdminSupplierPresetsService
+  ) {}
 
   /**
    * A different product - or switching between adding and correcting - starts from that product's own
@@ -110,6 +136,23 @@ export class MasterProductFormComponent implements OnChanges, OnDestroy {
     this.name = this.product?.name ?? '';
     this.sizeValue = this.product?.sizeValue ?? null;
     this.sizeUnit = this.product?.sizeUnit ?? MasterProductSizeUnit.Millilitre;
+    this.storedSearchTerms = this.product?.supplierSearchTerms ?? [];
+    this.editedSearchTerms = null;
+
+    if (this.product && !this.supplierPresetsRequested) {
+      this.supplierPresetsRequested = true;
+      this.supplierPresetsService.list().subscribe({
+        next: (presets) => (this.supplierPresets = presets),
+        error: () =>
+          (this.supplierPresetsError =
+            'The supplier list could not be loaded, so only connector entries can be added. Stored entries are kept.')
+      });
+    }
+  }
+
+  /** The editor's whole list after a change (issue #1138). */
+  searchTermsChanged(entries: SupplierSearchTerms[]): void {
+    this.editedSearchTerms = entries;
   }
 
   get editing(): boolean {
@@ -137,6 +180,12 @@ export class MasterProductFormComponent implements OnChanges, OnDestroy {
       return;
     }
 
+    const searchTerms = this.product ? this.editedSearchTerms : null;
+    if (searchTerms?.some((entry) => entry.supplierPresetId === null && entry.priceConnector === null)) {
+      this.error = 'Choose a supplier or a connector for each supplier search entry, or remove the entry.';
+      return;
+    }
+
     const description = {
       brand: this.brand.trim(),
       name: this.name.trim(),
@@ -153,7 +202,9 @@ export class MasterProductFormComponent implements OnChanges, OnDestroy {
       ? this.masterProducts.update(product.id, {
           ...description,
           // The instant this page read for that row, sent back unchanged.
-          lastChangedAtUtc: product.updatedAtUtc
+          lastChangedAtUtc: product.updatedAtUtc,
+          // Only when somebody changed them: omitted, the server keeps what it stores.
+          ...(searchTerms ? { supplierSearchTerms: searchTerms } : {})
         })
       : this.masterProducts.create(description);
 

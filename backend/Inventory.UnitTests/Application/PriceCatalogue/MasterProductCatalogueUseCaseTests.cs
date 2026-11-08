@@ -2,6 +2,7 @@ using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.PriceCatalogue;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
@@ -361,6 +362,83 @@ public class MasterProductCatalogueUseCaseTests
         Assert.Equal(7, updated!.Id);
     }
 
+    /// <summary>
+    /// An edit that carries no search terms keeps the stored ones (issue #1138): the port is handed
+    /// <see langword="null"/>, never an empty list that would erase them.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_without_search_terms_keeps_the_stored_ones()
+    {
+        var writes = new FakeWriteStore { Updated = Product(7, "Smiths") };
+
+        await Update(writes, new FakeAudit()).Handle(7, EditSubmission(), CancellationToken.None);
+
+        Assert.Null(writes.Edit!.SupplierSearchTerms);
+    }
+
+    /// <summary>
+    /// Search terms are cleaned before the port sees them (issue #1138): trimmed, deduplicated and in
+    /// the order given, and an empty list is handed on as "remove them all".
+    /// </summary>
+    [Fact]
+    public async Task An_edit_hands_the_port_cleaned_search_terms_in_order()
+    {
+        var writes = new FakeWriteStore { Updated = Product(7, "Smiths") };
+
+        await Update(writes, new FakeAudit()).Handle(
+            7,
+            new MasterProductEditSubmission(
+                "Smiths",
+                "Original",
+                45m,
+                MasterProductSizeUnit.Gram,
+                CreatedAt,
+                [
+                    new SupplierSearchTermsSubmission(
+                        null,
+                        SupplierPriceConnector.JbMetro,
+                        ["  Smiths   Plain ", "smiths plain", "Smiths"],
+                        [" Plain "]),
+                ]),
+            CancellationToken.None);
+
+        var entry = Assert.Single(writes.Edit!.SupplierSearchTerms!);
+        Assert.Equal(SupplierPriceConnector.JbMetro, entry.PriceConnector);
+        Assert.Equal(["Smiths Plain", "Smiths"], entry.SearchPhrases);
+        Assert.Equal(["Plain"], entry.FlavourAliases);
+
+        writes = new FakeWriteStore { Updated = Product(7, "Smiths") };
+        await Update(writes, new FakeAudit()).Handle(
+            7,
+            EditSubmission() with { SupplierSearchTerms = [] },
+            CancellationToken.None);
+
+        Assert.Empty(writes.Edit!.SupplierSearchTerms!);
+    }
+
+    /// <summary>A third search phrase is refused before anything reaches the port (issue #1138).</summary>
+    [Fact]
+    public async Task An_edit_with_a_third_search_phrase_writes_nothing()
+    {
+        var writes = new FakeWriteStore { Updated = Product(7, "Smiths") };
+        var audit = new FakeAudit();
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() => Update(writes, audit).Handle(
+            7,
+            EditSubmission() with
+            {
+                SupplierSearchTerms =
+                [
+                    new SupplierSearchTermsSubmission(3, null, ["Smiths Plain", "Smiths Chips", "Smiths"], []),
+                ],
+            },
+            CancellationToken.None));
+
+        Assert.Equal(SupplierSearchTermsPolicy.TooManyPhrasesMessage, refusal.Message);
+        Assert.Null(writes.UpdatedId);
+        Assert.Empty(audit.Entries);
+    }
+
     /// <summary>An accepted edit is one audit event of its own, distinct from a create.</summary>
     [Fact]
     public async Task An_edit_is_audited_as_an_edit()
@@ -485,7 +563,8 @@ public class MasterProductCatalogueUseCaseTests
             MasterProductSizeUnit.Millilitre,
             CreatedAt,
             CreatedAt,
-            new MasterProductListingCounts(0, 0, 0, 0));
+            new MasterProductListingCounts(0, 0, 0, 0),
+            []);
 
     private sealed class FakeAudit : IPriceCatalogueReviewAudit
     {
@@ -526,7 +605,8 @@ public class MasterProductCatalogueUseCaseTests
                 description.SizeUnit,
                 asOfUtc,
                 asOfUtc,
-                new MasterProductListingCounts(0, 0, 0, 0)));
+                new MasterProductListingCounts(0, 0, 0, 0),
+                []));
         }
 
         public Task<CataloguedMasterProduct?> UpdateAsync(

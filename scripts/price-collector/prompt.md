@@ -142,6 +142,44 @@ Rules:
 
 One entry of `searches` is one product at one supplier, identified by its `workItemId`.
 
+0. **Configured search terms come first.** A search whose `searchTerms` is not `null` carries
+   search phrases and flavour aliases a Super Admin configured for **this product at this
+   supplier** (issue #1138, owner decision of 8 November 2026). They belong to that one search:
+   never use them for another product or another supplier. A search whose `searchTerms` is `null`
+   is searched exactly as step 1 says.
+   - **When `searchTerms.searchPhrases` is not empty, those phrases are this work item's search
+     wordings, in order.** Search the **first phrase as written** (for JB Metro, drop any symbol the
+     guard refuses, as in step 1). Then choose the real matches as step 3 says. **Search the next
+     phrase** when the first search returned **no product at all**, **or** returned products but
+     **none of them is a real match** — every result a different size, a different flavour, a
+     different brand. Stop as soon as a search finds a real match, when there is no further phrase,
+     or when the run's call cap stops you. Never join two phrases into one search, never search
+     the same phrase twice, and never add step 1's own fewer-words search on top: the configured
+     phrases **are** the at-most-two wordings for this work item, and both searches count towards
+     the run's call cap.
+   - **When `searchTerms.searchPhrases` is empty**, only aliases were configured: word the search
+     exactly as step 1 says.
+   - **One file answers every search you made for the work item**, by this rule (it is
+     `configuredPhrasesOutcome` in `scripts/price-collector/pagination.mjs`; answer each search on
+     its own first, as step 2 says, then ask
+     `node scripts/price-collector/pagination.mjs --configured-phrases <search 1> [<search 2>]`,
+     each search written `<outcome>,<rowCount>,<pagesRead>,<pageCap>,<moreAvailable>[,<failureReason>]`,
+     and write what it reports):
+     - **Rows**: only the rows of the search that found the real matches — always the last one,
+       because you stop at the first search that finds any.
+     - **`truncated`** when **any** search was cut short, even if a later one found matches. A capped
+       first search with no match followed by a fully read fallback with a match is `truncated`
+       **and keeps the fallback's rows**: the first search may have held a listing nobody looked at.
+       Its `paging` is the paging of the **first search that was cut short**, so the file's paging
+       says why it is truncated (never the fallback's `moreAvailable: false` beside `truncated`).
+     - **`no_matches`** only when **every** search was read to the end and none found a real match,
+       with the last search's `paging`; **`complete`** when every search was read to the end and the
+       last found the matches, with that search's `paging`.
+     - **A failed search ends the work item**: do not search the next phrase after it; the file is
+       `failed` with that search's reason and no rows.
+   - **Flavour aliases** (`searchTerms.flavourAliases`) are words this supplier uses for this
+     product's own variant: `Plain` for Smith's `Original` at JB Metro. They are **never search
+     words**; they are used only in step 3, when deciding whether a result is this product.
 1. **Search by name, with short search words.** Search by name **every** run, even for a product
    whose listings you already know: a new pack of the same product (a 30-pack beside a 24-pack) has
    its own supplier product id, and an id-only lookup would never find it.
@@ -196,10 +234,42 @@ One entry of `searches` is one product at one supplier, identified by its `workI
    Recognise a listing you already know by its `supplierProductId` in `knownListings`, and report any
    other pack of the same product as a row of its own: the backend proposes it as a new listing and
    prices nothing until a person confirms it.
+   - **A configured flavour alias stands in for the variant, and for nothing else.** When this
+     search's `searchTerms.flavourAliases` holds a word, a result whose title uses that word **in
+     place of the product's own variant** is the same variant. Every other check still applies in
+     full: the **brand** must agree, the **product type** must agree (potato chips, not popcorn or
+     a dip), the **individual unit size** must agree, and a title that names any **other** flavour
+     or variant is still a different product. An alias never applies to another product or another
+     supplier, and it never makes a result a match on its own. Keep the supplier's own `title` and
+     `variant` exactly as published (`45G SMITH'S PLAIN`, variant `Plain`): never rewrite them to the
+     master product's wording. Nothing about the approval of a new listing changes either — the
+     backend still proposes it and prices nothing until a person confirms it.
 4. **The id lookup is the fallback and nothing else.** When a listing in `knownListings` does not
    appear in tonight's search results, look that one up by its `supplierProductId` (Varnmill products
    mode, or the BIG W SKU actor). Never start a search that way.
 5. **Write the file** as soon as that search is finished, and never again.
+
+### Worked example: Smith's Original 45g at JB Metro
+
+A documented expectation of your judgement (issue #1138), not an automated check. JB Metro lists
+Smith's Original potato chips 45g as `45G SMITH'S PLAIN`; in production run 42417968670 the search
+`Smiths Original` missed it at all three JB Metro sites, and `Smiths` found it. The Super Admin
+configured, for JB Metro: search phrases `Smiths Plain` then `Smiths`, flavour alias `Plain`. The
+work item is `Smiths` / `Original` / 45 g with that `searchTerms`.
+
+1. Search `Smiths Plain`. If it returns `45G SMITH'S PLAIN`, keep it: the brand is Smith's, `Plain` is
+   the configured alias for `Original`, it is the same potato chips, and the individual size is 45 g.
+   That is a real match, so there is no second search.
+2. Only if that first search found no product, or found products of which none is a real match,
+   search `Smiths`, and judge its results the same way:
+   - `45G SMITH'S PLAIN` — **keep**, for the reasons above.
+   - `27G SMITH'S PLAIN` — **reject**: the individual unit size is 27 g, not 45 g. The alias
+     changes nothing about the size.
+   - `45G SMITH'S SALT & VINEGAR`, `45G SMITH'S CHEESE & ONION` — **reject**: a different flavour.
+     The alias `Plain` stands in for `Original` only, and a 45 g pack of another flavour is another
+     product.
+3. Write the file as usual. `no_matches` only if both searches were read to the end and neither
+   found a real match.
 
 ### The file one search writes
 

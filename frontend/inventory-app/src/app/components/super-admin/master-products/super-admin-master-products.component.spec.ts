@@ -9,6 +9,7 @@ import {
   SuperAdminMasterProductsService
 } from '../../../services/super-admin-master-products.service';
 import { MasterProductSizeUnit, SupplierListingMatchStatus } from '../../../services/super-admin-price-catalogue-review.service';
+import { SuperAdminSupplierPresetsService } from '../../../services/super-admin-supplier-presets.service';
 import { MasterProductFormComponent } from './master-product-form.component';
 import { SuperAdminMasterProductsComponent } from './super-admin-master-products.component';
 
@@ -22,6 +23,7 @@ function product(overrides: Partial<SuperAdminMasterProduct> = {}): SuperAdminMa
     createdAtUtc: '2026-10-28T00:00:00Z',
     updatedAtUtc: '2026-10-29T00:00:00Z',
     listingCounts: { proposed: 1, confirmed: 2, needsReview: 0, rejected: 0, total: 3 },
+    supplierSearchTerms: [],
     ...overrides
   };
 }
@@ -59,7 +61,11 @@ const detail: SuperAdminMasterProductDetail = {
 async function render(service: Partial<SuperAdminMasterProductsService>) {
   await TestBed.configureTestingModule({
     imports: [SuperAdminMasterProductsComponent],
-    providers: [{ provide: SuperAdminMasterProductsService, useValue: service }]
+    providers: [
+      { provide: SuperAdminMasterProductsService, useValue: service },
+      // The form's supplier search terms editor (issue #1138) reads the presets on a correction.
+      { provide: SuperAdminSupplierPresetsService, useValue: { list: () => of([]) } }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(SuperAdminMasterProductsComponent);
@@ -84,7 +90,8 @@ describe('SuperAdminMasterProductsComponent (issues #1023 and #1024)', () => {
               id: 2,
               brand: 'Pepsi',
               name: 'Max',
-              listingCounts: { proposed: 0, confirmed: 0, needsReview: 0, rejected: 0, total: 0 }
+              listingCounts: { proposed: 0, confirmed: 0, needsReview: 0, rejected: 0, total: 0 },
+              supplierSearchTerms: []
             })
           ],
           totalCount: 2

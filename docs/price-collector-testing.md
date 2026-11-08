@@ -358,6 +358,68 @@ supplier being suggested to businesses and, since #1077, no longer stops its sea
 searched suppliers run on which day is each supplier's own **search schedule** since #1108 — see
 below.
 
+## Supplier search terms for one master product
+
+Some suppliers name a product differently from the master product (issue #1138). Smith's
+**Original** 45g is sold at JB Metro as `45G SMITH'S PLAIN`, so a search for the master product's
+own wording finds nothing the collector can accept. A Super Admin can give that one product its own
+search wording for one supplier, or for every supplier on one connector, without any global rule.
+
+### Configuring it
+
+In **Super Admin → Master products**, open the product and press **Edit**. Under **Supplier search
+terms**:
+
+1. Press **Add supplier search entry** and choose a target: one supplier (for example *JB Metro Penrith*) or a whole
+   connector (for example *All JB Metro suppliers*, which covers all three JB Metro sites and no
+   other connector).
+2. Add up to **two search phrases**, in the order they should be tried. A third is refused by the
+   page and by the API, because the collector never searches more than two wordings for one product
+   at one supplier. Use **Move up** to reorder and **Remove** to drop one.
+3. Add up to five **flavour aliases**: the supplier's other word for the product's flavour.
+4. Press **Save**. Pressing **Remove entry** on every entry and saving clears the product's configuration.
+
+Phrases and aliases are trimmed, inner spaces are collapsed, blanks are dropped and a repeat that
+differs only by case is dropped. Only one entry per supplier and one per connector is allowed.
+
+### Which entry a work item receives
+
+Each work item stays per supplier preset. It receives exactly one entry, or none: the supplier's own
+entry if the product has one, otherwise the entry for that supplier's connector. The two are never
+merged, so a Penrith entry replaces the JB Metro connector entry for Penrith as a whole, while
+Bankstown and Liverpool keep the connector entry. Products with no entry search exactly as before.
+
+### What the collector does with it
+
+- **Phrases are queries.** The first phrase is searched first. If it returns no products, or no
+  result that is a valid match, the next distinct phrase is tried. Phrases are never joined, the
+  two-wording limit still holds, and the known-listing fallback, truncated-versus-no-match reporting,
+  budgets and guards are unchanged.
+- **One file answers both searches** (`configuredPhrasesOutcome` in
+  `scripts/price-collector/pagination.mjs`, also `pagination.mjs --configured-phrases`). The rows
+  come from the search that found the matches. The item is `truncated` when any search was cut
+  short, even if the fallback then found the product: a capped first search with no match and a
+  fully read fallback with a match keeps the fallback's rows, reports `truncated`, and carries the
+  capped search's `paging`. It is `no_matches` only when every search was read to the end and none
+  matched. A failed search ends the item as `failed`; the next phrase is not searched after it.
+- **Aliases are evidence, never queries.** An alias only lets a result's flavour word stand for the
+  master product's flavour. Brand, product type, individual unit size and variant must still agree,
+  the supplier's original title is still reported, and every match still waits for Super Admin
+  approval.
+
+### Worked example: Smith's Original 45g at JB Metro
+
+Entry: *All JB Metro suppliers*, phrases `Smiths Plain` then `Smiths`, alias `Plain`.
+
+| Result title | Outcome |
+| --- | --- |
+| `45G SMITH'S PLAIN` | Eligible: brand and 45g agree, `Plain` is the configured alias for Original |
+| `27G SMITH'S PLAIN` | Rejected: the unit size differs |
+| `45G SMITH'S SALT & VINEGAR` | Rejected: a different flavour, not an alias |
+
+The automated tests cover only the configuration, the work-list payload and the prompt contract; no
+live paid run was made for #1138.
+
 ## Choosing `all` or `due`
 
 Since [#1108](https://github.com/cristhyanc/InventoryApp/issues/1108) the work list takes a

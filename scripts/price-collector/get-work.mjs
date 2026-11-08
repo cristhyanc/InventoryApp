@@ -124,8 +124,22 @@ function searchesFor({ product, productView, listings, listingsOmitted, supplier
         .filter((listing) => listing.supplierPresetId === workItem.supplierPresetId)
         .map(listingView),
       knownListingsOmitted: listingsOmitted === true,
+      // The one configured entry for this product at this supplier (issue #1138), or null: then
+      // the search is worded exactly as the prompt's default rule says.
+      searchTerms: searchTermsView(workItem.searchTerms),
     };
   });
+}
+
+/**
+ * A work item's configured search phrases, in the order they are to be tried, and its flavour
+ * aliases (issue #1138). Absent or malformed is `null`, never an empty configuration: an empty list
+ * of phrases is a real entry (aliases only) and must not be invented.
+ */
+function searchTermsView(terms) {
+  if (terms === null || typeof terms !== 'object') return null;
+  const strings = (value) => listOf(value).filter((entry) => typeof entry === 'string' && entry.trim() !== '');
+  return { searchPhrases: strings(terms.searchPhrases), flavourAliases: strings(terms.flavourAliases) };
 }
 
 /**

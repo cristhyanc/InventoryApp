@@ -2705,6 +2705,10 @@ public class AppDbContext : DbContext
             .HasMaxLength(MasterProductPolicy.MaxNormalisedKeyLength);
         master.HasIndex(x => x.NormalisedKey).IsUnique();
 
+        // Optional supplier search terms (issue #1138), JSON written and read only through
+        // SupplierSearchTermsJson. Nullable with no default: a product nobody configured has none.
+        master.Property(x => x.SupplierSearchTerms);
+
         MarkUtc(master.Property(x => x.CreatedAtUtc));
         MarkUtc(master.Property(x => x.UpdatedAtUtc));
     }

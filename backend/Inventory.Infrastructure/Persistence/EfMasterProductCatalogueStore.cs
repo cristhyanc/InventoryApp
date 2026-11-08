@@ -87,7 +87,8 @@ public sealed class EfMasterProductCatalogueStore : IMasterProductCatalogueStore
                 master.SizeValue,
                 master.SizeUnit,
                 master.CreatedAtUtc,
-                master.UpdatedAtUtc))
+                master.UpdatedAtUtc,
+                master.SupplierSearchTerms))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -116,7 +117,8 @@ public sealed class EfMasterProductCatalogueStore : IMasterProductCatalogueStore
                 master.SizeValue,
                 master.SizeUnit,
                 master.CreatedAtUtc,
-                master.UpdatedAtUtc))
+                master.UpdatedAtUtc,
+                master.SupplierSearchTerms))
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
@@ -268,7 +270,8 @@ public sealed class EfMasterProductCatalogueStore : IMasterProductCatalogueStore
             product.UpdatedAtUtc,
             // No listings at all is four zeros rather than an absence: the product is in the
             // catalogue either way, and "nothing has been found at a supplier yet" is an answer.
-            counts.GetValueOrDefault(product.Id) ?? new MasterProductListingCounts(0, 0, 0, 0));
+            counts.GetValueOrDefault(product.Id) ?? new MasterProductListingCounts(0, 0, 0, 0),
+            SupplierSearchTermsJson.Deserialize(product.SupplierSearchTerms));
 
     private static CataloguedSupplierListing Listing(ListingRow listing) =>
         new(
@@ -298,7 +301,8 @@ public sealed class EfMasterProductCatalogueStore : IMasterProductCatalogueStore
         decimal SizeValue,
         MasterProductSizeUnit SizeUnit,
         DateTime CreatedAtUtc,
-        DateTime UpdatedAtUtc);
+        DateTime UpdatedAtUtc,
+        string? SupplierSearchTerms);
 
     /// <summary>One supplier listing of that product, with the price it currently publishes.</summary>
     private sealed record ListingRow(

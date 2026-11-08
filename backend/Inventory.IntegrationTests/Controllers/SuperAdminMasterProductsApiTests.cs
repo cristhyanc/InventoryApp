@@ -609,6 +609,185 @@ public class SuperAdminMasterProductsApiTests
 
     #endregion
 
+    #region Supplier search terms (issue #1138)
+
+    /// <summary>
+    /// The edit saves, displays, reorders and removes supplier search terms: a connector entry and a
+    /// preset entry round-trip cleaned and in order through the edit, the detail and the listing; an
+    /// edit that omits them keeps them; reordering is a resubmission in the new order; an empty list
+    /// removes them all.
+    /// </summary>
+    [Fact]
+    public async Task Supplier_search_terms_round_trip_through_the_edit_the_detail_and_the_listing()
+    {
+        var arranged = await ArrangeAsync();
+        var presetId = await PresetIdAsync();
+        var client = _factory.AsAdministrator();
+
+        var read = await ProductAsync(arranged.ColaId);
+        var saved = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            EditWithTerms(read.UpdatedAtUtc,
+            [
+                new
+                {
+                    supplierPresetId = (int?)null,
+                    priceConnector = (int?)SupplierPriceConnector.JbMetro,
+                    searchPhrases = new[] { "  Smiths   Plain ", "smiths plain", "Smiths" },
+                    flavourAliases = new[] { " Plain " },
+                },
+                new
+                {
+                    supplierPresetId = (int?)presetId,
+                    priceConnector = (int?)null,
+                    searchPhrases = new[] { "Coke" },
+                    flavourAliases = Array.Empty<string>(),
+                },
+            ]));
+
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        var expected =
+            "[{\"supplierPresetId\":null,\"priceConnector\":4,\"searchPhrases\":[\"Smiths Plain\",\"Smiths\"],\"flavourAliases\":[\"Plain\"]},"
+            + $"{{\"supplierPresetId\":{presetId},\"priceConnector\":null,\"searchPhrases\":[\"Coke\"],\"flavourAliases\":[]}}]";
+        Assert.Equal(expected, TermsOf(await saved.Content.ReadAsStringAsync()));
+
+        var detail = await client.GetStringAsync($"{MasterProductsUrl}/{arranged.ColaId}");
+        Assert.Equal(expected, JsonDocument.Parse(detail).RootElement.GetProperty("product")
+            .GetProperty("supplierSearchTerms").GetRawText());
+
+        var listing = JsonDocument.Parse(await client.GetStringAsync(MasterProductsUrl)).RootElement;
+        var listed = listing.GetProperty("products").EnumerateArray()
+            .Single(product => product.GetProperty("id").GetInt64() == arranged.ColaId);
+        Assert.Equal(expected, listed.GetProperty("supplierSearchTerms").GetRawText());
+        var other = listing.GetProperty("products").EnumerateArray()
+            .Single(product => product.GetProperty("id").GetInt64() == arranged.PepsiId);
+        Assert.Equal("[]", other.GetProperty("supplierSearchTerms").GetRawText());
+
+        // A correction from a client that sends no terms keeps them.
+        read = await ProductAsync(arranged.ColaId);
+        var kept = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            Edit("Coca-Cola", "Classic", 375m, read.UpdatedAtUtc));
+        Assert.Equal(HttpStatusCode.OK, kept.StatusCode);
+        Assert.Equal(expected, TermsOf(await kept.Content.ReadAsStringAsync()));
+
+        // Reordered phrases are stored in the new order.
+        read = await ProductAsync(arranged.ColaId);
+        var reordered = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            EditWithTerms(read.UpdatedAtUtc,
+            [
+                new
+                {
+                    supplierPresetId = (int?)null,
+                    priceConnector = (int?)SupplierPriceConnector.JbMetro,
+                    searchPhrases = new[] { "Smiths", "Smiths Plain" },
+                    flavourAliases = new[] { "Plain" },
+                },
+            ]));
+        Assert.Equal(
+            "[\"Smiths\",\"Smiths Plain\"]",
+            JsonDocument.Parse(TermsOf(await reordered.Content.ReadAsStringAsync())).RootElement[0]
+                .GetProperty("searchPhrases").GetRawText());
+
+        // An empty list removes them all, and the column goes back to holding nothing.
+        read = await ProductAsync(arranged.ColaId);
+        var removed = await client.PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            EditWithTerms(read.UpdatedAtUtc, []));
+        Assert.Equal("[]", TermsOf(await removed.Content.ReadAsStringAsync()));
+        Assert.Null((await ProductAsync(arranged.ColaId)).SupplierSearchTerms);
+    }
+
+    /// <summary>
+    /// A third search phrase, an entry naming both a supplier and a connector, two entries for one
+    /// connector and a supplier that does not exist are each a <c>400</c> with its own sentence, and
+    /// nothing is written - not the terms, and not the brand change sent beside them.
+    /// </summary>
+    [Theory]
+    [InlineData("third-phrase")]
+    [InlineData("both-targets")]
+    [InlineData("duplicate-connector")]
+    [InlineData("unknown-preset")]
+    public async Task Invalid_supplier_search_terms_are_a_bad_request_and_store_nothing(string invalid)
+    {
+        var arranged = await ArrangeAsync();
+        var presetId = await PresetIdAsync();
+        var before = await FingerprintAsync();
+        var read = await ProductAsync(arranged.ColaId);
+
+        object[] entries = invalid switch
+        {
+            "third-phrase" =>
+            [
+                new { supplierPresetId = (int?)null, priceConnector = (int?)4, searchPhrases = new[] { "Smiths Plain", "Smiths Chips", "Smiths" }, flavourAliases = Array.Empty<string>() },
+            ],
+            "both-targets" =>
+            [
+                new { supplierPresetId = (int?)presetId, priceConnector = (int?)4, searchPhrases = new[] { "Smiths" }, flavourAliases = Array.Empty<string>() },
+            ],
+            "duplicate-connector" =>
+            [
+                new { supplierPresetId = (int?)null, priceConnector = (int?)4, searchPhrases = new[] { "Smiths" }, flavourAliases = Array.Empty<string>() },
+                new { supplierPresetId = (int?)null, priceConnector = (int?)4, searchPhrases = new[] { "Smiths Plain" }, flavourAliases = Array.Empty<string>() },
+            ],
+            _ =>
+            [
+                new { supplierPresetId = (int?)(presetId + 1000), priceConnector = (int?)null, searchPhrases = new[] { "Smiths" }, flavourAliases = Array.Empty<string>() },
+            ],
+        };
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            $"{MasterProductsUrl}/{arranged.ColaId}",
+            new
+            {
+                brand = "Coca-Cola Renamed",
+                name = "Classic",
+                sizeValue = 375m,
+                sizeUnit = (int)MasterProductSizeUnit.Millilitre,
+                lastChangedAtUtc = read.UpdatedAtUtc,
+                supplierSearchTerms = entries,
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            invalid switch
+            {
+                "third-phrase" => SupplierSearchTermsPolicy.TooManyPhrasesMessage,
+                "both-targets" => SupplierSearchTermsPolicy.TargetRequiredMessage,
+                "duplicate-connector" => SupplierSearchTermsPolicy.DuplicateTargetMessage,
+                _ => SupplierSearchTermsPolicy.UnknownSupplierPresetMessage,
+            },
+            await MessageAsync(response));
+        Assert.Equal(before, await FingerprintAsync());
+    }
+
+    private static object EditWithTerms(DateTime lastChangedAtUtc, object[] supplierSearchTerms) =>
+        new
+        {
+            brand = "Coca-Cola",
+            name = "Classic",
+            sizeValue = 375m,
+            sizeUnit = (int)MasterProductSizeUnit.Millilitre,
+            lastChangedAtUtc,
+            supplierSearchTerms,
+        };
+
+    private static string TermsOf(string body) =>
+        JsonDocument.Parse(body).RootElement.GetProperty("supplierSearchTerms").GetRawText();
+
+    private async Task<int> PresetIdAsync()
+    {
+        await using var db = _factory.Database();
+
+        return await db.SupplierPresets.AsNoTracking()
+            .Where(preset => preset.Name == "Alpha Grocer")
+            .Select(preset => preset.Id)
+            .SingleAsync();
+    }
+
+    #endregion
+
     #region The listing
 
     /// <summary>
@@ -1045,7 +1224,7 @@ public class SuperAdminMasterProductsApiTests
         var masters = await db.MasterProducts
             .AsNoTracking()
             .OrderBy(master => master.Id)
-            .Select(master => new { master.Id, master.Brand, master.Name, master.UpdatedAtUtc })
+            .Select(master => new { master.Id, master.Brand, master.Name, master.UpdatedAtUtc, master.SupplierSearchTerms })
             .ToListAsync();
         var listings = await db.SupplierListings
             .AsNoTracking()
