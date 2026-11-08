@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { COLLECT_ENVIRONMENT, FINALISE_STEP, RUN_LOG_STEP, SCHEDULED_SETTINGS, SCHEDULE_SWITCH, SCHEDULE_TRIGGER, verifyCollectorWorkflow } from './workflow-contract.mjs';
+import { COLLECT_ENVIRONMENT, FINALISE_STEP, MANUAL_CONFIRMATION, RUN_LOG_STEP, SCHEDULED_SETTINGS, SCHEDULE_SWITCH, SCHEDULE_TRIGGER, verifyCollectorWorkflow } from './workflow-contract.mjs';
 
 const workflow = readFileSync(new URL('../../.github/workflows/price-collector.yml', import.meta.url), 'utf8');
 
@@ -45,17 +45,20 @@ test('production is main only, in its own environment with its own API setting, 
   ]) assert.throws(() => verifyCollectorWorkflow(changed));
 });
 
-test('one daily Sydney schedule, switched off by default, with no hour check and nothing else automatic', () => {
+test('one daily run from the Azure schedule, switched off by default, with no hour check and no other start', () => {
   for (const changed of [
-    // A second schedule, a UTC schedule, or a schedule on the hour.
-    workflow.replace("    - cron: '17 5 * * *'\n", "    - cron: '17 5 * * *'\n    - cron: '17 17 * * *'\n"),
-    workflow.replace('      timezone: Australia/Sydney\n', ''),
-    workflow.replace("    - cron: '17 5 * * *'", "    - cron: '0 5 * * *'"),
+    // A GitHub cron back alongside the Azure schedule would start a second, late daily run.
+    workflow.replace('on:\n', "on:\n  schedule:\n    - cron: '17 5 * * *'\n      timezone: Australia/Sydney\n"),
+    // The daily run must be marked by its own input.
+    workflow.replace("          SCHEDULED_RUN: ${{ inputs.scheduled_run }}\n          SCHEDULE_ENABLED", "          SCHEDULED_RUN: false\n          SCHEDULE_ENABLED"),
+    workflow.replace('      scheduled_run:\n', '      daily_run:\n'),
+    workflow.replace("          SCHEDULED_RUN: ${{ inputs.scheduled_run }}\n          ENABLED", "          SCHEDULED_RUN: false\n          ENABLED"),
     // Another automatic start.
     workflow.replace(SCHEDULE_TRIGGER, `${SCHEDULE_TRIGGER.replace('on:\n', 'on:\n  push:\n    branches: [main]\n')}`),
+    workflow.replace(SCHEDULE_TRIGGER, `${SCHEDULE_TRIGGER.replace('on:\n', 'on:\n  repository_dispatch:\n')}`),
     workflow.replace('  workflow_dispatch:\n', '  workflow_run:\n    workflows: [Deploy Production]\n  workflow_dispatch:\n'),
     // A runtime hour check would throw away a delayed run.
-    workflow.replace("          case \"$EVENT_NAME\" in\n", "          [ \"$(date +%H)\" = '05' ] || exit 0\n          case \"$EVENT_NAME\" in\n"),
+    workflow.replace("          case \"$SCHEDULED_RUN\" in\n", "          [ \"$(date +%H)\" = '05' ] || exit 0\n          case \"$SCHEDULED_RUN\" in\n"),
     // The switch read from anywhere else, or not compared with exactly true.
     workflow.replace('          SCHEDULE_ENABLED: ${{ vars.PRICE_COLLECTOR_SCHEDULE_ENABLED }}\n', '          SCHEDULE_ENABLED: true\n'),
     workflow.replace(SCHEDULE_SWITCH, SCHEDULE_SWITCH.replace("!= 'true'", "= 'false'")),
@@ -65,7 +68,8 @@ test('one daily Sydney schedule, switched off by default, with no hour check and
     workflow.replace(SCHEDULED_SETTINGS, SCHEDULED_SETTINGS.replace('TARGET=production', 'TARGET=test')),
     workflow.replace('          PRICE_COLLECTOR_SCHEDULE: ${{ needs.gate.outputs.schedule }}\n', ''),
     // The manual confirmation skipped for a manual run.
-    workflow.replace("        if: github.event_name == 'workflow_dispatch'\n", ''),
+    workflow.replace(MANUAL_CONFIRMATION, ''),
+    workflow.replace(MANUAL_CONFIRMATION, "        if: github.event_name == 'workflow_dispatch' && false\n"),
   ]) assert.throws(() => verifyCollectorWorkflow(changed));
 });
 
