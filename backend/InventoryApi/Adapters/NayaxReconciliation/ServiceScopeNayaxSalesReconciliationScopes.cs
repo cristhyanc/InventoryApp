@@ -30,6 +30,15 @@ namespace InventoryApi.Adapters.NayaxReconciliation;
 /// repoint it. From that point the context, the tenant query filters, the ownership stamp, the
 /// credential read, the plan check and the Nayax call are all the ones a member of that business would
 /// get.</para>
+///
+/// <para><strong>It is resolved as hosted work.</strong> The run has no request and no signed-in
+/// user, so there is no membership for <c>CurrentBusinessProvider</c> to resolve the business from.
+/// The scope is therefore published with <c>BusinessScope.ResolveForHostedWork</c>, which is the same
+/// <c>Resolved</c> scope for every read and write and only additionally lets
+/// <c>RequireBusinessIdAsync</c> answer this business. Before that, the scope was published with the
+/// request path's <c>Resolve</c>, and every sweep in production ended on
+/// <c>BusinessAccessDeniedException</c> at the use case's first line, so no reconciliation ever
+/// recorded a success.</para>
 /// </summary>
 public sealed class ServiceScopeNayaxSalesReconciliationScopes : INayaxSalesReconciliationScopes
 {
@@ -63,7 +72,7 @@ public sealed class ServiceScopeNayaxSalesReconciliationScopes : INayaxSalesReco
         {
             scope.ServiceProvider
                 .GetRequiredService<BusinessScope>()
-                .Resolve(BusinessId.From(businessId));
+                .ResolveForHostedWork(BusinessId.From(businessId));
 
             return new WorkScope(scope);
         }
