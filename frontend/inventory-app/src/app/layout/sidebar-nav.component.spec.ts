@@ -391,7 +391,8 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
       '/super-admin/businesses',
       '/super-admin/supplier-presets',
       '/super-admin/price-catalogue-review',
-      '/super-admin/master-products'
+      '/super-admin/master-products',
+      '/super-admin/menu-visibility'
     ]);
   });
 });
@@ -1910,17 +1911,28 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
 });
 
 /**
- * The one switchable Admin option in the menu (issue #873): a Super Admin may stop
- * `Historical GST Classification` being offered to everybody else, and keeps it themselves with an
- * `Off` pill beside its name.
+ * The switchable Admin destinations in the menu (issues #873, #1148 and #1151): a Super Admin may
+ * stop any of them being offered to everybody else, and keeps them themselves with an `Off` pill
+ * beside the name of each one that is off.
  *
  * The answer comes from the capability read - the sidebar decides nothing here either - and it is
  * applied after the capability rules, so it can only ever take away an entry the role already had.
  */
-describe('SidebarNavComponent switchable option visibility (issue #873)', () => {
+describe('SidebarNavComponent switchable menu visibility (issues #873, #1148 and #1151)', () => {
   const ROUTE = '/admin/historical-gst-classification';
-  const OFF: OptionVisibility = { historicalGstClassificationVisible: false };
-  const ON: OptionVisibility = { historicalGstClassificationVisible: true };
+  const GST_OFF: OptionVisibility = { switchedOffKeys: ['admin.historical-gst-classification'] };
+  const NOTHING_OFF: OptionVisibility = { switchedOffKeys: [] };
+  const EVERY_KEY_OFF: OptionVisibility = {
+    switchedOffKeys: [
+      'admin.site-commission-agreements',
+      'admin.imports',
+      'admin.historical-cost-recovery',
+      'admin.avco-transition',
+      'admin.costing-repair',
+      'admin.historical-gst-classification',
+      'admin.nayax-sale-timestamp-repair'
+    ]
+  };
 
   async function openAdmin(
     optionVisibility: OptionVisibility | undefined,
@@ -1936,17 +1948,30 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     return rendered;
   }
 
-  it('leaves the entry out for an eligible member while the option is off', async () => {
-    const { host } = await openAdmin(OFF);
+  it('leaves out only the entries whose key is off, for an eligible member', async () => {
+    const { host } = await openAdmin(GST_OFF);
 
     expect(link(host, ROUTE)).toBeNull();
-    // The rest of the Admin group is untouched: this is one option, not a section.
+    // The rest of the Admin group is untouched: this is one destination, not a section.
     expect(link(host, '/admin/costing-repair')).not.toBeNull();
     expect(link(host, '/admin/imports')).not.toBeNull();
   });
 
-  it('offers it, with no pill, while the option is on', async () => {
-    const { host } = await openAdmin(ON);
+  it('leaves out every switchable entry when every key is off, keeping the rest', async () => {
+    const { host } = await openAdmin(EVERY_KEY_OFF);
+
+    expect(link(host, ROUTE)).toBeNull();
+    expect(link(host, '/admin/costing-repair')).toBeNull();
+    expect(link(host, '/admin/imports')).toBeNull();
+    // Integrations, Users, Roles and Business Settings are never switchable (9 November 2026).
+    expect(link(host, '/admin/nayax-settings')).not.toBeNull();
+    expect(link(host, '/admin/users')).not.toBeNull();
+    expect(link(host, '/admin/roles')).not.toBeNull();
+    expect(link(host, '/admin/business-settings')).not.toBeNull();
+  });
+
+  it('offers it, with no pill, while nothing is switched off', async () => {
+    const { host } = await openAdmin(NOTHING_OFF);
 
     expect(link(host, ROUTE)).not.toBeNull();
     expect(link(host, ROUTE)?.textContent).not.toContain('Off');
@@ -1959,8 +1984,8 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     expect(link(host, ROUTE)?.textContent).not.toContain('Off');
   });
 
-  it('keeps it for a super admin while the option is off, marked Off and still linked', async () => {
-    const { host } = await openAdmin(OFF, { diagnosticsAccess: true });
+  it('keeps it for a super admin while its key is off, marked Off and still linked', async () => {
+    const { host } = await openAdmin(GST_OFF, { diagnosticsAccess: true });
 
     const entry = link(host, ROUTE);
     expect(entry).not.toBeNull();
@@ -1969,10 +1994,38 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     expect(entry?.hasAttribute('aria-disabled')).toBe(false);
   });
 
-  it('marks nothing Off for a super admin while the option is on', async () => {
-    const { host } = await openAdmin(ON, { diagnosticsAccess: true });
+  /** The pill is per entry, so the administrator sees exactly which destinations are off. */
+  it('marks every switched-off entry for a super admin, and only those', async () => {
+    const { host } = await openAdmin(
+      { switchedOffKeys: ['admin.imports', 'admin.costing-repair'] },
+      { diagnosticsAccess: true }
+    );
+
+    expect(link(host, '/admin/imports')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, '/admin/costing-repair')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, ROUTE)?.querySelector('.badge')).toBeNull();
+    expect(link(host, '/admin/users')?.querySelector('.badge')).toBeNull();
+  });
+
+  it('marks nothing Off for a super admin while nothing is switched off', async () => {
+    const { host } = await openAdmin(NOTHING_OFF, { diagnosticsAccess: true });
 
     expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  /**
+   * Menu Visibility is a Super Admin destination, so no switch reaches it: the page the switches are
+   * managed from must always be reachable from the menu that shows them.
+   */
+  it('keeps the Menu Visibility entry for a super admin with every key off', async () => {
+    const { host, fixture } = await render({
+      access: of(granted(CAPABILITIES, EVERY_KEY_OFF)),
+      diagnosticsAccess: of(true)
+    });
+    groupToggle(host, 'Super Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/super-admin/menu-visibility')).not.toBeNull();
   });
 
   /**
@@ -1980,7 +2033,7 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
    * `Super Admin` group (issue #721): what the preview shows is what the previewed role sees.
    */
   it('withholds the entry inside a role preview, as it does the Super Admin group', async () => {
-    const { host } = await openAdmin(OFF, { diagnosticsAccess: true, rolePreviewActive: true });
+    const { host } = await openAdmin(GST_OFF, { diagnosticsAccess: true, rolePreviewActive: true });
 
     expect(link(host, ROUTE)).toBeNull();
   });
@@ -1999,7 +2052,7 @@ describe('SidebarNavComponent switchable option visibility (issue #873)', () => 
     ] as const;
 
     const { host, fixture } = await render({
-      access: of(granted(manager, ON)),
+      access: of(granted(manager, NOTHING_OFF)),
       diagnosticsAccess: of(true)
     });
     groupToggle(host, 'Admin').click();

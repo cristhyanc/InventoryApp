@@ -44,7 +44,8 @@ import { confirmProductFormLeave } from './components/products/product-form-leav
  * `/application-rejected`, `/access-unavailable`, `/apply` and the `/invite` acceptance page - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
  * for the reason already documented beside it, and `/super-admin/diagnostics`,
- * `/super-admin/businesses` and `/super-admin/supplier-presets` (issues #546, #547, #848) carry
+ * `/super-admin/businesses`, `/super-admin/supplier-presets` and `/super-admin/menu-visibility`
+ * (issues #546, #547, #848, #1151) carry
  * neither guard: their authority is the
  * platform-admin check, not a business role or membership, so each carries `platformAdminGuard`
  * instead and sends a refusal to the dashboard rather than to any membership-handling destination
@@ -616,6 +617,19 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./components/super-admin/master-products/super-admin-master-products.component').then(
         (m) => m.SuperAdminMasterProductsComponent
+      )
+  },
+  {
+    // The Super Admin Menu Visibility page (issue #1151): which Admin maintenance destinations are
+    // offered to anybody but a Super Admin. Platform-admin authority, not a business role, decides
+    // it - the same `platformAdminGuard` as the five super-admin routes above, and for the same
+    // reason - and it is deliberately never affected by the switches it manages, because an
+    // administrator must always be able to switch one back on.
+    path: 'super-admin/menu-visibility',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/menu-visibility/super-admin-menu-visibility.component').then(
+        (m) => m.SuperAdminMenuVisibilityComponent
       )
   },
   {

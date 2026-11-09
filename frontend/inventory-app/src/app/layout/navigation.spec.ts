@@ -1,6 +1,6 @@
 import { capabilitySet } from '../access/capabilities';
 import { Entitlement } from '../access/entitlement';
-import { OptionVisibility } from '../access/option-visibility';
+import { MENU_VISIBILITY_KEYS, MenuVisibilityKey, OptionVisibility } from '../access/option-visibility';
 import { routes } from '../app.routes';
 import { ProviderAvailability, providerFeatureAvailabilities, providerConnectionOf } from '../provider/provider-availability.service';
 import {
@@ -10,26 +10,30 @@ import {
 } from '../provider/provider-feature-permissions';
 import {
   NavGroup,
+  NavGroupChild,
   NavItem,
   NavLink,
   NavSectionHeading,
   activeNavGroup,
   activeNavLink,
   activeNavRoute,
+  adminEntriesWithVisibilityKey,
+  adminNavGroup,
   businessesNavLink,
   masterProductsNavLink,
+  menuVisibilityNavLink,
   navLinks,
   navLockOf,
   navLockSummary,
   navigationFor,
+  neverSwitchableAdminRoutes,
   optionSwitchedOff,
   platformDiagnosticsNavLink,
   priceCatalogueReviewNavLink,
   primaryNavigation,
   superAdminNavGroup,
   superAdminNavSection,
-  supplierPresetsNavLink,
-  switchableOptionRoute
+  supplierPresetsNavLink
 } from './navigation';
 
 /**
@@ -386,13 +390,14 @@ describe('navigationFor (issue #546)', () => {
     expect(childRoutes('Admin', ownerNavigation())).toEqual(adminChildRoutes);
   });
 
-  it('adds it last, holding its five destinations, once the API confirms access', () => {
+  it('adds it last, holding its six destinations, once the API confirms access', () => {
     expect(group('Super Admin', ownerNavigation(true)).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink,
       supplierPresetsNavLink,
       priceCatalogueReviewNavLink,
-      masterProductsNavLink
+      masterProductsNavLink,
+      menuVisibilityNavLink
     ]);
   });
 
@@ -409,7 +414,8 @@ describe('navigationFor (issue #546)', () => {
       businessesNavLink.route,
       supplierPresetsNavLink.route,
       priceCatalogueReviewNavLink.route,
-      masterProductsNavLink.route
+      masterProductsNavLink.route,
+      menuVisibilityNavLink.route
     ]);
   });
 
@@ -474,7 +480,8 @@ describe('navigationFor (issue #546)', () => {
       businessesNavLink,
       supplierPresetsNavLink,
       priceCatalogueReviewNavLink,
-      masterProductsNavLink
+      masterProductsNavLink,
+      menuVisibilityNavLink
     ]);
     expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       platformDiagnosticsNavLink.route
@@ -531,6 +538,28 @@ describe('navigationFor (issue #546)', () => {
     );
     expect(navLinks(navigationFor(OWNER, true, 'offered')).map((link) => link.route)).toContain(
       masterProductsNavLink.route
+    );
+  });
+
+  /**
+   * Menu Visibility (issue #1151): the page the Admin switches are managed from. It declares no
+   * capability either - no business role grants it - and, like every other Super Admin destination,
+   * it is **never** affected by the switches it manages, which is asserted here with every key off.
+   */
+  it('declares Menu Visibility with no capability, and never switches itself off (#1151)', () => {
+    expect(menuVisibilityNavLink).toEqual({
+      kind: 'link',
+      label: 'Menu Visibility',
+      route: '/super-admin/menu-visibility'
+    });
+    expect(superAdminNavGroup.children).toContain(menuVisibilityNavLink);
+
+    const everyKeyOff: OptionVisibility = { switchedOffKeys: [...MENU_VISIBILITY_KEYS] };
+    expect(navLinks(navigationFor(OWNER, true, 'offered', undefined, everyKeyOff)).map((link) => link.route)).toContain(
+      menuVisibilityNavLink.route
+    );
+    expect(navLinks(navigationFor(OWNER, false, 'offered', undefined, everyKeyOff)).map((link) => link.route)).not.toContain(
+      menuVisibilityNavLink.route
     );
   });
 });
@@ -671,7 +700,8 @@ describe('navigationFor capabilities (issue #528)', () => {
       businessesNavLink,
       supplierPresetsNavLink,
       priceCatalogueReviewNavLink,
-      masterProductsNavLink
+      masterProductsNavLink,
+      menuVisibilityNavLink
     ]);
   });
 
@@ -708,7 +738,8 @@ describe('navigationFor with the business navigation withheld (issue #676)', () 
       businessesNavLink,
       supplierPresetsNavLink,
       priceCatalogueReviewNavLink,
-      masterProductsNavLink
+      masterProductsNavLink,
+      menuVisibilityNavLink
     ]);
   });
 
@@ -1231,19 +1262,41 @@ describe('activeNavLink (issue #729)', () => {
 });
 
 /**
- * The one switchable Admin option (issue #873): a Super Admin may stop Historical GST Classification
- * being offered to everybody else, and the menu is where that takes effect.
+ * Switchable Admin menu visibility (issues #873, #1148 and #1151): a Super Admin may stop any of the
+ * catalogue's Admin destinations being offered to everybody else, and the menu is where that takes
+ * effect.
  *
- * What these tests have to hold apart is "offered" from "permitted". The switch decides whether a
+ * What these tests have to hold apart is "offered" from "permitted". A switch decides whether a
  * destination is rendered; the capability set still decides whether it could be, and the API behind
- * the page authorizes every request itself either way - so switching the option on never adds an
- * entry to a member whose role never had it, and switching it off never takes a capability away.
+ * the page authorizes every request itself either way - so switching a key on never adds an entry to
+ * a member whose role never had it, and switching it off never takes a capability away.
+ *
+ * The key is declared on the entry, so **several entries may share one**. The literal table below is
+ * that declaration read back: a key whose entries change - the Reimbursement Report of #1152 joining
+ * `admin.imports` - changes it here too, which is the point of writing it out rather than deriving
+ * it from the navigation it is asserting about.
  */
-describe('switchable Admin option visibility (issue #873)', () => {
-  const OFF: OptionVisibility = { historicalGstClassificationVisible: false };
-  const ON: OptionVisibility = { historicalGstClassificationVisible: true };
+describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () => {
+  const GST_ROUTE = '/admin/historical-gst-classification';
+  const entry = { label: 'Historical GST Classification', route: GST_ROUTE };
 
-  const entry = { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' };
+  /** Every key, with every Admin entry that declares it, written out literally. */
+  const KEY_ENTRIES: readonly { readonly key: MenuVisibilityKey; readonly routes: readonly string[] }[] = [
+    { key: 'admin.site-commission-agreements', routes: ['/admin/site-commission-agreements'] },
+    { key: 'admin.imports', routes: ['/admin/imports'] },
+    { key: 'admin.historical-cost-recovery', routes: ['/admin/historical-cost-recovery'] },
+    { key: 'admin.avco-transition', routes: ['/admin/avco-transition'] },
+    { key: 'admin.costing-repair', routes: ['/admin/costing-repair'] },
+    { key: 'admin.historical-gst-classification', routes: [GST_ROUTE] },
+    { key: 'admin.nayax-sale-timestamp-repair', routes: ['/admin/nayax-sale-timestamp-repair'] }
+  ];
+
+  const EVERY_KEY_OFF: OptionVisibility = { switchedOffKeys: [...MENU_VISIBILITY_KEYS] };
+  const NOTHING_OFF: OptionVisibility = { switchedOffKeys: [] };
+
+  function off(...keys: readonly string[]): OptionVisibility {
+    return { switchedOffKeys: keys };
+  }
 
   function adminEntries(
     capabilities = OWNER,
@@ -1256,64 +1309,249 @@ describe('switchable Admin option visibility (issue #873)', () => {
     );
   }
 
-  it('offers the entry to an eligible member while the option is on', () => {
-    expect(adminEntries(OWNER, false, ON)).toContainEqual(entry);
+  function adminLink(route: string): NavLink {
+    const match = adminNavGroup.children.find(
+      (child): child is NavLink => child.kind === 'link' && child.route === route
+    );
+    expect(match).toBeDefined();
+    return match!;
+  }
+
+  it.each(KEY_ENTRIES)('leaves out exactly the entries that declare $key while it is off', ({ key, routes }) => {
+    const offered = adminEntries(OWNER, false, off(key)).map((child) => child.route);
+
+    expect(offered).toEqual(
+      adminEntries(OWNER, false, NOTHING_OFF)
+        .map((child) => child.route)
+        .filter((route) => !routes.includes(route))
+    );
+    routes.forEach((route) => expect(offered).not.toContain(route));
   });
 
-  it('hides it from an eligible member who is not a super admin while the option is off', () => {
-    expect(adminEntries(OWNER, false, OFF)).not.toContainEqual(entry);
+  it.each(KEY_ENTRIES)('keeps the entries that declare $key for a super admin while it is off', ({ routes }) => {
+    const offered = adminEntries(OWNER, true, EVERY_KEY_OFF).map((child) => child.route);
+
+    routes.forEach((route) => expect(offered).toContain(route));
   });
 
-  it('keeps it for a super admin while the option is off', () => {
-    expect(adminEntries(OWNER, true, OFF)).toContainEqual(entry);
+  it('offers every entry while nothing is switched off', () => {
+    expect(adminEntries(OWNER, false, NOTHING_OFF)).toEqual(adminChildRoutes);
   });
 
   /**
-   * An unread setting offers it, the same fail-open rule an unreadable capability set follows: the
-   * answer arrives with the capabilities, so "not known" means the read that would have said
+   * An unread setting hides nothing, the same fail-open rule an unreadable capability set follows:
+   * the answer arrives with the capabilities, so "not known" means the read that would have said
    * otherwise has not answered, and an entry whose own page authorizes itself is the safer default.
    */
-  it('offers it while the setting is not known yet', () => {
-    expect(adminEntries(OWNER, false, undefined)).toContainEqual(entry);
+  it('hides nothing while the setting is not known yet', () => {
+    expect(adminEntries(OWNER, false, undefined)).toEqual(adminChildRoutes);
+  });
+
+  /** A key this build does not declare is nobody's entry, so it takes nothing away. */
+  it('hides nothing for a key no entry declares', () => {
+    expect(adminEntries(OWNER, false, off('admin.something-else', 'reports.daily'))).toEqual(adminChildRoutes);
+  });
+
+  /** The never-switchable destinations have no key at all, so no switch can reach them. */
+  it('keeps the never-switchable destinations whatever is switched off', () => {
+    const offered = adminEntries(OWNER, false, EVERY_KEY_OFF).map((child) => child.route);
+
+    expect(offered).toEqual([...neverSwitchableAdminRoutes]);
   });
 
   /**
-   * The criterion "On restores it only to users already eligible under existing permissions": a
-   * Manager holds no `Data.Repair`, so neither state of the switch puts this entry in their menu -
-   * and neither does being the Super Admin, because the switch is not a capability.
+   * The criterion "switching On adds nothing": a Manager holds no `Data.Repair`, so neither state of
+   * a key puts a repair entry in their menu - and neither does being the Super Admin, because a
+   * switch is not a capability.
    */
-  it('never offers it to a member whose capabilities do not allow it', () => {
-    expect(adminEntries(MANAGER, false, ON)).not.toContainEqual(entry);
-    expect(adminEntries(MANAGER, false, OFF)).not.toContainEqual(entry);
-    expect(adminEntries(MANAGER, true, OFF)).not.toContainEqual(entry);
+  it('never offers an entry to a member whose capabilities do not allow it', () => {
+    const managerRoutes = (hasPlatformDiagnosticsAccess: boolean, options: OptionVisibility): string[] =>
+      navLinks(navigationFor(MANAGER, hasPlatformDiagnosticsAccess, 'offered', undefined, options)).map(
+        (link) => link.route
+      );
+
+    expect(managerRoutes(false, NOTHING_OFF)).not.toContain(entry.route);
+    expect(managerRoutes(false, EVERY_KEY_OFF)).not.toContain(entry.route);
+    expect(managerRoutes(true, EVERY_KEY_OFF)).not.toContain(entry.route);
   });
 
-  it('changes no other destination, in either state', () => {
-    const on = navigationFor(OWNER, true, 'offered', undefined, ON);
-    const off = navigationFor(OWNER, true, 'offered', undefined, OFF);
+  it('changes no destination outside the Admin group, in either state', () => {
+    const outsideAdmin = (options: OptionVisibility): string[] =>
+      navLinks(navigationFor(OWNER, true, 'offered', undefined, options))
+        .map((link) => link.route)
+        .filter((route) => !route.startsWith('/admin/'));
 
-    expect(navLinks(off).map((link) => link.route)).toEqual(navLinks(on).map((link) => link.route));
-    expect(adminEntries(OWNER, false, OFF)).toEqual(
-      adminEntries(OWNER, false, ON).filter((child) => child.route !== entry.route)
-    );
+    expect(outsideAdmin(EVERY_KEY_OFF)).toEqual(outsideAdmin(NOTHING_OFF));
   });
 
   /**
-   * What the sidebar renders the `Off` pill from, and nothing else: the one switchable entry, while
-   * the setting says it is switched off.
+   * A group with nothing left is left out with its children, exactly as it is when the capability
+   * set withholds every child: a Manager's whole Admin group is its two switchable destinations.
    */
-  it('reports the switched-off state for that entry alone', () => {
-    expect(optionSwitchedOff(entry.route, OFF)).toBe(true);
-    expect(optionSwitchedOff(entry.route, ON)).toBe(false);
-    expect(optionSwitchedOff(entry.route, undefined)).toBe(false);
-    expect(optionSwitchedOff('/admin/costing-repair', OFF)).toBe(false);
-    expect(optionSwitchedOff('/admin/business-settings', OFF)).toBe(false);
+  it('drops a group whose every remaining child is switched off', () => {
+    const navigation = navigationFor(MANAGER, false, 'offered', undefined, EVERY_KEY_OFF);
+
+    expect(navigation.map((navItem) => navItem.label)).not.toContain('Admin');
   });
 
-  /** The route the switch is about is the Admin destination it names, and only that one. */
-  it('names the one switchable destination', () => {
-    expect(switchableOptionRoute).toBe(entry.route);
-    expect(childRoutes('Admin')).toContainEqual(entry);
+  /** And the heading over it goes too, when the group was the only thing under it. */
+  it('drops a section heading left with nothing but a switched-off group', () => {
+    const capabilities = capabilitySet(['Imports.Run', 'SiteCommissions.Manage']);
+
+    expect(
+      navigationFor(capabilities, false, 'offered', undefined, NOTHING_OFF).map((navItem) => navItem.label)
+    ).toContain('Settings');
+    expect(
+      navigationFor(capabilities, false, 'offered', undefined, EVERY_KEY_OFF).map((navItem) => navItem.label)
+    ).not.toContain('Settings');
+  });
+
+  /**
+   * What the sidebar, the bottom nav's sheet and the Admin hub render the `Off` pill from, and
+   * nothing else: the entry's own declared key, while the setting says that key is switched off.
+   */
+  it('reports the switched-off state from the entry it is asked about', () => {
+    expect(optionSwitchedOff(adminLink(GST_ROUTE), off('admin.historical-gst-classification'))).toBe(true);
+    expect(optionSwitchedOff(adminLink(GST_ROUTE), off('admin.imports'))).toBe(false);
+    expect(optionSwitchedOff(adminLink(GST_ROUTE), NOTHING_OFF)).toBe(false);
+    expect(optionSwitchedOff(adminLink(GST_ROUTE), undefined)).toBe(false);
+    expect(optionSwitchedOff(adminLink('/admin/users'), EVERY_KEY_OFF)).toBe(false);
+  });
+
+  /**
+   * A shared key (the decision of 9 November 2026): the Reimbursement Report of #1152 declares
+   * `admin.imports` and never gets a key of its own. Until that entry exists this is a fixture
+   * entry declaring the same key - `navigationFor` renders the declared navigation, so a second real
+   * entry cannot be injected into it - and whichever issue adds the real one adds it here.
+   */
+  describe('a key shared by several entries', () => {
+    const reimbursementReport: NavLink = {
+      kind: 'link',
+      label: 'Reimbursement Report',
+      route: '/admin/imports/reimbursement-report',
+      capability: 'Imports.Run',
+      visibilityKey: 'admin.imports'
+    };
+
+    it('switches both entries off together for a member', () => {
+      expect(optionSwitchedOff(adminLink('/admin/imports'), off('admin.imports'))).toBe(true);
+      expect(optionSwitchedOff(reimbursementReport, off('admin.imports'))).toBe(true);
+      expect(adminEntries(OWNER, false, off('admin.imports')).map((child) => child.route)).not.toContain(
+        '/admin/imports'
+      );
+    });
+
+    it('keeps both for the administrator, each marked Off by the same rule', () => {
+      expect(adminEntries(OWNER, true, off('admin.imports')).map((child) => child.route)).toContain('/admin/imports');
+      expect(optionSwitchedOff(adminLink('/admin/imports'), off('admin.imports'))).toBe(true);
+      expect(optionSwitchedOff(reimbursementReport, off('admin.imports'))).toBe(true);
+    });
+
+    it('leaves both offered while the shared key is on', () => {
+      expect(optionSwitchedOff(adminLink('/admin/imports'), off('admin.costing-repair'))).toBe(false);
+      expect(optionSwitchedOff(reimbursementReport, off('admin.costing-repair'))).toBe(false);
+    });
+
+    /** The page's "it also covers ..." sentence is this list, read from the entries themselves. */
+    it('reports every Admin entry that declares the key', () => {
+      expect(adminEntriesWithVisibilityKey('admin.imports').map((link) => link.label)).toEqual(['Imports']);
+      expect(adminEntriesWithVisibilityKey('admin.costing-repair').map((link) => link.label)).toEqual([
+        'Costing Repair'
+      ]);
+      expect(adminEntriesWithVisibilityKey('admin.something-else')).toEqual([]);
+    });
+  });
+
+  /**
+   * The alignment rule: every Admin leaf either declares exactly one catalogue key or is on the
+   * explicit never-switchable list - not both, not neither - and every catalogue key is used.
+   *
+   * It is written as a function over any list of children so that the rule itself is tested, not
+   * only today's navigation: a new entry that declares neither fails, and a second entry that
+   * declares a key another entry already uses passes.
+   */
+  describe('alignment with the catalogue', () => {
+    function problems(children: readonly NavGroupChild[]): string[] {
+      return children.flatMap((child) => {
+        if (child.kind !== 'link') {
+          return [];
+        }
+        const never = neverSwitchableAdminRoutes.includes(child.route);
+        if (child.visibilityKey === undefined) {
+          return never ? [] : [`${child.route} declares no visibility key and is not never-switchable`];
+        }
+        if (never) {
+          return [`${child.route} declares a visibility key and is also never-switchable`];
+        }
+        return MENU_VISIBILITY_KEYS.includes(child.visibilityKey)
+          ? []
+          : [`${child.route} declares ${child.visibilityKey}, which the catalogue does not declare`];
+      });
+    }
+
+    it('holds for every Admin destination declared today', () => {
+      expect(problems(adminNavGroup.children)).toEqual([]);
+    });
+
+    it('uses every catalogue key at least once', () => {
+      const declared = adminNavGroup.children
+        .filter((child): child is NavLink => child.kind === 'link')
+        .map((child) => child.visibilityKey);
+
+      expect(MENU_VISIBILITY_KEYS.filter((key) => !declared.includes(key))).toEqual([]);
+    });
+
+    it('fails a new entry that declares neither a key nor never-switchability', () => {
+      const added: NavLink = { kind: 'link', label: 'New Tool', route: '/admin/new-tool', capability: 'Data.Repair' };
+
+      expect(problems([...adminNavGroup.children, added])).toEqual([
+        '/admin/new-tool declares no visibility key and is not never-switchable'
+      ]);
+    });
+
+    it('fails a key the catalogue does not declare', () => {
+      const added = {
+        kind: 'link',
+        label: 'New Tool',
+        route: '/admin/new-tool',
+        capability: 'Data.Repair',
+        visibilityKey: 'admin.new-tool'
+      } as unknown as NavLink;
+
+      expect(problems([...adminNavGroup.children, added])).toEqual([
+        '/admin/new-tool declares admin.new-tool, which the catalogue does not declare'
+      ]);
+    });
+
+    it('passes a second entry that declares a key an existing entry already uses', () => {
+      const added: NavLink = {
+        kind: 'link',
+        label: 'Reimbursement Report',
+        route: '/admin/imports/reimbursement-report',
+        capability: 'Imports.Run',
+        visibilityKey: 'admin.imports'
+      };
+
+      expect(problems([...adminNavGroup.children, added])).toEqual([]);
+    });
+
+    it('fails an entry that claims both a key and never-switchability', () => {
+      const added = { ...adminLink('/admin/users'), visibilityKey: 'admin.imports' } as NavLink;
+
+      expect(problems([added])).toEqual([
+        '/admin/users declares a visibility key and is also never-switchable'
+      ]);
+    });
+
+    /** The four destinations an Owner needs to run their business, named once (9 November 2026). */
+    it('names the never-switchable destinations', () => {
+      expect([...neverSwitchableAdminRoutes]).toEqual([
+        '/admin/nayax-settings',
+        '/admin/users',
+        '/admin/roles',
+        '/admin/business-settings'
+      ]);
+    });
   });
 });
 

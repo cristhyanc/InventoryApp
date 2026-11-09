@@ -69,6 +69,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/super-admin/supplier-presets',
       '/super-admin/price-catalogue-review',
       '/super-admin/master-products',
+      '/super-admin/menu-visibility',
       '/admin/nayax-settings',
       '/admin/site-commission-agreements'
     ]);
@@ -145,6 +146,13 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/super-admin/master-products', null)).toEqual([
       { label: 'Super Admin', path: undefined, current: false },
       { label: 'Master Products', current: true }
+    ]);
+  });
+
+  it('builds Super Admin > Menu Visibility for the switches page (issue #1151)', () => {
+    expect(buildBreadcrumbTrail('/super-admin/menu-visibility', null)).toEqual([
+      { label: 'Super Admin', path: undefined, current: false },
+      { label: 'Menu Visibility', current: true }
     ]);
   });
 

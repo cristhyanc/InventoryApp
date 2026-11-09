@@ -132,6 +132,21 @@ describe('classifyMemberRequest (issue #602)', () => {
       expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
     });
 
+    /**
+     * The switchable Admin menu visibility of issues #1148 and #1151: the catalogue read and one
+     * key's write. Class-2 platform-admin authorization again, and the setting is the platform's own
+     * - it names no business and nobody's data - so a `403` from either says nothing about a
+     * membership or a business role, and neither may carry a role-preview or support-session header.
+     */
+    it.each([
+      '/api/super-admin/menu-visibility',
+      '/api/super-admin/menu-visibility/',
+      '/api/super-admin/menu-visibility/admin.imports',
+      '/api/Super-Admin/Menu-Visibility/admin.costing-repair'
+    ])('classifies %s as the platform-admin surface (issue #1151)', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
+    });
+
     it.each([
       // A segment that merely begins with the same letters is a different endpoint, and the
       // default for anything the exclusions do not name has to stay `member`.
@@ -140,6 +155,7 @@ describe('classifyMemberRequest (issue #602)', () => {
       '/api/super-admin/supplier-presets-archive',
       '/api/super-admin/price-catalogue-review-archive',
       '/api/super-admin/master-products-archive',
+      '/api/super-admin/menu-visibility-archive',
       // The business's own suppliers are an ordinary member endpoint and must stay one.
       '/api/suppliers',
       '/api/suppliers/7'
