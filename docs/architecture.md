@@ -7818,7 +7818,7 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 ### Interaction and presentation
 
-Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
+Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. A shared toast (`ToastService`) stays on screen for at least 5,000 ms: that is the default, a shorter requested duration is raised to it and a longer one is kept (issue #1142). Every toast also has a native close button named "Dismiss notification" (its "×" glyph is hidden from assistive technology) that removes that toast alone at once and cancels its pending auto-dismiss; stacked toasts expire and close independently. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
 
 New UI must remain keyboard-operable, associate labels with controls, expose meaningful button/link names, and not rely on color alone for reconciliation or quality status.
 

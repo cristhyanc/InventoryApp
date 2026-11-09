@@ -12,7 +12,9 @@ import { ToastService, ToastType } from '../../services/toast.service';
       <div *ngFor="let toast of toastService.messages$ | async" class="toast alert shadow-md" [ngClass]="alertClassFor(toast.type)">
         <div class="toast-header">
           <strong class="alert-title">{{ toast.title }}</strong>
-          <button type="button" class="toast-close" (click)="toastService.remove(toast.id)">×</button>
+          <button type="button" class="toast-close" aria-label="Dismiss notification" (click)="toastService.remove(toast.id)">
+            <span aria-hidden="true">×</span>
+          </button>
         </div>
         <div class="toast-body">{{ toast.message }}</div>
       </div>
