@@ -1,6 +1,8 @@
 using System.Text;
 using Inventory.Domain.Imports;
 using Inventory.Infrastructure.Imports;
+using InventoryApi.Tests.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -192,6 +194,85 @@ public class ZipReimbursementArchiveReaderTests
         Assert.NotNull(contents.XmlFiles[0].Parsed);
         Assert.Null(contents.XmlFiles[1].Parsed);
         Assert.Null(contents.XmlFiles[2].Parsed);
+    }
+
+    /// <summary>
+    /// An XML that is well-formed and still ambiguous - it names one attribute twice, in two
+    /// different namespaces - is that one entry's own failure like any other unreadable file, and the
+    /// valid report beside it still imports.
+    ///
+    /// <para>It used to escape this adapter as an <c>ArgumentException</c> out of the parser's
+    /// raw-attribute record, which is keyed by the local name: the whole upload failed, with no job,
+    /// no outcome and nothing to tell the operator which file was at fault.</para>
+    /// </summary>
+    [Fact]
+    public void An_xml_naming_one_attribute_twice_in_two_namespaces_is_that_entrys_own_failure()
+    {
+        var archive = ReimbursementArchiveFixtures.FlatArchive(
+            ("report_9900001_20261005.xml",
+                ReimbursementArchiveFixtures.ReportXml(
+                    FirstReportDay, FirstReportDay.AddDays(6), 405m)),
+            ("report_9900001_20261012.xml", ReimbursementArchiveFixtures.AmbiguousAttributeNamesXml));
+
+        var contents = Reader().Read(archive);
+
+        Assert.True(contents.IsAccepted);
+        Assert.Null(contents.Rejection);
+        Assert.Equal(2, contents.XmlFiles.Count);
+        Assert.NotNull(contents.XmlFiles[0].Parsed);
+        Assert.Null(contents.XmlFiles[1].Parsed);
+    }
+
+    /// <summary>
+    /// What the adapter says about an entry it could not parse: the sanitised entry label and one
+    /// fixed failure category, at <c>Warning</c>, and <strong>nothing else</strong>.
+    ///
+    /// <para>The parser's own exception is deliberately not attached. Its message is assembled from
+    /// the uploaded file - the ambiguous attribute's name, an element name, a position in the bytes -
+    /// so attaching it publishes a piece of a settlement statement into retained telemetry, which is
+    /// the one thing this import's logging rule forbids (the issue's "logs contain no XML content,
+    /// figures or payment data" criterion; docs/architecture.md § Observability and error telemetry,
+    /// "what must never reach a log"). The entry label is the one thing about the file that may
+    /// appear, because an operator has to be able to find it.</para>
+    /// </summary>
+    [Fact]
+    public void A_parse_failure_is_logged_as_the_entry_label_and_a_fixed_category_only()
+    {
+        var logger = new CapturingLogger<ZipReimbursementArchiveReader>();
+        var archive = ReimbursementArchiveFixtures.FlatArchive(
+            ("report_9900001_20261005.xml", ReimbursementArchiveFixtures.AmbiguousAttributeNamesXml),
+            ("report_9900001_20261012.xml", ReimbursementArchiveFixtures.MalformedXml));
+
+        var contents = new ZipReimbursementArchiveReader(logger).Read(archive);
+
+        Assert.True(contents.IsAccepted);
+        Assert.All(contents.XmlFiles, entry => Assert.Null(entry.Parsed));
+
+        Assert.Equal(2, logger.Entries.Count);
+        Assert.All(logger.Entries, entry =>
+        {
+            Assert.Equal(LogLevel.Warning, entry.Level);
+            Assert.Null(entry.Exception);
+            Assert.Equal(
+                ZipReimbursementArchiveReader.UnparsableXmlFailure,
+                entry.Properties["FailureCategory"]);
+        });
+
+        Assert.Equal(
+            ["report_9900001_20261005.xml", "report_9900001_20261012.xml"],
+            logger.Entries.Select(entry => entry.Properties["ArchiveEntry"]));
+
+        // Neither the rendered message nor any exported property carries a value out of either file.
+        var logged = logger.Entries
+            .SelectMany(entry => entry.Properties.Values.Append(entry.Message))
+            .Select(text => text ?? string.Empty)
+            .ToList();
+
+        Assert.All(
+            ReimbursementArchiveFixtures.UnloggableXmlValues,
+            value => Assert.All(
+                logged,
+                text => Assert.DoesNotContain(value, text, StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>

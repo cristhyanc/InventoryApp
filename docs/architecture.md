@@ -13126,7 +13126,11 @@ The import side of that flow (`POST api/imports/pending-xml`) is the
   dates, a date without an offset assumed to be UTC, a numeric attribute read as a boolean when it
   parses to a non-zero integer, an unparsable number or date left `null` rather than zero, every
   attribute preserved as raw JSON, a root `row` element treated as the single row, and a bare
-  `row` fragment retried wrapped in a root element. Filesystem and XML failures are translated here
+  `row` fragment retried wrapped in a root element. Since issue #1149's review one further decision
+  joins them: a file whose element names one attribute *twice* — the same local name in two
+  namespaces — is refused as unreadable rather than recorded with one of the two values dropped,
+  because nothing here may decide which half of a settlement figure to keep. Filesystem and XML
+  failures are translated here
   and never cross the port: an unreadable, malformed or row-less file is logged (by file name, never
   by server path) and answered as `null`, and a file that cannot be deleted as `false`, matching the
   "translated to a plain answer at that layer's own boundary" rule in the
@@ -13203,7 +13207,19 @@ XLSX and an XML per report day, so the rules are:
 - A file that is not a readable reimbursement report is **that entry's own** failure, answered across
   the port as a parsed `null`, exactly as the pending folder's adapter answers `null` for an
   unreadable file. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
-  the whole upload.
+  the whole upload. "Not readable" includes an XML that is *well-formed* and still ambiguous — one
+  that names the same attribute twice on an element, in two namespaces — which the parser refuses as
+  its own declared parse failure (issue #1149's review); it used to escape the walk as an
+  `ArgumentException` and fail the whole upload, with no job and nothing to tell the operator which
+  file was at fault.
+- **What the adapter says about an entry it could not parse is the sanitised entry label and one
+  fixed failure category** (`ZipReimbursementArchiveReader.UnparsableXmlFailure`), at `Warning`. The
+  parser's exception is deliberately **not** attached: its message is assembled out of the uploaded
+  bytes — an attribute name, an element name, a position in the file — so attaching it publishes a
+  piece of a settlement statement into retained telemetry, the one thing this import's logging rule
+  forbids. It is the same withholding `NayaxUpstreamExceptionHandler` makes, for the same reason; see
+  the [exception ownership table](#exception-ownership-table). The label is the one thing about the
+  file that may appear, because an operator has to be able to find the entry that failed.
 
 **The limits, in the Domain and enforced while the bytes are read** (`ReimbursementArchivePolicy`,
 the repository owner's confirmation of 9 November 2026): a 10 MB request — the same ceiling the Nayax

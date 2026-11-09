@@ -40,6 +40,37 @@ internal static class ReimbursementArchiveFixtures
         </row>
         """;
 
+    /// <summary>
+    /// A report that is well-formed XML and still cannot be parsed: it names one attribute twice, in
+    /// two different namespaces, and the parser's raw-attribute record is keyed by the local name.
+    /// Nothing Nayax sends looks like this - an uploaded file can, which is the point: it is one
+    /// file's own parse failure, not a reason for the whole upload to fail.
+    /// </summary>
+    public const string AmbiguousAttributeNamesXml =
+        """
+        <row xmlns:a="urn:fictional:first" xmlns:b="urn:fictional:second"
+             a:reimbursement_marker="1" b:reimbursement_marker="2" report_type="reimbursement"
+             company_name="Fictional Vending Co" customer_id="9900001" total="876543.21" />
+        """;
+
+    /// <summary>XML that is not well-formed at all, carrying its own recognisable marker.</summary>
+    public const string MalformedXml = "<row unterminated_marker=\"765432.19\"";
+
+    /// <summary>
+    /// The parts of the two unparsable fixtures above that must never reach a log sink: an attribute
+    /// name out of the uploaded file - which a parser's own exception message quotes - a company name
+    /// and a figure. A log line is not a place to publish settlement figures, and the exception the
+    /// parser threw is a copy of the file by another route.
+    /// </summary>
+    public static IReadOnlyList<string> UnloggableXmlValues { get; } =
+        [
+            "reimbursement_marker",
+            "876543.21",
+            "Fictional Vending Co",
+            "unterminated_marker",
+            "765432.19",
+        ];
+
     /// <summary>The report name Nayax uses: <c>report_&lt;account&gt;_&lt;yyyyMMdd&gt;.xml</c>.</summary>
     public static string ReportName(DateTime day, string extension) =>
         $"report_{Account}_{day:yyyyMMdd}{extension}";

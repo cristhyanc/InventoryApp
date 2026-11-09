@@ -44,6 +44,15 @@ namespace Inventory.Infrastructure.Imports;
 /// </summary>
 public sealed class ZipReimbursementArchiveReader : IReimbursementArchiveReader
 {
+    /// <summary>
+    /// The one category an entry that could not be parsed is logged under. It is a fixed word rather
+    /// than anything derived from the file or from the parser's exception, because the exception's
+    /// own message is assembled out of the uploaded bytes - an attribute name, an element name, a
+    /// position - and a log sink is retained telemetry, not a place to publish a piece of a
+    /// settlement statement.
+    /// </summary>
+    public const string UnparsableXmlFailure = "unparsable-reimbursement-xml";
+
     private readonly ILogger<ZipReimbursementArchiveReader> _logger;
 
     public ZipReimbursementArchiveReader(ILogger<ZipReimbursementArchiveReader> logger)
@@ -278,12 +287,18 @@ public sealed class ZipReimbursementArchiveReader : IReimbursementArchiveReader
             or JsonException
             or XmlException)
         {
-            // The entry label, never its content: a log line is not a place to publish settlement
-            // figures.
+            // The entry label and one fixed category, and nothing else: a log line is not a place to
+            // publish settlement figures, and the parser's own exception is a piece of the uploaded
+            // file by another route - its message quotes the attribute name, the element name or the
+            // position in the bytes that it failed on. So the exception is deliberately not attached,
+            // the same withholding NayaxUpstreamExceptionHandler makes for the same reason
+            // (docs/architecture.md § Exception ownership table). What an operator needs from this
+            // line is which entry failed, which the label says.
             _logger.LogWarning(
-                exception,
-                "An entry of an uploaded reimbursement report archive could not be parsed. Entry={ArchiveEntry}",
-                label);
+                "An entry of an uploaded reimbursement report archive could not be parsed. "
+                    + "Entry={ArchiveEntry} Failure={FailureCategory}",
+                label,
+                UnparsableXmlFailure);
 
             return null;
         }

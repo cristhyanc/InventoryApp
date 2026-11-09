@@ -41,7 +41,10 @@ public static class ReimbursementXmlParser
     /// <param name="fileName">The name to record for provenance; never a path.</param>
     /// <param name="bytes">The file's bytes, hashed as they are.</param>
     /// <exception cref="XmlException">The bytes are not XML, wrapped or otherwise.</exception>
-    /// <exception cref="InvalidDataException">The XML carries no <c>row</c> element.</exception>
+    /// <exception cref="InvalidDataException">
+    /// The XML carries no <c>row</c> element, or an element names one attribute twice - the same
+    /// local name in two namespaces - so its raw-attribute record cannot be made unambiguously.
+    /// </exception>
     public static PendingReimbursementXmlFile Parse(string fileName, byte[] bytes)
     {
         ArgumentNullException.ThrowIfNull(bytes);
@@ -167,8 +170,34 @@ public static class ReimbursementXmlParser
 
     private static string? Attr(XElement element, string name) => (string?)element.Attribute(name);
 
-    private static string? Attributes(XElement element) =>
-        JsonSerializer.Serialize(element.Attributes().ToDictionary(a => a.Name.LocalName, a => a.Value));
+    /// <summary>
+    /// Every attribute of the element as raw JSON, keyed by local name, so the imported fact stays
+    /// auditable - and a refusal when that record cannot be made unambiguously.
+    ///
+    /// <para>An element may carry two attributes with the same local name in different namespaces
+    /// (<c>a:id</c> and <c>b:id</c>), which a record keyed by local name cannot hold: one value would
+    /// have to be dropped, and nothing here may decide which half of a settlement figure to keep.
+    /// It is therefore this file's own parse failure, declared as
+    /// <see cref="InvalidDataException"/> like the row-less file above, so each caller records it the
+    /// way it records any unreadable file. Nothing Nayax sends uses a namespace at all; an uploaded
+    /// file can, and before issue #1149's review this escaped as an <see cref="ArgumentException"/>
+    /// that failed the whole upload. The message names nothing out of the file.</para>
+    /// </summary>
+    private static string? Attributes(XElement element)
+    {
+        var attributes = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var attribute in element.Attributes())
+        {
+            if (!attributes.TryAdd(attribute.Name.LocalName, attribute.Value))
+            {
+                throw new InvalidDataException(
+                    "The XML file names one attribute twice on the same element.");
+            }
+        }
+
+        return JsonSerializer.Serialize(attributes);
+    }
 
     private static bool Bool(XElement element, string name) =>
         int.TryParse(Attr(element, name), out var value) && value != 0;

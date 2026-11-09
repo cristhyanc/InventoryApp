@@ -12,6 +12,7 @@ using InventoryApi.Tests.Swagger;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
@@ -172,6 +173,63 @@ public class ImportsControllerReimbursementReportTests
         Assert.Equal(["a.xml", "b.xml"], detail.Files.Select(file => file.File));
         Assert.Equal(
             ProcessReimbursementImportJob.UnreadableFileReason, detail.Files[1].Reason);
+    }
+
+    /// <summary>
+    /// <strong>The regression of the ambiguous attribute names.</strong> An archive holding one XML
+    /// that names an attribute twice in two different namespaces, and one valid report beside it: the
+    /// upload is <em>accepted</em>, the ambiguous file is recorded <c>Failed</c> with the safe reason,
+    /// the valid report imports, and the job ends <c>CompletedWithFailures</c>.
+    ///
+    /// <para>Before the fix the ambiguous file threw an <c>ArgumentException</c> out of the archive
+    /// walk - out of the raw-attribute record the parser keys by local name - so the upload itself
+    /// failed with no job, no outcome and nothing to tell the operator which file was at fault, and
+    /// the valid report in the same ZIP was not imported either.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_xml_naming_one_attribute_twice_is_accepted_and_fails_only_that_file()
+    {
+        await using var fixture = await ReimbursementImportJobFixture.CreateAsync();
+        var archive = ReimbursementArchiveFixtures.FlatArchive(
+            ("report_9900001_20261005.xml", ReimbursementArchiveFixtures.AmbiguousAttributeNamesXml),
+            ("report_9900001_20261012.xml",
+                ReimbursementArchiveFixtures.ReportXml(
+                    FirstReportDay.AddDays(7), FirstReportDay.AddDays(13), 412m)));
+
+        int jobId;
+        await using (var upload = fixture.Context())
+        {
+            var uploaded = await Controller(fixture, upload).UploadReimbursementReport(
+                Upload("Reports_09-11-26.zip", archive), CancellationToken.None);
+
+            var accepted = Assert.IsType<AcceptedResult>(uploaded.Result);
+            jobId = Assert.IsType<ReimbursementReportUploadAccepted>(accepted.Value).JobId;
+        }
+
+        await using (var worker = fixture.Context())
+        {
+            await fixture.Process(worker).Handle(jobId, CancellationToken.None);
+        }
+
+        await using var db = fixture.Context();
+        var result = await Controller(fixture, db)
+            .ReimbursementReportJob(jobId, CancellationToken.None);
+
+        var detail = Assert.IsType<ReimbursementImportJobDetail>(
+            Assert.IsType<OkObjectResult>(result.Result).Value);
+
+        Assert.Equal(ReimbursementImportJobState.CompletedWithFailures, detail.Job.State);
+        Assert.Equal(1, detail.Job.ImportedFiles);
+        Assert.Equal(1, detail.Job.FailedFiles);
+        Assert.Equal(ReimbursementImportFileOutcome.Failed, detail.Files[0].Outcome);
+        Assert.Equal(
+            ProcessReimbursementImportJob.UnreadableFileReason, detail.Files[0].Reason);
+        Assert.Equal(ReimbursementImportFileOutcome.Imported, detail.Files[1].Outcome);
+
+        // Exactly the valid report landed, and the ambiguous one left nothing behind.
+        await using var verify = fixture.Unrestricted();
+        Assert.Equal(1, await verify.ImportedFiles.CountAsync());
+        Assert.Equal(1, await verify.ImportedReimbursements.CountAsync());
     }
 
     /// <summary>A job of another business answers <c>404</c>.</summary>
