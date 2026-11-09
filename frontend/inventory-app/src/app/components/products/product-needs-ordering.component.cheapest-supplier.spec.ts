@@ -172,6 +172,16 @@ describe('ProductNeedsOrderingComponent Cheapest supplier column (issue #930)', 
     expect(getSummary).toHaveBeenCalledWith(ids);
   });
 
+  it('links each row\'s cheapest offer to that supplier\'s own product page', async () => {
+    const getSummary = jest.fn(() => of(summary([1])));
+    const { host } = await render([product({ id: 1 })], getSummary);
+
+    const link = host.querySelector('[data-testid="cheapest-supplier-cell-view-1"]') as HTMLAnchorElement;
+    expect(link.textContent?.trim()).toBe('View ↗');
+    expect(link.getAttribute('href')).toBe('https://example.test/jb-metro/cola');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+
   it('opens the popup from a row and lists that product\'s suppliers', async () => {
     const getSummary = jest.fn(() => of(summary([1])));
     const { fixture, host } = await render([product({ id: 1 })], getSummary);

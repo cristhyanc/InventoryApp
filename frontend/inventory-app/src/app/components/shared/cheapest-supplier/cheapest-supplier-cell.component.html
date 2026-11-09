@@ -20,6 +20,24 @@
     data-testid="cheapest-supplier-cell"
   >{{ display }}</span>
 }
+@if (productLinks.length > 0) {
+  <!--
+    A direct link to each cheapest offer's own product page (issue #1098's View link, here on the
+    pages that ask for it), never the comparison: only offers that carry a URL.
+  -->
+  <span class="flex flex-wrap items-center gap-2" data-testid="cheapest-supplier-cell-links">
+    @for (link of productLinks; track link.supplierId) {
+      <a
+        class="text-xs font-semibold text-rr-teal hover:underline"
+        [href]="link.productUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        [attr.aria-label]="'Open ' + link.supplierName + ' product page for ' + productName"
+        [attr.data-testid]="'cheapest-supplier-cell-view-' + link.supplierId"
+      >{{ tied ? 'View ' + link.supplierName + ' ↗' : 'View ↗' }}</a>
+    }
+  </span>
+}
 @if (onlinePriceNote) {
   <span class="block text-md-body value-muted" data-testid="cheapest-supplier-online-note">{{ onlinePriceNote }}</span>
 }

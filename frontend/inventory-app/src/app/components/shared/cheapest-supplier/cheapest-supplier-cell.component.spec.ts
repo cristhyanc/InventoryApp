@@ -390,6 +390,47 @@ describe('CheapestSupplierCellComponent (issue #930)', () => {
     expect(note?.textContent?.trim()).toBe('Stock may differ');
   });
 
+  describe('View links to the cheapest offer\'s product page', () => {
+    async function renderWithLinks(overrides: Partial<CheapestSupplierProduct> = {}, showProductLinks = true) {
+      const rendered = await render(overrides);
+      rendered.fixture.componentRef.setInput('showProductLinks', showProductLinks);
+      rendered.fixture.detectChanges();
+      return rendered;
+    }
+
+    it('links the cheapest offer\'s own product page in a new tab when asked to', async () => {
+      const { host } = await renderWithLinks();
+
+      const link = host.querySelector('[data-testid="cheapest-supplier-cell-view-1"]') as HTMLAnchorElement;
+      expect(link.textContent?.trim()).toBe('View ↗');
+      expect(link.getAttribute('href')).toBe('https://example.test/jb-metro/cola');
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+      expect(link.getAttribute('aria-label')).toBe('Open JB Metro product page for Coca-Cola Classic');
+    });
+
+    it('names each supplier in a tie and links only offers that carry a URL', async () => {
+      const { host } = await renderWithLinks({
+        suppliers: [
+          offer({ supplierId: 1, supplierName: 'JB Metro' }),
+          offer({ supplierId: 2, supplierName: 'Coles', productUrl: 'https://example.test/coles/cola' }),
+          offer({ supplierId: 3, supplierName: 'Woolworths', productUrl: null }),
+          offer({ supplierId: 4, supplierName: 'ALDI', isCheapest: false, productUrl: 'https://example.test/aldi/cola' })
+        ]
+      });
+
+      const links = Array.from(host.querySelectorAll('[data-testid^="cheapest-supplier-cell-view-"]'));
+      expect(links.map((link) => link.textContent?.trim())).toEqual(['View JB Metro ↗', 'View Coles ↗']);
+    });
+
+    it('shows no link unless the page asks for it, and none where the cell shows no price', async () => {
+      expect((await renderWithLinks({}, false)).host.querySelector('[data-testid="cheapest-supplier-cell-links"]')).toBeNull();
+      TestBed.resetTestingModule();
+      const { host } = await renderWithLinks({ cheapestUnitPrice: null, suppliers: [offer({ isCheapest: false })] });
+      expect(host.querySelector('[data-testid="cheapest-supplier-cell-links"]')).toBeNull();
+    });
+  });
+
   it('adds no stock note where the cell shows no price', async () => {
     const { host } = await render({ cheapestUnitPrice: null, suppliers: [offer({ isCheapest: false })] });
 
