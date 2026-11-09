@@ -9,9 +9,37 @@ namespace Inventory.Application.PlatformOptions;
 /// <para>A key names a <strong>destination</strong>, not a route. Which menu entries use a key is
 /// the frontend's decision (issue #1151), so several entries may share one - the Reimbursement
 /// Report of #1152 shares <see cref="Imports"/>, and no new key is added for it.</para>
+///
+/// <para>Each key is namespaced by the menu group its destination belongs to, which is what let the
+/// Reports group of issue #1153 arrive beside the Admin keys with no storage change at all: the
+/// stored row is keyed by this string and knows nothing about groups.</para>
 /// </summary>
 public static class MenuVisibilityKeys
 {
+    /// <summary>The Bookkeeping report.</summary>
+    public const string ReportsBookkeeping = "reports.bookkeeping";
+
+    /// <summary>The Daily report.</summary>
+    public const string ReportsDaily = "reports.daily";
+
+    /// <summary>The Transactions report.</summary>
+    public const string ReportsTransactions = "reports.transactions";
+
+    /// <summary>The Reconciliation report.</summary>
+    public const string ReportsReconciliation = "reports.reconciliation";
+
+    /// <summary>The Machines report.</summary>
+    public const string ReportsMachines = "reports.machines";
+
+    /// <summary>The Products report.</summary>
+    public const string ReportsProducts = "reports.products";
+
+    /// <summary>The Site Commissions report.</summary>
+    public const string ReportsSiteCommissions = "reports.site-commissions";
+
+    /// <summary>The GST report.</summary>
+    public const string ReportsGst = "reports.gst";
+
     /// <summary>Site Commission Agreements.</summary>
     public const string SiteCommissionAgreements = "admin.site-commission-agreements";
 
@@ -44,57 +72,96 @@ public static class MenuVisibilityKeys
 }
 
 /// <summary>
-/// One switchable menu destination as the catalogue declares it (issue #1148).
+/// The menu groups the catalogue's destinations belong to (issues #1148 and #1153), named once.
+///
+/// <para>A group is the menu's own heading for the destinations under it, and it is the
+/// <em>display</em> word as well as the classification: the Super Admin surface renders one section
+/// per group, so a second copy of that wording in the frontend would be a second chance to get it
+/// wrong. Each group's keys are namespaced by its own lower-cased name.</para>
+/// </summary>
+public static class MenuVisibilityGroups
+{
+    /// <summary>The business Reports destinations (issue #1153).</summary>
+    public const string Reports = "Reports";
+
+    /// <summary>The Admin maintenance destinations (issue #1148).</summary>
+    public const string Admin = "Admin";
+}
+
+/// <summary>
+/// One switchable menu destination as the catalogue declares it (issues #1148 and #1153).
 /// </summary>
 /// <param name="Key">
 /// The server-owned, stable key the stored row and every API response name the destination by. It is
-/// namespaced by the menu group it belongs to - <c>admin.</c> today - so a <c>reports.</c> group can
-/// be added by #1153 with no change to the storage, which knows nothing about groups.
+/// namespaced by the menu group it belongs to - <c>reports.</c> or <c>admin.</c> - which is why the
+/// Reports group of #1153 needed no change to the storage, which knows nothing about groups.
+/// </param>
+/// <param name="Group">
+/// The menu group the destination sits in, one of <see cref="MenuVisibilityGroups"/>. It is what
+/// <c>GET /api/super-admin/menu-visibility</c> reports the destination under and what the Super
+/// Admin page renders its sections from.
 /// </param>
 /// <param name="Label">
-/// The destination's own display label, the same words the Admin menu uses, so the Super Admin
-/// surface can list the catalogue without keeping a second copy of the menu's wording.
+/// The destination's own display label, the same words the menu uses, so the Super Admin surface can
+/// list the catalogue without keeping a second copy of the menu's wording.
 /// </param>
-public sealed record MenuVisibilityOption(string Key, string Label);
+public sealed record MenuVisibilityOption(string Key, string Group, string Label);
 
 /// <summary>
 /// The closed catalogue of menu destinations a Super Admin may switch off for everybody else
-/// (issue #1148).
+/// (issues #1148 and #1153).
 ///
 /// <para><strong>Closed and compiled, deliberately not a feature-flag framework.</strong> Issue
 /// #873's rule that a second switchable option must be a second named field - and never a key in a
 /// map - is superseded here by this catalogue, and the reason that rule existed is honoured rather
 /// than abandoned: the keys are a compiled list decided in one reviewed place, a caller cannot
 /// invent one, and a key that is not declared here is refused by
-/// <see cref="SetMenuVisibility"/> with nothing stored. What changed is only that seven
-/// destinations do not need seven columns.</para>
+/// <see cref="SetMenuVisibility"/> with nothing stored. What changed is only that fifteen
+/// destinations do not need fifteen columns.</para>
+///
+/// <para><strong>Two groups, in menu order.</strong> The eight business Reports destinations
+/// (issue #1153) and the seven Admin maintenance destinations (issue #1148), each option naming its
+/// own <see cref="MenuVisibilityOption.Group"/> - Reports first, because that is where the menu puts
+/// them. The storage knows nothing about groups: a key is namespaced by its group's own name, which
+/// is why the Reports half needed no migration at all.</para>
 ///
 /// <para><strong>What is deliberately not in it.</strong> Integrations, Users, Roles and Business
 /// Settings are never switchable (owner's decision, 9 November 2026): an Owner needs them to connect
 /// Nayax and run their business, so they always follow their normal capability, plan and provider
-/// rules. Super Admin tools are never in it either, nor is any destination outside the Admin group.
-/// Reports are out for now and are tracked in #1153.</para>
+/// rules. Super Admin tools are never in it either, nor is any destination outside the Reports and
+/// Admin groups.</para>
 ///
 /// <para>It decides nothing about <em>authorization</em>. Every destination's endpoints keep their
 /// own capability, plan and provider checks in both states; switching one off stops it being
-/// offered and grants or revokes nothing. See docs/architecture.md § Switchable Admin menu
-/// visibility.</para>
+/// offered and grants or revokes nothing. Every report keeps its own capability, plan and provider
+/// checks exactly as it had them, and <c>/reports</c> still redirects to Bookkeeping. See
+/// docs/architecture.md § Switchable Admin menu visibility.</para>
 /// </summary>
 public static class MenuVisibilityCatalogue
 {
     /// <summary>
-    /// Every switchable destination, in the order the Admin menu declares them, which is the order
-    /// the Super Admin surface lists them in.
+    /// Every switchable destination, grouped and in the order the menu declares them, which is the
+    /// order the Super Admin surface lists its sections and rows in.
     /// </summary>
     public static IReadOnlyList<MenuVisibilityOption> Options { get; } =
     [
-        new(MenuVisibilityKeys.SiteCommissionAgreements, "Site Commission Agreements"),
-        new(MenuVisibilityKeys.Imports, "Imports"),
-        new(MenuVisibilityKeys.HistoricalCostRecovery, "Historical Cost Recovery"),
-        new(MenuVisibilityKeys.AvcoTransition, "AVCO Transition"),
-        new(MenuVisibilityKeys.CostingRepair, "Costing Repair"),
-        new(MenuVisibilityKeys.HistoricalGstClassification, "Historical GST Classification"),
-        new(MenuVisibilityKeys.NayaxSaleTimestampRepair, "Nayax Sale Timestamp Repair"),
+        // Reports first, because that is where the menu puts them: the Super Admin page lists its
+        // sections in this order, so the catalogue's order is the one decision about it.
+        new(MenuVisibilityKeys.ReportsBookkeeping, MenuVisibilityGroups.Reports, "Bookkeeping"),
+        new(MenuVisibilityKeys.ReportsDaily, MenuVisibilityGroups.Reports, "Daily"),
+        new(MenuVisibilityKeys.ReportsTransactions, MenuVisibilityGroups.Reports, "Transactions"),
+        new(MenuVisibilityKeys.ReportsReconciliation, MenuVisibilityGroups.Reports, "Reconciliation"),
+        new(MenuVisibilityKeys.ReportsMachines, MenuVisibilityGroups.Reports, "Machines"),
+        new(MenuVisibilityKeys.ReportsProducts, MenuVisibilityGroups.Reports, "Products"),
+        new(MenuVisibilityKeys.ReportsSiteCommissions, MenuVisibilityGroups.Reports, "Site Commissions"),
+        new(MenuVisibilityKeys.ReportsGst, MenuVisibilityGroups.Reports, "GST"),
+        new(MenuVisibilityKeys.SiteCommissionAgreements, MenuVisibilityGroups.Admin, "Site Commission Agreements"),
+        new(MenuVisibilityKeys.Imports, MenuVisibilityGroups.Admin, "Imports"),
+        new(MenuVisibilityKeys.HistoricalCostRecovery, MenuVisibilityGroups.Admin, "Historical Cost Recovery"),
+        new(MenuVisibilityKeys.AvcoTransition, MenuVisibilityGroups.Admin, "AVCO Transition"),
+        new(MenuVisibilityKeys.CostingRepair, MenuVisibilityGroups.Admin, "Costing Repair"),
+        new(MenuVisibilityKeys.HistoricalGstClassification, MenuVisibilityGroups.Admin, "Historical GST Classification"),
+        new(MenuVisibilityKeys.NayaxSaleTimestampRepair, MenuVisibilityGroups.Admin, "Nayax Sale Timestamp Repair"),
     ];
 
     /// <summary>

@@ -694,7 +694,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports and Admin → Reimbursement Report, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
   - **Owner** — everything a Manager reaches, plus Admin → Integrations (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
   - **Holding the capability is not the same as the page being usable.** Two Admin pages need the live Nayax fleet read and show the connection-required page without it (issue #869): **Site Commission Agreements**, whose site picker is that read and which a Manager reaches as well as an Owner, and the Owner-only **Inventory AVCO Transition Baseline**, whose preview reads the machines and their products. **Nayax Historical Cost Recovery is deliberately not locked** — it reads the Nayax cost already stored on imported sales and makes no Nayax call — and neither are Costing Repair and Historical GST Classification, which work on the business's own data. See [The menu without a usable provider](#the-menu-without-a-usable-provider).
-  - **The Admin maintenance destinations can also be switched off by a Super Admin**, which is a different thing again: each of the seven — Site Commission Agreements, Imports, Historical Cost Recovery, AVCO Transition, Costing Repair, Historical GST Classification and Nayax Sale Timestamp Repair — can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. The **Imports** switch covers two entries, because Reimbursement Report is the other way into the same imports (issue #1152): switching it off hides both. That hides the sidebar entry, the mobile menu entry and the Admin card, and changes no permission at all — an Owner still holds `Data.Repair`, and each page and its API still work exactly as before. Integrations, Users, Roles and Business Settings are never switchable. See [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
+  - **The reports and the Admin maintenance destinations can also be switched off by a Super Admin**, which is a different thing again: each of the seven Admin tools — Site Commission Agreements, Imports, Historical Cost Recovery, AVCO Transition, Costing Repair, Historical GST Classification and Nayax Sale Timestamp Repair — and each of the eight reports — Bookkeeping, Daily, Transactions, Reconciliation, Machines, Products, Site Commissions and GST — can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. The **Imports** switch covers two entries, because Reimbursement Report is the other way into the same imports (issue #1152): switching it off hides both. That hides the sidebar entry, the mobile menu entry and the Admin card, and changes no permission at all — an Owner still holds `Data.Repair`, a Manager still holds `Reports.View`, and each page and its API still work exactly as before. Integrations, Users, Roles and Business Settings are never switchable. See [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
@@ -1688,24 +1688,30 @@ PUT    /api/super-admin/master-products/{id}                      correct one (t
 
 ## Super Admin menu visibility
 
-The Super Admin also decides which of the **Admin maintenance destinations** are offered to anybody
-else — the occasional tools a business needs for a while and then never again. There are seven, each
-a key in a closed, server-owned catalogue (issue #1148, generalising issue #873's single switch):
-`admin.site-commission-agreements`, `admin.imports`, `admin.historical-cost-recovery`,
-`admin.avco-transition`, `admin.costing-repair`, `admin.historical-gst-classification` and
-`admin.nayax-sale-timestamp-repair`. **Integrations, Users, Roles and Business Settings are never
-switchable** — an Owner needs them to connect Nayax and run their business — and nor is anything
-outside the Admin group. Reports are a later decision (issue #1153).
+The Super Admin also decides which of the **reports** and the **Admin maintenance destinations** are
+offered to anybody else — the readings a business may not want everybody in it to open, and the
+occasional tools it needs for a while and then never again. There are fifteen, each a key in a
+closed, server-owned catalogue (issue #1148, generalising issue #873's single switch, with the
+Reports group added by issue #1153), in two groups.
+
+**Reports:** `reports.bookkeeping`, `reports.daily`, `reports.transactions`,
+`reports.reconciliation`, `reports.machines`, `reports.products`, `reports.site-commissions` and
+`reports.gst`. **Admin:** `admin.site-commission-agreements`, `admin.imports`,
+`admin.historical-cost-recovery`, `admin.avco-transition`, `admin.costing-repair`,
+`admin.historical-gst-classification` and `admin.nayax-sale-timestamp-repair`.
+
+**Integrations, Users, Roles and Business Settings are never switchable** — an Owner needs them to
+connect Nayax and run their business — and nor is anything outside those two groups.
 
 ```text
-GET /api/super-admin/menu-visibility                 → every key, its label and its current state
+GET /api/super-admin/menu-visibility                 → every key, its group, its label and its state
 PUT /api/super-admin/menu-visibility/{key}           { "visible": true|false }
 PUT /api/super-admin/option-visibility               { "historicalGstClassificationVisible": true|false }
 ```
 
 The third is the previous endpoint, kept for the rollout; it writes the
 `admin.historical-gst-classification` key like the second one does, and the Angular application no
-longer calls it — the page below drives all seven through the second one.
+longer calls it — the page below drives all fifteen through the second one.
 
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the surfaces
   above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair
@@ -1722,9 +1728,12 @@ longer calls it — the page below drives all seven through the second one.
   switched off: it names no business and nobody's data.
 - **It is visibility, not permission.** Every one of those destinations' endpoints keeps its existing
   checks in both states — `POST /api/admin/historical-gst-classification/preview` and `.../apply` still
-  require `Data.Repair` — and the capability set a member is reported is identical whatever the switches
+  require `Data.Repair`, and every `GET /api/reports/...` still requires `Reports.View` with the same
+  plan and Nayax rules — and the capability set a member is reported is identical whatever the switches
   say. Switching a destination off hides the entry and the card; switching it on restores them only to
-  members whose role already allowed them.
+  members whose role already allowed them. A switched-off report's own address still opens, `/reports`
+  still goes to Bookkeeping, and a link into a report from somewhere else — the Dashboard's link to
+  Bookkeeping, for instance — is unchanged.
 - **The default is On**, and it is the absence of a stored row, so every existing installation keeps
   exactly the visibility it has today until a Super Admin switches something. A row of
   `PlatformMenuVisibility` is created the first time its destination is switched, and an installation
@@ -1736,9 +1745,11 @@ longer calls it — the page below drives all seven through the second one.
   declare, are not audited, because nothing happened.
 - **The page.** Every switch is on **Super Admin → Menu Visibility** (`/super-admin/menu-visibility`,
   issue #1151), behind the same platform-admin check as the Super Admin pages above and never affected
-  by the switches it manages. It lists every destination the catalogue declares, in menu order, with
-  one On/Off control each whose accessible name says which destination it is about; a row whose switch
-  covers two menu entries says so. One save changes one destination: a refused save leaves that row
+  by the switches it manages. It lists every destination the catalogue declares, in menu order, under
+  one section per group — **Reports** above **Admin** — with one On/Off control each whose accessible
+  name says which destination it is about; a row whose switch covers two menu entries says so. Every
+  destination is listed whatever the viewing business's plan, provider or capabilities are, because the
+  setting is the platform's. One save changes one destination: a refused save leaves that row
   reading exactly as it is stored, says the change was not saved, and leaves every other row alone,
   while a save the server accepted re-reads the menus so they follow immediately. See
   [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
@@ -3173,7 +3184,10 @@ can stop offering it — and the same is true of the other occasional Admin tool
 of those switches is on one page, **Super Admin → Menu Visibility** (issue #1151, which replaced the
 single switch that used to sit on the Admin page beside this tool's own card): each destination is
 listed with an On/Off control, and **Historical GST Classification** is one of them, with whatever
-state it was already in. It is one shared, application-wide setting per destination, saved on the
+state it was already in. Since issue #1153 the same page also lists the **reports** — Bookkeeping,
+Daily, Transactions, Reconciliation, Machines, Products, Site Commissions and GST — in their own
+**Reports** section above the Admin one, each switched the same way and with the same effect: the way
+in is hidden, and nothing about the report itself changes. It is one shared, application-wide setting per destination, saved on the
 server — it is not a per-browser preference, so it survives a reload, a new tab and a different
 computer, and it stays as it was until a Super Admin switches it again. Every installation starts
 with every tool **shown**.

@@ -146,14 +146,15 @@ describe('BottomNavComponent (issue #972)', () => {
   });
 
   /**
-   * The switchable Admin destinations (issue #1151) reach this bar through the same
+   * The switchable destinations (issues #1151 and #1153) reach this bar through the same
    * `navigationFor` answer the sidebar uses, and the bar's own shortcuts are four destinations no
    * switch can reach: none of them declares a visibility key, which is asserted here so that a
    * future shortcut that *did* declare one could not quietly stay on the bar after being switched
-   * off. The whole menu on a narrow screen is the More sheet, which is the sidebar in drawer mode
-   * and is covered by its own spec.
+   * off. `MENU_VISIBILITY_KEYS` is the whole catalogue, so since #1153 "whatever is switched off"
+   * below includes all eight Reports keys. The whole menu on a narrow screen is the More sheet,
+   * which is the sidebar in drawer mode and is covered by its own spec.
    */
-  describe('switchable menu visibility (issue #1151)', () => {
+  describe('switchable menu visibility (issues #1151 and #1153)', () => {
     const everyKeyOff = { switchedOffKeys: [...MENU_VISIBILITY_KEYS] };
 
     it('offers the same shortcuts whatever is switched off, because no shortcut is switchable', async () => {

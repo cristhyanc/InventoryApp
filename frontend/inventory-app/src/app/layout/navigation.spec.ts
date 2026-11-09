@@ -17,9 +17,9 @@ import {
   activeNavGroup,
   activeNavLink,
   activeNavRoute,
-  adminEntriesWithVisibilityKey,
   adminNavGroup,
   businessesNavLink,
+  entriesWithVisibilityKey,
   masterProductsNavLink,
   menuVisibilityNavLink,
   navLinks,
@@ -31,9 +31,11 @@ import {
   platformDiagnosticsNavLink,
   priceCatalogueReviewNavLink,
   primaryNavigation,
+  reportsNavGroup,
   superAdminNavGroup,
   superAdminNavSection,
-  supplierPresetsNavLink
+  supplierPresetsNavLink,
+  switchableNavGroups
 } from './navigation';
 
 /**
@@ -1361,7 +1363,7 @@ describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () =
 
   /** A key this build does not declare is nobody's entry, so it takes nothing away. */
   it('hides nothing for a key no entry declares', () => {
-    expect(adminEntries(OWNER, false, off('admin.something-else', 'reports.daily'))).toEqual(adminChildRoutes);
+    expect(adminEntries(OWNER, false, off('admin.something-else', 'reports.not-a-report'))).toEqual(adminChildRoutes);
   });
 
   /** The never-switchable destinations have no key at all, so no switch can reach them. */
@@ -1387,13 +1389,19 @@ describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () =
     expect(managerRoutes(true, EVERY_KEY_OFF)).not.toContain(entry.route);
   });
 
-  it('changes no destination outside the Admin group, in either state', () => {
-    const outsideAdmin = (options: OptionVisibility): string[] =>
-      navLinks(navigationFor(OWNER, true, 'offered', undefined, options))
+  /**
+   * Nothing outside the two switchable groups is reachable by a switch, which since issue #1153 is
+   * asserted of an ordinary member rather than of the administrator every key is kept for: the
+   * Dashboard, the Pick List, Sites, Machines, the Inventory and Purchases groups, Expenses and Plan
+   * are the same destinations whatever is switched off.
+   */
+  it('changes no destination outside the switchable groups, in either state', () => {
+    const outside = (options: OptionVisibility): string[] =>
+      navLinks(navigationFor(OWNER, false, 'offered', undefined, options))
         .map((link) => link.route)
-        .filter((route) => !route.startsWith('/admin/'));
+        .filter((route) => !route.startsWith('/admin/') && !route.startsWith('/reports/'));
 
-    expect(outsideAdmin(EVERY_KEY_OFF)).toEqual(outsideAdmin(NOTHING_OFF));
+    expect(outside(EVERY_KEY_OFF)).toEqual(outside(NOTHING_OFF));
   });
 
   /**
@@ -1469,20 +1477,20 @@ describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () =
 
     /** The page's "it also covers ..." sentence is this list, read from the entries themselves. */
     it('reports every Admin entry that declares the key', () => {
-      expect(adminEntriesWithVisibilityKey('admin.imports').map((link) => link.label)).toEqual([
+      expect(entriesWithVisibilityKey('admin.imports').map((link) => link.label)).toEqual([
         'Imports',
         'Reimbursement Report'
       ]);
-      expect(adminEntriesWithVisibilityKey('admin.costing-repair').map((link) => link.label)).toEqual([
-        'Costing Repair'
-      ]);
-      expect(adminEntriesWithVisibilityKey('admin.something-else')).toEqual([]);
+      expect(entriesWithVisibilityKey('admin.costing-repair').map((link) => link.label)).toEqual(['Costing Repair']);
+      expect(entriesWithVisibilityKey('reports.gst').map((link) => link.label)).toEqual(['GST']);
+      expect(entriesWithVisibilityKey('admin.something-else')).toEqual([]);
     });
   });
 
   /**
-   * The alignment rule: every Admin leaf either declares exactly one catalogue key or is on the
-   * explicit never-switchable list - not both, not neither - and every catalogue key is used.
+   * The alignment rule: every leaf of a switchable group - `Reports` since issue #1153, and `Admin`
+   * since #1151 - either declares exactly one catalogue key or is on the explicit never-switchable
+   * list, not both and not neither, and every catalogue key is used by at least one entry.
    *
    * It is written as a function over any list of children so that the rule itself is tested, not
    * only today's navigation: a new entry that declares neither fails, and a second entry that
@@ -1507,12 +1515,33 @@ describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () =
       });
     }
 
-    it('holds for every Admin destination declared today', () => {
+    it('holds for every switchable destination declared today', () => {
       expect(problems(adminNavGroup.children)).toEqual([]);
+      expect(problems(reportsNavGroup.children)).toEqual([]);
+      expect(switchableNavGroups.map((navGroup) => navGroup.label)).toEqual(['Reports', 'Admin']);
+    });
+
+    /** Every Reports leaf declares a key: no report is ever never-switchable (issue #1153). */
+    it('declares a Reports key on every report, and names the eight of them', () => {
+      expect(
+        reportsNavGroup.children
+          .filter((child): child is NavLink => child.kind === 'link')
+          .map((child) => child.visibilityKey)
+      ).toEqual([
+        'reports.bookkeeping',
+        'reports.daily',
+        'reports.transactions',
+        'reports.reconciliation',
+        'reports.machines',
+        'reports.products',
+        'reports.site-commissions',
+        'reports.gst'
+      ]);
     });
 
     it('uses every catalogue key at least once', () => {
-      const declared = adminNavGroup.children
+      const declared = switchableNavGroups
+        .flatMap((navGroup) => navGroup.children)
         .filter((child): child is NavLink => child.kind === 'link')
         .map((child) => child.visibilityKey);
 
@@ -1571,6 +1600,137 @@ describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () =
       ]);
     });
   });
+});
+
+/**
+ * Switchable **Reports** menu visibility (issue #1153): the catalogue's other half, on exactly the
+ * terms the Admin half has had since #1151.
+ *
+ * The same two things are held apart here. A switch decides whether a report is **offered**; the
+ * capability set still decides whether it could be, the plan and the provider still decide whether
+ * its page can serve anything, and `ReportsController` authorizes every request itself in both
+ * states - so a report is listed on the Super Admin page whatever this business's plan is, and
+ * switching a key on adds a report to nobody whose role never had it.
+ */
+describe('switchable Reports menu visibility (issue #1153)', () => {
+  /** Every Reports key with the entry that declares it, written out literally. */
+  const KEY_ENTRIES: readonly { readonly key: MenuVisibilityKey; readonly route: string }[] = [
+    { key: 'reports.bookkeeping', route: '/reports/bookkeeping' },
+    { key: 'reports.daily', route: '/reports/daily' },
+    { key: 'reports.transactions', route: '/reports/transactions' },
+    { key: 'reports.reconciliation', route: '/reports/reconciliation' },
+    { key: 'reports.machines', route: '/reports/machines' },
+    { key: 'reports.products', route: '/reports/products' },
+    { key: 'reports.site-commissions', route: '/reports/site-commissions' },
+    { key: 'reports.gst', route: '/reports/gst' }
+  ];
+
+  const EVERY_REPORT_OFF: OptionVisibility = { switchedOffKeys: KEY_ENTRIES.map((entry) => entry.key) };
+  const NOTHING_OFF: OptionVisibility = { switchedOffKeys: [] };
+
+  function off(...keys: readonly string[]): OptionVisibility {
+    return { switchedOffKeys: keys };
+  }
+
+  function reportRoutes(
+    hasPlatformDiagnosticsAccess = false,
+    options?: OptionVisibility,
+    capabilities = OWNER
+  ): string[] {
+    return childRoutes(
+      'Reports',
+      navigationFor(capabilities, hasPlatformDiagnosticsAccess, 'offered', undefined, options)
+    ).map((child) => child.route);
+  }
+
+  const everyReportRoute = KEY_ENTRIES.map((entry) => entry.route);
+
+  it('offers every report while nothing is off, and while nothing is known', () => {
+    expect(reportRoutes(false, NOTHING_OFF)).toEqual(everyReportRoute);
+    expect(reportRoutes(false, undefined)).toEqual(everyReportRoute);
+  });
+
+  it.each(KEY_ENTRIES)('leaves out exactly the entry that declares $key while it is off', ({ key, route }) => {
+    expect(reportRoutes(false, off(key))).toEqual(everyReportRoute.filter((candidate) => candidate !== route));
+  });
+
+  it.each(KEY_ENTRIES)('keeps the entry that declares $key for a super admin while it is off', ({ key, route }) => {
+    expect(reportRoutes(true, off(key))).toContain(route);
+    expect(optionSwitchedOff(reportLink(route), off(key))).toBe(true);
+  });
+
+  /** The pill is per entry and reads from the entry's own declared key, nothing else. */
+  it('reports the switched-off state from the report it is asked about', () => {
+    expect(optionSwitchedOff(reportLink('/reports/gst'), off('reports.gst'))).toBe(true);
+    expect(optionSwitchedOff(reportLink('/reports/gst'), off('reports.daily'))).toBe(false);
+    expect(optionSwitchedOff(reportLink('/reports/gst'), NOTHING_OFF)).toBe(false);
+    expect(optionSwitchedOff(reportLink('/reports/gst'), undefined)).toBe(false);
+  });
+
+  /**
+   * The group is dropped once nothing is left under it, exactly as the Admin group is - and the
+   * heading over it stays, because Expenses is under the same one and no switch reaches it.
+   */
+  it('drops the Reports group when every report is switched off, and keeps its heading', () => {
+    const labels = navigationFor(OWNER, false, 'offered', undefined, EVERY_REPORT_OFF).map((navItem) => navItem.label);
+
+    expect(labels).not.toContain('Reports');
+    expect(labels).toContain('Expenses');
+    expect(labels).toContain('Finance & reports');
+    // And the administrator still has all eight.
+    expect(reportRoutes(true, EVERY_REPORT_OFF)).toEqual(everyReportRoute);
+  });
+
+  /** A heading with nothing but a switched-off Reports group under it goes too. */
+  it('drops the heading when the Reports group was the only thing under it', () => {
+    const capabilities = capabilitySet(['Reports.View']);
+
+    expect(
+      navigationFor(capabilities, false, 'offered', undefined, NOTHING_OFF).map((navItem) => navItem.label)
+    ).toContain('Finance & reports');
+    expect(
+      navigationFor(capabilities, false, 'offered', undefined, EVERY_REPORT_OFF).map((navItem) => navItem.label)
+    ).not.toContain('Finance & reports');
+  });
+
+  /**
+   * The Site Commissions report and the Admin agreements page are two destinations with two keys:
+   * each switch reaches its own and neither reaches the other's.
+   */
+  it('switches the Site Commissions report and the Admin agreements page independently', () => {
+    expect(reportRoutes(false, off('reports.site-commissions'))).not.toContain('/reports/site-commissions');
+    expect(
+      childRoutes('Admin', navigationFor(OWNER, false, 'offered', undefined, off('reports.site-commissions'))).map(
+        (child) => child.route
+      )
+    ).toContain('/admin/site-commission-agreements');
+
+    expect(reportRoutes(false, off('admin.site-commission-agreements'))).toContain('/reports/site-commissions');
+  });
+
+  /** Switching a report on adds it to nobody: a switch is not a capability. */
+  it('never offers a report to a role without Reports.View, whichever state the keys are in', () => {
+    const operatorRoutes = (options: OptionVisibility): string[] =>
+      navLinks(navigationFor(OPERATOR, false, 'offered', undefined, options)).map((link) => link.route);
+
+    expect(operatorRoutes(NOTHING_OFF)).not.toContain('/reports/bookkeeping');
+    expect(operatorRoutes(EVERY_REPORT_OFF)).not.toContain('/reports/bookkeeping');
+  });
+
+  /** A switched-off report changes nothing about the Admin group, in either direction. */
+  it('leaves the Admin group exactly as it was', () => {
+    expect(childRoutes('Admin', navigationFor(OWNER, false, 'offered', undefined, EVERY_REPORT_OFF))).toEqual(
+      adminChildRoutes
+    );
+  });
+
+  function reportLink(route: string): NavLink {
+    const match = reportsNavGroup.children.find(
+      (child): child is NavLink => child.kind === 'link' && child.route === route
+    );
+    expect(match).toBeDefined();
+    return match!;
+  }
 });
 
 /**

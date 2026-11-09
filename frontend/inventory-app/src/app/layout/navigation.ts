@@ -48,7 +48,7 @@ import { ProviderLock, providerLockOf, providerLockSummary, providerToolsOffered
  * Issue #873 adds the one thing in this file that is not about a capability or a provider: a Super
  * Admin may stop an Admin maintenance destination being **offered** to everybody else. Issues #1148
  * and #1151 generalise that one switch to the server's closed catalogue of keys: each switchable
- * `Admin` entry declares its own {@link MenuVisibilityKey} on the entry itself, several entries may
+ * entry declares its own {@link MenuVisibilityKey} on the entry itself, several entries may
  * declare the **same** key - that shared declaration is the whole of the shared-route rule - and the
  * four destinations an Owner needs to run their business are on {@link neverSwitchableAdminRoutes}
  * instead. The shared setting arrives with the capability set, on `GET /api/me/access`, and is
@@ -57,6 +57,13 @@ import { ProviderLock, providerLockOf, providerLockSummary, providerToolsOffered
  * marked with an `Off` pill, and changes no capability and no other entry. Like everything else here
  * it hides a page rather than protecting one: each destination's endpoints keep authorizing every
  * request by their own capability in both states, and the route entered directly still resolves.
+ *
+ * Issue #1153 adds the catalogue's **Reports** half on exactly those terms: every entry of
+ * {@link reportsNavGroup} declares its own `reports.*` key, so a switched-off report leaves the
+ * sidebar and the bottom nav's menu sheet for everybody but the platform administrator and the group
+ * goes with the last of them. Nothing about a report's own rules changes - each one keeps the plan
+ * feature and the provider dependency it already declared, in both states, `/reports` still redirects
+ * to Bookkeeping, and a contextual link into a report is not a menu entry and is untouched.
  *
  * Issue #869 does the same for two Admin destinations, on the **live fleet read** rather than on
  * stored records: `Site Commission Agreements`, whose site picker is that read, and `AVCO
@@ -116,16 +123,16 @@ export interface NavLink {
   readonly planLockedWithout?: PlanFeature;
 
   /**
-   * The switchable destination this entry is one of the ways into (issues #1148 and #1151), named by
-   * the server's own catalogue key. While that key is switched off the entry is left out for every
-   * member but the platform administrator, who keeps it with an `Off` pill.
+   * The switchable destination this entry is one of the ways into (issues #1148, #1151 and #1153),
+   * named by the server's own catalogue key. While that key is switched off the entry is left out for
+   * every member but the platform administrator, who keeps it with an `Off` pill.
    *
    * **It is declared on the entry, not derived from the route**, which is what lets two entries share
    * one switch: the Reimbursement Report of #1152 declares `admin.imports` and gets no key of its
-   * own, so one decision hides both ways into the imports. An `Admin` entry must declare exactly one
-   * key or be on {@link neverSwitchableAdminRoutes} - never both and never neither, which the
-   * co-located spec asserts so a new entry cannot quietly arrive with no decision made about it.
-   * Entries outside the `Admin` group declare none: no switch reaches them.
+   * own, so one decision hides both ways into the imports. An entry of a {@link switchableNavGroups}
+   * group must declare exactly one key or be on {@link neverSwitchableAdminRoutes} - never both and
+   * never neither, which the co-located spec asserts so a new entry cannot quietly arrive with no
+   * decision made about it. Entries outside those groups declare none: no switch reaches them.
    */
   readonly visibilityKey?: MenuVisibilityKey;
 }
@@ -225,22 +232,85 @@ function providerToolLink(label: string, route: string, capability: Capability):
  * than to connect a Nayax account upgrading would make usable anyway - and the provider dependency
  * is unchanged: `providerRecords` locks the report only while the business has no Nayax connection
  * at all, and leaves it open for credentials that stopped working or a read Nayax refused.
+ *
+ * Since issue #1153 every report also declares its own `reports.*` catalogue key, which is a
+ * different kind of statement again: the plan and the provider decide whether the page can serve
+ * anything, while the key decides only whether the destination is still *offered* to anybody but a
+ * Super Admin.
  */
-function providerRecordsReportLink(label: string, route: string): NavLink {
+function providerRecordsReportLink(label: string, route: string, visibilityKey: MenuVisibilityKey): NavLink {
   return {
     ...link(label, route, 'Reports.View'),
     planLockedWithout: 'ProviderSalesReports',
-    lockedWithout: 'providerRecords'
+    lockedWithout: 'providerRecords',
+    visibilityKey
   };
 }
 
 /**
  * A report that needs no sales provider at all - Bookkeeping and the GST accounting aid - but does
- * need the `Starter` plan since issue #967 (`PlanFeature.BookkeepingAndGstReports`, issue #979).
+ * need the `Starter` plan since issue #967 (`PlanFeature.BookkeepingAndGstReports`, issue #979), and
+ * declares its own catalogue key since issue #1153.
  */
-function planOnlyReportLink(label: string, route: string): NavLink {
-  return { ...link(label, route, 'Reports.View'), planLockedWithout: 'BookkeepingAndGstReports' };
+function planOnlyReportLink(label: string, route: string, visibilityKey: MenuVisibilityKey): NavLink {
+  return {
+    ...link(label, route, 'Reports.View'),
+    planLockedWithout: 'BookkeepingAndGstReports',
+    visibilityKey
+  };
 }
+
+/**
+ * The business `Reports` group's declared destinations, exported on their own since issue #1153 for
+ * the reason {@link adminNavGroup} is: the switchable half of the menu is checked against the
+ * server's catalogue at build time, and that check reads the declared group rather than a second
+ * list of it.
+ *
+ * Every report is here again since issue #868, which brought the site commission report back from
+ * the "Needs Nayax" section it left for in issue #729. What a report needs from the provider is
+ * declared on the entry: Bookkeeping and GST need nothing, the five `providerRecordsReportLink`
+ * entries need a Nayax connection to exist at all, and Site Commissions needs the live fleet read.
+ * Each one still reports its own availability states inside the page (#730, #731). Since issue #979
+ * every report also declares the plan feature its own endpoint requires (`[RequirePlan]` on
+ * `ReportsController`), checked before the provider dependency: Bookkeeping and GST need `Starter`,
+ * and the rest need `Pro`.
+ *
+ * Since issue #1153 every entry also declares its own `reports.*` {@link MenuVisibilityKey}. None of
+ * them is ever never-switchable - a report is a reading, not something a business needs to keep
+ * running - so there is no `Reports` counterpart to {@link neverSwitchableAdminRoutes}, and the
+ * alignment spec requires a key on every one of these leaves.
+ */
+export const reportsNavGroup: NavGroup = {
+  kind: 'group',
+  label: 'Reports',
+  icon: 'bar_chart',
+  children: [
+    planOnlyReportLink('Bookkeeping', '/reports/bookkeeping', 'reports.bookkeeping'),
+    providerRecordsReportLink('Daily', '/reports/daily', 'reports.daily'),
+    providerRecordsReportLink('Transactions', '/reports/transactions', 'reports.transactions'),
+    providerRecordsReportLink('Reconciliation', '/reports/reconciliation', 'reports.reconciliation'),
+    providerRecordsReportLink('Machines', '/reports/machines', 'reports.machines'),
+    providerRecordsReportLink('Products', '/reports/products', 'reports.products'),
+    {
+      // The one report that is not a read of stored data at all: with no usable provider it has
+      // no sites to report on and the API answers `isAvailable: false` (issue #731), so it keeps
+      // the live fleet read it has always declared. The API puts it on SiteCommissions.Manage
+      // rather than Reports.View, because it is the surface the agreements are maintained from
+      // (issue #526); its breadcrumb has always named Reports as its parent page. Since issue #979
+      // it also needs the `Pro` plan (`PlanFeature.SiteCommissions`), checked first. Its switch is
+      // its own: `reports.site-commissions` hides this reading, and the Admin page the agreements
+      // are maintained from keeps `admin.site-commission-agreements`.
+      kind: 'link',
+      label: 'Site Commissions',
+      route: '/reports/site-commissions',
+      capability: 'SiteCommissions.Manage',
+      planLockedWithout: 'SiteCommissions',
+      lockedWithout: 'machineFleet',
+      visibilityKey: 'reports.site-commissions'
+    },
+    planOnlyReportLink('GST', '/reports/gst', 'reports.gst')
+  ]
+};
 
 /**
  * The business `Admin` group's declared destinations, exported on their own so the Admin hub page
@@ -312,7 +382,17 @@ export const adminNavGroup: NavGroup = {
 };
 
 /**
- * Every declared `Admin` destination that uses `key`, in menu order (issue #1151).
+ * The groups a Super Admin switch can reach, in menu order (issues #1151 and #1153): `Reports` above
+ * `Admin`, which is the catalogue's own order too.
+ *
+ * It is named once so that the build-time alignment check and the "what else does this switch cover"
+ * answer below are asked of the same list. Every other group - and every top-level destination - is
+ * outside the catalogue entirely and declares no key.
+ */
+export const switchableNavGroups: readonly NavGroup[] = [reportsNavGroup, adminNavGroup];
+
+/**
+ * Every declared switchable destination that uses `key`, in menu order (issues #1151 and #1153).
  *
  * It is how the Menu Visibility page says what one switch covers without keeping a second list of
  * that: a key with two entries - `admin.imports`, which both Imports and the Reimbursement Report of
@@ -320,9 +400,9 @@ export const adminNavGroup: NavGroup = {
  * navigation rather than a member's rendered menu, because what a switch covers is the same question
  * whoever is looking.
  */
-export function adminEntriesWithVisibilityKey(key: string): readonly NavLink[] {
-  return adminNavGroup.children.filter(
-    (child): child is NavLink => child.kind === 'link' && child.visibilityKey === key
+export function entriesWithVisibilityKey(key: string): readonly NavLink[] {
+  return switchableNavGroups.flatMap((group) =>
+    group.children.filter((child): child is NavLink => child.kind === 'link' && child.visibilityKey === key)
   );
 }
 
@@ -388,42 +468,7 @@ export const primaryNavigation: readonly NavItem[] = [
   },
   section('Finance & reports'),
   { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money', capability: 'Expenses.Manage' },
-  {
-    // Every report is here again since issue #868, which brought the site commission report back
-    // from the "Needs Nayax" section it left for in issue #729. What a report needs from the
-    // provider is declared on the entry: Bookkeeping and GST need nothing, the five
-    // `providerRecordsReportLink` entries need a Nayax connection to exist at all, and Site
-    // Commissions needs the live fleet read. Each one still reports its own availability states
-    // inside the page (#730, #731). Since issue #979 every report also declares the plan feature its
-    // own endpoint requires (`[RequirePlan]` on `ReportsController`), checked before the provider
-    // dependency above: Bookkeeping and GST need `Starter`, and the rest need `Pro`.
-    kind: 'group',
-    label: 'Reports',
-    icon: 'bar_chart',
-    children: [
-      planOnlyReportLink('Bookkeeping', '/reports/bookkeeping'),
-      providerRecordsReportLink('Daily', '/reports/daily'),
-      providerRecordsReportLink('Transactions', '/reports/transactions'),
-      providerRecordsReportLink('Reconciliation', '/reports/reconciliation'),
-      providerRecordsReportLink('Machines', '/reports/machines'),
-      providerRecordsReportLink('Products', '/reports/products'),
-      {
-        // The one report that is not a read of stored data at all: with no usable provider it has
-        // no sites to report on and the API answers `isAvailable: false` (issue #731), so it keeps
-        // the live fleet read it has always declared. The API puts it on SiteCommissions.Manage
-        // rather than Reports.View, because it is the surface the agreements are maintained from
-        // (issue #526); its breadcrumb has always named Reports as its parent page. Since issue #979
-        // it also needs the `Pro` plan (`PlanFeature.SiteCommissions`), checked first.
-        kind: 'link',
-        label: 'Site Commissions',
-        route: '/reports/site-commissions',
-        capability: 'SiteCommissions.Manage',
-        planLockedWithout: 'SiteCommissions',
-        lockedWithout: 'machineFleet'
-      },
-      planOnlyReportLink('GST', '/reports/gst')
-    ]
-  },
+  reportsNavGroup,
   section('Settings'),
   // The Plan page (issue #970): the business's plan, storage and connected machines. It declares
   // Dashboard.View - every role and a support session hold it - because it is visible to every
