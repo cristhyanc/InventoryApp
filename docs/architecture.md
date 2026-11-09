@@ -17809,6 +17809,23 @@ connection, support-session and `PlanFeature.SalesProviderIntegration` gates app
 `INayaxRequestCredentialProvider` exactly as they do for a request; a refused business is skipped and
 logged.
 
+**The business scope is resolved as hosted work.** Because nobody is signed in, there is no
+membership for `CurrentBusinessProvider` to resolve the business from, yet both
+`ReconcileNayaxSalesWithProvider` and `SyncLatestNayaxSales` start by asking
+`ICurrentBusinessProvider.RequireBusinessIdAsync` for it. `ServiceScopeNayaxSalesReconciliationScopes`
+therefore publishes each run's scope with `BusinessScope.ResolveForHostedWork`: the same `Resolved`
+state for every tenant-owned read and write, marked `IBusinessScope.IsHostedWork`, which is the one
+case besides a support session where `RequireBusinessIdAsync` answers from the scope instead of a
+membership. It answers the business id only: `ResolveAsync` reports no membership and
+`RequireRoleAsync` keeps failing closed, so hosted work holds no role and no capability. An ordinary
+`Resolved` scope with nobody signed in is still denied, and the API boundary never calls
+`ResolveForHostedWork`. The id comes from the eligibility read's stored sender row, never from a
+request or a message. Before this, the run scope used the request path's `Resolve`, and in
+production every sweep ended on `BusinessAccessDeniedException` at its first line, so no business
+ever recorded a successful reconciliation, and therefore never counted as live via SQS (#1106).
+`NayaxSalesReconciliationEndToEndTests` runs a sweep through the real composition with no signed-in
+user and two businesses, to keep it that way.
+
 One business's run, in order: try-acquire the lease → resolve the credential gate → drain every
 pending inventory-cost rebuild this business has (#1103 — recovery work that makes no Nayax call) →
 `SyncLatestNayaxSales` with `force: true` and the lease already held, observing what it read → compare

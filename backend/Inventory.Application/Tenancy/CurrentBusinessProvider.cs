@@ -90,6 +90,18 @@ public sealed class CurrentBusinessProvider : ICurrentBusinessProvider
             return supported;
         }
 
+        // Work a hosted background service started for one business (the hourly Nayax sales
+        // reconciliation): there is no request, no signed-in user and so no membership to resolve,
+        // and the business is the one the host published into this scope from a stored row. Only a
+        // scope explicitly marked as hosted work is answered this way - an ordinary Resolved scope
+        // still comes from the caller's membership below - and it answers the business id alone:
+        // ResolveAsync and RequireRoleAsync stay denied, so no role or capability is invented.
+        if (_businessScope is { IsHostedWork: true, State: BusinessScopeState.Resolved, BusinessId: { } hostedBusinessId } &&
+            BusinessId.TryFrom(hostedBusinessId, out var hosted))
+        {
+            return hosted;
+        }
+
         var resolution = await ResolveAsync(cancellationToken).ConfigureAwait(false);
 
         return resolution.ResolvedBusinessId

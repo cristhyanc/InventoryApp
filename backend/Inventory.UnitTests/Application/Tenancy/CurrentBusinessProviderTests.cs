@@ -282,6 +282,97 @@ public class CurrentBusinessProviderTests
         Assert.Equal(BusinessRole.Owner, await provider.RequireRoleAsync(CancellationToken.None));
     }
 
+    /// <summary>
+    /// Work a hosted background service started for one business - the hourly Nayax sales
+    /// reconciliation - has no signed-in user and no membership. Its scope is published with
+    /// <see cref="BusinessScope.ResolveForHostedWork"/>, and the business id is answered from that
+    /// scope without reading a membership. Before this, every production sweep ended on
+    /// <see cref="BusinessAccessDeniedException"/> here.
+    /// </summary>
+    [Fact]
+    public async Task RequireBusinessIdAsync_answers_a_hosted_work_scopes_business_with_no_signed_in_user()
+    {
+        var scope = new BusinessScope();
+        scope.ResolveForHostedWork(BusinessId.From(9));
+        var store = new FakeBusinessMembershipStore();
+        var provider = Provider(FakeAuthenticatedActorAccessor.NotAuthenticated(), store, scope);
+
+        Assert.Equal(BusinessId.From(9), await provider.RequireBusinessIdAsync(CancellationToken.None));
+        Assert.Equal(0, store.QueryCount);
+    }
+
+    /// <summary>
+    /// Hosted work is answered a business and nothing more: no membership is reported and no role is
+    /// invented, so anything that needs a member's role or capabilities still fails closed.
+    /// </summary>
+    [Fact]
+    public async Task A_hosted_work_scope_resolves_no_membership_and_no_role()
+    {
+        var scope = new BusinessScope();
+        scope.ResolveForHostedWork(BusinessId.From(9));
+        var provider = Provider(
+            FakeAuthenticatedActorAccessor.NotAuthenticated(),
+            new FakeBusinessMembershipStore(),
+            scope);
+
+        var resolution = await provider.ResolveAsync(CancellationToken.None);
+
+        Assert.False(resolution.IsResolved);
+        Assert.Null(resolution.ResolvedRole);
+        await Assert.ThrowsAsync<BusinessAccessDeniedException>(
+            () => provider.RequireRoleAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Only a scope explicitly marked as hosted work is answered from the scope. An ordinary resolved
+    /// scope with nobody signed in - which the API boundary never produces - is still denied rather
+    /// than trusted, so the new branch cannot turn a resolution bug into access.
+    /// </summary>
+    [Fact]
+    public async Task An_ordinary_resolved_scope_with_no_signed_in_user_is_still_denied()
+    {
+        var scope = new BusinessScope();
+        scope.Resolve(BusinessId.From(9));
+        var provider = Provider(
+            FakeAuthenticatedActorAccessor.NotAuthenticated(),
+            new FakeBusinessMembershipStore(),
+            scope);
+
+        await Assert.ThrowsAsync<BusinessAccessDeniedException>(
+            () => provider.RequireBusinessIdAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// A hosted work scope is the ordinary resolved state for persistence, it is once-only like every
+    /// other resolution, and a request's own resolutions are never marked as hosted work.
+    /// </summary>
+    [Fact]
+    public void ResolveForHostedWork_is_the_resolved_state_once_and_only_it_is_marked_as_hosted_work()
+    {
+        var hosted = new BusinessScope();
+        hosted.ResolveForHostedWork(BusinessId.From(9));
+
+        Assert.Equal(BusinessScopeState.Resolved, hosted.State);
+        Assert.Equal(9, hosted.BusinessId);
+        Assert.True(hosted.IsHostedWork);
+        Assert.Throws<InvalidOperationException>(() => hosted.ResolveForHostedWork(BusinessId.From(10)));
+        Assert.Throws<InvalidOperationException>(() => hosted.Resolve(BusinessId.From(10)));
+        Assert.Equal(9, hosted.BusinessId);
+
+        var member = new BusinessScope();
+        member.Resolve(BusinessId.From(9));
+        Assert.False(member.IsHostedWork);
+        Assert.Throws<InvalidOperationException>(() => member.ResolveForHostedWork(BusinessId.From(9)));
+        Assert.False(member.IsHostedWork);
+
+        var support = new BusinessScope();
+        support.ResolveForSupportSession(BusinessId.From(9));
+        Assert.False(support.IsHostedWork);
+
+        Assert.False(new BusinessScope().IsHostedWork);
+        Assert.False(UnscopedBusinessScope.Instance.IsHostedWork);
+    }
+
     private static CurrentBusinessProvider CreateProviderDeniedWith(BusinessAccessDenialReason reason) => reason switch
     {
         BusinessAccessDenialReason.NotAuthenticated => Provider(
