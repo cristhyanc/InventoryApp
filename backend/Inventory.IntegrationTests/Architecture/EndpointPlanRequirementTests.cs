@@ -138,6 +138,12 @@ public class EndpointPlanRequirementTests
         // feed the two reports a Starter business includes.
         new("ImportsController.ImportNayaxSales", PlanRequirementKind.Declared, PlanFeature.SalesFileImport), // POST api/imports/nayax-sales
         new("ImportsController.ImportPendingXmlFiles", PlanRequirementKind.None), // POST api/imports/pending-xml
+        // The uploaded Nayax reimbursement report ZIP of issue #1149 is the same settlement
+        // statement by another delivery route, so it carries no plan requirement either - and
+        // neither do the two reads that report what became of one.
+        new("ImportsController.UploadReimbursementReport", PlanRequirementKind.None), // POST api/imports/reimbursement-report
+        new("ImportsController.ReimbursementReportJobs", PlanRequirementKind.None), // GET api/imports/reimbursement-report/jobs
+        new("ImportsController.ReimbursementReportJob", PlanRequirementKind.None), // GET api/imports/reimbursement-report/jobs/{jobId:int}
 
         // Costing repairs over this business's own recorded history.
         new("InventoryCostRepairsController.Apply", PlanRequirementKind.None), // POST api/admin/inventory-cost-repair/apply
@@ -592,6 +598,9 @@ public class EndpointPlanRequirementTests
     [Theory]
     [InlineData("NayaxConnectionController.Status")]
     [InlineData("ImportsController.ImportPendingXmlFiles")]
+    [InlineData("ImportsController.UploadReimbursementReport")]
+    [InlineData("ImportsController.ReimbursementReportJobs")]
+    [InlineData("ImportsController.ReimbursementReportJob")]
     [InlineData("PickListController.RecordRefill")]
     [InlineData("PickListController.RecordMultiMachineRefill")]
     [InlineData("ProductsController.SetPriceTracking")]

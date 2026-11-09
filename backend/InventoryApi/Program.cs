@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
 using Inventory.Application.ConnectedMachines;
+using Inventory.Application.Imports;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxReconciliation;
@@ -27,6 +28,7 @@ using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Adapters.Products;
+using InventoryApi.Adapters.ReimbursementImport;
 using InventoryApi.Adapters.Subscriptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Application.PlatformAdmin;
@@ -528,6 +530,23 @@ builder.Services.AddSingleton<INayaxSalesReconciliationLog, LoggingNayaxSalesRec
 builder.Services.AddSingleton<INayaxSalesReconciliationScopes, ServiceScopeNayaxSalesReconciliationScopes>();
 builder.Services.AddSingleton<NayaxSalesReconciliationRunner>();
 builder.Services.AddHostedService<NayaxSalesReconciliationWorker>();
+
+// The fourth hosted background service (issue #1149): importing the Nayax reimbursement report ZIPs
+// operators upload. It first looks for work about thirty seconds after startup and then takes the
+// oldest job that is due, one at a time, each in its own service scope resolved to that job's own
+// business - so one business's archive never touches another's, and one job's trouble never stops
+// another's.
+//
+// It is in-process for the reasons the two workers above are - one writer on one SQLite file, no
+// second identity or configuration surface - and App Service Always On is the same human
+// prerequisite: without it a queued job waits until the next request wakes the app. It has no
+// setting to switch it on; an environment where nobody has uploaded an archive finds nothing to do
+// and writes nothing.
+builder.Services.AddSingleton<IReimbursementImportJobSchedule, SystemReimbursementImportJobSchedule>();
+builder.Services.AddSingleton<IReimbursementImportJobLog, LoggingReimbursementImportJobLog>();
+builder.Services.AddSingleton<IReimbursementImportJobScopes, ServiceScopeReimbursementImportJobScopes>();
+builder.Services.AddSingleton<ReimbursementImportJobRunner>();
+builder.Services.AddHostedService<ReimbursementImportJobWorker>();
 
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as

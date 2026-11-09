@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.Imports;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.PriceCatalogue;
@@ -604,6 +605,22 @@ public class AppDbContext : DbContext
     /// </summary>
     public DbSet<MachineStockCount> MachineStockCounts => Set<MachineStockCount>();
     public DbSet<ImportedFile> ImportedFiles => Set<ImportedFile>();
+
+    /// <summary>
+    /// The uploaded Nayax reimbursement report archives waiting to be, or already, imported (issue
+    /// #1149). Ordinary tenant-owned data; the uploaded bytes live on the row until the job reaches
+    /// a final state and are deleted then. See <see cref="ReimbursementImportJob"/>.
+    /// </summary>
+    public DbSet<ReimbursementImportJob> ReimbursementImportJobs => Set<ReimbursementImportJob>();
+
+    /// <summary>
+    /// What each XML file inside one of those archives turned into (issue #1149), written in the
+    /// same transaction as that file's reimbursement rows. Nothing updates or deletes one, and the
+    /// job's counts are computed from this set rather than stored. See
+    /// <see cref="ReimbursementImportJobFile"/>.
+    /// </summary>
+    public DbSet<ReimbursementImportJobFile> ReimbursementImportJobFiles =>
+        Set<ReimbursementImportJobFile>();
     public DbSet<ImportedReimbursement> ImportedReimbursements => Set<ImportedReimbursement>();
     public DbSet<ImportedReimbursementDevice> ImportedReimbursementDevices => Set<ImportedReimbursementDevice>();
     public DbSet<ImportedDevicePayment> ImportedDevicePayments => Set<ImportedDevicePayment>();
@@ -2089,6 +2106,75 @@ public class AppDbContext : DbContext
                 : fromProvider);
 
         ConfigureConnectedMachineSnapshots(modelBuilder);
+
+        ConfigureReimbursementImportJobs(modelBuilder);
+    }
+
+    /// <summary>
+    /// Maps the uploaded reimbursement report import jobs of issue #1149: one tenant-owned row per
+    /// uploaded Nayax ZIP, and one per XML file inside it saying what that file turned into.
+    ///
+    /// <para><strong>Both are ordinary tenant-owned data.</strong>
+    /// <see cref="ConfigureBusinessOwnership"/> gives each the business key, its index, the central
+    /// query filter and the ownership stamp, and nothing here replaces any of that. A settlement
+    /// archive and what became of it are facts about the business whose money it settles, so neither
+    /// is a platform table, declared or otherwise.</para>
+    ///
+    /// <para><strong>One outcome per file per job, enforced by the database.</strong> The unique
+    /// index over (business, job, entry index) is what makes the counts right: they are computed from
+    /// these rows every time they are asked for, so a second outcome for one file would be a second
+    /// vote. It is led by the business key like every other per-business uniqueness rule in this
+    /// schema (AGENTS.md § Tenant ownership and data isolation).</para>
+    ///
+    /// <para><strong>The discovery index is the worker's whole query.</strong> (state, next attempt,
+    /// upload instant) is the order the one cross-business statement reads in - the oldest job that
+    /// is due - and it deliberately does <em>not</em> lead with the business key, because that
+    /// statement has no business to narrow by: whose job is waiting is what it is for.</para>
+    ///
+    /// <para>Every instant is persisted UTC and marked UTC on the way out, for the reason the
+    /// subscription records' are: the SQLite provider returns an unspecified kind otherwise, and
+    /// these instants are reported to the Reimbursement Report page.</para>
+    /// </summary>
+    private static void ConfigureReimbursementImportJobs(ModelBuilder modelBuilder)
+    {
+        var job = modelBuilder.Entity<ReimbursementImportJob>();
+
+        job.HasIndex(x => new { x.State, x.NextAttemptAtUtc, x.UploadedAtUtc });
+        job.HasIndex(x => new { x.BusinessId, x.UploadedAtUtc });
+
+        job.Property(x => x.FileName).HasMaxLength(ReimbursementArchivePolicy.MaxFileNameLength);
+        job.Property(x => x.UploadedByDirectoryTenantId).HasMaxLength(100);
+        job.Property(x => x.UploadedByObjectId).HasMaxLength(100);
+        job.Property(x => x.LastError).HasMaxLength(400);
+
+        job.Property(x => x.UploadedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        job.Property(x => x.NextAttemptAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        job.Property(x => x.FinishedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+
+        var file = modelBuilder.Entity<ReimbursementImportJobFile>();
+
+        file.HasOne(x => x.Job)
+            .WithMany(x => x.Files)
+            .HasForeignKey(x => x.ReimbursementImportJobId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        file.HasIndex(x => new { x.BusinessId, x.ReimbursementImportJobId, x.EntryIndex }).IsUnique();
+
+        file.Property(x => x.EntryPath).HasMaxLength(ReimbursementArchivePolicy.MaxEntryLabelLength);
+        file.Property(x => x.Reason).HasMaxLength(400);
+        file.Property(x => x.RecordedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>

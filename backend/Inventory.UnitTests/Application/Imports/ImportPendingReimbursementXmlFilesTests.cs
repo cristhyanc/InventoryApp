@@ -148,7 +148,7 @@ public class ImportPendingReimbursementXmlFilesTests
         source.Add("august.xml", File("hash-a", reimbursements: 1));
         var store = new FakeStore();
 
-        await new ImportPendingReimbursementXmlFiles(source, store, new FixedClock(ImportedAt), new FakeProviderDataCoverageStore())
+        await new ImportPendingReimbursementXmlFiles(source, ImportFile(store))
             .Handle(cancellation.Token);
 
         Assert.Equal(cancellation.Token, source.ObservedToken);
@@ -156,8 +156,14 @@ public class ImportPendingReimbursementXmlFilesTests
     }
 
     private static Task<ImportedFileImportResult> Import(FakeSource source, FakeStore store) =>
-        new ImportPendingReimbursementXmlFiles(source, store, new FixedClock(ImportedAt), new FakeProviderDataCoverageStore())
-            .Handle(CancellationToken.None);
+        new ImportPendingReimbursementXmlFiles(source, ImportFile(store)).Handle(CancellationToken.None);
+
+    /// <summary>
+    /// The per-file steps the pending folder shares with the uploaded-archive import since issue
+    /// #1149, over this test's own fakes: the same store, clock and coverage recorder as before.
+    /// </summary>
+    private static ImportReimbursementXmlFile ImportFile(FakeStore store) =>
+        new(store, new FixedClock(ImportedAt), new FakeProviderDataCoverageStore());
 
     private static PendingReimbursementXmlFile File(string hash, int reimbursements) =>
         new(
