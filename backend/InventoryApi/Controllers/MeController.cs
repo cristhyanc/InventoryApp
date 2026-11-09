@@ -1,4 +1,5 @@
 using Inventory.Application.Access;
+using Inventory.Application.PlatformOptions;
 using Inventory.Application.Subscriptions;
 using Inventory.Domain.ConnectedMachines;
 using InventoryApi.Auth;
@@ -71,7 +72,10 @@ public sealed class MeController : ControllerBase
                     session.ExpiresAtUtc,
                     session.ReadOnly)
                 : null,
-            access.HistoricalGstClassificationVisible,
+            // The legacy single boolean of issue #873, derived from the catalogue key it became
+            // (issue #1148), so the frontend that has not moved to the list below yet - the API
+            // deploys first - keeps reading the same answer from the same field.
+            access.MenuVisibility.IsVisible(MenuVisibilityKeys.HistoricalGstClassification),
             new MeEntitlementResponse(
                 access.Entitlement.Enforced,
                 access.Entitlement.Plan?.ToString(),
@@ -83,7 +87,8 @@ public sealed class MeController : ControllerBase
                         storage.LimitBytes,
                         storage.WarningLevel.ToString())
                     : null,
-                ConnectedMachines(access.Entitlement.ConnectedMachines))));
+                ConnectedMachines(access.Entitlement.ConnectedMachines)),
+            new MeMenuVisibilityResponse(access.MenuVisibility.SwitchedOffKeys)));
     }
 
     /// <summary>

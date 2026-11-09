@@ -359,6 +359,12 @@ public class EndpointPlanRequirementTests
         new("SuperAdminMasterProductsController.Get", PlanRequirementKind.None), // GET api/super-admin/master-products/{id:long}
         new("SuperAdminMasterProductsController.List", PlanRequirementKind.None), // GET api/super-admin/master-products
         new("SuperAdminMasterProductsController.Update", PlanRequirementKind.None), // PUT api/super-admin/master-products/{id:long}
+        // Issue #1148's switchable Admin menu destinations. No plan requirement, for the reason no
+        // platform-admin endpoint has one: which destinations the platform offers is the platform's
+        // own decision, and a plan a business holds cannot decide whether the Super Admin may read
+        // or change it. The switches withhold nothing a plan would have to agree about either.
+        new("SuperAdminMenuVisibilityController.Get", PlanRequirementKind.None), // GET api/super-admin/menu-visibility
+        new("SuperAdminMenuVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/menu-visibility/{key}
         new("SuperAdminOptionVisibilityController.Put", PlanRequirementKind.None), // PUT api/super-admin/option-visibility
         new("SuperAdminPriceCatalogueReviewController.ConfirmAutomaticMatch", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/automatic-matches/{suggestionId:long}/confirm
         new("SuperAdminPriceCatalogueReviewController.DecideListing", PlanRequirementKind.None), // POST api/super-admin/price-catalogue-review/listings/{supplierListingId:long}/decision

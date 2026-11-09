@@ -26,13 +26,15 @@ namespace Inventory.Application.Access;
 /// row that has gone missing means. That costs no second lookup: both resolutions are memoised per
 /// request.
 ///
-/// Since issue #873 it also reports what the application <em>offers</em>, from
-/// <see cref="GetOptionVisibility"/>: the shared setting that says whether Historical GST
-/// Classification is offered to anybody but a Super Admin. That is deliberately part of this one
-/// answer rather than a second read of its own - the shell builds its menu from this response, so
-/// "what may I do" and "what is on offer" have to arrive together or a menu can be built from one
-/// without the other. It is not a capability: the capability set above is identical in both states,
-/// and the classification endpoints authorize themselves by <c>Data.Repair</c> regardless.
+/// Since issue #873 it also reports what the application <em>offers</em>, and since issue #1148 it
+/// reports that for every switchable Admin destination rather than for one, from
+/// <see cref="GetMenuVisibility"/>: the shared setting that says which destinations are offered to
+/// anybody but a Super Admin. That is deliberately part of this one answer rather than a second read
+/// of its own - the shell builds its menu from this response, so "what may I do" and "what is on
+/// offer" have to arrive together or a menu can be built from one without the other. It is not a
+/// capability: the capability set above is identical whatever the switches say, and every
+/// destination's endpoints authorize themselves by their own capability, plan and provider rules
+/// regardless.
 ///
 /// Since issue #966 it also reports what the business has <em>bought</em>, from
 /// <see cref="GetEffectiveEntitlement"/>: the effective plan, or that nothing is enforced at all,
@@ -49,7 +51,7 @@ public sealed class GetCurrentAccess
     private readonly CurrentCapabilities _capabilities;
     private readonly ISupportSessionAccessor _supportSession;
     private readonly GetCurrentBusiness _getCurrentBusiness;
-    private readonly GetOptionVisibility _optionVisibility;
+    private readonly GetMenuVisibility _menuVisibility;
     private readonly GetEffectiveEntitlement _entitlement;
     private readonly GetAttachmentStorageStatus _attachmentStorage;
 
@@ -58,7 +60,7 @@ public sealed class GetCurrentAccess
         CurrentCapabilities capabilities,
         ISupportSessionAccessor supportSession,
         GetCurrentBusiness getCurrentBusiness,
-        GetOptionVisibility optionVisibility,
+        GetMenuVisibility menuVisibility,
         GetEffectiveEntitlement entitlement,
         GetAttachmentStorageStatus attachmentStorage)
     {
@@ -66,7 +68,7 @@ public sealed class GetCurrentAccess
         _capabilities = capabilities;
         _supportSession = supportSession;
         _getCurrentBusiness = getCurrentBusiness;
-        _optionVisibility = optionVisibility;
+        _menuVisibility = menuVisibility;
         _entitlement = entitlement;
         _attachmentStorage = attachmentStorage;
     }
@@ -84,9 +86,10 @@ public sealed class GetCurrentAccess
         var capabilities = await _capabilities.ListAsync(cancellationToken).ConfigureAwait(false);
         var business = await _getCurrentBusiness.Handle(cancellationToken).ConfigureAwait(false);
         // What the application offers, which is about no business and the same for everybody
-        // (issue #873). Read after the resolutions above, so a caller with no access to describe is
-        // denied before anything is read about what they would have been offered.
-        var options = await _optionVisibility.Handle(cancellationToken).ConfigureAwait(false);
+        // (issue #873, widened to every switchable Admin destination by issue #1148). Read after the
+        // resolutions above, so a caller with no access to describe is denied before anything is
+        // read about what they would have been offered.
+        var menuVisibility = await _menuVisibility.Handle(cancellationToken).ConfigureAwait(false);
         // And what the business has bought (issue #966), read on the request's own resolved scope -
         // which inside a support session is the business being viewed, so the plan reported is that
         // business's own. Read after the resolutions above for the same reason the options are.
@@ -113,7 +116,7 @@ public sealed class GetCurrentAccess
             support is { IsActive: true, ExpiresAtUtc: { } expiresAtUtc }
                 ? new CurrentSupportSession(business.Name, expiresAtUtc, ReadOnly: true)
                 : null,
-            options.HistoricalGstClassificationVisible,
+            menuVisibility,
             entitlement,
             attachmentStorage);
     }

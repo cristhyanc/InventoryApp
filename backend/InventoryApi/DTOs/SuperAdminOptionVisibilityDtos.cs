@@ -25,6 +25,11 @@ public sealed record SuperAdminOptionVisibilityRequest(
 /// The shared option visibility as the API reports it (issue #873), by the Super Admin surface that
 /// wrote it. <c>GET /api/me/access</c> reports the same boolean to a member as part of its own
 /// response; see <see cref="MeAccessResponse"/>.
+///
+/// <para>Since issue #1148 the stored answer is the <c>admin.historical-gst-classification</c> row
+/// of the menu-visibility catalogue, and this response reports that one destination's state. The
+/// shape is unchanged, so the frontend that has not moved to
+/// <c>PUT /api/super-admin/menu-visibility/{key}</c> yet (issue #1151) keeps working.</para>
 /// </summary>
 /// <param name="HistoricalGstClassificationVisible">
 /// Whether Historical GST Classification is offered to members who are not the platform
@@ -32,10 +37,10 @@ public sealed record SuperAdminOptionVisibilityRequest(
 /// </param>
 public sealed record SuperAdminOptionVisibilityResponse(bool HistoricalGstClassificationVisible)
 {
-    public static SuperAdminOptionVisibilityResponse From(OptionVisibilitySettings settings)
+    public static SuperAdminOptionVisibilityResponse From(MenuVisibilityOptionState stored)
     {
-        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(stored);
 
-        return new SuperAdminOptionVisibilityResponse(settings.HistoricalGstClassificationVisible);
+        return new SuperAdminOptionVisibilityResponse(stored.Visible);
     }
 }
