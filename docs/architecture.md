@@ -1055,7 +1055,7 @@ Contains:
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
 - The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection`, `resolve-nayax-sale-products` (issue #758), `grandfather-business-plans` (issue #966), `reconcile-attachment-storage` (issue #968) and the database backup commands, plus the startup report that says whether plan enforcement can take effect (issue #966).
-- The two hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. Both are hosting glue, not use cases — neither holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
+- The four hosted background services. `Auth/MemberProfileRefreshWorker` (issue #524) opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it; see [Member display name and email](#member-display-name-and-email-issue-524). `Adapters/NayaxSqs/NayaxSqsSalesReaderWorker` (issue #1103) is the second, and the first that is not started by a request: it runs `Inventory.Application.NayaxSqs.NayaxSqsSalesReader`'s polling loop over the shared Nayax SQS sales queue, and `Adapters/NayaxSqs/ServiceScopeNayaxSqsReaderScopes` beside it is the one place a business becomes the current business for a queued message. `Adapters/NayaxReconciliation/NayaxSalesReconciliationWorker` (issue #1104) is the third, running `NayaxSalesReconciliationRunner`'s hourly sweep; see [Hourly Nayax sales reconciliation](#hourly-nayax-sales-reconciliation-issue-1104). `Adapters/ReimbursementImport/ReimbursementImportJobWorker` (issue #1149) is the fourth, running `ReimbursementImportJobRunner`'s loop over the uploaded reimbursement report archives, with `ServiceScopeReimbursementImportJobScopes` beside it as the one place a business becomes the current business for a job; see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149). All four are hosting glue, not use cases — none holds a rule, resolves a `DbContext` or logs anything but an outcome. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -13148,6 +13148,139 @@ The import side of that flow (`POST api/imports/pending-xml`) is the
   import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
   (see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
   deleted `ImportService`/`IImportService` entirely.
+- Since issue #1149 the **per-file steps** — the hash dedupe, the atomic write and the coverage the
+  committed file proves — are `Inventory.Application.Imports.ImportReimbursementXmlFile`, shared with
+  the uploaded-archive import below. Nothing about this use case's behaviour changed: the same
+  counters move in the same order, a persistence failure still propagates rather than being reported
+  as a handful of failed files, and the pending folder is still the only place it looks. The parsing
+  moved the same way, into `Inventory.Infrastructure.Imports.ReimbursementXmlParser`, which is now the
+  one parser of reimbursement XML in the application; every parsing decision listed above is
+  unchanged, and `FileSystemPendingReimbursementXmlSource` still owns discovery, the folder
+  confinement and removal, and still translates its own failures into `null`/`false` at the port.
+
+### Reimbursement Report ZIP upload and background import (issue #1149)
+
+Nayax emails the reimbursement report as a ZIP, and until this issue the only way to import one was
+to unzip it twice by hand and get the XML files onto the server's own pending folder. This adds the
+second route: an authorised operator uploads the attachment exactly as it arrived, the upload is
+accepted in seconds, and the import happens in the background with the same pipeline.
+
+**The HTTP surface, on `ImportsController` under the existing `Imports.Run` capability.**
+`POST api/imports/reimbursement-report` takes one multipart file, checks the archive, stores it as a
+queued job and answers `202` with the job id; a bad archive is `400` with a readable sentence and
+nothing stored at all. `GET api/imports/reimbursement-report/jobs` answers the caller's own
+business's latest 20 jobs and `GET .../jobs/{jobId}` one of them with every file outcome; a job of
+another business is `404`, and not because of a comparison made at the endpoint — the lookup is
+tenant-scoped centrally, so another business's job is not found. The business is always the caller's
+resolved business: nothing in the request can choose one. A role preview and a read-only support
+session are refused on the upload centrally, because it is a `POST`, exactly as the two import writes
+beside it are; the two reads are `GET`s, so a support session may make them. None of the three
+carries a plan requirement, for the reason the pending-XML import carries none: a settlement
+statement the business was sent feeds the Bookkeeping and GST reports a Starter business includes.
+
+**Reading the archive: `Inventory.Application.Imports.IReimbursementArchiveReader`, implemented by
+`Inventory.Infrastructure.Imports.ZipReimbursementArchiveReader`.** The real shape is
+`Reports_DD-MM-YY.zip` holding `MM-YYYY/Reimbursments.zip` (Nayax's own spelling) holding a PDF, an
+XLSX and an XML per report day, so the rules are:
+
+- Folders are descended into — a ZIP has no folders, only entry names that contain them, so this
+  needs nothing — and the directory entries a ZIP tool writes are counted as ignored.
+- An archive found in the uploaded one is opened, **exactly one level deep**. An archive inside an
+  inner archive is counted as ignored and never opened: recursing into attacker-supplied archives is
+  how a decompression bomb is built, and nothing Nayax sends needs it.
+- Only `.xml` entries are imported, matched case-insensitively. PDFs, XLSXs, anything else and the
+  directory entries are ignored and **counted**, so the numbers a job reports add up to what was in
+  the archive. An entry this import does not expand cannot expand into anything.
+- An uploaded archive whose XML files sit directly in it works too, which is what an operator who
+  unzipped one level by hand sends.
+- **Entry names are untrusted and are never used as a path.** Every byte is read in memory, nothing is
+  ever extracted to disk, and `Inventory.Domain.Imports.ReimbursementArchivePolicy.SanitiseEntryName`
+  reduces a name to a label that is only recorded and displayed: both separators normalised, every
+  `.`/`..` segment dropped, a leading separator and a drive prefix removed, control characters
+  replaced, and the result capped. A name of nothing but traversal segments becomes a positional label
+  rather than a guess. The server's own pending import folder is not touched — this import has nothing
+  to do with it.
+- A file that is not a readable reimbursement report is **that entry's own** failure, answered across
+  the port as a parsed `null`, exactly as the pending folder's adapter answers `null` for an
+  unreadable file. A damaged outer archive, or an inner entry named `.zip` that is not one, refuses
+  the whole upload.
+
+**The limits, in the Domain and enforced while the bytes are read** (`ReimbursementArchivePolicy`,
+the repository owner's confirmation of 9 November 2026): a 10 MB request — the same ceiling the Nayax
+sales upload has carried since issue #301 — at most 20 inner archives, at most 2,000 entries in
+total, 5 MB per expanded entry, 100 MB expanded in total, and a 200:1 compression-ratio ceiling above
+a 64 KB floor, so the check refuses bombs rather than small, highly compressible reports. The entry's
+own declared length is deliberately **not** trusted as the bound: it comes from the archive's central
+directory, which is attacker-supplied, so the copy itself stops one byte past the limit. Breaking any
+limit **rejects the whole upload** — not the bytes, not a job, not one reimbursement row is stored —
+because a partially accepted settlement archive would leave the operator unable to say which half of
+their money landed. An archive with no XML at all is rejected too: there is nothing to import.
+
+**The job: two additive tenant-owned tables.** `ReimbursementImportJobs` holds the business, the
+uploading member (their validated Entra `(tid, oid)` pair — the identity the `BusinessMembership` row
+is itself keyed by; no display name, no email address, and neither half is published by any
+endpoint), the upload instant, the sanitised file name, the state (`Queued`, `Processing`,
+`Completed`, `CompletedWithFailures`, `Failed`), the attempt count, the not-before instant, the last
+safe error, and the uploaded bytes — which are kept until the job reaches a final state and deleted
+then, because a job resumed after a restart imports from the archive it was uploaded with and nothing
+else holds a copy. `ReimbursementImportJobFiles` holds one row per XML: its index in the archive walk
+(the job's per-file identity, unique per job by index — the walk over the same bytes is
+deterministic, whereas two inner archives may legitimately hold a report of the same name), its
+sanitised label, its outcome (`Imported`, `Skipped`, `Failed`) and a safe reason. **No count is
+stored**: what was imported, skipped and failed is counted from those rows every time it is asked
+for, because a total maintained beside them is a total that can disagree with them after a restart.
+
+**The worker: `ReimbursementImportJobRunner`, the fourth hosted background service.** It is the
+hourly reconciliation's arrangement exactly (issue #1104): the Application layer owns the loop, the
+cadence and the outcome, `InventoryApi.Adapters.ReimbursementImport.ReimbursementImportJobWorker` is
+a `BackgroundService` whose only dependency is that runner, and
+`ServiceScopeReimbursementImportJobScopes` is the one place a scope is opened. It takes the oldest
+**due** job, one at a time; a job's failure never stops another's, and only cancellation ends the
+loop. It is in-process for the reasons the queue reader and the reconciliation are — one writer on
+the one SQLite file, no second identity or configuration surface — and App Service **Always On** is
+the human prerequisite: without it a queued job waits until the next request wakes the app. The seven
+background-workload criteria are answered for it in [Azure Functions and background
+workloads](#azure-functions-and-background-workloads-decision-criteria-issue-68).
+
+**The one cross-business read, and what makes it narrow.** `EfReimbursementImportJobQueue` is the
+**ninth** reviewed `IgnoreQueryFilters` path and the **second** that is not in a request at all
+(AGENTS.md § Tenant ownership and data isolation; the owner's approval of 9 November 2026). It has to
+ignore the filters because the business is the *answer*: the worker's loop is not a request, resolves
+no actor and has deliberately resolved no business, so the central filter would match no job row and
+the queue would be silently empty forever. One statement, over one table, projecting **two columns** —
+the job's key and the ownership key, which is not business data. No file name, no uploaded bytes, no
+uploader, no attempt count, no error text, no count of anything. One method taking no argument but a
+cancellation token, so there is nothing to widen it with; the ordering and the clock comparison are
+inside the adapter. Everything the chosen job then does happens in a scope resolved to that one
+business through `BusinessScope.ResolveForHostedWork`, where the ordinary filters and
+`BusinessOwnershipEnforcer` are fully in force, and every other statement about a job — the upload,
+the two status reads, the claim, the outcomes, the completion — is an ordinary filtered one with no
+business predicate of its own.
+
+**One XML, one transaction.** `ProcessReimbursementImportJob` claims the job (counting the attempt and
+moving it to `Processing` in one `BEGIN IMMEDIATE` write, so a counted attempt and a claimed job
+cannot come apart), reads the stored archive, and for every file with no recorded outcome opens one
+transaction (`IReimbursementImportFileTransactions`) around **the same parse → hash dedupe → save →
+coverage steps the pending-folder import uses** — `ImportReimbursementXmlFile`, shared, with no
+second parser and no second copy of the coverage rule — plus that file's own outcome row. The three
+adapters involved resolve the same scoped `AppDbContext`, so they all enlist in that one transaction
+without knowing it exists. There is therefore no moment at which a file is committed without the
+record of what happened to it, or an outcome exists for rows that were not committed, and a duplicate's
+`Skipped` and a bad file's `Failed` are written the same way. When every file has an outcome the job
+is finished through `ReimbursementImportJobCompletion.StateFor`: `Completed` when nothing failed,
+`CompletedWithFailures` when something did — a job all of whose files were skipped is a success, not a
+failure — and the uploaded bytes are deleted.
+
+**Why the `Skipped`-after-a-restart answer is correct rather than a guess.** A resumed job keeps every
+recorded outcome exactly as it is and processes only the files with none, so a file it imported before
+the restart still reports `Imported`. A file with no outcome whose hash turns out to be present was
+therefore imported by something *else* — a previous upload, or another job — because had this job
+imported it, the same transaction would have written its outcome.
+
+**Out of scope here**, and deliberately: email or Logic App automation (#1150), any change to XML
+parsing, reimbursement, coverage or reconciliation rules, row-level deduplication (dedupe stays the
+byte-identical file hash), the Reimbursement Report page and every frontend change (#1152), importing
+the PDF or XLSX, cancelling or deleting jobs, and notifications when a job finishes.
 
 ### Report availability model (issue #730)
 
@@ -18938,6 +19071,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
 | Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
 | Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
+| Uploaded reimbursement report import — `Inventory.Application.Imports.ProcessReimbursementImportJob` | In-process, in a hosted loop: an operator uploads the ZIP Nayax emails and the endpoint stores it as a queued job; the worker takes the oldest job that is **due**, one at a time, in a service scope resolved to that job's own business, and commits each XML's rows, its coverage and its per-file outcome in one transaction | Implemented (#1149); App Service **Always On** is the same outstanding human prerequisite as the reader's — see [Reimbursement Report ZIP upload and background import](#reimbursement-report-zip-upload-and-background-import-issue-1149) | No, and a Function is the thing it must not be. It writes the `/home` SQLite file for its whole duration, so an out-of-process importer is outside the single-writer envelope; it needs no credential at all; and it is **not scheduled** — it is work an operator started, moved off the request so a 1.3 MB archive is acknowledged in seconds and a database problem becomes a bounded retry instead of a failed upload. It is assessed explicitly under each criterion below. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in a hosted drain of its own: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |
 | Connected-machine counts — `snapshot-connected-machines` | `InventoryApi` CLI mode dispatched before the web host is built, invoking `Inventory.Application.ConnectedMachines.RecordConnectedMachineSnapshot` once per counted business; runnable by hand and intended for the same App Service WebJob mechanism as the backup (#333) | Implemented (#978); scheduling it in the App Service is outstanding human work — see [Counting connected machines](#counting-connected-machines-issue-978) | No. The published executable already is the job, it reaches the same `/home` database file and the same per-business credentials, and it is the single SQLite writer while it runs. It is the second workload that genuinely cannot stay request-driven — a day nobody signs in is still a day the account held machines — but it is **bounded and self-healing**: at most 100 fleet reads per run, one per business per day, and a missed run leaves the last complete count as a stale figure rather than a wrong one. |
@@ -19092,6 +19226,64 @@ here criterion by criterion rather than left to the general paragraphs above.
    same window again, because `lastSales` is a rolling window rather than a cursor. A pending
    inventory-cost rebuild left behind by any path is drained at the start of the next run. There is no
    state a human has to repair, and no step that is unsafe to repeat.
+
+#### The uploaded reimbursement report import against the seven criteria (issue #1149)
+
+The fourth in-process background workload and the first one that is **neither scheduled nor
+event-driven**: it is work a person started, deliberately moved off their request. So it is answered
+here criterion by criterion rather than left to the general paragraphs above.
+
+1. **Frequency.** It is not a schedule and does not poll an upstream. The worker looks for work about
+   30 seconds after startup, and then takes the oldest job that is **due** until there is none, waiting
+   15 seconds between empty passes. A pass that did something looks again immediately, so a backlog of
+   uploads drains in one go rather than one job every 15 seconds. There is no overlap to worry about,
+   because there is one loop and it runs one job at a time — which the single-writer SQLite file
+   requires anyway. Staleness is seconds: the operator's upload is acknowledged at once and its
+   importing starts on the next pass.
+2. **Retries.** The retry is the job's own, bounded, and counted on the row: a transient database
+   failure puts the job back to `Queued` with its attempt count increased and a not-before instant of
+   1 minute, 5 minutes, 15 minutes, then 1 hour, and after the fifth attempt the job becomes `Failed`
+   with the safe reason "Stopped after repeated database errors. Upload the ZIP again." An attempt is
+   counted when it **starts**, so a restart that finds a job `Processing` has already spent one — which
+   is what bounds a job that crashes its own host. A file this application cannot read is **never** a
+   retry: it is that file's own recorded outcome, because trying a malformed XML four more times
+   produces the same malformed XML. And because the worker takes the oldest job that is *due*, a job
+   waiting out its back-off never holds up another, of its own business or of any other.
+3. **Idempotency.** This is the criterion the whole design rests on, and it is a durable row rather
+   than a value in memory: each XML's reimbursement rows, the settlement coverage they prove and the
+   job's record of what happened to that file are written in **one** transaction. There is therefore no
+   moment at which a file is committed without its outcome, or an outcome exists for rows that were not
+   committed. A resumed job processes only the files with no outcome, so a file it imported before a
+   restart still reports `Imported` and nothing is imported twice; a file with no outcome whose content
+   hash is already present is reported `Skipped`, which is correct rather than a guess, precisely
+   because this job's own import would have written its outcome in the same transaction. Deduplication
+   stays the byte-identical file hash, per business, so re-uploading the same ZIP creates a new job
+   whose files all come out `Skipped`. Nothing is upserted and no recorded amount is changed.
+4. **Secrets.** **None at all**, and that is not a near miss: the import reads an uploaded file and
+   writes the database. It makes no Nayax call, holds no AWS credential, reads no stored token, and
+   needs no identity of its own. A Function App would have added one, plus a runtime storage account,
+   for a workload that authenticates to nothing.
+5. **Observability.** One structured line per job, carrying the business's key, the job's key, the
+   outcome and **counts only** — imported, skipped, failed, and how many files this attempt itself
+   processed. No XML content, reimbursement figure, fee, payment method, customer id or company name
+   can reach a sink, which the log port's own signatures enforce; a **file name may** appear, because
+   an operator has to be able to find the file a job is talking about. Beside the log, the job row and
+   its per-file outcomes are the durable answer to "what actually landed?", readable through
+   `GET api/imports/reimbursement-report/jobs`, and the job's counts are computed from those outcome
+   rows every time rather than stored beside them.
+6. **Cost.** No billed or quota-limited external call of any kind. The bounded resource is memory, and
+   it is bounded deliberately: a 10 MB request, at most 20 archives one level deep, at most 2,000
+   entries, 5 MB per expanded entry, 100 MB expanded in total, and a compression-ratio ceiling, each
+   enforced while the bytes are read rather than taken from the archive's own declared sizes. The
+   uploaded bytes live on the job row until it finishes and are deleted then. Nothing about the host is
+   new: no deployment unit, no runtime storage account, no role assignment, no second telemetry source.
+7. **Failure recovery.** **Operator replay**, which is what the retry stop rule is written for. A job
+   that ran out of attempts keeps every outcome it recorded and tells the operator to upload the ZIP
+   again; doing so creates a new job whose already-imported files come out `Skipped`, so a replay
+   imports exactly what is missing and nothing twice. A job that finished `CompletedWithFailures` is
+   the same shape at file granularity: the readable per-file reasons say which report could not be
+   read, and re-uploading a corrected archive imports only it. There is no partial state a human has to
+   unpick, because no file is ever half-committed.
 
 ### Why "no Functions yet" is the answer today
 

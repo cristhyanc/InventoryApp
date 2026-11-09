@@ -1238,6 +1238,98 @@ first successful poll, and the Dashboard syncs on load in the meantime. The `200
 business-facing surface may read. See [docs/architecture.md § Dashboard sales live from the Nayax SQS
 queue](docs/architecture.md#dashboard-sales-live-from-the-nayax-sqs-queue-issue-1106).
 
+## The Reimbursement Report import (issue #1149)
+
+Nayax emails the reimbursement report as a ZIP attachment. You can upload it **exactly as it
+arrived** — no unzipping, no copying files onto the server. The upload is accepted in seconds and the
+importing happens in the background, so a year of reports does not hold a browser open; the design is
+[docs/architecture.md § Reimbursement Report ZIP upload and background
+import](docs/architecture.md#reimbursement-report-zip-upload-and-background-import-issue-1149).
+
+**There is nothing to configure.** It has no settings of its own and needs no credential of any kind:
+it reads the file you uploaded and writes your own records. **Always On** is the one prerequisite, and
+it is the same one the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103) has: without
+it the platform may idle the process out, and an idled process imports nothing — a queued upload would
+then wait until somebody's next request woke the application.
+
+This is the backend. The page that uses it is issue #1152; until then the API below is the whole of
+it, and it is open to exactly the members who may run an import (Manager and Owner — see [Roles and
+capabilities](#roles-and-capabilities)).
+
+### What you upload, and what is refused
+
+`POST api/imports/reimbursement-report` takes one file as `multipart/form-data`. It answers **`202`
+with the job id** when the archive is accepted, and **`400` with a sentence saying why** when it is
+not. A refused upload stores **nothing at all** — not the file, not a job, not one reimbursement row —
+because a half-accepted settlement archive would leave you unable to say which half of your money
+landed.
+
+What is read, inside the ZIP:
+
+- the archives **inside** it are opened, one level deep — which is the shape Nayax sends,
+  `Reports_DD-MM-YY.zip` holding `MM-YYYY/Reimbursments.zip`;
+- folders inside either are descended into;
+- every `.xml` file in either is imported;
+- the PDF and the XLSX beside each report, and anything else, are **ignored and counted**;
+- an archive inside an inner archive is **ignored**, not opened;
+- an archive whose XML files sit directly in it works too, if you unzipped a level by hand.
+
+The limits, all checked by the server before the upload is accepted:
+
+| Limit | Value |
+|---|---|
+| Whole upload | 10 MB (the real file is about 1.3 MB) |
+| Archives inside the archive | 20 |
+| Entries in total | 2,000 |
+| Any one file, expanded | 5 MB |
+| Everything expanded | 100 MB |
+| How far one file may expand | 200× its compressed size |
+
+Breaking any one of them rejects the whole upload. So does a file that is not a readable ZIP, and an
+archive with no reimbursement XML in it at all — there would be nothing to import.
+
+### Following a job
+
+`GET api/imports/reimbursement-report/jobs` lists your business's **latest 20** uploads, newest
+first, and `GET api/imports/reimbursement-report/jobs/{jobId}` adds what each XML inside one turned
+into. A job of another business is a `404`. Each job reports:
+
+| State | What it means |
+|---|---|
+| `Queued` | Accepted and waiting. Nothing imported yet. |
+| `Processing` | Being worked through now. |
+| `Completed` | Every file in it was imported, or was already imported. |
+| `CompletedWithFailures` | It finished, and at least one file in it could not be imported. The rest were. |
+| `Failed` | The job itself stopped. Whatever it had already imported stays imported. |
+
+and, per file, `Imported`, `Skipped` (your business had already imported a file with those exact
+bytes) or `Failed` with a short, safe reason. The counts are always counted from those per-file
+records, so what a job says is what actually landed. **No log line and no status field carries XML
+content, a figure or a payment detail** — a file name may appear, so you can find the file a job is
+talking about.
+
+### Recovering a file that did not import
+
+- **One file failed (`CompletedWithFailures`).** The others imported. Look at that file's reason, fix
+  or re-export it, and upload the archive again: the files already imported come out `Skipped`, so a
+  re-upload imports exactly what is missing and never anything twice. Duplicate detection is the
+  file's own bytes, per business.
+- **The job failed (`Failed`).** Either the database could not be written five times over — the job
+  says "Stopped after repeated database errors. Upload the ZIP again." — or its stored copy of the
+  archive could no longer be read. Everything it had imported keeps its record; upload the same ZIP
+  again and it imports the remainder.
+- **The application restarted mid-job.** Nothing to do: the job is picked up again and continues from
+  the first file with no recorded outcome. A file it had imported still reports `Imported`, and
+  nothing is imported twice — each file's rows and the record of them are written together or not at
+  all.
+- **A job seems stuck in `Queued`.** It is waiting for the worker. Check that **Always On** is on;
+  until a request wakes an idled process, nothing is imported. A job whose attempt failed is also
+  deliberately held back for 1, then 5, then 15 minutes and then an hour before the next attempt —
+  and a job waiting like that never holds up anybody else's.
+
+Re-uploading the same ZIP is always safe. It creates a new job, and every file in it that you already
+have comes out `Skipped`.
+
 ## Platform diagnostics API
 
 The tenant boundary fails closed, which is what makes a problem *in* it hard to see: a row assigned to the wrong business, or a child row whose parent belongs to another business, is invisible to the only person who would notice. The platform diagnostics API is one narrowly bounded, read-only, audited path for that investigation and nothing else. See [docs/architecture.md](docs/architecture.md#platform-diagnostics-issue-336) for the complete design.
