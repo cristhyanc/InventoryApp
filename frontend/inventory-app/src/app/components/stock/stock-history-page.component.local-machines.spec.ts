@@ -98,6 +98,11 @@ async function render(
 
   const fixture = TestBed.createComponent(StockHistoryPageComponent);
   fixture.detectChanges();
+  if (options.selectedProduct) {
+    // The adjustment form lives in the Adjust stock panel since issue #1156; open it.
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="open-adjustment"]')!.click();
+    fixture.detectChanges();
+  }
   return {
     fixture,
     component: fixture.componentInstance,

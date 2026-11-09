@@ -1,195 +1,352 @@
-<div class="page">
-  <header class="page-header">
-    <div>
-      <h1 class="page-title">Stock History</h1>
-      <p class="page-subtitle">Every recorded stock movement, newest first. Times are shown in the business's own time zone.</p>
-    </div>
-    <div class="page-actions">
-      <a routerLink="/products" class="btn btn-secondary">Back to Products</a>
+<!--
+  Stock History (issue #1156's layout, on the Products list's `rr` scale): the heading with Back to
+  Products and Adjust stock, a compact summary of the selected product, then one card holding the
+  toolbar, the ledger (a table from `md`, movement cards below it) and the pager. The table and the
+  cards render the same page of movements, so the two layouts can never disagree.
+-->
+<div class="page font-rr text-rr-navy">
+  <header class="flex flex-col gap-3">
+    <a routerLink="/products" class="inline-flex min-h-11 w-fit items-center gap-1 text-sm font-semibold text-rr-teal no-underline hover:underline" data-testid="back-to-products">
+      <span aria-hidden="true">←</span> Back to Products
+    </a>
+    <div class="flex flex-wrap items-end justify-between gap-3">
+      <div class="min-w-0">
+        <h1 class="page-title m-0 text-2xl font-bold tracking-tight text-rr-navy sm:text-3xl">Stock history</h1>
+        <p class="m-0 mt-1 text-sm text-rr-muted">Movements newest first. Times are shown in the business's own time zone.</p>
+      </div>
+      @if (selectedProduct) {
+        <button
+          #adjustButton
+          type="button"
+          class="rr-button-primary w-full sm:w-auto"
+          data-testid="open-adjustment"
+          aria-haspopup="dialog"
+          [attr.aria-expanded]="adjusting"
+          (click)="openAdjustment()"><app-icon name="add" [size]="18" />Adjust stock</button>
+      }
     </div>
   </header>
 
-  <form class="card" (ngSubmit)="applyFilters()">
-    <div class="card-body grid gap-4 md:grid-cols-3">
-      <div class="field">
-        <label for="filter-product" class="field-label">Product</label>
-        <select id="filter-product" name="productId" [(ngModel)]="filters.productId">
-          <option [ngValue]="null">All products</option>
-          @for (product of products; track product.id) {
-            <option [ngValue]="product.id">{{ product.name }}</option>
-          }
-        </select>
-      </div>
-      <div class="field">
-        <label for="filter-from" class="field-label">From</label>
-        <input id="filter-from" name="from" type="date" [(ngModel)]="filters.from" />
-      </div>
-      <div class="field">
-        <label for="filter-to" class="field-label">To</label>
-        <input id="filter-to" name="to" type="date" [(ngModel)]="filters.to" />
-      </div>
-      <div class="field">
-        <label for="filter-reason" class="field-label">Reason</label>
-        <select id="filter-reason" name="reason" [(ngModel)]="filters.reason">
-          <option [ngValue]="null">All reasons</option>
-          @for (option of reasonOptions; track option.value) {
-            <option [ngValue]="option.value">{{ option.label }}</option>
-          }
-        </select>
-      </div>
-      @if (machinesError) {
-        <div class="field">
-          <span class="field-label">Machine</span>
-          <p data-testid="machine-filter-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
-        </div>
-      } @else if (machinesLoading) {
-        <div class="field">
-          <span class="field-label">Machine</span>
-          <output data-testid="machine-filter-loading" class="text-md-body value-muted">Loading machines…</output>
-        </div>
-      } @else if (machineFilterShown) {
-        <div class="field">
-          <label for="filter-machine" class="field-label">Machine</label>
-          <select id="filter-machine" name="machineId" [(ngModel)]="filters.machineId">
-            <option [ngValue]="null">All machines</option>
-            <!-- Every recorded machine, deactivated ones included, so a retired machine's movements stay findable. -->
-            @for (machine of machines; track machine.id) {
-              <option [ngValue]="machine.id">{{ machine.name }}</option>
-            }
-          </select>
-        </div>
-      }
-      <div class="field">
-        <label for="filter-source" class="field-label">Source</label>
-        <select id="filter-source" name="source" [(ngModel)]="filters.source">
-          <option [ngValue]="null">All sources</option>
-          @for (option of sourceOptions; track option.value) {
-            <option [ngValue]="option.value">{{ option.label }}</option>
-          }
-        </select>
-      </div>
-      <div class="field">
-        <label for="filter-page-size" class="field-label">Rows per page</label>
-        <select id="filter-page-size" name="pageSize" [(ngModel)]="filters.pageSize">
-          @for (size of pageSizeOptions; track size) {
-            <option [ngValue]="size">{{ size }}</option>
-          }
-        </select>
-      </div>
-    </div>
-    <div class="card-footer flex flex-wrap gap-3">
-      <button type="submit" data-testid="apply-filters" class="btn btn-primary">Apply filters</button>
-      <button type="button" data-testid="clear-filters" [disabled]="!hasFilters" (click)="clearFilters()" class="btn btn-secondary">Clear filters</button>
-    </div>
-  </form>
+  @if (adjustmentMessage) {
+    <output class="block rounded-lg bg-rr-ok-bg p-3 text-sm font-semibold text-rr-ok-text" data-testid="adjustment-applied">{{ adjustmentMessage }}</output>
+  }
 
   @if (selectedProduct) {
     <!--
-      Three tiles since issue #792 (A2 of #786): the product's selling price was the fourth, and a
-      product carries none. The stock movement table below keeps its own unit-cost and cost-impact
-      columns - those are costs, not a price.
+      The selected product now, not as at the filtered dates: Current stock is the product's own
+      on-hand storage stock, read from the product list, so changing a date or another filter never
+      changes it. The unit label is the product's pack size, shown apart from every quantity.
     -->
-    <div class="grid gap-4 md:grid-cols-3" data-testid="selected-product-summary">
-      <div class="card">
-        <div class="card-body text-center">
-          <span class="block text-md-card-title font-semibold text-md-gray-800">{{ selectedProduct.name }}</span>
-          <span class="mt-2 block text-md-body value-muted">Selected product</span>
+    <section class="card rounded-xl border-rr-line p-4" aria-label="Selected product" data-testid="selected-product-summary">
+      <div class="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div class="min-w-0">
+          <h2 class="m-0 break-words text-lg font-bold text-rr-navy">{{ selectedProduct.name }}</h2>
+          <p class="m-0 mt-0.5 text-sm text-rr-muted">Unit label (pack size): <span class="font-semibold text-rr-navy" data-testid="summary-unit-label">{{ unitLabel(selectedProduct) }}</span></p>
         </div>
+        <dl class="m-0 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+          <div>
+            <dt class="text-xs font-semibold uppercase tracking-wide text-rr-caption">Current stock</dt>
+            <dd class="m-0 text-base font-bold text-rr-navy"><span class="tabular-nums" data-testid="summary-current-stock">{{ quantityLabel(selectedProduct.quantityInStock) }}</span> units</dd>
+          </div>
+          <div>
+            <dt class="text-xs font-semibold uppercase tracking-wide text-rr-caption">Low stock threshold</dt>
+            <dd class="m-0 text-base font-bold text-rr-navy"><span class="tabular-nums" data-testid="summary-low-stock-threshold">{{ quantityLabel(selectedProduct.lowStockThreshold) }}</span> units</dd>
+          </div>
+        </dl>
       </div>
-      <div class="card">
-        <div class="card-body text-center">
-          <span class="block text-md-stat-value font-semibold text-md-info-text">{{ selectedProduct.quantityInStock }}</span>
-          <span class="mt-2 block text-md-body value-muted">Current Stock ({{ selectedProduct.unit }})</span>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-body text-center">
-          <span class="block text-md-stat-value font-semibold text-md-info-text">{{ selectedProduct.lowStockThreshold }}</span>
-          <span class="mt-2 block text-md-body value-muted">Low Stock Threshold</span>
-        </div>
-      </div>
-    </div>
-
-    <app-stock-adjustment-form
-      [productId]="selectedProduct.id"
-      [machines]="machines"
-      [machinesFailed]="machinesError !== ''"
-      [machinesLoading]="machinesLoading"
-      (adjustmentApplied)="onAdjustmentApplied()">
-    </app-stock-adjustment-form>
+      <p class="m-0 mt-3 text-xs text-rr-caption">Current stock is on-hand storage stock now, whatever dates are filtered.</p>
+    </section>
   } @else if (filters.productId !== null) {
-    <p data-testid="unknown-product" class="text-md-body value-muted">
+    <p data-testid="unknown-product" class="m-0 text-sm text-rr-muted">
       This product is not in the current product list, so an adjustment cannot be recorded here. Its movements are still listed below.
     </p>
   } @else {
-    <p data-testid="select-product-hint" class="text-md-body value-muted">
-      Select a product above to record a stock adjustment for it.
+    <p data-testid="select-product-hint" class="m-0 text-sm text-rr-muted">
+      Choose a product to see its current stock and record a stock adjustment for it.
     </p>
   }
 
-  <div class="card">
-    <div class="card-header">
-      <h2 class="card-title">Adjustment History</h2>
-    </div>
-    <div class="card-body p-0">
-      @if (error) {
-        <div class="alert alert-danger m-4" role="alert" data-testid="history-error">
-          <p class="alert-title">{{ error }}</p>
-        </div>
-      } @else if (loading) {
-        <output data-testid="history-loading" class="block p-4 text-md-body value-muted">Loading stock history…</output>
-      } @else if (history === null || history.items.length === 0) {
-        <p data-testid="history-empty" class="p-4 text-md-body value-muted">
-          {{ hasFilters ? 'No stock movements match these filters.' : 'No stock adjustments yet.' }}
-        </p>
-      } @else {
-        <div class="overflow-x-auto">
-          <table class="table">
-            <thead class="table-head">
-              <tr>
-                <th scope="col" class="table-cell">Date</th>
-                <th scope="col" class="table-cell">Product</th>
-                <th scope="col" class="table-cell">Change</th>
-                <th scope="col" class="table-cell">Resulting Qty</th>
-                <th scope="col" class="table-cell">Reason</th>
-                <th scope="col" class="table-cell">Source</th>
-                <th scope="col" class="table-cell">Machine</th>
-                <th scope="col" class="table-cell">Unit Cost</th>
-                <th scope="col" class="table-cell">Eat Before</th>
-                <th scope="col" class="table-cell">Notes</th>
-              </tr>
-            </thead>
-            <tbody data-testid="history-rows">
-              @for (movement of history.items; track movement.id) {
-                <tr class="table-row">
-                  <td class="table-cell">{{ movement.createdAt | businessDateTime }}</td>
-                  <td class="table-cell">{{ movement.productName }}</td>
-                  <td class="table-cell table-num" [ngClass]="movement.quantityChange < 0 ? 'text-md-danger-text' : 'text-md-success-text'">
-                    {{ movement.quantityChange > 0 ? '+' : '' }}{{ movement.quantityChange }}
-                  </td>
-                  <td class="table-cell table-num">{{ movement.quantityAfter }}</td>
-                  <td class="table-cell">{{ reasonLabel(movement.reason) }}</td>
-                  <td class="table-cell">{{ sourceLabel(movement.source) }}</td>
-                  <td class="table-cell">{{ machineLabel(movement.machineId) }}</td>
-                  <td class="table-cell">{{ unitCostLabel(movement.unitCost) }}</td>
-                  <td class="table-cell">{{ movement.eatBefore || '—' }}</td>
-                  <td class="table-cell">{{ movement.notes }}</td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
+  <section class="card overflow-hidden rounded-xl border-rr-line" aria-label="Stock movements">
+    <div class="flex flex-col gap-3 border-b border-rr-line p-3 sm:p-4" data-testid="history-toolbar">
+      <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+        <label class="flex min-h-11 min-w-0 basis-full items-center gap-1 rounded-lg border border-rr-line bg-white pl-3 text-sm sm:basis-auto md:min-h-10">
+          <span class="whitespace-nowrap text-rr-caption">Product:</span>
+          <select
+            id="filter-product"
+            name="productId"
+            class="min-h-10 min-w-0 flex-1 border-0 bg-transparent pr-2 text-sm font-semibold text-rr-navy sm:max-w-[16rem] md:min-h-9"
+            [(ngModel)]="filters.productId"
+            (ngModelChange)="applyFilters()">
+            <option [ngValue]="null">All products</option>
+            @for (product of products; track product.id) {
+              <option [ngValue]="product.id">{{ product.name }}</option>
+            }
+          </select>
+        </label>
 
-        <div class="card-footer flex flex-wrap items-center justify-between gap-3">
-          <p data-testid="history-paging" class="text-md-body value-muted">
-            Showing {{ history.items.length }} of {{ history.totalCount }} movements — page {{ history.page }} of {{ totalPages }}
+        <fieldset class="m-0 flex min-h-11 basis-full flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-rr-line bg-white px-3 py-1 text-sm sm:basis-auto md:min-h-10">
+          <legend class="sr-only">Date range (business days)</legend>
+          <span class="whitespace-nowrap text-rr-caption" aria-hidden="true">Dates:</span>
+          <label class="flex items-center gap-1">
+            <span class="sr-only">From</span>
+            <input id="filter-from" name="from" type="date" class="min-h-9 w-auto border-0 bg-transparent p-0 text-sm font-semibold text-rr-navy" [(ngModel)]="filters.from" (ngModelChange)="applyFilters()" />
+          </label>
+          <span class="text-rr-caption" aria-hidden="true">–</span>
+          <label class="flex items-center gap-1">
+            <span class="sr-only">To</span>
+            <input id="filter-to" name="to" type="date" class="min-h-9 w-auto border-0 bg-transparent p-0 text-sm font-semibold text-rr-navy" [(ngModel)]="filters.to" (ngModelChange)="applyFilters()" />
+          </label>
+        </fieldset>
+
+        <button
+          type="button"
+          class="rr-button-secondary md:min-h-10"
+          data-testid="more-filters"
+          aria-controls="stock-history-more-filters"
+          [attr.aria-expanded]="moreFiltersOpen"
+          (click)="moreFiltersOpen = !moreFiltersOpen">
+          More filters
+          @if (appliedMoreFilters.length > 0) {
+            <span class="inline-flex min-w-5 items-center justify-center rounded-full bg-rr-teal px-1.5 text-xs text-white" data-testid="more-filters-count">
+              {{ appliedMoreFilters.length }}<span class="sr-only"> applied</span>
+            </span>
+          }
+        </button>
+
+        @if (hasFilters) {
+          <button type="button" data-testid="clear-filters" class="rr-button-ghost md:min-h-10" (click)="clearFilters()">
+            <app-icon name="refresh" [size]="18" />Reset filters
+          </button>
+        }
+
+        @if (history && !loading && !error) {
+          <p class="m-0 ml-auto text-sm text-rr-muted" data-testid="history-count" aria-live="polite">
+            <span class="font-semibold text-rr-navy">{{ history.totalCount }}</span> {{ history.totalCount === 1 ? 'movement' : 'movements' }} found
           </p>
-          <div class="flex gap-3">
-            <button type="button" data-testid="previous-page" [disabled]="history.page <= 1" (click)="previousPage()" class="btn btn-sm btn-secondary">Previous</button>
-            <button type="button" data-testid="next-page" [disabled]="!history.hasMore" (click)="nextPage()" class="btn btn-sm btn-secondary">Next</button>
-          </div>
+        }
+      </div>
+
+      <!--
+        More filters: Reason, Machine and Source, behind a disclosure that stays in the page (not a
+        popover), so its selects keep their ids and labels and are reachable by keyboard in place.
+      -->
+      <!-- The `hidden` attribute is on a wrapper with no display class of its own, so it really hides. -->
+      <div id="stock-history-more-filters" [hidden]="!moreFiltersOpen" data-testid="more-filters-panel">
+      <div class="grid gap-3 rounded-lg bg-rr-surface p-3 sm:grid-cols-3">
+        <div class="field">
+          <label for="filter-reason" class="field-label">Reason</label>
+          <select id="filter-reason" name="reason" class="min-h-11 md:min-h-10" [(ngModel)]="filters.reason" (ngModelChange)="applyFilters()">
+            <option [ngValue]="null">All reasons</option>
+            @for (option of reasonOptions; track option.value) {
+              <option [ngValue]="option.value">{{ option.label }}</option>
+            }
+          </select>
         </div>
+        @if (machinesError) {
+          <div class="field">
+            <span class="field-label">Machine</span>
+            <p data-testid="machine-filter-error" class="m-0 text-sm text-rr-danger-text">{{ machinesError }}</p>
+          </div>
+        } @else if (machinesLoading) {
+          <div class="field">
+            <span class="field-label">Machine</span>
+            <output data-testid="machine-filter-loading" class="text-sm text-rr-muted">Loading machines…</output>
+          </div>
+        } @else if (machineFilterShown) {
+          <div class="field">
+            <label for="filter-machine" class="field-label">Machine</label>
+            <select id="filter-machine" name="machineId" class="min-h-11 md:min-h-10" [(ngModel)]="filters.machineId" (ngModelChange)="applyFilters()">
+              <option [ngValue]="null">All machines</option>
+              <!-- Every recorded machine, deactivated ones included, so a retired machine's movements stay findable. -->
+              @for (machine of machines; track machine.id) {
+                <option [ngValue]="machine.id">{{ machine.name }}</option>
+              }
+            </select>
+          </div>
+        }
+        <div class="field">
+          <label for="filter-source" class="field-label">Source</label>
+          <select id="filter-source" name="source" class="min-h-11 md:min-h-10" [(ngModel)]="filters.source" (ngModelChange)="applyFilters()">
+            <option [ngValue]="null">All sources</option>
+            @for (option of sourceOptions; track option.value) {
+              <option [ngValue]="option.value">{{ option.label }}</option>
+            }
+          </select>
+        </div>
+      </div>
+      </div>
+
+      @if (appliedMoreFilters.length > 0) {
+        <ul class="m-0 flex list-none flex-wrap gap-2 p-0" aria-label="Applied filters" data-testid="applied-filters">
+          @for (applied of appliedMoreFilters; track applied.key) {
+            <li class="inline-flex min-h-9 items-center gap-1 rounded-full border border-rr-teal-border bg-rr-teal-tint pl-3 text-sm font-semibold text-rr-teal">
+              {{ applied.label }}
+              <button
+                type="button"
+                class="inline-flex h-9 w-9 items-center justify-center rounded-full hover:bg-white"
+                [attr.aria-label]="'Remove filter ' + applied.label"
+                (click)="removeFilter(applied.key)"><app-icon name="close" [size]="16" /></button>
+            </li>
+          }
+        </ul>
       }
     </div>
-  </div>
+
+    @if (error) {
+      <div class="alert alert-danger m-4" role="alert" data-testid="history-error">
+        <p class="alert-title">{{ error }}</p>
+      </div>
+    } @else if (loading) {
+      <output data-testid="history-loading" class="block p-4 text-sm text-rr-muted">Loading stock history…</output>
+    } @else if (history === null || history.items.length === 0) {
+      <p data-testid="history-empty" class="m-0 p-4 text-sm text-rr-muted">
+        {{ hasFilters ? 'No stock movements match these filters.' : 'No stock adjustments yet.' }}
+      </p>
+    } @else {
+      <div class="hidden overflow-x-auto md:block" data-testid="history-table">
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell whitespace-nowrap">Date and time</th>
+              @if (shownProductId === null) {
+                <th scope="col" class="table-cell">Product</th>
+              }
+              <th scope="col" class="table-cell whitespace-nowrap text-right">Change</th>
+              <th scope="col" class="table-cell whitespace-nowrap text-right">Stock after</th>
+              <th scope="col" class="table-cell">Reason</th>
+              <th scope="col" class="table-cell">Source</th>
+              <th scope="col" class="table-cell">Machine</th>
+              <th scope="col" class="table-cell text-right"><span class="sr-only">Details</span></th>
+            </tr>
+          </thead>
+          <tbody data-testid="history-rows">
+            @for (movement of history.items; track movement.id) {
+              <tr class="table-row">
+                <td class="table-cell whitespace-nowrap">{{ movement.createdAt | businessDateTime }}</td>
+                @if (shownProductId === null) {
+                  <td class="table-cell">{{ movement.productName }}</td>
+                }
+                <td class="table-cell table-num font-semibold" [ngClass]="movement.quantityChange < 0 ? 'text-rr-danger-text' : 'text-rr-ok-text'">{{ changeLabel(movement.quantityChange) }}</td>
+                <td class="table-cell table-num">{{ quantityLabel(movement.quantityAfter) }}</td>
+                <td class="table-cell">{{ reasonLabel(movement.reason) }}</td>
+                <td class="table-cell">{{ sourceLabel(movement.source) }}</td>
+                <td class="table-cell">{{ machineLabel(movement.machineId) }}</td>
+                <td class="table-cell text-right">
+                  <button
+                    type="button"
+                    class="rr-button-ghost min-h-9 px-3 text-xs"
+                    data-testid="movement-details-toggle"
+                    [attr.aria-expanded]="isExpanded(movement.id)"
+                    [attr.aria-controls]="'movement-details-' + movement.id"
+                    [attr.aria-label]="(isExpanded(movement.id) ? 'Hide details for ' : 'Show details for ') + reasonLabel(movement.reason) + ' ' + changeLabel(movement.quantityChange) + ' on ' + (movement.createdAt | businessDateTime)"
+                    (click)="toggleDetails(movement.id)">{{ isExpanded(movement.id) ? 'Hide' : 'Details' }}</button>
+                </td>
+              </tr>
+              @if (isExpanded(movement.id)) {
+                <tr class="bg-rr-surface" [id]="'movement-details-' + movement.id" data-testid="movement-details">
+                  <td class="table-cell" [attr.colspan]="shownProductId === null ? 8 : 7">
+                    <ng-container *ngTemplateOutlet="movementDetails; context: { $implicit: movement }"></ng-container>
+                  </td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </div>
+
+      <!--
+        Below `md` the same page of movements as cards: change and reason first, then the time, the
+        resulting stock, the source and the machine where one was recorded, and the product while
+        several products are listed. Details opens the same fields the table row does.
+      -->
+      <ul class="m-0 flex list-none flex-col gap-3 p-3 md:hidden" data-testid="history-cards">
+        @for (movement of history.items; track movement.id) {
+          <li class="rounded-xl border border-rr-line bg-white p-3" data-testid="history-card">
+            <div class="flex items-baseline justify-between gap-3">
+              <span class="text-lg font-bold tabular-nums" [ngClass]="movement.quantityChange < 0 ? 'text-rr-danger-text' : 'text-rr-ok-text'">{{ changeLabel(movement.quantityChange) }}</span>
+              <span class="text-sm font-semibold text-rr-navy">{{ reasonLabel(movement.reason) }}</span>
+            </div>
+            @if (shownProductId === null) {
+              <p class="m-0 mt-1 break-words text-sm font-semibold text-rr-navy">{{ movement.productName }}</p>
+            }
+            <dl class="m-0 mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+              <div class="col-span-2">
+                <dt class="text-xs text-rr-muted">Date and time</dt>
+                <dd class="m-0">{{ movement.createdAt | businessDateTime }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-rr-muted">Stock after</dt>
+                <dd class="m-0 font-semibold tabular-nums">{{ quantityLabel(movement.quantityAfter) }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-rr-muted">Source</dt>
+                <dd class="m-0 break-words">{{ sourceLabel(movement.source) }}</dd>
+              </div>
+              @if (movement.machineId !== null && movement.machineId !== undefined) {
+                <div class="col-span-2">
+                  <dt class="text-xs text-rr-muted">Machine</dt>
+                  <dd class="m-0 break-words">{{ machineLabel(movement.machineId) }}</dd>
+                </div>
+              }
+            </dl>
+            <button
+              type="button"
+              class="rr-button-secondary mt-3 w-full"
+              data-testid="movement-card-details-toggle"
+              [attr.aria-expanded]="isExpanded(movement.id)"
+              [attr.aria-controls]="'movement-card-details-' + movement.id"
+              (click)="toggleDetails(movement.id)">{{ isExpanded(movement.id) ? 'Hide details' : 'Show details' }}</button>
+            @if (isExpanded(movement.id)) {
+              <div class="mt-3 rounded-lg bg-rr-surface p-3" [id]="'movement-card-details-' + movement.id">
+                <ng-container *ngTemplateOutlet="movementDetails; context: { $implicit: movement }"></ng-container>
+              </div>
+            }
+          </li>
+        }
+      </ul>
+
+      <div class="border-t border-rr-line p-3 sm:p-4">
+        <app-list-pagination
+          itemLabel="movements"
+          sizeLabel="Rows per page"
+          [totalItems]="history.totalCount"
+          [pageIndex]="history.page - 1"
+          [pageSize]="history.pageSize"
+          [pageSizeOptions]="pageSizeOptions"
+          (pageIndexChange)="goToPage($event)"
+          (pageSizeChange)="onPageSizeChange($event)"></app-list-pagination>
+      </div>
+    }
+  </section>
 </div>
+
+<!--
+  A movement's details: unit cost (unknown is "—", never $0.00), eat-before date and
+  notes. Unit cost is visible to every role that may open this page, as it always was here.
+-->
+<ng-template #movementDetails let-movement>
+  <dl class="m-0 grid gap-3 text-sm sm:grid-cols-3" data-testid="movement-details-fields">
+    <div>
+      <dt class="text-xs font-semibold uppercase tracking-wide text-rr-caption">Unit cost</dt>
+      <dd class="m-0 tabular-nums" data-testid="movement-unit-cost">{{ unitCostLabel(movement.unitCost) }}</dd>
+    </div>
+    <div>
+      <dt class="text-xs font-semibold uppercase tracking-wide text-rr-caption">Eat before</dt>
+      <dd class="m-0" data-testid="movement-eat-before">{{ movement.eatBefore || '—' }}</dd>
+    </div>
+    <div>
+      <dt class="text-xs font-semibold uppercase tracking-wide text-rr-caption">Notes</dt>
+      <dd class="m-0 whitespace-pre-line break-words" data-testid="movement-notes">{{ movement.notes || '—' }}</dd>
+    </div>
+  </dl>
+</ng-template>
+
+@if (adjusting && selectedProduct) {
+  <app-stock-adjustment-panel
+    [product]="selectedProduct"
+    [machines]="machines"
+    [machinesFailed]="machinesError !== ''"
+    [machinesLoading]="machinesLoading"
+    (closed)="closeAdjustment()"
+    (adjustmentApplied)="onAdjustmentApplied()"></app-stock-adjustment-panel>
+}
