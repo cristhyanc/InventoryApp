@@ -130,7 +130,9 @@
         More filters: Reason, Machine and Source, behind a disclosure that stays in the page (not a
         popover), so its selects keep their ids and labels and are reachable by keyboard in place.
       -->
-      <div id="stock-history-more-filters" class="grid gap-3 rounded-lg bg-rr-surface p-3 sm:grid-cols-3" [hidden]="!moreFiltersOpen" data-testid="more-filters-panel">
+      <!-- The `hidden` attribute is on a wrapper with no display class of its own, so it really hides. -->
+      <div id="stock-history-more-filters" [hidden]="!moreFiltersOpen" data-testid="more-filters-panel">
+      <div class="grid gap-3 rounded-lg bg-rr-surface p-3 sm:grid-cols-3">
         <div class="field">
           <label for="filter-reason" class="field-label">Reason</label>
           <select id="filter-reason" name="reason" class="min-h-11 md:min-h-10" [(ngModel)]="filters.reason" (ngModelChange)="applyFilters()">
@@ -172,6 +174,7 @@
           </select>
         </div>
       </div>
+      </div>
 
       @if (appliedMoreFilters.length > 0) {
         <ul class="m-0 flex list-none flex-wrap gap-2 p-0" aria-label="Applied filters" data-testid="applied-filters">
@@ -204,12 +207,12 @@
         <table class="table">
           <thead class="table-head">
             <tr>
-              <th scope="col" class="table-cell">Date and time</th>
+              <th scope="col" class="table-cell whitespace-nowrap">Date and time</th>
               @if (shownProductId === null) {
                 <th scope="col" class="table-cell">Product</th>
               }
-              <th scope="col" class="table-cell text-right">Change</th>
-              <th scope="col" class="table-cell text-right">Stock after</th>
+              <th scope="col" class="table-cell whitespace-nowrap text-right">Change</th>
+              <th scope="col" class="table-cell whitespace-nowrap text-right">Stock after</th>
               <th scope="col" class="table-cell">Reason</th>
               <th scope="col" class="table-cell">Source</th>
               <th scope="col" class="table-cell">Machine</th>
