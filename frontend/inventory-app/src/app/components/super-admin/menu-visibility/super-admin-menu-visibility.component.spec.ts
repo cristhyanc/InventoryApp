@@ -5,15 +5,26 @@ import { MENU_VISIBILITY_KEYS } from '../../../access/option-visibility';
 import { MenuVisibilityOption, MenuVisibilityService } from '../../../services/menu-visibility.service';
 import { SuperAdminMenuVisibilityComponent } from './super-admin-menu-visibility.component';
 
-/** The catalogue as the API reports it: every key, in its own order, with its own label. */
+/**
+ * The catalogue as the API reports it: every key, grouped and in its own order, with its own group
+ * and label - the Reports group of issue #1153 above the Admin one.
+ */
 const CATALOGUE: readonly MenuVisibilityOption[] = [
-  { key: 'admin.site-commission-agreements', label: 'Site Commission Agreements', visible: true },
-  { key: 'admin.imports', label: 'Imports', visible: true },
-  { key: 'admin.historical-cost-recovery', label: 'Historical Cost Recovery', visible: true },
-  { key: 'admin.avco-transition', label: 'AVCO Transition', visible: true },
-  { key: 'admin.costing-repair', label: 'Costing Repair', visible: true },
-  { key: 'admin.historical-gst-classification', label: 'Historical GST Classification', visible: false },
-  { key: 'admin.nayax-sale-timestamp-repair', label: 'Nayax Sale Timestamp Repair', visible: true }
+  { key: 'reports.bookkeeping', group: 'Reports', label: 'Bookkeeping', visible: true },
+  { key: 'reports.daily', group: 'Reports', label: 'Daily', visible: true },
+  { key: 'reports.transactions', group: 'Reports', label: 'Transactions', visible: true },
+  { key: 'reports.reconciliation', group: 'Reports', label: 'Reconciliation', visible: true },
+  { key: 'reports.machines', group: 'Reports', label: 'Machines', visible: true },
+  { key: 'reports.products', group: 'Reports', label: 'Products', visible: false },
+  { key: 'reports.site-commissions', group: 'Reports', label: 'Site Commissions', visible: true },
+  { key: 'reports.gst', group: 'Reports', label: 'GST', visible: true },
+  { key: 'admin.site-commission-agreements', group: 'Admin', label: 'Site Commission Agreements', visible: true },
+  { key: 'admin.imports', group: 'Admin', label: 'Imports', visible: true },
+  { key: 'admin.historical-cost-recovery', group: 'Admin', label: 'Historical Cost Recovery', visible: true },
+  { key: 'admin.avco-transition', group: 'Admin', label: 'AVCO Transition', visible: true },
+  { key: 'admin.costing-repair', group: 'Admin', label: 'Costing Repair', visible: true },
+  { key: 'admin.historical-gst-classification', group: 'Admin', label: 'Historical GST Classification', visible: false },
+  { key: 'admin.nayax-sale-timestamp-repair', group: 'Admin', label: 'Nayax Sale Timestamp Repair', visible: true }
 ];
 
 async function render(
@@ -49,6 +60,22 @@ function listed(host: HTMLElement): string[] {
   );
 }
 
+/** The section headings in the order they are rendered, which must be the server's own order. */
+function sectionTitles(host: HTMLElement): string[] {
+  return Array.from(host.querySelectorAll('.card-title')).map((title) => title.textContent?.trim() ?? '');
+}
+
+/** The keys listed under one section heading, so "above" and "under" are both assertable. */
+function rowsUnder(host: HTMLElement, group: string): string[] {
+  const section = Array.from(host.querySelectorAll('section.card')).find(
+    (candidate) => candidate.querySelector('.card-title')?.textContent?.trim() === group
+  );
+  expect(section).toBeDefined();
+  return Array.from(section!.querySelectorAll('[data-testid^="row-"]')).map((row) =>
+    (row as HTMLElement).dataset['testid']!.replace('row-', '')
+  );
+}
+
 /**
  * The Super Admin Menu Visibility page (issue #1151): every switchable Admin destination, with the
  * one control that switches it, and nothing else.
@@ -58,7 +85,7 @@ function listed(host: HTMLElement): string[] {
  * is reachable only through `platformAdminGuard` and is never itself switchable.
  */
 describe('SuperAdminMenuVisibilityComponent (issue #1151)', () => {
-  it('lists every key the API reports, in catalogue order, under an Admin section', async () => {
+  it('lists every key the API reports, in catalogue order, under its own section', async () => {
     const list = jest.fn(() => of({ options: CATALOGUE }));
     const { host } = await render({ list });
 
@@ -66,6 +93,57 @@ describe('SuperAdminMenuVisibilityComponent (issue #1151)', () => {
     expect(listed(host)).toEqual([...MENU_VISIBILITY_KEYS]);
     expect(host.textContent).toContain('Admin');
     expect(rowText(host, 'admin.costing-repair')).toContain('Costing Repair');
+  });
+
+  /**
+   * The Reports section is above the Admin one (issue #1153), and it is above it because the server
+   * reported it first: the page groups the options it was given and invents no order of its own.
+   */
+  it('shows a Reports section above the Admin section, each holding its own rows', async () => {
+    const { host } = await render({ list: jest.fn(() => of({ options: CATALOGUE })) });
+
+    expect(sectionTitles(host)).toEqual(['Reports', 'Admin']);
+    expect(rowsUnder(host, 'Reports')).toEqual([
+      'reports.bookkeeping',
+      'reports.daily',
+      'reports.transactions',
+      'reports.reconciliation',
+      'reports.machines',
+      'reports.products',
+      'reports.site-commissions',
+      'reports.gst'
+    ]);
+    expect(rowsUnder(host, 'Admin')).toEqual([
+      'admin.site-commission-agreements',
+      'admin.imports',
+      'admin.historical-cost-recovery',
+      'admin.avco-transition',
+      'admin.costing-repair',
+      'admin.historical-gst-classification',
+      'admin.nayax-sale-timestamp-repair'
+    ]);
+    expect(rowText(host, 'reports.gst')).toContain('GST');
+  });
+
+  /** A report row is the same row an Admin one is: the same state, pill, control and save. */
+  it('switches a report off and on with the same control and the server’s own answer', async () => {
+    const set = jest.fn((key: string, visible: boolean) => of({ key, group: 'Reports', label: 'Daily', visible }));
+    const refresh = jest.fn(() => of({ status: 'unread' as const }));
+    const { fixture, host } = await render({ list: jest.fn(() => of({ options: CATALOGUE })), set }, { refresh });
+
+    expect(toggle(host, 'reports.daily').getAttribute('aria-label')).toBe('Daily visibility');
+    expect(toggle(host, 'reports.products').getAttribute('aria-checked')).toBe('false');
+    expect(rowText(host, 'reports.products')).toContain('Off');
+
+    toggle(host, 'reports.daily').click();
+    fixture.detectChanges();
+
+    expect(set).toHaveBeenCalledWith('reports.daily', false);
+    expect(toggle(host, 'reports.daily').getAttribute('aria-checked')).toBe('false');
+    expect(rowText(host, 'reports.daily')).toContain('Off');
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // One row, one write: the Admin rows beside it are untouched.
+    expect(toggle(host, 'admin.imports').getAttribute('aria-checked')).toBe('true');
   });
 
   /**
@@ -106,7 +184,7 @@ describe('SuperAdminMenuVisibilityComponent (issue #1151)', () => {
   });
 
   it('switches one destination off and shows the answer the server stored', async () => {
-    const set = jest.fn(() => of({ key: 'admin.costing-repair', label: 'Costing Repair', visible: false }));
+    const set = jest.fn(() => of({ key: 'admin.costing-repair', group: 'Admin', label: 'Costing Repair', visible: false }));
     const refresh = jest.fn(() => of({ status: 'unread' as const }));
     const { fixture, host } = await render({ list: jest.fn(() => of({ options: CATALOGUE })), set }, { refresh });
 
@@ -123,7 +201,12 @@ describe('SuperAdminMenuVisibilityComponent (issue #1151)', () => {
   /** The opposite of the server's own answer, never of a value this page assumed. */
   it('switches a stored Off destination back on', async () => {
     const set = jest.fn(() =>
-      of({ key: 'admin.historical-gst-classification', label: 'Historical GST Classification', visible: true })
+      of({
+        key: 'admin.historical-gst-classification',
+        group: 'Admin',
+        label: 'Historical GST Classification',
+        visible: true
+      })
     );
     const { fixture, host } = await render({ list: jest.fn(() => of({ options: CATALOGUE })), set });
 
@@ -154,7 +237,7 @@ describe('SuperAdminMenuVisibilityComponent (issue #1151)', () => {
     const set = jest.fn((key: string) =>
       key === 'admin.costing-repair'
         ? throwError(() => new Error('refused'))
-        : of({ key, label: 'Imports', visible: false })
+        : of({ key, group: 'Admin', label: 'Imports', visible: false })
     );
     const { fixture, host } = await render({ list: jest.fn(() => of({ options: CATALOGUE })), set });
 
@@ -173,7 +256,7 @@ describe('SuperAdminMenuVisibilityComponent (issue #1151)', () => {
   it('clears a row’s error once a later save on it succeeds', async () => {
     let fail = true;
     const set = jest.fn((key: string, visible: boolean) =>
-      fail ? throwError(() => new Error('refused')) : of({ key, label: 'Costing Repair', visible })
+      fail ? throwError(() => new Error('refused')) : of({ key, group: 'Admin', label: 'Costing Repair', visible })
     );
     const { fixture, host } = await render({ list: jest.fn(() => of({ options: CATALOGUE })), set });
 
