@@ -34,10 +34,15 @@ interface MeAccessResponse {
   timeZoneId: string;
 
   /**
-   * The shared switchable option visibility (issue #873). Optional here deliberately: an API that
-   * does not report it is read as "not known", which hides nothing - see {@link OptionVisibility}.
+   * The shared switchable menu visibility (issues #1148 and #1151): the catalogue keys that are
+   * switched off. Optional here deliberately: an API that does not report it is read as "not known",
+   * which hides nothing - see {@link OptionVisibility}. The superseded
+   * `historicalGstClassificationVisible` boolean the same response still carries for the rollout is
+   * deliberately not read, because it is derived from this list's own
+   * `admin.historical-gst-classification` entry and reading both would be two answers to one
+   * question.
    */
-  historicalGstClassificationVisible?: boolean;
+  menuVisibility?: { switchedOffKeys?: string[] };
 
   /**
    * What the business has bought (issue #966). Optional on the same terms and for the same reason:
@@ -61,10 +66,10 @@ export interface MemberAccess {
   readonly timeZoneId: string;
 
   /**
-   * Which switchable options the application offers (issue #873), or `undefined` when the API did
-   * not report it. It travels with the capabilities because the shell builds one menu from both,
-   * and it is **not** one of them: it says what is offered, never what this member may do. See
-   * {@link OptionVisibility}.
+   * Which switchable Admin destinations the application offers (issues #873, #1148 and #1151), or
+   * `undefined` when the API did not report it. It travels with the capabilities because the shell
+   * builds one menu from both, and it is **not** one of them: it says what is offered, never what
+   * this member may do. See {@link OptionVisibility}.
    */
   readonly optionVisibility?: OptionVisibility;
 
@@ -365,13 +370,13 @@ export class AccessService implements OnDestroy {
               businessName: response.businessName,
               timeZoneId: response.timeZoneId,
               // Read as reported, never defaulted here: an absent field means "not known", and
-              // what that means for the menu is the one rule on `OptionVisibility`.
+              // what that means for the menu is the one rule on `OptionVisibility`. An answer that
+              // reports the block with no list at all is still an answer - the API publishes an
+              // empty list when nothing is switched off - so it is read as "nothing is off".
               optionVisibility:
-                response.historicalGstClassificationVisible === undefined
+                response.menuVisibility === undefined
                   ? undefined
-                  : {
-                      historicalGstClassificationVisible: response.historicalGstClassificationVisible
-                    },
+                  : { switchedOffKeys: response.menuVisibility.switchedOffKeys ?? [] },
               // Read as reported too, and never defaulted here: an absent field means "not known",
               // and what that means is the one rule on `Entitlement` - nothing is withheld.
               entitlement: response.entitlement ?? undefined

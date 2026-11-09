@@ -1,11 +1,10 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, of } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../../access/access.service';
 import { CAPABILITIES, Capability, capabilitySet } from '../../access/capabilities';
-import { OptionVisibility } from '../../access/option-visibility';
+import { MENU_VISIBILITY_KEYS, MenuVisibilityKey, OptionVisibility } from '../../access/option-visibility';
 import { RolePreviewService } from '../../role-preview/role-preview.service';
-import { OptionVisibilityService } from '../../services/option-visibility.service';
 import { PlatformDiagnosticsAccessService } from '../../services/platform-diagnostics-access.service';
 import { AdminComponent } from './admin.component';
 
@@ -48,22 +47,18 @@ const OPERATOR = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate'
  * capability read, the platform-admin probe and whether a role preview is running. All three default
  * to what an ordinary member's session reports - the capabilities asked for, no platform access and
  * no preview - so a test only states what it is about.
+ *
+ * Since issue #1151 the hub only *renders* the switches: it stores nothing and re-reads nothing, so
+ * there is no save to stub here any more.
  */
 async function render(
   access: Observable<MemberAccessState> = of(OWNER),
   options: {
     diagnosticsAccess?: Observable<boolean>;
     rolePreviewActive?: Observable<boolean>;
-    saveVisibility?: jest.Mock;
-    refresh?: jest.Mock;
   } = {}
 ) {
-  const saveVisibility =
-    options.saveVisibility ??
-    jest.fn((visible: boolean) => of({ historicalGstClassificationVisible: visible }));
-  // An unanswered re-read by default: `AccessService.refresh()` answers when the server does, and
-  // the window before it answers is the one the repaired lifecycle is about (issue #873).
-  const refresh = options.refresh ?? jest.fn((): Observable<MemberAccessState> => NEVER);
+  const refresh = jest.fn((): Observable<MemberAccessState> => NEVER);
 
   await TestBed.configureTestingModule({
     imports: [AdminComponent],
@@ -74,17 +69,13 @@ async function render(
         provide: PlatformDiagnosticsAccessService,
         useValue: { granted$: options.diagnosticsAccess ?? of(false) }
       },
-      { provide: RolePreviewService, useValue: { active$: options.rolePreviewActive ?? of(false) } },
-      {
-        provide: OptionVisibilityService,
-        useValue: { setHistoricalGstClassificationVisible: saveVisibility }
-      }
+      { provide: RolePreviewService, useValue: { active$: options.rolePreviewActive ?? of(false) } }
     ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(AdminComponent);
   fixture.detectChanges();
-  return { fixture, host: fixture.nativeElement as HTMLElement, saveVisibility, refresh };
+  return { fixture, host: fixture.nativeElement as HTMLElement, refresh };
 }
 
 /**
@@ -278,97 +269,102 @@ describe('AdminComponent capability-driven cards (issue #674)', () => {
 });
 
 /**
- * The Super Admin's switch over Historical GST Classification (issue #873), on the hub where the
- * option's own entry is.
+ * The switchable Admin destinations on the hub (issues #873, #1148 and #1151): every card whose
+ * destination declares a switched-off key is withheld from a member, and the platform administrator
+ * keeps them all with the `Off` pill.
  *
- * The thing each test holds apart is "offered" from "permitted": the switch decides whether the card
- * is rendered and the capability set still decides whether it could be, so switching the option on
- * never gives a Manager a card their role never had, and switching it off never takes `Data.Repair`
- * away from an Owner.
+ * The thing each test holds apart is "offered" from "permitted": a switch decides whether a card is
+ * rendered and the capability set still decides whether it could be, so switching a key on never
+ * gives a Manager a card their role never had, and switching it off never takes `Data.Repair` away
+ * from an Owner. **The switch itself is no longer here**: it is the Super Admin Menu Visibility page
+ * (issue #1151), and this hub only renders the result.
  */
-describe('AdminComponent switchable option visibility (issue #873)', () => {
+describe('AdminComponent switchable menu visibility (issues #873, #1148 and #1151)', () => {
   const ROUTE = '/admin/historical-gst-classification';
-  const OFF: OptionVisibility = { historicalGstClassificationVisible: false };
-  const ON: OptionVisibility = { historicalGstClassificationVisible: true };
 
-  const OWNER_OFF = granted(CAPABILITIES, OFF);
-  const OWNER_ON = granted(CAPABILITIES, ON);
+  /** Every switchable key, with the Admin card it withholds. */
+  const SWITCHABLE: readonly { readonly key: MenuVisibilityKey; readonly route: string }[] = [
+    { key: 'admin.site-commission-agreements', route: '/admin/site-commission-agreements' },
+    { key: 'admin.imports', route: '/admin/imports' },
+    { key: 'admin.historical-cost-recovery', route: '/admin/historical-cost-recovery' },
+    { key: 'admin.avco-transition', route: '/admin/avco-transition' },
+    { key: 'admin.costing-repair', route: '/admin/costing-repair' },
+    { key: 'admin.historical-gst-classification', route: ROUTE },
+    { key: 'admin.nayax-sale-timestamp-repair', route: '/admin/nayax-sale-timestamp-repair' }
+  ];
 
-  /** The switch itself: the labelled control the Super Admin is offered beside the card. */
-  function toggle(host: HTMLElement): HTMLButtonElement | null {
-    return host.querySelector<HTMLButtonElement>('#historical-gst-classification-visibility');
+  const NEVER_SWITCHABLE = [
+    '/admin/nayax-settings',
+    '/admin/users',
+    '/admin/roles',
+    '/admin/business-settings'
+  ];
+
+  const EVERY_KEY_OFF: OptionVisibility = { switchedOffKeys: [...MENU_VISIBILITY_KEYS] };
+  const NOTHING_OFF: OptionVisibility = { switchedOffKeys: [] };
+
+  const OWNER_OFF = granted(CAPABILITIES, { switchedOffKeys: ['admin.historical-gst-classification'] });
+  const OWNER_ON = granted(CAPABILITIES, NOTHING_OFF);
+
+  function pills(host: HTMLElement): string[] {
+    return Array.from(host.querySelectorAll('.badge')).map((badge) => badge.textContent?.trim() ?? '');
   }
 
-  /** The control that asks for the shared answer again, offered only when a read of it failed. */
-  function retry(host: HTMLElement): HTMLButtonElement | null {
-    return host.querySelector<HTMLButtonElement>('#historical-gst-classification-visibility-retry');
+  function cardText(host: HTMLElement, route = ROUTE): string {
+    return link(host, route)?.closest('section')?.textContent ?? '';
   }
 
-  function pill(host: HTMLElement): string | undefined {
-    return host.querySelector<HTMLElement>('.badge')?.textContent?.trim();
-  }
+  it.each(SWITCHABLE)('withholds the $route card from a member while $key is off', async ({ key, route }) => {
+    const { host } = await render(of(granted(CAPABILITIES, { switchedOffKeys: [key] })));
 
-  function cardText(host: HTMLElement): string {
-    const card = link(host, ROUTE)?.closest('section');
-    return card?.textContent ?? '';
-  }
-
-  it('hides the card from an eligible member who is not a super admin while the option is off', async () => {
-    const { host } = await render(of(OWNER_OFF));
-
-    expect(link(host, ROUTE)).toBeNull();
-    // Every other Owner card is untouched: this is one option's visibility, not a page-wide switch.
-    expect(link(host, '/admin/costing-repair')).not.toBeNull();
-    expect(link(host, '/admin/historical-cost-recovery')).not.toBeNull();
+    expect(link(host, route)).toBeNull();
+    // Every other card is untouched: this is one destination's visibility, not a page-wide switch.
+    SWITCHABLE.filter((other) => other.route !== route).forEach((other) =>
+      expect(link(host, other.route)).not.toBeNull()
+    );
+    NEVER_SWITCHABLE.forEach((other) => expect(link(host, other)).not.toBeNull());
   });
 
-  it('offers the card with no switch and no pill to an eligible member while the option is on', async () => {
-    const { host } = await render(of(OWNER_ON));
+  it.each(SWITCHABLE)('keeps the $route card for a super admin while $key is off, marked Off', async ({ route }) => {
+    const { host } = await render(of(granted(CAPABILITIES, EVERY_KEY_OFF)), { diagnosticsAccess: of(true) });
 
-    expect(link(host, ROUTE)).not.toBeNull();
-    expect(toggle(host)).toBeNull();
-    expect(cardText(host)).not.toContain('Off');
+    expect(link(host, route)).not.toBeNull();
+    expect(cardText(host, route)).toContain('hidden from everybody but a Super Admin');
   });
 
-  it('keeps the card for a super admin while the option is off, with the Off pill beside its name', async () => {
-    const { host } = await render(of(OWNER_OFF), { diagnosticsAccess: of(true) });
+  it('marks every switched-off card, and only those, for a super admin', async () => {
+    const { host } = await render(of(granted(CAPABILITIES, EVERY_KEY_OFF)), { diagnosticsAccess: of(true) });
 
-    expect(link(host, ROUTE)).not.toBeNull();
-
-    const pill = host.querySelector<HTMLElement>('.badge');
-    expect(pill?.textContent?.trim()).toBe('Off');
-    expect(cardText(host)).toContain('Historical GST Classification');
+    expect(pills(host)).toEqual(SWITCHABLE.map(() => 'Off'));
   });
 
-  it('omits the Off pill for a super admin while the option is on', async () => {
+  it('offers every card with no pill while nothing is switched off', async () => {
     const { host } = await render(of(OWNER_ON), { diagnosticsAccess: of(true) });
 
-    expect(host.querySelector('.badge')).toBeNull();
-    expect(toggle(host)).not.toBeNull();
+    expect(pills(host)).toEqual([]);
+    [...SWITCHABLE.map((entry) => entry.route), ...NEVER_SWITCHABLE].forEach((route) =>
+      expect(link(host, route)).not.toBeNull()
+    );
   });
 
-  it('offers a super admin a switch that says it would show the option while it is off', async () => {
-    const { host } = await render(of(OWNER_OFF), { diagnosticsAccess: of(true) });
+  it('never withholds a never-switchable card, whatever is switched off', async () => {
+    const { host } = await render(of(granted(CAPABILITIES, EVERY_KEY_OFF)));
 
-    expect(toggle(host)?.textContent).toContain('Show Historical GST Classification to other users');
+    NEVER_SWITCHABLE.forEach((route) => expect(link(host, route)).not.toBeNull());
+    SWITCHABLE.forEach((entry) => expect(link(host, entry.route)).toBeNull());
+    expect(pills(host)).toEqual([]);
   });
 
-  it('offers a super admin a switch that says it would hide the option while it is on', async () => {
-    const { host } = await render(of(OWNER_ON), { diagnosticsAccess: of(true) });
+  /** A key this build does not declare matches no card, so it withholds nothing. */
+  it('withholds nothing for a key no card declares', async () => {
+    const { host } = await render(of(granted(CAPABILITIES, { switchedOffKeys: ['admin.something-else'] })));
 
-    expect(toggle(host)?.textContent).toContain('Hide Historical GST Classification from other users');
-  });
-
-  it('offers no switch at all to a member who is not a super admin', async () => {
-    const { host } = await render(of(OWNER_ON));
-
-    expect(toggle(host)).toBeNull();
+    SWITCHABLE.forEach((entry) => expect(link(host, entry.route)).not.toBeNull());
   });
 
   /**
    * A role preview withholds the administrator's own treatment, exactly as it withholds the
-   * `Super Admin` menu group (issue #721): what a preview shows is what the previewed role sees, and
-   * the API refuses a write made inside one anyway.
+   * `Super Admin` menu group (issue #721): what a preview shows is what the previewed role sees.
    */
   it('withholds the super-admin treatment while a role preview is running', async () => {
     const { host } = await render(of(OWNER_OFF), {
@@ -377,219 +373,87 @@ describe('AdminComponent switchable option visibility (issue #873)', () => {
     });
 
     expect(link(host, ROUTE)).toBeNull();
-    expect(toggle(host)).toBeNull();
+    expect(pills(host)).toEqual([]);
   });
 
-  it('offers the card while the setting has not been reported, hiding nothing over an unread answer', async () => {
+  it('offers every card while the setting has not been reported, hiding nothing over an unread answer', async () => {
     const { host } = await render(of(granted(CAPABILITIES)));
 
-    expect(link(host, ROUTE)).not.toBeNull();
+    SWITCHABLE.forEach((entry) => expect(link(host, entry.route)).not.toBeNull());
+    expect(pills(host)).toEqual([]);
   });
 
   /**
-   * The criterion "On restores it only to users already eligible under existing permissions": a
-   * Manager holds no `Data.Repair`, so the option being on puts no card in their hub - and neither
-   * does being the Super Admin, because the switch is not a capability.
+   * The criterion "switching On adds nothing": a Manager holds no `Data.Repair`, so a key being on
+   * puts no repair card in their hub - and neither does being the Super Admin, because a switch is
+   * not a capability.
    */
-  it('never offers the card to a member whose capabilities do not allow it while it is on', async () => {
-    const { host } = await render(of(granted(MANAGER_CAPABILITIES, ON)), {
+  it('never offers a card to a member whose capabilities do not allow it while its key is on', async () => {
+    const { host } = await render(of(granted(MANAGER_CAPABILITIES, NOTHING_OFF)), {
       diagnosticsAccess: of(true)
     });
 
     expect(link(host, ROUTE)).toBeNull();
-    expect(toggle(host)).toBeNull();
   });
 
-  it('never offers the card to a member whose capabilities do not allow it while it is off', async () => {
-    const { host } = await render(of(granted(MANAGER_CAPABILITIES, OFF)));
+  it('never offers a card to a member whose capabilities do not allow it while its key is off', async () => {
+    const { host } = await render(of(granted(MANAGER_CAPABILITIES, EVERY_KEY_OFF)));
 
     expect(link(host, ROUTE)).toBeNull();
   });
 
-  it('submits the new state and re-reads the shared answer once the server has stored it', async () => {
-    const { host, saveVisibility, refresh } = await render(of(OWNER_ON), {
-      diagnosticsAccess: of(true)
-    });
+  /** The GST switch has moved to the Menu Visibility page: no control on this hub changes it. */
+  it('offers no visibility switch of its own any more', async () => {
+    const { host } = await render(of(OWNER_OFF), { diagnosticsAccess: of(true) });
 
-    toggle(host)!.click();
-
-    expect(saveVisibility).toHaveBeenCalledWith(false);
-    expect(refresh).toHaveBeenCalledTimes(1);
-  });
-
-  /**
-   * The criterion "a failed save must not leave the UI claiming that an unsaved setting is active":
-   * nothing is re-read, nothing on screen moves to the requested state, and the refusal is reported.
-   */
-  it('reports a failed save and leaves the option reading exactly as it is stored', async () => {
-    const saveVisibility = jest.fn(() => throwError(() => new Error('refused')));
-    const { host, refresh, fixture } = await render(of(OWNER_ON), {
-      diagnosticsAccess: of(true),
-      saveVisibility
-    });
-
-    toggle(host)!.click();
-    fixture.detectChanges();
-
-    expect(refresh).not.toHaveBeenCalled();
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain('was not saved');
-    // The switch still offers to hide an option that is still shown, the card is still offered, and
-    // no `Off` pill has appeared.
-    expect(toggle(host)?.textContent).toContain('Hide Historical GST Classification from other users');
-    expect(link(host, ROUTE)).not.toBeNull();
-    expect(host.querySelector('.badge')).toBeNull();
-  });
-
-  /**
-   * The save-and-re-read lifecycle of that switch, repaired after the review's [P2] finding on
-   * head `04f1728`.
-   *
-   * What each of these holds the hub to is that **what is on screen is an answer somebody gave**.
-   * A successful `PUT` is the server's own answer for this identity, and it is not simultaneous with
-   * the `GET /api/me/access` that publishes it to every other surface: that read takes a moment,
-   * keeps the previous answer published while it runs, and may fail outright. Before the repair the
-   * hub discarded the stored answer at the moment it arrived, so it stated the pre-save value for
-   * the length of the read and then - when the read failed - an `On` that nothing had ever reported,
-   * over a setting the server was holding as `Off`.
-   */
-  describe('the saved answer and the re-read that publishes it', () => {
-    it('keeps the stored Off state while the re-read has not answered, and offers turning it back on', async () => {
-      // The published capability answer still says `on` here, exactly as the real service leaves it
-      // during a same-identity re-read; the stored answer is the newer of the two.
-      const access = new BehaviorSubject<MemberAccessState>(OWNER_ON);
-      const { host, fixture, saveVisibility, refresh } = await render(access, {
-        diagnosticsAccess: of(true)
-      });
-
-      toggle(host)!.click();
-      fixture.detectChanges();
-
-      expect(saveVisibility).toHaveBeenCalledWith(false);
-      expect(refresh).toHaveBeenCalledTimes(1);
-      expect(access.value).toBe(OWNER_ON);
-
-      // Accurate: the stored state, its `Off` pill, and no claim that the tool is shown.
-      expect(pill(host)).toBe('Off');
-      expect(cardText(host)).toContain('hidden from everybody but a Super Admin');
-      expect(cardText(host)).not.toContain('shown to every user whose role allows it');
-
-      // And the next permitted switch asks for the other state rather than repeating this one.
-      toggle(host)!.click();
-      expect(saveVisibility).toHaveBeenNthCalledWith(2, true);
-    });
-
-    it('hands the shared answer back over once the re-read carries it', async () => {
-      const access = new BehaviorSubject<MemberAccessState>(OWNER_ON);
-      const answer = new Subject<MemberAccessState>();
-      const { host, fixture } = await render(access, {
-        diagnosticsAccess: of(true),
-        refresh: jest.fn((): Observable<MemberAccessState> => answer)
-      });
-
-      toggle(host)!.click();
-      fixture.detectChanges();
-      expect(pill(host)).toBe('Off');
-
-      // The read answers, publishing the stored setting to every surface built from it.
-      access.next(OWNER_OFF);
-      answer.next(OWNER_OFF);
-      fixture.detectChanges();
-
-      expect(pill(host)).toBe('Off');
-      expect(toggle(host)?.textContent).toContain('Show Historical GST Classification to other users');
-      expect(host.querySelector('[role="alert"]')).toBeNull();
-      expect(retry(host)).toBeNull();
-    });
-
-    it('keeps the stored Off state when the re-read fails, says so, and still offers turning it on', async () => {
-      const access = new BehaviorSubject<MemberAccessState>(OWNER_ON);
-      const { host, fixture, saveVisibility } = await render(access, {
-        diagnosticsAccess: of(true),
-        refresh: jest.fn((): Observable<MemberAccessState> => of({ status: 'unavailable' }))
-      });
-
-      toggle(host)!.click();
-      // A failed read is published as `unavailable`, which reports no setting at all - the state
-      // that used to make this screen claim the option was shown.
-      access.next({ status: 'unavailable' });
-      fixture.detectChanges();
-
-      expect(pill(host)).toBe('Off');
-      expect(cardText(host)).toContain('hidden from everybody but a Super Admin');
-      expect(cardText(host)).not.toContain('shown to every user whose role allows it');
-      expect(toggle(host)?.textContent).toContain('Show Historical GST Classification to other users');
-      expect(host.querySelector('[role="alert"]')?.textContent).toContain('could not be read just now');
-      expect(retry(host)).not.toBeNull();
-
-      toggle(host)!.click();
-      expect(saveVisibility).toHaveBeenNthCalledWith(2, true);
-    });
-
-    it('offers no switch and claims nothing while the setting could not be read at all', async () => {
-      const access = new BehaviorSubject<MemberAccessState>({ status: 'unavailable' });
-      const { host } = await render(access, { diagnosticsAccess: of(true) });
-
-      // The card itself stays - that is the fail-open rule an unreadable capability set follows -
-      // but nothing on it states the setting, and no control offers to change it from a guess.
-      expect(link(host, ROUTE)).not.toBeNull();
-      expect(toggle(host)).toBeNull();
-      expect(pill(host)).toBeUndefined();
-      expect(cardText(host)).toContain('could not be read');
-      expect(cardText(host)).not.toContain('shown to every user whose role allows it');
-      expect(retry(host)).not.toBeNull();
-    });
-
-    it('reads the setting again when the administrator asks, and renders the answer', async () => {
-      const access = new BehaviorSubject<MemberAccessState>({ status: 'unavailable' });
-      const refresh = jest.fn((): Observable<MemberAccessState> => {
-        access.next(OWNER_OFF);
-        return of(OWNER_OFF);
-      });
-      const { host, fixture } = await render(access, { diagnosticsAccess: of(true), refresh });
-
-      retry(host)!.click();
-      fixture.detectChanges();
-
-      expect(refresh).toHaveBeenCalledTimes(1);
-      expect(pill(host)).toBe('Off');
-      expect(toggle(host)?.textContent).toContain('Show Historical GST Classification to other users');
-      expect(host.querySelector('[role="alert"]')).toBeNull();
-      expect(retry(host)).toBeNull();
-    });
-
-    it('offers no switch at all while the capability read has not answered', async () => {
-      const { host } = await render(NEVER, { diagnosticsAccess: of(true) });
-
-      // No card is rendered before the capabilities are known (issue #674), so there is no switch
-      // either: an unread setting is never presented as a state, let alone a changeable one.
-      expect(link(host, ROUTE)).toBeNull();
-      expect(toggle(host)).toBeNull();
-      expect(retry(host)).toBeNull();
-    });
-
-    /**
-     * An identity change republishes `unread` (issue #603). A setting one administrator stored is
-     * not the next identity's answer, so the stored answer is dropped with the published one rather
-     * than carried across the change.
-     */
-    it('drops the stored answer when the published answer goes back to unread', async () => {
-      const access = new BehaviorSubject<MemberAccessState>(OWNER_ON);
-      const { host, fixture } = await render(access, { diagnosticsAccess: of(true) });
-
-      toggle(host)!.click();
-      fixture.detectChanges();
-      expect(pill(host)).toBe('Off');
-
-      access.next({ status: 'unread' });
-      fixture.detectChanges();
-      expect(link(host, ROUTE)).toBeNull();
-
-      // The next identity's own answer decides it, with nothing of the previous one left.
-      access.next(OWNER_ON);
-      fixture.detectChanges();
-      expect(pill(host)).toBeUndefined();
-      expect(toggle(host)?.textContent).toContain('Hide Historical GST Classification from other users');
-      expect(host.querySelector('[role="alert"]')).toBeNull();
-    });
+    expect(host.querySelector('#historical-gst-classification-visibility')).toBeNull();
+    expect(host.querySelector('app-historical-gst-visibility-toggle')).toBeNull();
+    expect(host.querySelectorAll('button')).toHaveLength(0);
   });
 });
+
+/**
+ * The hub with nothing left to offer (issue #1151). Before this it rendered an empty grid, which
+ * reads as a page that failed rather than as a page with nothing on it.
+ */
+describe('AdminComponent empty state (issue #1151)', () => {
+  function emptyState(host: HTMLElement): HTMLElement | null {
+    return host.querySelector<HTMLElement>('[data-testid="admin-empty"]');
+  }
+
+  it('says there is nothing to show when every card a role had is withheld by a switch', async () => {
+    const { host } = await render(
+      of(granted(MANAGER_CAPABILITIES, { switchedOffKeys: [...MENU_VISIBILITY_KEYS] }))
+    );
+
+    expect(emptyState(host)).not.toBeNull();
+    expect(emptyState(host)?.textContent).toContain('nothing');
+  });
+
+  /** An Owner still has the never-switchable destinations, so they are never the empty case. */
+  it('says nothing to an Owner with every key switched off, who still has four cards', async () => {
+    const { host } = await render(of(granted(CAPABILITIES, { switchedOffKeys: [...MENU_VISIBILITY_KEYS] })));
+
+    expect(emptyState(host)).toBeNull();
+  });
+
+  it('says it for a role with no admin destination at all', async () => {
+    const { host } = await render(of(OPERATOR));
+
+    expect(emptyState(host)).not.toBeNull();
+  });
+
+  /** Not before the answer arrives: an unread capability set is not an empty hub (issue #674). */
+  it('says nothing while the capability set has not been read', async () => {
+    const { host } = await render(NEVER);
+
+    expect(emptyState(host)).toBeNull();
+  });
+
+  it('says nothing once there is a card to show', async () => {
+    const { host } = await render(of(OWNER));
+
+    expect(emptyState(host)).toBeNull();
+  });
+});
+

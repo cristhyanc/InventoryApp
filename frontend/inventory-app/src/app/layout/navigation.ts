@@ -1,7 +1,7 @@
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { Capability, CapabilitySet } from '../access/capabilities';
 import { Entitlement } from '../access/entitlement';
-import { OptionVisibility } from '../access/option-visibility';
+import { MenuVisibilityKey, OptionVisibility } from '../access/option-visibility';
 import { PlanFeature } from '../access/plan-feature';
 import { planLockOf, planLockSummary } from '../access/plan-lock';
 import { ProviderAvailability } from '../provider/provider-availability.service';
@@ -46,13 +46,17 @@ import { ProviderLock, providerLockOf, providerLockSummary, providerToolsOffered
  * GST declare nothing and are never locked.
  *
  * Issue #873 adds the one thing in this file that is not about a capability or a provider: a Super
- * Admin may stop `Historical GST Classification` being **offered** to everybody else. The shared
- * setting arrives with the capability set, on `GET /api/me/access`, and is applied here as
- * {@link OptionVisibility} - it hides that one destination from a member who is not the platform
- * administrator, leaves it in the Super Admin's own menu marked with an `Off` pill, and changes no
- * capability and no other entry. Like everything else here it hides a page rather than protecting
- * one: the classification endpoints keep authorizing every request by `Data.Repair` in both states,
- * and the route entered directly still resolves.
+ * Admin may stop an Admin maintenance destination being **offered** to everybody else. Issues #1148
+ * and #1151 generalise that one switch to the server's closed catalogue of keys: each switchable
+ * `Admin` entry declares its own {@link MenuVisibilityKey} on the entry itself, several entries may
+ * declare the **same** key - that shared declaration is the whole of the shared-route rule - and the
+ * four destinations an Owner needs to run their business are on {@link neverSwitchableAdminRoutes}
+ * instead. The shared setting arrives with the capability set, on `GET /api/me/access`, and is
+ * applied here as {@link OptionVisibility} - it hides every entry declaring a switched-off key from a
+ * member who is not the platform administrator, leaves those entries in the Super Admin's own menu
+ * marked with an `Off` pill, and changes no capability and no other entry. Like everything else here
+ * it hides a page rather than protecting one: each destination's endpoints keep authorizing every
+ * request by their own capability in both states, and the route entered directly still resolves.
  *
  * Issue #869 does the same for two Admin destinations, on the **live fleet read** rather than on
  * stored records: `Site Commission Agreements`, whose site picker is that read, and `AVCO
@@ -110,6 +114,20 @@ export interface NavLink {
    * Nayax account upgrading would make usable anyway.
    */
   readonly planLockedWithout?: PlanFeature;
+
+  /**
+   * The switchable destination this entry is one of the ways into (issues #1148 and #1151), named by
+   * the server's own catalogue key. While that key is switched off the entry is left out for every
+   * member but the platform administrator, who keeps it with an `Off` pill.
+   *
+   * **It is declared on the entry, not derived from the route**, which is what lets two entries share
+   * one switch: the Reimbursement Report of #1152 declares `admin.imports` and gets no key of its
+   * own, so one decision hides both ways into the imports. An `Admin` entry must declare exactly one
+   * key or be on {@link neverSwitchableAdminRoutes} - never both and never neither, which the
+   * co-located spec asserts so a new entry cannot quietly arrive with no decision made about it.
+   * Entries outside the `Admin` group declare none: no switch reaches them.
+   */
+  readonly visibilityKey?: MenuVisibilityKey;
 }
 
 /**
@@ -142,27 +160,35 @@ export interface NavPlaceholder {
 }
 
 /**
- * The route of the one Admin destination whose visibility a Super Admin may switch (issue #873).
+ * The `Admin` destinations no switch may ever reach (the owner's decision of 9 November 2026):
+ * Integrations, Users, Roles and Business Settings. An Owner needs them to connect Nayax and run
+ * their business, so they always follow their normal capability, plan and provider rules, and the
+ * server's catalogue declares no key for any of them.
  *
- * It is named by its route rather than by a flag on the entry because there is exactly one of them
- * and because the API names it the same way: `GET /api/me/access` reports one boolean about this one
- * option. A general feature-flag framework is explicitly out of scope of that issue, so a second
- * switchable option would be a second named constant and a second field, decided by its own issue -
- * never a map of arbitrary keys this file resolves.
+ * It is the explicit other half of {@link NavLink.visibilityKey}: an `Admin` entry is on this list or
+ * declares a key, so a new destination cannot arrive with no decision made about it.
  */
-export const switchableOptionRoute = '/admin/historical-gst-classification';
+export const neverSwitchableAdminRoutes: readonly string[] = [
+  '/admin/nayax-settings',
+  '/admin/users',
+  '/admin/roles',
+  '/admin/business-settings'
+];
 
 /**
- * Whether `route` is the switchable destination and the application has switched it **off** - which
- * is what the sidebar and the Admin hub render the `Off` pill from, what this file withholds the
- * destination from an ordinary member for, and the only thing either of them renders it from.
+ * Whether `navLink` declares a switchable destination the application has switched **off** - which
+ * is what the sidebar, the bottom nav's menu sheet and the Admin hub render the `Off` pill from, what
+ * this file withholds the destination from an ordinary member for, and the only thing any of them
+ * renders it from.
  *
  * It says nothing about who is looking: a destination is only ever *offered* to a Super Admin while
- * it is off, so a rendered switched-off entry is by construction a Super Admin's. `undefined`
- * options are "not known" and are never switched off (see {@link OptionVisibility}).
+ * it is off, so a rendered switched-off entry is by construction a Super Admin's. An entry that
+ * declares no key is never switched off, and `undefined` options are "not known" and switch nothing
+ * off at all (see {@link OptionVisibility}).
  */
-export function optionSwitchedOff(route: string, options: OptionVisibility | undefined): boolean {
-  return route === switchableOptionRoute && options?.historicalGstClassificationVisible === false;
+export function optionSwitchedOff(navLink: NavLink, options: OptionVisibility | undefined): boolean {
+  const key = navLink.visibilityKey;
+  return key !== undefined && options !== undefined && options.switchedOffKeys.includes(key);
 }
 
 /** Anything a group may hold: a real destination or an inert placeholder. */
@@ -220,6 +246,9 @@ function planOnlyReportLink(label: string, route: string): NavLink {
  * The business `Admin` group's declared destinations, exported on their own so the Admin hub page
  * (`AdminComponent`) can filter its own cards from the same capability-to-route data the sidebar
  * renders, rather than a second, hand-kept copy that could drift from it (issue #674).
+ *
+ * Every entry here also states what a Super Admin may switch about it (issue #1151): a
+ * `visibilityKey`, or membership of {@link neverSwitchableAdminRoutes}.
  */
 export const adminNavGroup: NavGroup = {
   kind: 'group',
@@ -229,36 +258,64 @@ export const adminNavGroup: NavGroup = {
     // "Integrations" rather than "Nayax Settings" since issue #729: it is where a business connects
     // a sales provider, so it is also the one destination every locked page sends an Owner to, and
     // it stays in the top section whatever the provider's state - it has to be reachable to fix it.
+    // Never switchable, for that same reason (9 November 2026).
     link('Integrations', '/admin/nayax-settings', 'Integration.Manage'),
     {
       // Locked on the live fleet read since issue #869, for the same reason the site commission
       // report is: this page's site picker *is* that read (`GET /api/sites`), and a site is known
       // only from it, so with no usable connection there is no site to write an agreement against.
       ...link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
-      lockedWithout: 'machineFleet'
+      lockedWithout: 'machineFleet',
+      visibilityKey: 'admin.site-commission-agreements'
     },
     // The Nayax sales and settlement imports, and the Nayax sale timestamp repair: hidden until the
-    // provider is usable (issue #729).
-    providerToolLink('Imports', '/admin/imports', 'Imports.Run'),
-    // Deliberately never locked (issue #869, the user's decision of 24 October 2026): this page
-    // makes no Nayax call at all - it reads the Nayax cost already stored on imported sales - so a
-    // disconnected business with imported history can still recover those costs.
-    link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
+    // provider is usable (issue #729). The imports switch also covers the Reimbursement Report that
+    // is reached from them (#1152), which declares this same key rather than one of its own.
+    { ...providerToolLink('Imports', '/admin/imports', 'Imports.Run'), visibilityKey: 'admin.imports' },
+    {
+      // Deliberately never locked (issue #869, the user's decision of 24 October 2026): this page
+      // makes no Nayax call at all - it reads the Nayax cost already stored on imported sales - so a
+      // disconnected business with imported history can still recover those costs.
+      ...link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
+      visibilityKey: 'admin.historical-cost-recovery'
+    },
     {
       // Locked on the live fleet read since issue #869: the transition preview reads the machines
       // and then their products from Nayax, so without a usable connection it has no baseline to
       // offer.
       ...link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
-      lockedWithout: 'machineFleet'
+      lockedWithout: 'machineFleet',
+      visibilityKey: 'admin.avco-transition'
     },
-    link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
-    link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
-    providerToolLink('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
+    { ...link('Costing Repair', '/admin/costing-repair', 'Data.Repair'), visibilityKey: 'admin.costing-repair' },
+    {
+      ...link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
+      visibilityKey: 'admin.historical-gst-classification'
+    },
+    {
+      ...providerToolLink('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
+      visibilityKey: 'admin.nayax-sale-timestamp-repair'
+    },
     link('Users', '/admin/users', 'Members.Manage'),
     link('Roles', '/admin/roles', 'Roles.View'),
     link('Business Settings', '/admin/business-settings', 'Business.Manage')
   ]
 };
+
+/**
+ * Every declared `Admin` destination that uses `key`, in menu order (issue #1151).
+ *
+ * It is how the Menu Visibility page says what one switch covers without keeping a second list of
+ * that: a key with two entries - `admin.imports`, once the Reimbursement Report of #1152 exists -
+ * names both of them here, and a key with one names only itself. It reads the **declared**
+ * navigation rather than a member's rendered menu, because what a switch covers is the same question
+ * whoever is looking.
+ */
+export function adminEntriesWithVisibilityKey(key: string): readonly NavLink[] {
+  return adminNavGroup.children.filter(
+    (child): child is NavLink => child.kind === 'link' && child.visibilityKey === key
+  );
+}
 
 export const primaryNavigation: readonly NavItem[] = [
   section('Operations'),
@@ -431,6 +488,18 @@ export const masterProductsNavLink: NavLink = {
 };
 
 /**
+ * The Menu Visibility page (issue #1151): the one place every Admin menu switch is managed from,
+ * replacing the single switch issue #873 put on the Admin hub beside one card. Like the five links
+ * above it declares no capability, because no business role grants it: only the platform-admin probe
+ * below does - and, being a Super Admin destination, it is never itself switchable.
+ */
+export const menuVisibilityNavLink: NavLink = {
+  kind: 'link',
+  label: 'Menu Visibility',
+  route: '/super-admin/menu-visibility'
+};
+
+/**
  * The top-level Super Admin group (issue #546, parent #510 under #328): kept apart from the
  * business `Admin` group because neither of its destinations is granted by a business role.
  * `navigationFor` composes it in only while `GET /api/admin/diagnostics/access` confirms the
@@ -448,7 +517,8 @@ export const superAdminNavGroup: NavGroup = {
     priceCatalogueReviewNavLink,
     // Beside the review rather than inside it (issue #1023): the catalogue is browsed here and
     // decided there.
-    masterProductsNavLink
+    masterProductsNavLink,
+    menuVisibilityNavLink
   ]
 };
 
@@ -494,12 +564,14 @@ export const superAdminNavSection: NavSectionHeading = section('Super admin');
  * the answer has not settled yet, and then nothing is withheld and nothing is locked: the menu must
  * not flicker items away, and an unread status is not a refusal (issue #728's fail-open rule).
  *
- * `options` is the shared switchable-option answer (issue #873), applied in the same pass as the
- * capability set and **after** it in effect: the one switchable destination is left out while the
- * application has switched it off, unless `hasPlatformDiagnosticsAccess` says this is the platform
- * administrator, who keeps it in both states. It can only ever remove an entry the capabilities
- * already allowed - switching the option on adds nothing to a member whose role never had it - and
- * `undefined` removes nothing at all (see {@link OptionVisibility}).
+ * `options` is the shared menu-visibility answer (issues #873, #1148 and #1151), applied in the same
+ * pass as the capability set and **after** it in effect: every entry that declares a switched-off key
+ * is left out, unless `hasPlatformDiagnosticsAccess` says this is the platform administrator, who
+ * keeps them all in both states. A group left with no child at all goes with them, and a section
+ * heading left with nothing under it goes too, exactly as they do when the capability set withholds
+ * every child. It can only ever remove an entry the capabilities already allowed - switching a key on
+ * adds nothing to a member whose role never had it - and `undefined` removes nothing at all (see
+ * {@link OptionVisibility}).
  *
  * Everything here copies rather than mutates, so `primaryNavigation` stays the full declared
  * navigation and one member's rendered menu can never leak into another's.
@@ -541,7 +613,7 @@ function allowsLink(
   navLink: NavLink,
   switchedOff: OptionVisibility | undefined
 ): boolean {
-  if (optionSwitchedOff(navLink.route, switchedOff)) {
+  if (optionSwitchedOff(navLink, switchedOff)) {
     return false;
   }
 

@@ -32,6 +32,7 @@ import { SuperAdminBusinessesComponent } from './components/super-admin/business
 import { SuperAdminSupplierPresetsComponent } from './components/super-admin/supplier-presets/super-admin-supplier-presets.component';
 import { SuperAdminPriceCatalogueReviewComponent } from './components/super-admin/price-catalogue-review/super-admin-price-catalogue-review.component';
 import { SuperAdminMasterProductsComponent } from './components/super-admin/master-products/super-admin-master-products.component';
+import { SuperAdminMenuVisibilityComponent } from './components/super-admin/menu-visibility/super-admin-menu-visibility.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
 import { BusinessSettingsComponent } from './components/admin/business-settings/business-settings.component';
@@ -442,6 +443,24 @@ describe('super-admin routing (issue #546)', () => {
 
   it('loads the Super Admin Master products page component', async () => {
     await expect(loadedComponent('super-admin/master-products')).resolves.toBe(SuperAdminMasterProductsComponent);
+  });
+
+  /**
+   * The Menu Visibility page (issue #1151) is guarded exactly like the five above, for the same
+   * reason: its authority is the platform-admin check and no business role or membership. It is also
+   * the page the Admin switches are managed from, so it must never be reachable only *because*
+   * something was switched on - and the switches never apply to a Super Admin destination.
+   */
+  it('guards /super-admin/menu-visibility with MsalGuard then platformAdminGuard, and nothing else', () => {
+    expect(route('super-admin/menu-visibility').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+  });
+
+  it('carries no accountStateGuard on /super-admin/menu-visibility either', () => {
+    expect(route('super-admin/menu-visibility').canActivate ?? []).not.toContain(accountStateGuard);
+  });
+
+  it('loads the Super Admin Menu visibility page component', async () => {
+    await expect(loadedComponent('super-admin/menu-visibility')).resolves.toBe(SuperAdminMenuVisibilityComponent);
   });
 });
 

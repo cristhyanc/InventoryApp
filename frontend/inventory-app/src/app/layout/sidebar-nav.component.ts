@@ -412,15 +412,16 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
-   * Whether this destination is the switchable one and the application has switched it off
-   * (issue #873), which is what the `Off` pill is rendered from.
+   * Whether this destination declares a switchable key the application has switched off (issues
+   * #873, #1148 and #1151), which is what the `Off` pill is rendered from.
    *
    * A member who is not the Super Admin is not offered the entry at all in that state, so a pill
    * here is by construction a Super Admin's: it tells them, where they are looking, that what they
-   * can see is hidden from everybody else.
+   * can see is hidden from everybody else. Two entries that share one key are both marked, because
+   * both of them are hidden from everybody else.
    */
   isOptionSwitchedOff(link: NavLink): boolean {
-    return optionSwitchedOff(link.route, this.menuInputs?.options);
+    return optionSwitchedOff(link, this.menuInputs?.options);
   }
 
   /** The sentence a screen reader is given beside the `Off` pill. */
@@ -551,10 +552,10 @@ export class SidebarNavComponent implements OnInit, AfterViewInit, OnDestroy {
 const NO_CAPABILITIES: CapabilitySet = new Set();
 
 /**
- * The switchable-option answer to render the menu from (issue #873). Only a granted read carries
- * one; `unread` and `unavailable` are both "not known", which hides nothing and shows no pill - the
- * answer travels with the capabilities, and a menu must not take an entry away over a read that
- * never answered.
+ * The menu-visibility answer to render the menu from (issues #873, #1148 and #1151). Only a granted
+ * read carries one; `unread` and `unavailable` are both "not known", which hides nothing and shows no
+ * pill - the answer travels with the capabilities, and a menu must not take an entry away over a read
+ * that never answered.
  */
 export function renderedOptionVisibility(state: MemberAccessState): OptionVisibility | undefined {
   return state.status === 'granted' ? state.access.optionVisibility : undefined;

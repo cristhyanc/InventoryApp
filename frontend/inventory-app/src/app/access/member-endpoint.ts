@@ -64,6 +64,11 @@ const ACCOUNT_STATE_PROBE_PATH = 'me/account-state';
  *   edit that manage the catalogue. All four are platform data about products and suppliers, they name
  *   no business at all, and like the four above they must carry no role-preview or support-session
  *   header - so a `403` from any of them says nothing about a membership or a business role.
+ * - `super-admin/menu-visibility` - the switchable Admin menu visibility of issues #1148 and #1151:
+ *   the catalogue read and one key's write, which the Menu Visibility page is the only caller of. The
+ *   setting is the platform's own - one answer for the whole application, naming no business and
+ *   nobody's data - so a `403` from either says nothing about a membership or a business role, and
+ *   neither may carry a role-preview or support-session header.
  */
 const PLATFORM_ADMIN_PREFIXES = [
   'admin/diagnostics',
@@ -71,7 +76,8 @@ const PLATFORM_ADMIN_PREFIXES = [
   'super-admin/support-sessions',
   'super-admin/supplier-presets',
   'super-admin/price-catalogue-review',
-  'super-admin/master-products'
+  'super-admin/master-products',
+  'super-admin/menu-visibility'
 ];
 
 /** Static and runtime-configuration assets (`/assets/config.json`), which are not API calls. */
