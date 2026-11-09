@@ -1,5 +1,9 @@
 import { MsalGuard } from '@azure/msal-angular';
-import { Route } from '@angular/router';
+import { Component } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { CanActivateFn, Route, Router, provideRouter } from '@angular/router';
+import { of } from 'rxjs';
+import { AccessService } from './access/access.service';
 import { ACCESS_NOT_ALLOWED_PATH } from './access/capability.guard';
 import { accountStateGuard } from './access/account-state.guard';
 import { platformAdminGuard } from './access/platform-admin.guard';
@@ -22,6 +26,7 @@ import { StockHistoryPageComponent } from './components/stock/stock-history-page
 import { ProductFormComponent } from './components/products/product-form.component';
 import { ProductImportPageComponent } from './components/products/product-import-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
+import { ReimbursementReportPageComponent } from './components/admin/imports/reimbursement-report/reimbursement-report-page.component';
 import { HistoricalCostRecoveryComponent } from './components/admin/historical-cost-recovery/historical-cost-recovery.component';
 import { AvcoTransitionComponent } from './components/admin/avco-transition/avco-transition.component';
 import { CostingRepairPageComponent } from './components/admin/costing-repair/costing-repair-page.component';
@@ -41,6 +46,39 @@ import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
 import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
 import { SupplierOrdersComponent } from './components/purchases/supplier-orders.component';
+
+/** A stand-in for whichever page a guard under test is mounted in front of. */
+@Component({ standalone: true, template: 'guarded page' })
+class GuardedPageComponent {}
+
+/**
+ * Navigates a route guarded by `guard` alone, with a capability set holding exactly `capabilities`,
+ * and answers where the router ended up. `AccessService` is doubled at its one guard-facing method
+ * (`allowsAny`), whose own behaviour - including the fail-open rule for an unread set - is driven in
+ * `access/capability.guard.spec.ts` against the real service.
+ */
+async function navigateWithCapability(guard: CanActivateFn, capabilities: readonly string[]): Promise<string> {
+  // Each navigation gets its own module: two in one test are two separate capability sets.
+  TestBed.resetTestingModule();
+  await TestBed.configureTestingModule({
+    providers: [
+      provideRouter([
+        { path: 'target', component: GuardedPageComponent, canActivate: [guard] },
+        { path: ACCESS_NOT_ALLOWED_PATH, component: AccessNotAllowedComponent }
+      ]),
+      {
+        provide: AccessService,
+        useValue: {
+          allowsAny: (required: readonly string[]) => of(required.some((name) => capabilities.includes(name)))
+        }
+      }
+    ]
+  }).compileComponents();
+
+  const router = TestBed.inject(Router);
+  await router.navigateByUrl('/target');
+  return router.url;
+}
 
 function route(path: string): Route {
   const match = routes.find((candidate) => candidate.path === path);
@@ -92,6 +130,52 @@ describe('Purchase edit route (issue #475)', () => {
 describe('Admin Imports route (issue #389)', () => {
   it('serves the dedicated Admin Imports page at /admin/imports, behind authentication', async () => {
     expect(route('admin/imports').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/imports')).resolves.toBe(AdminImportsComponent);
+  });
+});
+
+/**
+ * The dedicated Reimbursement Report page (issue #1152), which hosts #1149's ZIP upload, its job
+ * status list and the pending reimbursement XML import that used to run on Admin → Imports. It
+ * carries exactly the three guards `/admin/imports` carries - the same capability over the same
+ * imports - and no provider guard: the page makes no Nayax call at all, so a business whose
+ * connection has stopped working can still reach it by URL. The menu hides the entry instead.
+ */
+describe('Reimbursement Report route (issue #1152)', () => {
+  const PATH = 'admin/imports/reimbursement-report';
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('serves the page behind three guards, authentication and account state first', async () => {
+    const guards = route(PATH).canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent(PATH)).resolves.toBe(ReimbursementReportPageComponent);
+  });
+
+  /**
+   * And the third guard is the capability itself, driven rather than only counted: a member holding
+   * `Imports.Run` reaches the page, and one holding every other capability but that is sent to the
+   * access-not-allowed page. The guard is presentation either way - every endpoint behind the page
+   * checks the same capability itself (`capability.guard.ts`) - but a page the wrong role is shown
+   * is still a defect.
+   */
+  it('requires Imports.Run, and nothing else, through its capability guard', async () => {
+    const capabilityGuard = (route(PATH).canActivate ?? [])[2] as CanActivateFn;
+
+    expect(await navigateWithCapability(capabilityGuard, ['Imports.Run'])).toBe('/target');
+    expect(await navigateWithCapability(capabilityGuard, ['Data.Repair', 'Reports.View'])).toBe(
+      `/${ACCESS_NOT_ALLOWED_PATH}`
+    );
+  });
+
+  /**
+   * Three segments against `/admin/imports`'s two, so Angular's exact matching keeps them apart
+   * whatever the declaration order, and the Imports page still serves its own URL.
+   */
+  it('leaves /admin/imports resolving to the Imports page', async () => {
     await expect(loadedComponent('admin/imports')).resolves.toBe(AdminImportsComponent);
   });
 });
@@ -584,6 +668,9 @@ describe('provider-locked routes (issues #729, #868)', () => {
    */
   it('leaves the Nayax imports and the sale timestamp repair routes unguarded by the provider', () => {
     expect(route('admin/imports').canActivate).toHaveLength(3);
+    // The Reimbursement Report page (issue #1152) is hidden from the menu the same way and keeps
+    // its URL working for the same reason.
+    expect(route('admin/imports/reimbursement-report').canActivate).toHaveLength(3);
     expect(route('admin/nayax-sale-timestamp-repair').canActivate).toHaveLength(3);
   });
 

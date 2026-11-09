@@ -493,6 +493,20 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
   },
   {
+    // The dedicated Reimbursement Report page (issue #1152), reached from the Imports page's own
+    // card and from its own sidebar entry. It carries exactly the three guards `/admin/imports`
+    // carries - it is the same capability over the same imports - and deliberately no provider
+    // guard: the page makes no Nayax call at all, reading and writing only this business's own
+    // records, so it is reachable by URL for a business whose connection has stopped working. The
+    // menu hides the entry instead, exactly as it hides Imports.
+    path: 'admin/imports/reimbursement-report',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Imports.Run')],
+    loadComponent: () =>
+      import('./components/admin/imports/reimbursement-report/reimbursement-report-page.component').then(
+        (m) => m.ReimbursementReportPageComponent
+      )
+  },
+  {
     // Deliberately **not** provider-locked (issue #869, the user's decision of 24 October 2026):
     // this page makes no Nayax call at all - `BackfillNayaxHistoricalSaleCosts` reads the Nayax cost
     // already stored on imported sales - so a disconnected business with imported history can still

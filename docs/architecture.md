@@ -1684,7 +1684,8 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
-| Admin → Imports | `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Imports | `api/imports/nayax-sales` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Reimbursement Report (`/admin/imports/reimbursement-report`, issue #1152) | `api/imports/pending-xml`, `POST api/imports/reimbursement-report`, `GET api/imports/reimbursement-report/jobs`, `GET api/imports/reimbursement-report/jobs/{jobId}` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
@@ -2929,7 +2930,7 @@ preview is still given the figures.
 
 **One row, one write, and nothing on screen invents an answer.** Each save is `PUT /api/super-admin/menu-visibility/{key}` for that row alone, so a refusal on one destination leaves every other row exactly as it was; the row then keeps the last state the **server** confirmed and says that the change was not saved, and nothing is re-read, because nothing was stored. A successful save renders the state the server returned — not the value that was requested — and re-reads `GET /api/me/access`, which is the one answer the sidebar, the bottom nav and the Admin hub build their menus from, so the menus follow in one step from one source. A second click while that row's write is in flight submits nothing. A catalogue read that could not answer lists **nothing** and offers reading it again, rather than offering controls over states nobody reported: the navigation's fail-open rule is a different statement — leaving an entry in place over an unknown answer is the state the application was in before the setting existed, while telling an administrator a destination is definitely on would be a claim nobody made.
 
-**Tests.** `Inventory.UnitTests/Application/PlatformOptions/MenuVisibilityCatalogueTests` pins the catalogue literally — the fifteen keys in menu order, their groups (Reports first, each group contiguous), their labels, their uniqueness, the namespacing of each key under its own group, and that only a declared key is found, case included — because a renamed key would silently switch a destination back on for every installation that had switched it off. `MenuVisibilityTests` is the default rule and the write: nothing stored reads as offered and writes nothing, every answered destination carries its catalogue group, each of the eight Reports keys defaults to offered and is switched, stored and audited exactly as an Admin one is, a stored answer is reported for its own key alone, several switched-off keys are reported as exactly those, a stored key the catalogue no longer declares is ignored, a switch stores what was asked for one key and audits it once with the actor's own identity, a second write to another key leaves the first alone, switching to the state already held is still one ordinary write, an undeclared key stores and audits nothing, an unidentifiable actor is denied with nothing written, and the legacy GST answer is that key's own state. `Application/Access/GetCurrentAccessTests` proves the answer travels with the capability set without changing it. `Inventory.IntegrationTests/Controllers/SuperAdminMenuVisibilityApiTests` is the pipeline: the whole labelled catalogue read with nothing stored, the eight Reports keys reported with their group above the Admin ones and each of them switched off and on again by the administrator with every member read reporting that one key, a Reports key refused to an Owner, a Manager, an applicant, a stranger and a support-session caller, `GET /api/reports/bookkeeping` answering the Owner exactly what it answered before its own key was switched off, one destination switched off and on with every member read reporting the stored answer from a separate request, two destinations switched independently, seven undeclared keys each `404` with nothing stored, an Owner, a Manager, an applicant and a stranger each refused on **both** endpoints without mutation, a refusal leaving an already-switched-off destination switched off, the missing-field `400`, the unauthenticated `401` and the scope-less `403`, the support-session header refused as an ordinary member's, `/api/me/access` reporting the switched-off keys with a byte-for-byte identical capability set and the derived legacy field, the audit event and the absence of one for a refused write or an undeclared key — and that switching a destination off leaves the Owner's own `POST .../preview` answering `200`, which is the test that fails if a switch ever starts restricting a tool. `SuperAdminOptionVisibilityApiTests` is the legacy endpoint's unchanged contract over the new storage, including that the superseded table is never written and that what the legacy `PUT` stores is the answer both new surfaces report. `Adapters/Persistence/AddPlatformMenuVisibilityMigrationTests` is the upgrade: a stored GST `false` carried over as the one switched-off key with the old row's instant, a stored `true` and an absent row carrying over nothing, one table added and no other changed, no business column and no database-assigned key, the primary key refusing a second row for one destination, and `Down` dropping the table while the superseded row survives. The frontend specs are `layout/navigation.spec.ts`, `layout/sidebar-nav.component.spec.ts`, `layout/bottom-nav.component.spec.ts`, `components/admin/admin.component.spec.ts`, `components/super-admin/menu-visibility/super-admin-menu-visibility.component.spec.ts`, `services/menu-visibility.service.spec.ts` and `access/access.service.spec.ts`. `navigation.spec.ts` is the rule itself: each key off leaving out exactly the entries that declare it and nothing else, the administrator keeping them, an unknown and an unreported answer hiding nothing, the never-switchable four surviving every key being off, an emptied group and its heading dropped, nothing outside the two switchable groups changing in either state, the alignment spec over any list of children (a new entry declaring neither fails, an undeclared key fails, a second entry declaring an existing key passes) run over both groups, and the shared-key rule over a fixture `Reimbursement Report` entry until #1152 declares the real one. Its Reports half (#1153) is the same rule again, written out per key: each report left out exactly while its own key is off, kept for the administrator with the pill, the group and then its heading dropped as the last of them goes, the Site Commissions report and the Admin agreements page switched independently, and an Operator offered no report in either state. `sidebar-nav.component.spec.ts` renders that, and `bottom-nav.component.spec.ts` asserts the bar's four shortcuts declare no key at all, so the whole catalogue being off leaves it unchanged. The page's own spec is the surface: every reported key listed in order, the `Reports` section above the `Admin` one with each group's own rows under it, a report switched with the same control and the same per-row save, each control's accessible name and keyboard-operable button, a successful save rendering the server's answer and re-reading the shared access answer, a failed save keeping the confirmed state and saying so with nothing re-read, one row's failure leaving the others untouched, a second click while a write is in flight submitting nothing, and an unreadable catalogue listing nothing and offering to be read again. The hub's spec covers the withheld card, the per-destination pill, the never-switchable cards, the empty state and that the hub now offers no switch of its own.
+**Tests.** `Inventory.UnitTests/Application/PlatformOptions/MenuVisibilityCatalogueTests` pins the catalogue literally — the fifteen keys in menu order, their groups (Reports first, each group contiguous), their labels, their uniqueness, the namespacing of each key under its own group, and that only a declared key is found, case included — because a renamed key would silently switch a destination back on for every installation that had switched it off. `MenuVisibilityTests` is the default rule and the write: nothing stored reads as offered and writes nothing, every answered destination carries its catalogue group, each of the eight Reports keys defaults to offered and is switched, stored and audited exactly as an Admin one is, a stored answer is reported for its own key alone, several switched-off keys are reported as exactly those, a stored key the catalogue no longer declares is ignored, a switch stores what was asked for one key and audits it once with the actor's own identity, a second write to another key leaves the first alone, switching to the state already held is still one ordinary write, an undeclared key stores and audits nothing, an unidentifiable actor is denied with nothing written, and the legacy GST answer is that key's own state. `Application/Access/GetCurrentAccessTests` proves the answer travels with the capability set without changing it. `Inventory.IntegrationTests/Controllers/SuperAdminMenuVisibilityApiTests` is the pipeline: the whole labelled catalogue read with nothing stored, the eight Reports keys reported with their group above the Admin ones and each of them switched off and on again by the administrator with every member read reporting that one key, a Reports key refused to an Owner, a Manager, an applicant, a stranger and a support-session caller, `GET /api/reports/bookkeeping` answering the Owner exactly what it answered before its own key was switched off, one destination switched off and on with every member read reporting the stored answer from a separate request, two destinations switched independently, seven undeclared keys each `404` with nothing stored, an Owner, a Manager, an applicant and a stranger each refused on **both** endpoints without mutation, a refusal leaving an already-switched-off destination switched off, the missing-field `400`, the unauthenticated `401` and the scope-less `403`, the support-session header refused as an ordinary member's, `/api/me/access` reporting the switched-off keys with a byte-for-byte identical capability set and the derived legacy field, the audit event and the absence of one for a refused write or an undeclared key — and that switching a destination off leaves the Owner's own `POST .../preview` answering `200`, which is the test that fails if a switch ever starts restricting a tool. `SuperAdminOptionVisibilityApiTests` is the legacy endpoint's unchanged contract over the new storage, including that the superseded table is never written and that what the legacy `PUT` stores is the answer both new surfaces report. `Adapters/Persistence/AddPlatformMenuVisibilityMigrationTests` is the upgrade: a stored GST `false` carried over as the one switched-off key with the old row's instant, a stored `true` and an absent row carrying over nothing, one table added and no other changed, no business column and no database-assigned key, the primary key refusing a second row for one destination, and `Down` dropping the table while the superseded row survives. The frontend specs are `layout/navigation.spec.ts`, `layout/sidebar-nav.component.spec.ts`, `layout/bottom-nav.component.spec.ts`, `components/admin/admin.component.spec.ts`, `components/super-admin/menu-visibility/super-admin-menu-visibility.component.spec.ts`, `services/menu-visibility.service.spec.ts` and `access/access.service.spec.ts`. `navigation.spec.ts` is the rule itself: each key off leaving out exactly the entries that declare it and nothing else, the administrator keeping them, an unknown and an unreported answer hiding nothing, the never-switchable four surviving every key being off, an emptied group and its heading dropped, nothing outside the two switchable groups changing in either state, the alignment spec over any list of children (a new entry declaring neither fails, an undeclared key fails, a second entry declaring an existing key passes) run over both groups, and the shared-key rule over the two entries that declare `admin.imports` — Imports and the Reimbursement Report #1152 built, which replaced the fixture entry this spec stood that rule up against before the page existed. Its Reports half (#1153) is the same rule again, written out per key: each report left out exactly while its own key is off, kept for the administrator with the pill, the group and then its heading dropped as the last of them goes, the Site Commissions report and the Admin agreements page switched independently, and an Operator offered no report in either state. `sidebar-nav.component.spec.ts` renders that, and `bottom-nav.component.spec.ts` asserts the bar's four shortcuts declare no key at all, so the whole catalogue being off leaves it unchanged. The page's own spec is the surface: every reported key listed in order, the `Reports` section above the `Admin` one with each group's own rows under it, a report switched with the same control and the same per-row save, each control's accessible name and keyboard-operable button, a successful save rendering the server's answer and re-reading the shared access answer, a failed save keeping the confirmed state and saying so with nothing re-read, one row's failure leaving the others untouched, a second click while a write is in flight submitting nothing, and an unreadable catalogue listing nothing and offering to be read again. The hub's spec covers the withheld card, the per-destination pill, the never-switchable cards, the empty state and that the hub now offers no switch of its own.
 
 ### Business subscriptions and plan entitlements (issue #966)
 
@@ -5319,13 +5320,17 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
 
 **What changed, page by page.**
 
-- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file and Import
-  XML files, and `onSalesSelected` and `importXml` each return before calling `ImportService`.
-  Download template stays enabled: it builds a CSV in the browser and calls no API. Its Import
-  products card is a link to `/products/import` since issue #888 and is left in place, because it
-  starts nothing; `ProductImportPageComponent` applies this same rule at the destination, rendering
-  a short "imports are unavailable during a support session" notice instead of the catalogue review
-  — withheld rather than disabled, because the review reads the catalogue as soon as it renders.
+- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, and
+  `onSalesSelected` returns before calling `ImportService`. Download template stays enabled: it
+  builds a CSV in the browser and calls no API. Its two cards that are links — Import products to
+  `/products/import` since issue #888, and Reimbursement Report to
+  `/admin/imports/reimbursement-report` since issue #1152 — are left in place, because a link starts
+  nothing; each destination applies this same rule itself. `ProductImportPageComponent` renders a
+  short "imports are unavailable during a support session" notice instead of the catalogue review —
+  withheld rather than disabled, because the review reads the catalogue as soon as it renders — and
+  `ReimbursementReportPageComponent` renders the same notice, disables the ZIP upload and the
+  pending-XML action and guards both handlers, while leaving its recent-uploads list alone, because
+  those reads are `GET`s a read-only session may make.
 - `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
   `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
   `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
@@ -7386,8 +7391,8 @@ keep working unchanged once that one file knows the new word:
   alerts (#939), Needs Ordering and Products (#940) all share is the one place this had to be taught.
 - **The Nayax sales import card** (`SalesFileImport`, `Pro`) is the second inline lock of that same
   `403 plan_required` shape, and it is inline rather than route-level **because the page is mixed**:
-  `/admin/imports` also runs the pending reimbursement XML import, links to the product-catalogue
-  review's own page and downloads a CSV template that calls no API, and none of those is a
+  `/admin/imports` also links to the product-catalogue review's own page and (since issue #1152) to
+  the Reimbursement Report's, and downloads a CSV template that calls no API, and none of those is a
   higher-plan feature. Locking the route would withhold three working workflows over one locked
   card, so `admin-imports.component.ts` locks the card instead and the route keeps its
   `requireCapability('Imports.Run')` alone - stated by name in `app.routes.spec.ts` rather than
@@ -7428,7 +7433,7 @@ own lock - `Free` and `Starter` withholding the controls with **no** import call
 normally and still refused during a support session, enforcement off and the three not-known
 entitlement answers locking nothing, a `plan_required` refusal rendered in the card instead of a
 toast and not repeatable, an ordinary failure still reported as the error it is, the re-read that
-clears the refusal and the one that keeps it, and the other three import workflows on the page
+clears the refusal and the one that keeps it, and the other import workflows and links on the page
 untouched.
 
 ### Target feature boundaries
@@ -7562,13 +7567,14 @@ unchanged fee-rate editor — see
 
 **Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
 authenticated UI entry point for the Nayax import workflows, moved out of `AdminComponent`: the
-Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template download, and the pending
+Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template download, and — until issue
+#1152 moved it to the Reimbursement Report's own page — the pending
 reimbursement XML import. The page is an
-entry point only — it calls the same `ImportService` methods (`POST api/imports/nayax-sales`,
-`POST api/imports/pending-xml`) with the same request shapes, keeps
+entry point only — it calls the same `ImportService` method (`POST api/imports/nayax-sales`)
+with the same request shape, keeps
 the same client-side extension validation, template columns/sample row, success and failure
 messages, and the same single `loading` flag that disables every import action while one is in
-flight. No import boundary or contract changed with the move: Nayax sales parsing and timestamp
+flight. No import boundary or contract changed with either move: Nayax sales parsing and timestamp
 semantics, import deduplication, product matching, reimbursement parsing and persistence all stay
 exactly where they were (see [Uploaded transaction export import (issue
 #301)](#uploaded-transaction-export-import-issue-301) and [Reimbursement import and
@@ -7589,6 +7595,15 @@ withholds the review and shows its own notice (see
 [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551) for
 the rule both pages apply). The Admin hub's `Imports` card description names where the catalogue
 import went rather than implying it still runs here.
+
+**And the reimbursement report is a link to its own page** (issue #1152). The `Import XML files` card
+is now a short **Reimbursement Report** card whose control is a `routerLink` to
+`/admin/imports/reimbursement-report`, where #1149's ZIP upload, its job status list and that same
+pending-XML action now live; this page runs no reimbursement import of its own and
+`AdminImportsComponent.importXml` is gone. The link is neither hidden nor disabled during a support
+session, for the reason the Import products link is not. See
+[The Reimbursement Report page](#the-reimbursement-report-page-issue-1152). The Admin hub's `Imports`
+card description names that destination too.
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -7846,7 +7861,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -13345,6 +13360,100 @@ imported it, the same transaction would have written its outcome.
 parsing, reimbursement, coverage or reconciliation rules, row-level deduplication (dedupe stays the
 byte-identical file hash), the Reimbursement Report page and every frontend change (#1152), importing
 the PDF or XLSX, cancelling or deleting jobs, and notifications when a job finishes.
+
+### The Reimbursement Report page (issue #1152)
+
+The page over the surface above, and frontend only: it adds no endpoint, no rule and no calculation,
+and `ImportService` stays the one place the browser calls an import from.
+
+**Where it is.** `/admin/imports/reimbursement-report`, declared in `app.routes.ts` with exactly the
+three guards `/admin/imports` carries — `MsalGuard`, `accountStateGuard`,
+`requireCapability('Imports.Run')` — and deliberately **no provider guard**: the page makes no Nayax
+call at all, reading and writing only this business's own records, so a business whose connection has
+stopped working can still reach it by URL and finish importing a statement it was emailed. The
+sidebar entry is a `providerToolLink` directly after `Imports`, hidden while the connection is not
+usable for the reason Imports is hidden, and it declares `visibilityKey: 'admin.imports'` rather than
+a key of its own — the shared-key rule of [Switchable Admin menu
+visibility](#switchable-admin-menu-visibility-issues-873-and-1148). Its breadcrumb is the first
+three-item trail in `breadcrumbs/breadcrumb-routes.ts`: `BreadcrumbParent` may now declare a parent of
+its own, so Admin › Imports › Reimbursement Report is that chain read outwards rather than a second
+way of writing a trail. `/admin/imports` keeps the `Import XML files` card's place with a short
+**Reimbursement Report** card that links here, and the Nayax sales upload and the sale timestamp
+repair are untouched.
+
+**Composition.** Per [Page composition boundary](#page-composition-boundary-issue-191)
+`ReimbursementReportPageComponent` is the boundary: `ReimbursementReportUploadComponent` owns the
+chosen file, the in-flight upload and the refusal, and emits `(uploaded)` with the accepted job id;
+`ReimbursementImportJobsComponent` owns the list read, the refresh lifecycle, the per-row expansion
+and both reads' failures, and is told to read again through one `[reloadToken]`. The page itself keeps
+the support-session answer, that token, and the one-button pending-XML action that moved here
+unchanged — a single call with its own toast, which is not a workflow of its own.
+
+**What the page decides, which is nothing about an import.** Every state, count and reason on screen
+is the server's answer, counted there from its own per-file outcome rows;
+`reimbursement-import-job-display.ts` only names them, and a state this build does not recognise reads
+as `Unknown` rather than as one of the states it is not. The upload sends the file and shows the
+server's own `400` sentence beside the file it refused, because a refused upload stores nothing at all
+and a toast would leave the controls offering an upload that has already been answered; the `.zip`
+picker filter is a convenience and deliberately not a second archive rule. No XML content, figure or
+payment detail is rendered, and none is available to: the status contract carries none, and the upload
+reply carries the job id alone.
+
+**The refresh, and when it stops.** A job is live while the server reports `Queued` or `Processing`.
+After each successful read the list arms one `timer(REIMBURSEMENT_JOBS_REFRESH_MS)` if any job is
+live, and arms nothing otherwise — so a settled list polls nothing, an accepted upload reads once
+immediately through the token rather than waiting, and leaving and coming back reads the current state
+once on arrival. A failed read stops the refresh too, keeps whatever was already read on screen
+(it is still the last thing the server said) and offers the read again, rather than hammering an
+endpoint that is already answering badly. Every subscription is `takeUntil` the component's own
+destruction, so a closed page asks for nothing.
+
+**Only the newest list read may change the screen.** Reads overlap — an accepted upload reads again
+immediately while the arrival read or a refresh is still in flight — and whichever was asked for
+first can answer last. An answer older than the upload does not know about the job it accepted, so
+left alone it would put the pre-upload list back, take the queued job off screen and, finding nothing
+running, stop the refresh that was following it. `load()` therefore unsubscribes the read in flight
+before it makes the next one: the superseded request is cancelled outright, its answer and its
+failure both reach nobody, and the rows, the error and the refresh schedule can only be set by the
+newest read.
+
+**Support session.** Both writes are withheld and the page says so; the two status reads are `GET`s a
+read-only session may make, so the list is unchanged. The endpoints enforce that themselves either
+way — the page withholds the controls so no refusable request is sent.
+
+**Phone width.** The page is `.page` (a 16px gutter), and the list is a stacked `<ul>` rather than a
+table: at 390px a five-column table either scrolls sideways or truncates the one thing an operator
+came to read, so each upload is its own block whose summary lays out in a row only once there is room.
+The file names wrap rather than overflow. **Checked in a browser, because jsdom computes no layout:**
+`e2e/visual/reimbursement-report.visual.ts` opens the page at 1440px and 390px against synthetic job
+answers and asserts, before each capture, that the document does not scroll sideways, that `.page`
+computes a 16px left and right padding at 390px, that every upload's summary stacks at 390px and is a
+row at 1440px, and that the longest file name stays inside its own row. Its captures are
+`docs/screenshots/issue-1152/`. It is not part of `scripts/validate.sh`; see [Browser-level
+end-to-end suite](#browser-level-end-to-end-suite-issue-46).
+
+**Tests.** `reimbursement-report-page.component.spec.ts` (the composition, the reload token, the
+pending-XML action and its two failures, and the support session), `reimbursement-report-upload.component.spec.ts`
+(the picker and the note, the selection, the accepted upload and its emitted id, the server's `400`,
+a `ProblemDetails` body, the bodiless failure, the busy state and its second click, the withheld
+session and the cleared refusal), `reimbursement-import-jobs.component.spec.ts` (the empty state, a
+row's fields in the business's own zone, every state's wording, the expansion's failed files and its
+failure, the refresh that stops when nothing is running, the refresh that never starts, destruction,
+the first read that failed and its retry, a refresh failure that keeps the rows, the reload token,
+and the two overlapping-read cases — a superseded read answering last with the pre-upload list, and
+one failing after the newer read succeeded — neither of which may change the rows, the error or the
+refresh), `reimbursement-import-job-display.spec.ts` (the wording, the badges, the unknown state and the
+running rule), `import.service.spec.ts` (the three routes and the multipart body),
+`app.routes.spec.ts` (the three guards, the capability driven rather than counted, and
+`/admin/imports` still resolving to its own page), `navigation.spec.ts` (the entry, its order, the
+shared key off and on for a member and for the administrator, the provider-hidden rule and the
+catalogue alignment), `breadcrumb-routes.spec.ts` (the three-item trail and the parent chain itself
+over fixture entries) and `admin-imports.component.spec.ts` (the replaced card, and that the page runs
+no reimbursement import of its own any more). The rendered half is
+`e2e/visual/reimbursement-report.visual.ts`, described under **Phone width** above.
+
+**Out of scope**, as #1152 states: any backend change, cancelling or deleting a job, notifications,
+and any change to the Nayax sales upload, the timestamp repair or #1148's catalogue.
 
 ### Report availability model (issue #730)
 

@@ -339,9 +339,18 @@ export const adminNavGroup: NavGroup = {
       visibilityKey: 'admin.site-commission-agreements'
     },
     // The Nayax sales and settlement imports, and the Nayax sale timestamp repair: hidden until the
-    // provider is usable (issue #729). The imports switch also covers the Reimbursement Report that
-    // is reached from them (#1152), which declares this same key rather than one of its own.
+    // provider is usable (issue #729). The imports switch also covers the Reimbursement Report
+    // below, reached from them (#1152), which declares this same key rather than one of its own.
     { ...providerToolLink('Imports', '/admin/imports', 'Imports.Run'), visibilityKey: 'admin.imports' },
+    {
+      // The Reimbursement Report page (issue #1152), directly after the Imports page it is reached
+      // from. It declares the **same** key as Imports rather than one of its own, which is the
+      // shared-key rule of issue #1151: one switch decides both ways into the imports. It is a
+      // provider tool for the same reason Imports is - with no sales provider there is no
+      // reimbursement report being emailed to upload.
+      ...providerToolLink('Reimbursement Report', '/admin/imports/reimbursement-report', 'Imports.Run'),
+      visibilityKey: 'admin.imports'
+    },
     {
       // Deliberately never locked (issue #869, the user's decision of 24 October 2026): this page
       // makes no Nayax call at all - it reads the Nayax cost already stored on imported sales - so a
@@ -386,8 +395,8 @@ export const switchableNavGroups: readonly NavGroup[] = [reportsNavGroup, adminN
  * Every declared switchable destination that uses `key`, in menu order (issues #1151 and #1153).
  *
  * It is how the Menu Visibility page says what one switch covers without keeping a second list of
- * that: a key with two entries - `admin.imports`, once the Reimbursement Report of #1152 exists -
- * names both of them here, and a key with one names only itself. It reads the **declared**
+ * that: a key with two entries - `admin.imports`, which both Imports and the Reimbursement Report of
+ * #1152 declare - names both of them here, and a key with one names only itself. It reads the **declared**
  * navigation rather than a member's rendered menu, because what a switch covers is the same question
  * whoever is looking.
  */

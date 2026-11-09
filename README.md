@@ -691,10 +691,10 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 - A stored role the application does not recognise **denies access** rather than falling back to the least privileged role.
 - **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
-  - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
+  - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports and Admin → Reimbursement Report, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
   - **Owner** — everything a Manager reaches, plus Admin → Integrations (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
   - **Holding the capability is not the same as the page being usable.** Two Admin pages need the live Nayax fleet read and show the connection-required page without it (issue #869): **Site Commission Agreements**, whose site picker is that read and which a Manager reaches as well as an Owner, and the Owner-only **Inventory AVCO Transition Baseline**, whose preview reads the machines and their products. **Nayax Historical Cost Recovery is deliberately not locked** — it reads the Nayax cost already stored on imported sales and makes no Nayax call — and neither are Costing Repair and Historical GST Classification, which work on the business's own data. See [The menu without a usable provider](#the-menu-without-a-usable-provider).
-  - **The reports and the Admin maintenance destinations can also be switched off by a Super Admin**, which is a different thing again: each of the seven Admin tools — Site Commission Agreements, Imports, Historical Cost Recovery, AVCO Transition, Costing Repair, Historical GST Classification and Nayax Sale Timestamp Repair — and each of the eight reports — Bookkeeping, Daily, Transactions, Reconciliation, Machines, Products, Site Commissions and GST — can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. That hides the sidebar entry, the mobile menu entry and the Admin card, and changes no permission at all — an Owner still holds `Data.Repair`, a Manager still holds `Reports.View`, and each page and its API still work exactly as before. Integrations, Users, Roles and Business Settings are never switchable. See [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
+  - **The reports and the Admin maintenance destinations can also be switched off by a Super Admin**, which is a different thing again: each of the seven Admin tools — Site Commission Agreements, Imports, Historical Cost Recovery, AVCO Transition, Costing Repair, Historical GST Classification and Nayax Sale Timestamp Repair — and each of the eight reports — Bookkeeping, Daily, Transactions, Reconciliation, Machines, Products, Site Commissions and GST — can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. The **Imports** switch covers two entries, because Reimbursement Report is the other way into the same imports (issue #1152): switching it off hides both. That hides the sidebar entry, the mobile menu entry and the Admin card, and changes no permission at all — an Owner still holds `Data.Repair`, a Manager still holds `Reports.View`, and each page and its API still work exactly as before. Integrations, Users, Roles and Business Settings are never switchable. See [Hiding a maintenance tool from other users](#hiding-a-maintenance-tool-from-other-users-super-admin).
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
@@ -1252,9 +1252,38 @@ it is the same one the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issu
 it the platform may idle the process out, and an idled process imports nothing — a queued upload would
 then wait until somebody's next request woke the application.
 
-This is the backend. The page that uses it is issue #1152; until then the API below is the whole of
-it, and it is open to exactly the members who may run an import (Manager and Owner — see [Roles and
+It is open to exactly the members who may run an import (Manager and Owner — see [Roles and
 capabilities](#roles-and-capabilities)).
+
+### Where the page is, and what is on it
+
+**Admin → Reimbursement Report** (`/admin/imports/reimbursement-report`, issue #1152). It is in the
+sidebar's **Admin** group directly after **Imports**, and the Imports page itself carries a
+**Reimbursement Report** card that opens it; the breadcrumb reads Admin › Imports › Reimbursement
+Report. The entry needs the same access as Imports (`Imports.Run`), is left out of the menu while the
+Nayax connection is not usable for the same reason Imports is, and is covered by the **same**
+Super Admin menu switch as Imports — switching `admin.imports` off hides both ways in (see
+[Super Admin menu visibility](#super-admin-menu-visibility)). Its address still opens if you go to it
+directly, and every endpoint behind it checks the same access itself.
+
+The page has three things on it:
+
+- **Upload the reimbursement report.** Choose the ZIP and press **Upload**. Upload it **exactly as
+  Nayax emails it** — do not unzip it, rename it or take files out of it. An accepted upload says so
+  and is queued; a refused one shows the server's own sentence saying why, beside the file you chose,
+  and stores nothing at all.
+- **Recent uploads.** Each upload, newest first, with when it was uploaded in your business's own time
+  (Sydney for an Australian business), the file name, its state, and how many files it imported,
+  skipped and failed. An upload with failures offers **Show the files that failed**, which names each
+  failed file and the short reason recorded for it. While an upload is `Queued` or `Processing` the
+  list refreshes itself; once nothing is running it stops, and leaving the page and coming back shows
+  the current state. Nothing financial is on the page: no figure, no payment detail and no XML.
+- **Import XML files.** The older pending-folder import, moved here unchanged from Admin → Imports:
+  it processes reimbursement XML files already on the server and reports how many files and
+  reimbursements it imported.
+
+Both uploads and the pending-XML import are unavailable during a read-only support session, which the
+page says; the recent uploads are still shown, because reading them changes nothing.
 
 ### What you upload, and what is refused
 
@@ -1294,13 +1323,13 @@ archive with no reimbursement XML in it at all — there would be nothing to imp
 first, and `GET api/imports/reimbursement-report/jobs/{jobId}` adds what each XML inside one turned
 into. A job of another business is a `404`. Each job reports:
 
-| State | What it means |
-|---|---|
-| `Queued` | Accepted and waiting. Nothing imported yet. |
-| `Processing` | Being worked through now. |
-| `Completed` | Every file in it was imported, or was already imported. |
-| `CompletedWithFailures` | It finished, and at least one file in it could not be imported. The rest were. |
-| `Failed` | The job itself stopped. Whatever it had already imported stays imported. |
+| State | On the page | What it means |
+|---|---|---|
+| `Queued` | Queued | Accepted and waiting. Nothing imported yet. |
+| `Processing` | Processing | Being worked through now. |
+| `Completed` | Completed | Every file in it was imported, or was already imported. |
+| `CompletedWithFailures` | Completed with failures | It finished, and at least one file in it could not be imported. The rest were. |
+| `Failed` | Failed | The job itself stopped. Whatever it had already imported stays imported. |
 
 and, per file, `Imported`, `Skipped` (your business had already imported a file with those exact
 bytes) or `Failed` with a short, safe reason. The counts are always counted from those per-file
@@ -3782,7 +3811,8 @@ out.
   The Nayax permission *key* behind a read is not named, because no published contract states it (see
   [docs/architecture.md § Provider-locked navigation](docs/architecture.md#provider-locked-navigation-issue-729)).
 - **The provider's repair and admin tools are hidden, not locked**: Admin → Imports (the Nayax sales
-  and settlement imports), Inventory → Import products (the catalogue review's own page, issue #888)
+  import), Admin → Reimbursement Report (the reimbursement report's own page, issue #1152),
+  Inventory → Import products (the catalogue review's own page, issue #888)
   and Admin → Nayax Sale Timestamp Repair are left out of the menu until the
   connection is usable, because without a provider there is nothing of the provider's to import or
   repair. The costing and GST repairs are the business's own data and stay. **Admin → Nayax Settings

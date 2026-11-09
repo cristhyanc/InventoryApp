@@ -11,10 +11,18 @@
  * page, and the Dashboard) renders no breadcrumb at all: a one-item trail adds no hierarchy.
  */
 
-/** A breadcrumb's parent entry. Omitting `path` renders a non-routable group as plain text. */
+/**
+ * A breadcrumb's parent entry. Omitting `path` renders a non-routable group as plain text.
+ *
+ * A parent may itself declare one (issue #1152), which is how a trail deeper than two items is
+ * stated: the Reimbursement Report page is owned by the Imports page, which is owned by the Admin
+ * hub, so `Admin › Imports › Reimbursement Report` is that chain read outwards rather than a second
+ * way of writing a trail.
+ */
 export interface BreadcrumbParent {
   readonly label: string;
   readonly path?: string;
+  readonly parent?: BreadcrumbParent;
 }
 
 export interface BreadcrumbRouteEntry {
@@ -46,6 +54,9 @@ const ADMIN: BreadcrumbParent = { label: 'Admin', path: '/admin' };
 // No path: the Super Admin group (issue #546) is a sidebar heading with no landing page of its
 // own, unlike `/admin`'s `AdminComponent` hub.
 const SUPER_ADMIN: BreadcrumbParent = { label: 'Super Admin' };
+// The Imports page owns the Reimbursement Report page (issue #1152) and is itself owned by the
+// Admin hub, so it is the first parent in this file that declares a parent of its own.
+const IMPORTS: BreadcrumbParent = { label: 'Imports', path: '/admin/imports', parent: ADMIN };
 
 /**
  * Every routed page with a meaningful parent. Covers the nested Products, Machines, Sites,
@@ -73,6 +84,7 @@ export const breadcrumbRoutes: readonly BreadcrumbRouteEntry[] = [
   { pattern: '/reports/gst', label: 'GST', parent: REPORTS },
   { pattern: '/reports/site-commissions', label: 'Site Commissions', parent: REPORTS },
   { pattern: '/admin/imports', label: 'Imports', parent: ADMIN },
+  { pattern: '/admin/imports/reimbursement-report', label: 'Reimbursement Report', parent: IMPORTS },
   { pattern: '/admin/historical-cost-recovery', label: 'Historical Cost Recovery', parent: ADMIN },
   { pattern: '/admin/avco-transition', label: 'AVCO Transition', parent: ADMIN },
   { pattern: '/admin/costing-repair', label: 'Costing Repair', parent: ADMIN },
@@ -114,12 +126,23 @@ function findEntry(entries: readonly BreadcrumbRouteEntry[], path: string): Brea
   return entries.find((entry) => matchesPattern(entry.pattern, path));
 }
 
+/** Every ancestor of `parent`, outermost first, so a nested page names its whole chain. */
+function ancestorsOf(parent: BreadcrumbParent): readonly BreadcrumbItem[] {
+  const chain: BreadcrumbParent[] = [];
+  for (let current: BreadcrumbParent | undefined = parent; current !== undefined; current = current.parent) {
+    chain.unshift(current);
+  }
+
+  return chain.map((ancestor) => ({ label: ancestor.label, path: ancestor.path, current: false }));
+}
+
 /**
  * Builds the breadcrumb trail for `url` against `entries`, resolving the current page's label to
  * `dynamicLabel` only when the matched entry is `dynamic` and a label is available.
  *
  * Returns an empty trail for a URL with no entry, and for an entry with no `parent` — a one-item
- * trail is exactly the "standalone top-level page" case issue #457 asks to skip.
+ * trail is exactly the "standalone top-level page" case issue #457 asks to skip. A parent that
+ * declares a parent of its own contributes its whole chain (issue #1152).
  */
 export function buildTrailFrom(
   entries: readonly BreadcrumbRouteEntry[],
@@ -133,10 +156,7 @@ export function buildTrailFrom(
 
   const currentLabel = entry.dynamic && dynamicLabel ? dynamicLabel : entry.label;
 
-  return [
-    { label: entry.parent.label, path: entry.parent.path, current: false },
-    { label: currentLabel, current: true }
-  ];
+  return [...ancestorsOf(entry.parent), { label: currentLabel, current: true }];
 }
 
 export function buildBreadcrumbTrail(url: string, dynamicLabel: string | null): readonly BreadcrumbItem[] {

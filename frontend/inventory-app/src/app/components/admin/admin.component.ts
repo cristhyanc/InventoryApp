@@ -31,9 +31,10 @@ const ADMIN_CARDS: readonly AdminCard[] = [
     route: '/admin/imports',
     title: 'Imports',
     // The product catalogue import moved to its own page, Products -> Import products (issue #888),
-    // so this card names where it went rather than implying it still runs here.
+    // and the reimbursement report to Admin -> Reimbursement Report (issue #1152), so this card
+    // names where each went rather than implying either still runs there.
     description:
-      'Nayax sales file import and template, and pending reimbursement XML import. The product catalogue import is now Products → Import products.'
+      'Nayax sales file import and template. The product catalogue import is now Products → Import products, and the reimbursement report is now Admin → Reimbursement Report.'
   },
   {
     route: '/admin/historical-cost-recovery',
