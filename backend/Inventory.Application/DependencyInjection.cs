@@ -509,6 +509,15 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ResolveLinkedProviderSales>();
         services.AddScoped<ImportNayaxSales>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();
+        // The per-file steps both reimbursement import paths share (issue #1149): hash dedupe, the
+        // atomic write, and the settlement coverage a committed file proves.
+        services.AddScoped<ImportReimbursementXmlFile>();
+        // The uploaded Nayax ZIP of issue #1149: the upload, the two status reads, and the one job
+        // the background worker runs in a scope resolved to that job's own business.
+        services.AddScoped<UploadReimbursementReportArchive>();
+        services.AddScoped<ListReimbursementImportJobs>();
+        services.AddScoped<GetReimbursementImportJob>();
+        services.AddScoped<ProcessReimbursementImportJob>();
         services.AddScoped<GetStockHistory>();
         services.AddScoped<ListStockHistory>();
         services.AddScoped<GetRestockCostSuggestion>();

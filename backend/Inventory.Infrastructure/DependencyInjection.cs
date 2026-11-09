@@ -444,6 +444,19 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxReconciliationSuccessStore, EfNayaxReconciliationSuccessStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
+        // The uploaded reimbursement report import of issue #1149. All three are scoped because each
+        // runs on one context: the job store on the caller's own request scope for the upload and
+        // the status reads, and on the worker's per-business scope for the import; the per-file
+        // transaction on that same worker scope's context, which is what makes a file's rows, its
+        // coverage and its outcome one commit; and the queue on the deliberately business-less scope
+        // the worker opens for its one reviewed cross-business statement.
+        services.AddScoped<IReimbursementImportJobStore, EfReimbursementImportJobStore>();
+        services.AddScoped<IReimbursementImportFileTransactions, EfReimbursementImportFileTransactions>();
+        services.AddScoped<IReimbursementImportJobQueue, EfReimbursementImportJobQueue>();
+        // Reading the uploaded ZIP (issue #1149). A singleton because it holds nothing per request:
+        // it is given bytes and answers what they contain, touches no database and no filesystem,
+        // and its limits are the Domain's constants.
+        services.AddSingleton<IReimbursementArchiveReader, ZipReimbursementArchiveReader>();
         // The provider catalogue review (issue #738), the catalogue import's one persistence
         // adapter since issue #739. Scoped like every other adapter here: both
         // operations read and write one caller's resolved business through the request's own

@@ -28,7 +28,9 @@ public class ImportPendingReimbursementXmlCoverageTests
     private static async Task<FakeProviderDataCoverageStore> ImportAsync(FakeSource source, FakeStore store)
     {
         var coverage = new FakeProviderDataCoverageStore();
-        await new ImportPendingReimbursementXmlFiles(source, store, new FixedClock(ImportedAt), coverage)
+        await new ImportPendingReimbursementXmlFiles(
+                source,
+                new ImportReimbursementXmlFile(store, new FixedClock(ImportedAt), coverage))
             .Handle(CancellationToken.None);
         return coverage;
     }
@@ -155,7 +157,9 @@ public class ImportPendingReimbursementXmlCoverageTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             new ImportPendingReimbursementXmlFiles(
-                    source, new FakeStore { ImportThrows = true }, new FixedClock(ImportedAt), coverage)
+                    source,
+                    new ImportReimbursementXmlFile(
+                        new FakeStore { ImportThrows = true }, new FixedClock(ImportedAt), coverage))
                 .Handle(CancellationToken.None));
 
         Assert.Empty(coverage.Recorded);
