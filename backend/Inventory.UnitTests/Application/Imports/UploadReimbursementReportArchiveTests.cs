@@ -37,7 +37,7 @@ public class UploadReimbursementReportArchiveTests
         Assert.Equal(UploadedAt, created.UploadedAtUtc);
         Assert.Equal([1, 2, 3, 4], created.Archive);
         Assert.Equal(ReimbursementImportFakes.Actor(), created.UploadedBy);
-        Assert.Equal(result.JobId, 1);
+        Assert.Equal(1, result.JobId);
     }
 
     /// <summary>

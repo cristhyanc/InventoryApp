@@ -114,40 +114,8 @@ public sealed class ZipReimbursementArchiveReader : IReimbursementArchiveReader
 
             if (ReimbursementArchivePolicy.IsArchiveEntry(entry.Name))
             {
-                if (depth > 0)
-                {
-                    // An archive inside an inner archive. Reported as ignored, never opened.
-                    walk.IgnoredNestedArchives++;
-                    continue;
-                }
-
-                walk.InnerArchives++;
-                if (walk.InnerArchives > ReimbursementArchivePolicy.MaxInnerArchives)
-                    return ReimbursementArchivePolicy.TooManyInnerArchivesMessage;
-
-                var inner = Expand(entry, label, walk, out var innerRejection);
-                if (innerRejection is not null) return innerRejection;
-
-                try
-                {
-                    using var innerStream = new MemoryStream(inner!, writable: false);
-                    using var innerZip = new ZipArchive(innerStream, ZipArchiveMode.Read);
-
-                    var rejection = WalkArchive(innerZip, label, depth + 1, walk);
-                    if (rejection is not null) return rejection;
-                }
-                catch (Exception exception) when (exception is InvalidDataException or NotSupportedException)
-                {
-                    // An inner entry named .zip that is not one refuses the whole upload rather than
-                    // being silently ignored: the operator uploaded something this application
-                    // cannot account for, and half an import is worse than none.
-                    _logger.LogWarning(
-                        exception,
-                        "An archive inside an uploaded reimbursement report archive could not be read. Entry={ArchiveEntry}",
-                        label);
-                    return ReimbursementArchivePolicy.UnreadableArchiveMessage;
-                }
-
+                var archiveRejection = WalkArchiveEntry(entry, label, depth, walk);
+                if (archiveRejection is not null) return archiveRejection;
                 continue;
             }
 
@@ -159,12 +127,64 @@ public sealed class ZipReimbursementArchiveReader : IReimbursementArchiveReader
                 continue;
             }
 
-            var bytes = Expand(entry, label, walk, out var xmlRejection);
+            var xmlRejection = WalkXmlEntry(entry, label, walk);
             if (xmlRejection is not null) return xmlRejection;
-
-            walk.XmlFiles.Add(new ReimbursementArchiveXmlEntry(
-                walk.XmlFiles.Count, label, Parse(label, bytes!)));
         }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Handles one archive-entry: ignores it at depth &gt; 0, otherwise expands and recurses into it.
+    /// Split out of <see cref="WalkArchive"/> to keep that method's branching readable.
+    /// </summary>
+    private string? WalkArchiveEntry(ZipArchiveEntry entry, string label, int depth, Walk walk)
+    {
+        if (depth > 0)
+        {
+            // An archive inside an inner archive. Reported as ignored, never opened.
+            walk.IgnoredNestedArchives++;
+            return null;
+        }
+
+        walk.InnerArchives++;
+        if (walk.InnerArchives > ReimbursementArchivePolicy.MaxInnerArchives)
+            return ReimbursementArchivePolicy.TooManyInnerArchivesMessage;
+
+        var inner = Expand(entry, label, walk, out var innerRejection);
+        if (innerRejection is not null) return innerRejection;
+
+        try
+        {
+            using var innerStream = new MemoryStream(inner!, writable: false);
+            using var innerZip = new ZipArchive(innerStream, ZipArchiveMode.Read);
+
+            return WalkArchive(innerZip, label, depth + 1, walk);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or NotSupportedException)
+        {
+            // An inner entry named .zip that is not one refuses the whole upload rather than
+            // being silently ignored: the operator uploaded something this application
+            // cannot account for, and half an import is worse than none.
+            _logger.LogWarning(
+                exception,
+                "An archive inside an uploaded reimbursement report archive could not be read. Entry={ArchiveEntry}",
+                label);
+            return ReimbursementArchivePolicy.UnreadableArchiveMessage;
+        }
+    }
+
+    /// <summary>
+    /// Expands and parses one XML entry, recording it on <paramref name="walk"/>. Split out of
+    /// <see cref="WalkArchive"/> to keep that method's branching readable.
+    /// </summary>
+    private string? WalkXmlEntry(ZipArchiveEntry entry, string label, Walk walk)
+    {
+        var bytes = Expand(entry, label, walk, out var rejection);
+        if (rejection is not null) return rejection;
+
+        walk.XmlFiles.Add(new ReimbursementArchiveXmlEntry(
+            walk.XmlFiles.Count, label, Parse(label, bytes!)));
 
         return null;
     }
