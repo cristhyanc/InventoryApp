@@ -212,12 +212,13 @@ public static class InfrastructureServiceCollectionExtensions
         // one table in this schema that names no business in any statement because it is about none.
         // Scoped like every adapter here, so it runs on the request's own denied-scope context.
         services.AddScoped<ISupplierPresetStore, EfSupplierPresetStore>();
-        // The shared switchable option visibility (issue #873): the second table in this schema that
-        // names no business, for the same reason - the setting is one answer for the whole
-        // application. Scoped like every adapter here, so the Super Admin's write runs on the
+        // The shared switchable menu visibility (issue #1148, replacing issue #873's single-row
+        // adapter over PlatformOptionVisibility, which nothing writes any more): a table that names
+        // no business, for the same reason the presets do not - the setting is one answer for the
+        // whole application. Scoped like every adapter here, so the Super Admin's write runs on the
         // request's own denied-scope context and a member's read on their own resolved one; neither
         // scope selects anything, because there is no owner to compare.
-        services.AddScoped<IOptionVisibilityStore, EfOptionVisibilityStore>();
+        services.AddScoped<IMenuVisibilityStore, EfMenuVisibilityStore>();
         // The business subscription state of issue #966: three deliberately tiny adapters over three
         // tables, kept apart because the records they hold must never write each other. The billing
         // subscription and the manual grants are ordinary tenant-owned reads and writes through the

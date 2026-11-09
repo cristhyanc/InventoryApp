@@ -2116,6 +2116,23 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("PickListRefillLines");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PlatformMenuVisibility", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Visible")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("PlatformMenuVisibility");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.PlatformOptionVisibility", b =>
                 {
                     b.Property<int>("Id")

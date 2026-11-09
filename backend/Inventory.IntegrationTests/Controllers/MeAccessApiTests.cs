@@ -114,15 +114,23 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
                 // The shared switchable option visibility (issue #873): what the application offers,
                 // beside what this member may do. It is part of the asserted shape rather than an
                 // extra field a client may or may not find, and it is never a capability - every
-                // capability list above is identical in both of its states.
+                // capability list above is identical in both of its states. Since issue #1148 it is
+                // derived from the catalogue key it became, and is kept for the rollout.
                 "historicalGstClassificationVisible",
+                // Which switchable Admin destinations are switched off (issue #1148), beside the one
+                // derived boolean above. Part of the asserted shape for the same reason, and never a
+                // capability either.
+                "menuVisibility",
                 "role",
                 "supportSession",
                 "timeZoneId",
             ],
             json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
-        // Nothing has been switched off in this deployment, so the option is offered.
+        // Nothing has been switched off in this deployment, so every destination is offered: the
+        // legacy boolean is true and the switched-off list is empty (issue #1148).
         Assert.True(json.GetProperty("historicalGstClassificationVisible").GetBoolean());
+        Assert.Empty(
+            json.GetProperty("menuVisibility").GetProperty("switchedOffKeys").EnumerateArray());
         AssertNothingIsEnforced(json);
         Assert.Equal(expectedRole, json.GetProperty("role").GetString());
         // A member is in no support session, and the field is an explicit null rather than omitted

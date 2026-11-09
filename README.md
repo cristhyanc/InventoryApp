@@ -1657,36 +1657,54 @@ PUT    /api/super-admin/master-products/{id}                      correct one (t
   typed into it, and a change the server accepted is still announced and the list still refreshed. See
   [docs/architecture.md § Super Admin master products](docs/architecture.md#super-admin-master-products-issues-1023-and-1024).
 
-## Super Admin option visibility
+## Super Admin menu visibility
 
-The Super Admin also decides whether **one** Admin option is offered to anybody else: **Historical
-GST Classification**, the occasional maintenance tool that is only needed until historical purchase
-components have been classified. It is one shared, application-wide setting with one endpoint
-(issue #873):
+The Super Admin also decides which of the **Admin maintenance destinations** are offered to anybody
+else — the occasional tools a business needs for a while and then never again. There are seven, each
+a key in a closed, server-owned catalogue (issue #1148, generalising issue #873's single switch):
+`admin.site-commission-agreements`, `admin.imports`, `admin.historical-cost-recovery`,
+`admin.avco-transition`, `admin.costing-repair`, `admin.historical-gst-classification` and
+`admin.nayax-sale-timestamp-repair`. **Integrations, Users, Roles and Business Settings are never
+switchable** — an Owner needs them to connect Nayax and run their business — and nor is anything
+outside the Admin group. Reports are a later decision (issue #1153).
 
 ```text
-PUT /api/super-admin/option-visibility   { "historicalGstClassificationVisible": true|false }
+GET /api/super-admin/menu-visibility                 → every key, its label and its current state
+PUT /api/super-admin/menu-visibility/{key}           { "visible": true|false }
+PUT /api/super-admin/option-visibility               { "historicalGstClassificationVisible": true|false }
 ```
+
+The third is the previous endpoint, kept while the API runs ahead of the Angular application; it
+writes the `admin.historical-gst-classification` key like the second one does. The Super Admin page
+that drives all seven is issue #1151.
 
 - **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the surfaces
   above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair
-  unset — the shipped state — nobody can change it.** An Owner is refused like anybody else, a member
-  who presents a support-session id is still an ordinary member, and a refused request changes
+  unset — the shipped state — nobody can read or change them.** An Owner is refused like anybody else, a
+  member who presents a support-session id is still an ordinary member, and a refused request changes
   nothing. A role preview is refused, as every write is.
+- **A key cannot be invented.** The catalogue is compiled, so a key it does not declare is answered
+  `404` and nothing is stored; a body that leaves `visible` out is answered `400` rather than quietly
+  switching a destination off. One write changes one key's own stored row and no other.
 - **Everyone reads it, nobody else writes it.** `GET /api/me/access` reports
-  `historicalGstClassificationVisible` beside the capability set, which is how the menu and the Admin
-  page know what to offer. That is the one thing a member reads from a platform-wide setting, and it
-  is one boolean: it names no business and nobody's data.
-- **It is visibility, not permission.** `POST /api/admin/historical-gst-classification/preview` and
-  `.../apply` keep requiring `Data.Repair` in both states, and the capability set a member is reported
-  is identical in both. Switching the option off hides the entry and the card; switching it on
-  restores them only to members whose role already allowed them.
-- **The default is shown**, and it is the absence of any stored setting, so every existing
-  installation keeps exactly the visibility it has today until a Super Admin switches it. The setting
-  is one row (`PlatformOptionVisibility`) that is created the first time it is switched.
+  `menuVisibility.switchedOffKeys` beside the capability set, which is how the menu and the Admin page
+  know what to offer, and keeps reporting the derived `historicalGstClassificationVisible` for now.
+  That is the one thing a member reads from a platform-wide setting, and it is only the keys that are
+  switched off: it names no business and nobody's data.
+- **It is visibility, not permission.** Every one of those destinations' endpoints keeps its existing
+  checks in both states — `POST /api/admin/historical-gst-classification/preview` and `.../apply` still
+  require `Data.Repair` — and the capability set a member is reported is identical whatever the switches
+  say. Switching a destination off hides the entry and the card; switching it on restores them only to
+  members whose role already allowed them.
+- **The default is On**, and it is the absence of a stored row, so every existing installation keeps
+  exactly the visibility it has today until a Super Admin switches something. A row of
+  `PlatformMenuVisibility` is created the first time its destination is switched, and an installation
+  that had already switched Historical GST Classification off keeps it off: the upgrade carries that
+  one answer over.
 - **Audit.** Every committed change emits one structured `ILogger` event with the actor `(tid, oid)`,
-  the resulting state, the instant and the correlation id — and nothing about a business or a member,
-  because the setting is about neither. A refused change is not audited, because nothing happened.
+  the key, the resulting state, the instant and the correlation id — and nothing about a business or a
+  member, because the setting is about neither. A refused change, and a key the catalogue does not
+  declare, are not audited, because nothing happened.
 - **The page.** The switch is on the Admin page beside the tool's own card, offered to a Super Admin
   alone; see [Hiding this option from other users](#hiding-this-option-from-other-users-super-admin).
 

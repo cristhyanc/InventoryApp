@@ -342,11 +342,11 @@ builder.Services.AddScoped<ISupportSessionAudit, LoggingSupportSessionAudit>();
 // fields - and its entry type has no field for the preset's name or its URL, so neither can reach
 // the trail by a sink's discretion.
 builder.Services.AddScoped<ISupplierPresetAudit, LoggingSupplierPresetAudit>();
-// The option-visibility audit trail (issue #873): one event per committed switch. A separate port
-// again, for the same reason - a different event with different fields, and an entry type that has
-// no field for a business, a member or anything of theirs, because this setting is about none of
-// them.
-builder.Services.AddScoped<IOptionVisibilityAudit, LoggingOptionVisibilityAudit>();
+// The menu-visibility audit trail (issue #1148, replacing issue #873's option-visibility one): one
+// event per committed switch, naming the destination it was about. A separate port again, for the
+// same reason - a different event with different fields, and an entry type that has no field for a
+// business, a member or anything of theirs, because this setting is about none of them.
+builder.Services.AddScoped<IMenuVisibilityAudit, LoggingMenuVisibilityAudit>();
 // The price-catalogue review trail (issue #928): one event per committed decision, and a second one
 // beside it when a price outside the band was accepted on the reviewer's explicit exception. A
 // separate port again, for the same reason as the four above - a different event with different

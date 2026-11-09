@@ -485,25 +485,43 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         ["Coles", "Woolworths", "Big W", "Costco"];
 
     /// <summary>
-    /// Puts the switchable option visibility of issue #873 back to the shipped state - <em>no row at
-    /// all</em>, which is what makes every option offered - so a test about the default starts from
-    /// the default however a predecessor left it.
+    /// Puts the switchable menu visibility of issue #1148 back to the shipped state - <em>no row at
+    /// all</em>, in either the current table or the superseded one of issue #873, which is what makes
+    /// every destination offered - so a test about the default starts from the default however a
+    /// predecessor left it.
     ///
     /// <para>Like <see cref="ResetSupplierPresetsAsync"/> it is deliberately not part of
     /// <see cref="ResetAsync"/>: the setting is about no business, so a test about businesses has no
     /// reason to touch it.</para>
     /// </summary>
-    public async Task ResetOptionVisibilityAsync()
+    public async Task ResetMenuVisibilityAsync()
     {
         await using var db = Database();
+        db.PlatformMenuVisibility.RemoveRange(await db.PlatformMenuVisibility.ToListAsync());
         db.PlatformOptionVisibility.RemoveRange(await db.PlatformOptionVisibility.ToListAsync());
         await db.SaveChangesAsync();
         ClearLog();
     }
 
     /// <summary>
-    /// Every stored option-visibility row (issue #873). There is at most one, and the point of
-    /// reading them as a list is that a test can prove a second write did not add a second row.
+    /// Every stored menu-visibility row (issue #1148), by key. A destination with no row is absent,
+    /// which is the whole point of reading them as a list: a test can prove that a write stored one
+    /// row, that a second write to another destination added its own, and that a refused write
+    /// stored none.
+    /// </summary>
+    public async Task<IReadOnlyList<PlatformMenuVisibility>> MenuVisibilityRowsAsync()
+    {
+        await using var db = Database();
+        return await db.PlatformMenuVisibility
+            .AsNoTracking()
+            .OrderBy(row => row.Key)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Every stored row of the <em>superseded</em> single-option table (issue #873). Issue #1148
+    /// leaves that table in place and no longer writes it, so a test reads it to prove exactly
+    /// that - and a seeding test writes it to prove the carried-over answer is honoured.
     /// </summary>
     public async Task<IReadOnlyList<PlatformOptionVisibility>> OptionVisibilityRowsAsync()
     {

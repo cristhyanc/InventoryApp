@@ -743,6 +743,22 @@ public class AppDbContext : DbContext
         Set<Models.PlatformOptionVisibility>();
 
     /// <summary>
+    /// Which switchable Admin menu destinations are offered to anybody but a Super Admin
+    /// (issue #1148): one row per destination somebody has switched, keyed by the destination's own
+    /// catalogue key. The twelfth <em>platform</em> table, on the same terms as
+    /// <see cref="SupplierPresets"/> above: about no business, so no business key, no index on one
+    /// and no query filter. No row for a key means that destination is offered; see
+    /// <see cref="Models.PlatformMenuVisibility"/>.
+    ///
+    /// <para>It supersedes the single-row <see cref="PlatformOptionVisibility"/> above, whose
+    /// stored answer the migration carries over to the
+    /// <c>admin.historical-gst-classification</c> key. That table is left in place and is no longer
+    /// written.</para>
+    /// </summary>
+    public DbSet<Models.PlatformMenuVisibility> PlatformMenuVisibility =>
+        Set<Models.PlatformMenuVisibility>();
+
+    /// <summary>
     /// The shared catalogue's products (issue #923, parent #817): one row per product that is looked
     /// up at a supplier, however many businesses want its price. The third <em>platform</em> table,
     /// on the terms <see cref="SupplierPresets"/> states - about no business, so no business key, no
@@ -948,6 +964,7 @@ public class AppDbContext : DbContext
         ConfigureSupportSessions(modelBuilder);
         ConfigureSupplierPresets(modelBuilder);
         ConfigurePlatformOptionVisibility(modelBuilder);
+        ConfigurePlatformMenuVisibility(modelBuilder);
         ConfigureSubscriptions(modelBuilder);
         ConfigureAttachmentStorageReservations(modelBuilder);
         ConfigurePriceCatalogue(modelBuilder);
@@ -1988,6 +2005,38 @@ public class AppDbContext : DbContext
 
         // Persisted UTC, and marked UTC on the way out for the reason the preset instants are: the
         // SQLite provider returns an unspecified kind otherwise.
+        visibility.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the keyed menu-visibility rows (issue #1148), which supersede the single row above.
+    ///
+    /// <para><strong>The key is the catalogue key.</strong> One row per switchable destination
+    /// somebody has switched, keyed by
+    /// <c>Inventory.Application.PlatformOptions.MenuVisibilityKeys</c>'s own string, so the database
+    /// assigns nothing: two writes to the <em>same</em> destination collide on the primary key -
+    /// which <c>EfMenuVisibilityStore</c> resolves into the update it should have been - while two
+    /// writes to different destinations are two different rows and cannot overwrite each other.
+    /// There is no index to add: the only question asked of this table is "every stored row", and
+    /// the lookup by key is the primary key itself.</para>
+    ///
+    /// <para>The twelfth <em>platform</em> table, on the terms
+    /// <see cref="ConfigureSupplierPresets"/> states: about no business, so no business key, no index
+    /// on one and no query filter. It is seeded with nothing; the one value the migration carries
+    /// over is the stored <c>false</c> of issue #873, so an installation that switched Historical GST
+    /// Classification off keeps it off.</para>
+    /// </summary>
+    private static void ConfigurePlatformMenuVisibility(ModelBuilder modelBuilder)
+    {
+        var visibility = modelBuilder.Entity<Models.PlatformMenuVisibility>();
+
+        visibility.HasKey(x => x.Key);
+        visibility.Property(x => x.Key).HasMaxLength(100).ValueGeneratedNever();
+
+        // Persisted UTC, and marked UTC on the way out for the reason the row above is: the SQLite
+        // provider returns an unspecified kind otherwise.
         visibility.Property(x => x.UpdatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));

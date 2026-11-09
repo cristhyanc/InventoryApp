@@ -167,13 +167,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateSupplierPreset>();
         services.AddScoped<UpdateSupplierPreset>();
 
-        // The shared switchable option visibility (issue #873). The write is the Super Admin's and
-        // runs under a denied business scope like the presets above; the read is every member's,
-        // through GetCurrentAccess, and runs under their ordinary resolved scope. Both are scoped
-        // because both go through the request's own AppDbContext, and the setting is about no
-        // business, so neither one's scope selects anything.
-        services.AddScoped<GetOptionVisibility>();
-        services.AddScoped<SetHistoricalGstClassificationVisibility>();
+        // The shared switchable menu visibility (issue #1148, replacing issue #873's single named
+        // option). The write is the Super Admin's and runs under a denied business scope like the
+        // presets above; the read is every member's, through GetCurrentAccess, and runs under their
+        // ordinary resolved scope. Both are scoped because both go through the request's own
+        // AppDbContext, and the setting is about no business, so neither one's scope selects
+        // anything.
+        services.AddScoped<GetMenuVisibility>();
+        services.AddScoped<SetMenuVisibility>();
 
         // What the business this request acts in has bought (issue #966). Scoped for the reason the
         // capability set is: the answer belongs to one request's resolved business - the viewed one
