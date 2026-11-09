@@ -38,7 +38,7 @@ public class GetCurrentAccessTests
         ICurrentBusinessProvider currentBusiness,
         IBusinessProfileStore? store = null,
         ISupportSessionAccessor? supportSession = null,
-        IOptionVisibilityStore? options = null,
+        IMenuVisibilityStore? menuVisibility = null,
         IRolePreviewAccessor? rolePreview = null,
         GetEffectiveEntitlement? entitlement = null,
         IAttachmentQuotaStore? attachmentQuota = null)
@@ -50,7 +50,7 @@ public class GetCurrentAccessTests
             new CurrentCapabilities(session, currentBusiness, rolePreview ?? new FakeRolePreviewAccessor()),
             session,
             new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()),
-            new GetOptionVisibility(options ?? new FakeOptionVisibilityStore()),
+            new GetMenuVisibility(menuVisibility ?? new FakeMenuVisibilityStore()),
             entitlement ?? Unrestricted(),
             new GetAttachmentStorageStatus(attachmentQuota ?? new FakeAttachmentQuotaStore()));
 
@@ -169,37 +169,48 @@ public class GetCurrentAccessTests
     }
 
     /// <summary>
-    /// The switchable option's state travels with the answer (issue #873), and it changes nothing
-    /// about the capabilities: the same Owner is reported with exactly the Owner capability set
-    /// whether the option is offered or switched off. That is the whole distinction the issue rests
-    /// on - switching it off hides an entry and grants or revokes nothing.
+    /// The switchable destinations' states travel with the answer (issue #873, widened to the whole
+    /// catalogue by issue #1148), and they change nothing about the capabilities: the same Owner is
+    /// reported with exactly the Owner capability set whether a destination is offered or switched
+    /// off. That is the whole distinction both issues rest on - switching one off hides an entry and
+    /// grants or revokes nothing.
     /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Reports_the_shared_option_visibility_without_changing_any_capability(bool visible)
+    public async Task Reports_the_shared_menu_visibility_without_changing_any_capability(bool visible)
     {
         var access = await Create(
                 new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Owner),
-                options: FakeOptionVisibilityStore.Holding(visible))
+                menuVisibility: FakeMenuVisibilityStore.Holding(
+                    MenuVisibilityKeys.HistoricalGstClassification,
+                    visible))
             .Handle(CancellationToken.None);
 
-        Assert.Equal(visible, access.HistoricalGstClassificationVisible);
+        Assert.Equal(
+            visible,
+            access.MenuVisibility.IsVisible(MenuVisibilityKeys.HistoricalGstClassification));
+        Assert.Equal(
+            visible ? [] : new[] { MenuVisibilityKeys.HistoricalGstClassification },
+            access.MenuVisibility.SwitchedOffKeys);
         Assert.Equal(RoleCapabilities.For(BusinessRole.Owner), access.Capabilities);
         Assert.Contains(Capability.DataRepair, access.Capabilities);
     }
 
     /// <summary>
-    /// An installation that has never switched anything offers the option, which is what every
-    /// existing deployment gets on the day this arrives.
+    /// An installation that has never switched anything offers every destination, which is what
+    /// every existing deployment gets on the day this arrives: no key is reported as switched off.
     /// </summary>
     [Fact]
-    public async Task Reports_the_option_as_offered_when_nothing_has_ever_been_switched()
+    public async Task Reports_every_destination_as_offered_when_nothing_has_ever_been_switched()
     {
         var access = await Create(new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Operator))
             .Handle(CancellationToken.None);
 
-        Assert.True(access.HistoricalGstClassificationVisible);
+        Assert.Empty(access.MenuVisibility.SwitchedOffKeys);
+        Assert.Equal(
+            MenuVisibilityCatalogue.Options.Select(option => option.Key),
+            access.MenuVisibility.Options.Select(option => option.Key));
     }
 
     /// <summary>
