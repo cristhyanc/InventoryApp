@@ -16,12 +16,23 @@ namespace Inventory.Application.Tenancy;
 /// the other resolved state. One request is either a member acting in their own business or a
 /// platform administrator reading one business through a session - never both, and never one and
 /// then the other.</para>
+///
+/// <para>The hourly Nayax sales reconciliation (the review of issue #1104's production run) adds a
+/// marked variant of <see cref="Resolve"/> for work the <em>host</em> starts on a business's behalf,
+/// with no request and no signed-in user behind it: <see cref="ResolveForHostedWork"/>. It is the
+/// same <see cref="BusinessScopeState.Resolved"/> state - the query filters and the ownership
+/// enforcer treat it exactly as a member's scope - and the only difference is
+/// <see cref="IsHostedWork"/>, which is what lets <see cref="CurrentBusinessProvider"/> answer the
+/// business id for a scope that has no membership to resolve it from. It is still once-only.</para>
 /// </summary>
 public sealed class BusinessScope : IBusinessScope
 {
     public BusinessScopeState State { get; private set; } = BusinessScopeState.Denied;
 
     public int? BusinessId { get; private set; }
+
+    /// <inheritdoc />
+    public bool IsHostedWork { get; private set; }
 
     /// <summary>
     /// Publishes the resolved business for the rest of the request. Called once, by the API
@@ -42,6 +53,27 @@ public sealed class BusinessScope : IBusinessScope
     /// </summary>
     public void ResolveForSupportSession(BusinessId businessId) =>
         MoveTo(BusinessScopeState.SupportReadOnly, businessId);
+
+    /// <summary>
+    /// Publishes the business a hosted background service is working for, in a service scope that
+    /// service opened for that business alone. Called once, by the host adapter that opened the
+    /// scope, with a business id it read from a stored row - never from a request, a message body or
+    /// any other caller-supplied value.
+    ///
+    /// <para>It is <see cref="BusinessScopeState.Resolved"/> for every read and write, exactly like
+    /// <see cref="Resolve"/>. It differs only in marking the scope as <see cref="IsHostedWork"/>, so
+    /// that <see cref="CurrentBusinessProvider.RequireBusinessIdAsync"/> can answer this business
+    /// without a membership. It grants no role and no capability: the scope still resolves no
+    /// membership, so anything that asks for one fails closed exactly as it did before.</para>
+    ///
+    /// <para>The API boundary never calls it. A request's scope is resolved only by
+    /// <see cref="Resolve"/> (from the caller's membership) or <see cref="ResolveForSupportSession"/>.</para>
+    /// </summary>
+    public void ResolveForHostedWork(BusinessId businessId)
+    {
+        MoveTo(BusinessScopeState.Resolved, businessId);
+        IsHostedWork = true;
+    }
 
     private void MoveTo(BusinessScopeState state, BusinessId businessId)
     {
@@ -67,4 +99,6 @@ public sealed class UnscopedBusinessScope : IBusinessScope
     public BusinessScopeState State => BusinessScopeState.Unscoped;
 
     public int? BusinessId => null;
+
+    public bool IsHostedWork => false;
 }

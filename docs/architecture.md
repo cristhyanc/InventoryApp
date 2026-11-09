@@ -7818,7 +7818,7 @@ The UI may format and explain backend results, but it must not recreate authorit
 
 ### Interaction and presentation
 
-Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
+Every routed page should provide intentional loading, empty, error, and success states. Use shared toast notifications for transient mutation outcomes and inline errors when a report or form cannot be understood without the message. A shared toast (`ToastService`) stays on screen for at least 5,000 ms: that is the default, a shorter requested duration is raised to it and a longer one is kept (issue #1142). Every toast also has a native close button named "Dismiss notification" (its "×" glyph is hidden from assistive technology) that removes that toast alone at once and cancels its pending auto-dismiss; stacked toasts expire and close independently. Confirm destructive actions and keep server validation details available to the user without exposing stack traces.
 
 New UI must remain keyboard-operable, associate labels with controls, expose meaningful button/link names, and not rely on color alone for reconciliation or quality status.
 
@@ -8260,7 +8260,11 @@ link at all. The same `cheapestSupplierSummaryView` and template serve the deskt
 narrow-screen card (`layout="card"`), so a View link can never differ between them. Dashboard and
 Needs Ordering compose `CheapestSupplierCellComponent` instead (see
 [The cheapest-supplier summary and the Cheapest supplier column](#the-cheapest-supplier-summary-and-the-cheapest-supplier-column-issue-930))
-and are untouched by this: they keep the comparison-only Link column inside the popup.
+and are untouched by this: they keep the comparison-only Link column inside the popup. Since the
+owner's request of 9 November 2026, Needs Ordering also shows the same View links: the cell takes
+an opt-in `showProductLinks` input (off by default, so the Dashboard is unchanged) and renders one
+`View ↗` anchor per cheapest offer with a `productUrl`, naming the supplier in a tie, only while the
+cell shows a cheapest price. The anchors sit beside the cell's comparison button, never inside it.
 
 The general Cheapest supplier guidance (observed prices, stock may differ) is one
 `HelpToggletipComponent` on the column heading and on each card rather than a note in every cell.
@@ -17808,6 +17812,23 @@ the ordinary tenant filters and `BusinessOwnershipEnforcer` are fully in force. 
 connection, support-session and `PlanFeature.SalesProviderIntegration` gates apply through
 `INayaxRequestCredentialProvider` exactly as they do for a request; a refused business is skipped and
 logged.
+
+**The business scope is resolved as hosted work.** Because nobody is signed in, there is no
+membership for `CurrentBusinessProvider` to resolve the business from, yet both
+`ReconcileNayaxSalesWithProvider` and `SyncLatestNayaxSales` start by asking
+`ICurrentBusinessProvider.RequireBusinessIdAsync` for it. `ServiceScopeNayaxSalesReconciliationScopes`
+therefore publishes each run's scope with `BusinessScope.ResolveForHostedWork`: the same `Resolved`
+state for every tenant-owned read and write, marked `IBusinessScope.IsHostedWork`, which is the one
+case besides a support session where `RequireBusinessIdAsync` answers from the scope instead of a
+membership. It answers the business id only: `ResolveAsync` reports no membership and
+`RequireRoleAsync` keeps failing closed, so hosted work holds no role and no capability. An ordinary
+`Resolved` scope with nobody signed in is still denied, and the API boundary never calls
+`ResolveForHostedWork`. The id comes from the eligibility read's stored sender row, never from a
+request or a message. Before this, the run scope used the request path's `Resolve`, and in
+production every sweep ended on `BusinessAccessDeniedException` at its first line, so no business
+ever recorded a successful reconciliation, and therefore never counted as live via SQS (#1106).
+`NayaxSalesReconciliationEndToEndTests` runs a sweep through the real composition with no signed-in
+user and two businesses, to keep it that way.
 
 One business's run, in order: try-acquire the lease → resolve the credential gate → drain every
 pending inventory-cost rebuild this business has (#1103 — recovery work that makes no Nayax call) →

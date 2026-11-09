@@ -18,6 +18,16 @@ public interface IBusinessScope
     /// "no business data at all", never as "all businesses".
     /// </summary>
     int? BusinessId { get; }
+
+    /// <summary>
+    /// Whether this scope was resolved by a hosted background service for work it started on one
+    /// business's behalf (<see cref="BusinessScope.ResolveForHostedWork"/>), rather than by the API
+    /// boundary for a request. Such a scope has no signed-in user and no membership, so it is the one
+    /// <see cref="BusinessScopeState.Resolved"/> scope whose business
+    /// <see cref="ICurrentBusinessProvider.RequireBusinessIdAsync"/> takes from the scope itself.
+    /// Always <see langword="false"/> for a request's scope.
+    /// </summary>
+    bool IsHostedWork { get; }
 }
 
 public enum BusinessScopeState

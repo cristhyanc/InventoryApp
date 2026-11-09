@@ -1,5 +1,5 @@
 import { Component, ElementRef, Input, ViewChild } from '@angular/core';
-import { CheapestSupplierProduct, SupplierPriceBasis } from '../../../models/cheapest-supplier';
+import { CheapestSupplierOffer, CheapestSupplierProduct, SupplierPriceBasis } from '../../../models/cheapest-supplier';
 import { ProductPriceTrackingStatus } from '../../../models/models';
 import { CheapestSuppliersState } from './cheapest-suppliers.component';
 import { ONLINE_PRICE_NOTE, basisLabel, money } from './cheapest-supplier-format';
@@ -114,6 +114,13 @@ export class CheapestSupplierCellComponent {
   /** The product's own name, for the dialog's heading and the cell's accessible label. */
   @Input() productName = '';
 
+  /**
+   * Whether the cell also offers a "View" link to each cheapest offer's own product page, as the
+   * Products page's summary does (issue #1098). Off by default, so a page shows the links only
+   * where it asks for them (Needs ordering, owner request of 9 November 2026).
+   */
+  @Input() showProductLinks = false;
+
   open = false;
 
   @ViewChild('trigger') private readonly trigger?: ElementRef<HTMLButtonElement>;
@@ -139,6 +146,22 @@ export class CheapestSupplierCellComponent {
    */
   get canOpen(): boolean {
     return this.state === 'loaded' && (this.product?.suppliers.length ?? 0) > 0;
+  }
+
+  /**
+   * The cheapest offers that carry a product page, in the server's order, when this cell shows a
+   * cheapest price and was asked for links; otherwise none. A URL is never guessed.
+   */
+  get productLinks(): readonly CheapestSupplierOffer[] {
+    if (!this.showProductLinks || this.stockNote === null) {
+      return [];
+    }
+    return (this.product?.suppliers ?? []).filter((offer) => offer.isCheapest && offer.productUrl !== null);
+  }
+
+  /** Whether more than one supplier ties for cheapest, so each link must name its supplier. */
+  get tied(): boolean {
+    return (this.product?.suppliers ?? []).filter((offer) => offer.isCheapest).length > 1;
   }
 
   /** Whether this product's match was made automatically and has not been checked (#941). */
