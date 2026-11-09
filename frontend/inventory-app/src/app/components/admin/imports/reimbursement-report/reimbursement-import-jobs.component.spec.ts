@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { BusinessTimeZoneService } from '../../../../formatting/business-time-zone.service';
 import {
   ImportService,
@@ -284,5 +284,81 @@ describe('ReimbursementImportJobsComponent (issue #1152)', () => {
     fixture.detectChanges();
 
     expect(reimbursementReportJobs).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Reads overlap, and the one asked for first can answer last. An answer older than an accepted
+   * upload does not know about the job it created, so if it were still allowed to land it would put
+   * the pre-upload list back, take the queued job off screen, and - finding nothing running - stop
+   * the refresh that was following it. The superseded read is cancelled instead.
+   */
+  describe('overlapping reads', () => {
+    /** One list read per call, each answered by hand so the test decides the order they return in. */
+    function pendingReads() {
+      const reads: Subject<readonly ReimbursementImportJobSummary[]>[] = [];
+      const reimbursementReportJobs = jest.fn(() => {
+        const read = new Subject<readonly ReimbursementImportJobSummary[]>();
+        reads.push(read);
+        return read.asObservable();
+      });
+      return { reads, reimbursementReportJobs };
+    }
+
+    const queued = () =>
+      job({ id: 7, state: ReimbursementImportJobState.Queued, importedFiles: 0, skippedFiles: 0, failedFiles: 0 });
+
+    it('keeps the newly queued job and keeps refreshing when the superseded read answers last', async () => {
+      const { reads, reimbursementReportJobs } = pendingReads();
+      const { fixture, host } = await render({ reimbursementReportJobs });
+
+      // The arrival read is still in flight when an accepted upload asks for the list again.
+      fixture.componentRef.setInput('reloadToken', 1);
+      fixture.detectChanges();
+      expect(reimbursementReportJobs).toHaveBeenCalledTimes(2);
+
+      // The newer read answers first, with the job the upload created.
+      reads[1].next([queued()]);
+      reads[1].complete();
+      fixture.detectChanges();
+
+      // The older read answers last, with the list as it was before that upload existed.
+      reads[0].next([]);
+      reads[0].complete();
+      fixture.detectChanges();
+
+      expect(rows(host)).toHaveLength(1);
+      expect(text(rows(host)[0], 'job-state')).toBe('Queued');
+      expect(testId(host, 'jobs-empty')).toBeNull();
+
+      // And the queued job is still being followed: the refresh the newer answer armed is intact.
+      jest.advanceTimersByTime(REIMBURSEMENT_JOBS_REFRESH_MS);
+      fixture.detectChanges();
+      expect(reimbursementReportJobs).toHaveBeenCalledTimes(3);
+
+      // Because the superseded read was cancelled outright, not merely ignored on arrival.
+      expect(reads[0].observed).toBe(false);
+    });
+
+    it('reports no failure when the superseded read fails after the newer one succeeded', async () => {
+      const { reads, reimbursementReportJobs } = pendingReads();
+      const { fixture, host } = await render({ reimbursementReportJobs });
+
+      fixture.componentRef.setInput('reloadToken', 1);
+      fixture.detectChanges();
+
+      reads[1].next([queued()]);
+      reads[1].complete();
+      fixture.detectChanges();
+
+      reads[0].error({ status: 503 });
+      fixture.detectChanges();
+
+      expect(testId(host, 'jobs-error')).toBeNull();
+      expect(rows(host)).toHaveLength(1);
+
+      jest.advanceTimersByTime(REIMBURSEMENT_JOBS_REFRESH_MS);
+      fixture.detectChanges();
+      expect(reimbursementReportJobs).toHaveBeenCalledTimes(3);
+    });
   });
 });

@@ -7861,7 +7861,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -13408,6 +13408,15 @@ once on arrival. A failed read stops the refresh too, keeps whatever was already
 endpoint that is already answering badly. Every subscription is `takeUntil` the component's own
 destruction, so a closed page asks for nothing.
 
+**Only the newest list read may change the screen.** Reads overlap — an accepted upload reads again
+immediately while the arrival read or a refresh is still in flight — and whichever was asked for
+first can answer last. An answer older than the upload does not know about the job it accepted, so
+left alone it would put the pre-upload list back, take the queued job off screen and, finding nothing
+running, stop the refresh that was following it. `load()` therefore unsubscribes the read in flight
+before it makes the next one: the superseded request is cancelled outright, its answer and its
+failure both reach nobody, and the rows, the error and the refresh schedule can only be set by the
+newest read.
+
 **Support session.** Both writes are withheld and the page says so; the two status reads are `GET`s a
 read-only session may make, so the list is unchanged. The endpoints enforce that themselves either
 way — the page withholds the controls so no refusable request is sent.
@@ -13415,7 +13424,13 @@ way — the page withholds the controls so no refusable request is sent.
 **Phone width.** The page is `.page` (a 16px gutter), and the list is a stacked `<ul>` rather than a
 table: at 390px a five-column table either scrolls sideways or truncates the one thing an operator
 came to read, so each upload is its own block whose summary lays out in a row only once there is room.
-The file names wrap rather than overflow.
+The file names wrap rather than overflow. **Checked in a browser, because jsdom computes no layout:**
+`e2e/visual/reimbursement-report.visual.ts` opens the page at 1440px and 390px against synthetic job
+answers and asserts, before each capture, that the document does not scroll sideways, that `.page`
+computes a 16px left and right padding at 390px, that every upload's summary stacks at 390px and is a
+row at 1440px, and that the longest file name stays inside its own row. Its captures are
+`docs/screenshots/issue-1152/`. It is not part of `scripts/validate.sh`; see [Browser-level
+end-to-end suite](#browser-level-end-to-end-suite-issue-46).
 
 **Tests.** `reimbursement-report-page.component.spec.ts` (the composition, the reload token, the
 pending-XML action and its two failures, and the support session), `reimbursement-report-upload.component.spec.ts`
@@ -13424,15 +13439,18 @@ a `ProblemDetails` body, the bodiless failure, the busy state and its second cli
 session and the cleared refusal), `reimbursement-import-jobs.component.spec.ts` (the empty state, a
 row's fields in the business's own zone, every state's wording, the expansion's failed files and its
 failure, the refresh that stops when nothing is running, the refresh that never starts, destruction,
-the first read that failed and its retry, a refresh failure that keeps the rows, and the reload
-token), `reimbursement-import-job-display.spec.ts` (the wording, the badges, the unknown state and the
+the first read that failed and its retry, a refresh failure that keeps the rows, the reload token,
+and the two overlapping-read cases — a superseded read answering last with the pre-upload list, and
+one failing after the newer read succeeded — neither of which may change the rows, the error or the
+refresh), `reimbursement-import-job-display.spec.ts` (the wording, the badges, the unknown state and the
 running rule), `import.service.spec.ts` (the three routes and the multipart body),
 `app.routes.spec.ts` (the three guards, the capability driven rather than counted, and
 `/admin/imports` still resolving to its own page), `navigation.spec.ts` (the entry, its order, the
 shared key off and on for a member and for the administrator, the provider-hidden rule and the
 catalogue alignment), `breadcrumb-routes.spec.ts` (the three-item trail and the parent chain itself
 over fixture entries) and `admin-imports.component.spec.ts` (the replaced card, and that the page runs
-no reimbursement import of its own any more).
+no reimbursement import of its own any more). The rendered half is
+`e2e/visual/reimbursement-report.visual.ts`, described under **Phone width** above.
 
 **Out of scope**, as #1152 states: any backend change, cancelling or deleting a job, notifications,
 and any change to the Nayax sales upload, the timestamp repair or #1148's catalogue.

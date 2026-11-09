@@ -184,6 +184,9 @@ export class ReimbursementImportJobsComponent implements OnInit, OnChanges, OnDe
 
   private refresh?: Subscription;
 
+  /** The one list read that may still change the screen. See {@link load}. */
+  private listRequest?: Subscription;
+
   private readonly destroying$ = new Subject<void>();
 
   constructor(private readonly imports: ImportService) {}
@@ -258,11 +261,23 @@ export class ReimbursementImportJobsComponent implements OnInit, OnChanges, OnDe
       });
   }
 
+  /**
+   * Reads the list, and makes that read the only one that may still change the screen.
+   *
+   * <p>Reads overlap: an accepted upload reloads immediately while an arrival read or a refresh is
+   * still in flight. Whichever was asked for first can answer last, and an answer older than the
+   * upload does not know about the job it accepted - so left alone it would put the pre-upload list
+   * back, take the queued job off screen and, finding nothing running, stop the refresh that was
+   * following it. Cancelling the superseded read ends that: it is unsubscribed before the new one is
+   * made, so its answer and its failure both reach nobody, and the list, the error and the refresh
+   * schedule can only be set by the newest read.</p>
+   */
   private load(): void {
     this.refresh?.unsubscribe();
     this.refresh = undefined;
+    this.listRequest?.unsubscribe();
 
-    this.imports
+    this.listRequest = this.imports
       .reimbursementReportJobs()
       .pipe(takeUntil(this.destroying$))
       .subscribe({
