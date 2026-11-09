@@ -16,7 +16,7 @@
     </div>
     <div class="card-body">
       @if (loading) {
-        <p data-testid="loading" class="text-sm value-muted" role="status">Reading the stored settings…</p>
+        <output data-testid="loading" class="block text-sm value-muted">Reading the stored settings…</output>
       } @else if (loadFailed) {
         <!--
           Nothing is listed when the catalogue could not be read: there is no state to switch from, so
