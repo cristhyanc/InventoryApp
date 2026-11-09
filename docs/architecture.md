@@ -8335,7 +8335,7 @@ publish the window's business dates; that is a backend change outside issue #112
 
 **The API contract (breaking, as issue #792 permits).** `ProductResponse` no longer carries `unitPrice`, and neither does the product snapshot nested in a purchase line, a supplier-order line or a machine slot — removed, never sent as `null`. `ProductCreateDto`/`ProductUpdateDto` bind none either, so a submitted `unitPrice` is simply not bound and nothing is stored for it; `initialUnitCost` on the create is a cost and is unaffected. `ProductCataloguePolicy` is down to one invariant, that a product has a name, and `ProductCataloguePolicy.NegativeUnitPriceMessage` is gone with the bound it expressed.
 
-**The UI.** The product form has no Unit Price input; All Products, Needs Ordering and the Dashboard's Reorder Alerts have no Price column or price sort; and the Stock History page's product summary is three tiles rather than four. The stock movement table's own unit-cost and cost-impact columns, the purchase and supplier-order prices and the machine pages' live prices are all untouched.
+**The UI.** The product form has no Unit Price input; All Products, Needs Ordering and the Dashboard's Reorder Alerts have no Price column or price sort; and the Stock History page's product summary shows no price (three tiles then; one compact summary since issue #1156). The stock movement table's own unit-cost and cost-impact columns, the purchase and supplier-order prices and the machine pages' live prices are all untouched.
 
 **The catalogue review proposes no price** (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). The Nayax `ProductDefaultRetailPrice` is not read, a review entry records no provider price, a created row is initialised without one, and a submitted selling-price decision is refused outright rather than dropped. A review **stored** before this change still carries the provider prices it meant to negotiate, so it is refused whole as stale — `ApplyCatalogueReview.StaleSellingPriceReviewMessage`, decided on the authoritative row inside the apply's own transaction and before anything is staged — and the operator starts a fresh one.
 
@@ -12887,6 +12887,44 @@ experience filtered to that product, with its adjustment form. The former
 list still has its movements listed, but no adjustment form, because an adjustment needs a product
 the catalogue can resolve.
 
+**The page layout: a responsive ledger with an Adjust stock panel (issue #1156).** The page is laid
+out on the Products list's `rr` scale and changes no request, rule or contract above:
+
+- **Header and summary.** Back to Products, the Stock history heading with its newest-first and
+  business time zone note, and **Adjust stock**, offered only while the selected product is one the
+  catalogue resolved. A compact summary shows that product's name, its current storage stock and low
+  stock threshold in **units**, and its unit label as the **pack size**, kept apart from every
+  quantity. Current stock is read from the product list, not from the filtered history, so a date or
+  other filter never changes it; a recorded `0` is shown as `0` and only an absent value as `—`.
+- **Toolbar and filters.** Product and the business-day date range sit in a compact toolbar; Reason,
+  Machine and Source are under **More filters**, an in-page disclosure (not a popover), so its
+  selects keep their ids and labels. A filter applies as soon as it changes, from page 1, with the
+  same `GET /api/stock-history` parameters and defaults the former Apply filters button sent. Applied
+  More filters are listed as removable chips with a count on the toggle, and **Reset filters**
+  clears every filter but keeps the page size. **Rows per page** (25, 50, 100, 200, still capped by
+  the server) moved to the shared `ListPaginationComponent` under the results, mapped onto the
+  server's one-based page.
+- **Ledger.** From `md` a table of Date and time, Product (left out when the page shown was read
+  for one product), Change (signed, `+12` / `−3`), Stock after, Reason, Source and Machine, with
+  quantities right-aligned and times through `BusinessDateTimePipe`. Below `md` the same page of
+  movements renders as cards: change and reason first, then date and time, stock after, source, the
+  machine where one was recorded and the product while several are listed. Each movement's **unit
+  cost, eat-before date and notes** are behind its own Details disclosure (`aria-expanded`/
+  `aria-controls`), collapsed again whenever another page is read. Unit cost stays visible to every
+  role that may open the page, as before; `inventoryValueAfter` is still not shown.
+- **Adjust stock panel.** `StockAdjustmentPanelComponent` (a dedicated feature component, so the
+  routed page authors no dialog markup) is a native modal `<dialog>`: a drawer on the right from
+  `md`, full screen below it, over the ledger, whose selection, filters and page stay in place behind
+  it. It names the product and its current stock and hosts `StockAdjustmentFormComponent` with its
+  existing fields, options and validation, plus Cancel. Focus moves to Quantity change on open and
+  back to Adjust stock on close; Escape, the backdrop, Close and Cancel are all refused while an
+  adjustment is saving, and the form ignores a second Apply while the first is in flight. A failed
+  save keeps everything entered and shows the server's message. Since this issue the **Machine field
+  is enabled only for Machine refill**: changing the reason away from it drops the chosen machine,
+  and the form never submits a machine with another reason. After a successful save the panel
+  closes, a status message is announced, and the product list and the history are re-read with the
+  filters unchanged, so a new movement outside them stays outside the results.
+
 Tenant isolation is the central query filter's, as everywhere else: the query adds no `BusinessId`
 predicate of its own, and `EfStockHistoryQueryTests` proves with two synthetic businesses (plus an
 unresolved caller) that neither the rows, the total count, nor an explicit request for another
@@ -13945,7 +13983,7 @@ number (it publishes `isProviderNamed`, the fact), so there is none to show and 
 
 | Surface | What it lists |
 | --- | --- |
-| Stock adjustment form (a new movement) | the **active** machines |
+| Stock adjustment form (a new movement) | the **active** machines, enabled only for a Machine refill since [issue #1156](#global-stock-history-issue-384) |
 | New expense | the **active** machines |
 | Expense being edited | the active machines **plus the machine that expense already names**, deactivated or not |
 | Stock History machine filter | **every** recorded machine, deactivated included |

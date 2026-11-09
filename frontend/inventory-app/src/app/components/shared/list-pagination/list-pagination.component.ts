@@ -21,7 +21,7 @@ import { pageCount, pageRange } from './paging';
           <span class="font-semibold text-rr-navy">{{ totalItems }}</span> {{ itemLabel }}
         </p>
         <label class="flex items-center gap-2">
-          <span>Per page</span>
+          <span>{{ sizeLabel }}</span>
           <select
             class="min-h-10 w-auto rounded-lg border border-rr-line bg-white px-2 text-sm text-rr-navy"
             data-testid="list-pagination-size"
@@ -61,6 +61,8 @@ export class ListPaginationComponent {
   @Input({ required: true }) pageSizeOptions: readonly number[] = [];
   /** The plural noun the range names, e.g. `products`. */
   @Input() itemLabel = 'items';
+  /** The page-size selector's visible label, e.g. `Rows per page` on Stock History (issue #1156). */
+  @Input() sizeLabel = 'Per page';
 
   @Output() readonly pageIndexChange = new EventEmitter<number>();
   @Output() readonly pageSizeChange = new EventEmitter<number>();

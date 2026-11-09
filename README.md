@@ -2793,7 +2793,7 @@ its stored values are gone.
 
 - The **product form** has no Unit Price input. The **All Products** and **Needs Ordering** pages
   have no Price column or price sort, the home dashboard's **Reorder Alerts** table has no Unit
-  Price column, and the **Stock History** page's product summary shows three tiles instead of four.
+  Price column, and the **Stock History** page's product summary shows no price (since issue #1156 it is one compact summary of current stock, low stock threshold and unit label).
 - **Import products** (Products → Import products) no longer asks you to keep or take a Nayax price. Linking a
   product still replaces its **name and category** with the provider's, and those changes are still
   listed as applied automatically; there is simply no price to decide about any more.
@@ -3330,6 +3330,23 @@ machine list there was came from the fleet read.
   no error.
 - **Read-only support sessions are unchanged.** Every write control on these screens is still hidden
   or disabled in a support session, exactly as before.
+- **Only a Machine refill names a machine (issue #1156).** On Stock History's **Adjust stock** panel
+  the Machine field is enabled only when the reason is **Machine refill**. Choosing another reason
+  clears a machine you had picked, so a Restock, Sale, Damaged, Expired or Correction movement is
+  recorded without one. Movements already recorded against a machine keep it.
+
+#### Stock History layout (issue #1156)
+
+Stock History opens on the movements themselves. A compact summary of the selected product shows its
+current stock and low stock threshold in units and its unit label (pack size); current stock is the
+product's storage stock now, whatever dates are filtered. The toolbar holds **Product** and the
+**date range**, with **Reason**, **Machine** and **Source** under **More filters**; each filter applies
+as soon as you change it, applied More filters are listed as chips you can remove, and **Reset
+filters** clears them all. **Rows per page** is with the pager under the results. On a wide screen the
+movements are a table (the Product column is left out when one product is selected); on a phone they
+are cards, change and reason first. **Details** on a movement shows its unit cost, eat-before date and
+notes. **Adjust stock** opens a panel on the right (full screen on a phone) over the same list, and
+after you apply an adjustment the stock and the list are refreshed with your filters kept.
 
 #### Recording a pick without a provider
 
