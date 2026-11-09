@@ -39,6 +39,21 @@ namespace InventoryApi.DTOs;
 /// the entry from the members it was switched off for, <see langword="true"/> restores it only to
 /// members whose capabilities already allowed it, and the classification endpoints keep authorizing
 /// every request by <c>Data.Repair</c> either way.
+///
+/// <para><strong>Kept for the rollout, and derived (issue #1148).</strong> It is now exactly
+/// <c>admin.historical-gst-classification</c>'s own state - the absence of that key from
+/// <paramref name="MenuVisibility"/>'s switched-off list - so a client that reads either field reads
+/// the same answer. The API deploys before the frontend, which is why this field stays; removing it
+/// is a later issue.</para>
+/// </param>
+/// <param name="MenuVisibility">
+/// Which switchable Admin destinations the application currently offers (issue #1148), as the list
+/// of catalogue keys that are switched off. Always present, never omitted, and empty in the state
+/// every installation is in until a Super Admin switches something; see
+/// <see cref="MeMenuVisibilityResponse"/>. It is reported beside the capability set for the reason
+/// the single boolean above was: the shell builds one menu from one read. It is deliberately not a
+/// capability and implies none - the capability list is byte-for-byte identical whatever the
+/// switches say.
 /// </param>
 /// <param name="Entitlement">
 /// What the business has <em>bought</em> (issue #966): the effective plan, or - in the shipped state -
@@ -53,7 +68,29 @@ public sealed record MeAccessResponse(
     string TimeZoneId,
     MeSupportSessionResponse? SupportSession,
     bool HistoricalGstClassificationVisible,
-    MeEntitlementResponse Entitlement);
+    MeEntitlementResponse Entitlement,
+    MeMenuVisibilityResponse MenuVisibility);
+
+/// <summary>
+/// Which switchable Admin destinations are switched off, as <c>GET /api/me/access</c> reports them
+/// (issue #1148).
+///
+/// <para><strong>It names what is <em>off</em>, and nothing else.</strong> Every other catalogue key
+/// is offered, so an installation that has never switched anything reports an empty list and no
+/// client has to recognise seven keys to learn that nothing changed. The catalogue itself - the keys
+/// that exist and their labels - is the Super Admin surface's answer
+/// (<c>GET /api/super-admin/menu-visibility</c>) and is deliberately not published here: a member
+/// has no use for the name of a destination they are not being offered.</para>
+///
+/// <para>It carries nothing about this caller, their business or their role: these are shared
+/// application-wide settings, reported identically to everybody, and a Super Admin keeps every
+/// destination whatever this says. <strong>It is visibility only</strong> - every destination's
+/// endpoints keep their own capability, plan and provider checks in both states.</para>
+/// </summary>
+/// <param name="SwitchedOffKeys">
+/// The catalogue keys that are switched off, in catalogue order, and empty when none is.
+/// </param>
+public sealed record MeMenuVisibilityResponse(IReadOnlyList<string> SwitchedOffKeys);
 
 /// <summary>
 /// The business's plan entitlement, as <c>GET /api/me/access</c> reports it (issue #966).

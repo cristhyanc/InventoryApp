@@ -1,4 +1,5 @@
 using Inventory.Application.Attachments;
+using Inventory.Application.PlatformOptions;
 using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Tenancy;
 
@@ -35,19 +36,20 @@ namespace Inventory.Application.Access;
 /// which is every request today's UI makes. It is what lets a client show, unmistakably, that the
 /// data on screen belongs to somebody else and that nothing on it can be changed.
 /// </param>
-/// <param name="HistoricalGstClassificationVisible">
-/// Whether the application currently <em>offers</em> Historical GST Classification to anybody but a
-/// Super Admin (issue #873), from
-/// <see cref="Inventory.Application.PlatformOptions.GetOptionVisibility"/>. It is a shared
+/// <param name="MenuVisibility">
+/// Which switchable Admin destinations the application currently <em>offers</em> to anybody but a
+/// Super Admin (issue #1148, widening issue #873's single named option), from
+/// <see cref="Inventory.Application.PlatformOptions.GetMenuVisibility"/>. It is a shared
 /// application-wide setting rather than anything about this caller, and it is reported here because
-/// this is the one answer the shell builds its menu from - an option the application has switched
-/// off has to stop being offered in the same read that says what the member may do.
+/// this is the one answer the shell builds its menu from - a destination the application has
+/// switched off has to stop being offered in the same read that says what the member may do.
 ///
 /// <para><strong>It is not a capability and never implies one.</strong>
-/// <see cref="Capabilities"/> is unchanged by it in both states: <see langword="false"/> hides an
-/// entry from the people it was switched off for and revokes nothing, and <see langword="true"/>
-/// restores it only to a member whose capabilities already allowed it. The classification
-/// endpoints keep authorizing every request by <c>Data.Repair</c> whatever this says.</para>
+/// <see cref="Capabilities"/> is unchanged by it whatever the switches say: a switched-off
+/// destination is hidden from the people it was switched off for and nothing is revoked, and
+/// switching one back on restores it only to a member whose capabilities already allowed it. Every
+/// destination's endpoints keep authorizing each request by their own capability, plan and provider
+/// rules whatever this says.</para>
 /// </param>
 /// <param name="Entitlement">
 /// What the business this request acts in has <em>bought</em> (issue #966), from
@@ -86,7 +88,7 @@ public sealed record CurrentAccess(
     string BusinessName,
     string TimeZoneId,
     CurrentSupportSession? SupportSession,
-    bool HistoricalGstClassificationVisible,
+    MenuVisibility MenuVisibility,
     EffectiveEntitlement Entitlement,
     AttachmentStorageStatus? AttachmentStorage);
 

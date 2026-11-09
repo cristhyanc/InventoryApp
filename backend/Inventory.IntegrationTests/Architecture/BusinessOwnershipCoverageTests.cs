@@ -147,13 +147,25 @@ public class BusinessOwnershipCoverageTests
     /// and the per-request read of the completion marker is bounded to that one marker. See
     /// docs/architecture.md § Business subscriptions and plan entitlements.</para>
     ///
+    /// <para><see cref="PlatformMenuVisibility"/> is the twelfth, and the reviewed ownership decision
+    /// on issue #1148, whose own "Storage" criterion declares an additive platform table holding one
+    /// row per switched menu destination. The structural reason is
+    /// <see cref="PlatformOptionVisibility"/>'s, unchanged by there being seven switchable
+    /// destinations instead of one: whether a destination is offered is a single shared
+    /// application-wide answer, so there is no business whose key a row could carry and no filter a
+    /// business could match it by. One row per key, one boolean, and nothing about anybody's data.
+    /// The single-row table it supersedes stays declared above: it is left in place by that issue and
+    /// is no longer written. See docs/architecture.md § Switchable Admin menu visibility.</para>
+    ///
     /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
     /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
     /// by the ownership mechanism, because there is no ownership here to enforce. <strong>Reading has
-    /// two documented exceptions, each reviewed on its own issue.</strong> Issue #873's one boolean:
-    /// <c>GET /api/me/access</c> publishes it to every member, because an option the application
-    /// switched off has to stop being offered to the people it was switched off for, and that read
-    /// reaches one column and nothing else. And issue #935's "Available to add" suppliers:
+    /// two documented exceptions, each reviewed on its own issue.</strong> Issue #873's one boolean,
+    /// widened by issue #1148 to the keys that are switched off: <c>GET /api/me/access</c> publishes
+    /// them to every member, because a destination the application switched off has to stop being
+    /// offered to the people it was switched off for, and that read reaches those rows and nothing
+    /// else - no label, no instant and nothing about any business. And issue #935's "Available to
+    /// add" suppliers:
     /// <c>GET /api/suppliers/available-presets</c> publishes the id, name and website of the enabled
     /// <see cref="SupplierPreset"/> rows that serve the caller's own business's state and that it
     /// holds no copy of, so a record the platform added later is offered to a business rather than
@@ -175,6 +187,7 @@ public class BusinessOwnershipCoverageTests
         typeof(PriceCollectorResultRow),
         typeof(SupplierListingPendingObservation),
         typeof(SubscriptionGrandfathering),
+        typeof(PlatformMenuVisibility),
     ];
 
     /// <summary>
@@ -199,18 +212,20 @@ public class BusinessOwnershipCoverageTests
 
     /// <summary>
     /// The platform list is closed in the same way and for the same reason: a table claiming to be
-    /// about no business is a tenancy decision, not an implementation detail. There are eleven, each
+    /// about no business is a tenancy decision, not an implementation detail. There are twelve, each
     /// added by its own reviewed issue - the supplier presets (#848), the option-visibility setting
     /// (#873), the shared price catalogue's master products, supplier listings and match suggestions
     /// (#923), the collector runs and observed prices of #925, the collector work items of #924, the
-    /// submitted result rows and held readings of #937, and the subscription grandfathering record of
-    /// #966 - and a twelfth one arriving is the change this assertion exists to make visible.
+    /// submitted result rows and held readings of #937, the subscription grandfathering record of
+    /// #966, and the keyed menu visibility of #1148 - and a thirteenth one arriving is the change
+    /// this assertion exists to make visible.
     /// </summary>
     [Fact]
-    public void Exactly_eleven_entities_are_declared_platform_tables() =>
+    public void Exactly_twelve_entities_are_declared_platform_tables() =>
         Assert.Equal(
             [
                 "MasterProduct",
+                "PlatformMenuVisibility",
                 "PlatformOptionVisibility",
                 "PriceCollectorResultRow",
                 "PriceCollectorRun",
