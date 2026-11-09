@@ -7,9 +7,9 @@ using Xunit;
 namespace InventoryApi.Tests.Controllers;
 
 /// <summary>
-/// The switchable Admin menu destinations over real HTTP (issue #1148): who may list and change
-/// them, what they default to, what every member is told, what an unknown key does, and what a
-/// refused write leaves behind.
+/// The switchable menu destinations over real HTTP (issue #1148, and the Reports group of issue
+/// #1153): who may list and change them, what they default to, what every member is told, what an
+/// unknown key does, and what a refused write leaves behind.
 ///
 /// <para>Everything here goes through the complete pipeline - authentication, <c>[Authorize]</c>,
 /// the platform-admin policy, <c>[RequiredScope]</c>, <c>RolePreviewMiddleware</c>,
@@ -32,6 +32,7 @@ public class SuperAdminMenuVisibilityApiTests
     private const string MenuVisibilityUrl = "/api/super-admin/menu-visibility";
     private const string AccessUrl = "/api/me/access";
     private const string PreviewUrl = "/api/admin/historical-gst-classification/preview";
+    private const string BookkeepingReportUrl = "/api/reports/bookkeeping";
 
     private readonly SuperAdminBusinessesApiFactory _factory;
 
@@ -49,8 +50,8 @@ public class SuperAdminMenuVisibilityApiTests
     public Task DisposeAsync() => Task.CompletedTask;
 
     /// <summary>
-    /// The read is the whole catalogue, labelled, whether a key's state was stored or defaulted -
-    /// which in the shipped state is all seven defaulted, with no stored row at all.
+    /// The read is the whole catalogue, grouped and labelled, whether a key's state was stored or
+    /// defaulted - which in the shipped state is all fifteen defaulted, with no stored row at all.
     /// </summary>
     [Fact]
     public async Task The_administrator_is_answered_the_whole_catalogue_with_every_key_offered()
@@ -71,6 +72,68 @@ public class SuperAdminMenuVisibilityApiTests
         Assert.All(options, option => Assert.True(option.Visible));
         // And nothing was written to answer the read.
         Assert.Empty(await _factory.MenuVisibilityRowsAsync());
+    }
+
+    /// <summary>
+    /// The eight Reports keys of issue #1153 are reported with their group, beside the Admin ones and
+    /// before them, which is what the Super Admin page renders its two sections from.
+    /// </summary>
+    [Fact]
+    public async Task The_reports_keys_are_reported_with_their_group_above_the_admin_ones()
+    {
+        var options = await ReadOptionsAsync(await _factory.AsAdministrator().GetAsync(MenuVisibilityUrl));
+
+        Assert.Equal(
+            MenuVisibilityCatalogue.Options.Select(option => (option.Key, option.Group)),
+            options.Select(option => (option.Key, option.Group)));
+        Assert.Equal(
+            [
+                (MenuVisibilityKeys.ReportsBookkeeping, "Reports", "Bookkeeping"),
+                (MenuVisibilityKeys.ReportsDaily, "Reports", "Daily"),
+                (MenuVisibilityKeys.ReportsTransactions, "Reports", "Transactions"),
+                (MenuVisibilityKeys.ReportsReconciliation, "Reports", "Reconciliation"),
+                (MenuVisibilityKeys.ReportsMachines, "Reports", "Machines"),
+                (MenuVisibilityKeys.ReportsProducts, "Reports", "Products"),
+                (MenuVisibilityKeys.ReportsSiteCommissions, "Reports", "Site Commissions"),
+                (MenuVisibilityKeys.ReportsGst, "Reports", "GST"),
+            ],
+            options.Take(8).Select(option => (option.Key, option.Group, option.Label)).ToArray());
+        Assert.All(options.Skip(8), option => Assert.Equal("Admin", option.Group));
+    }
+
+    /// <summary>
+    /// Each Reports destination is switched by the administrator exactly as an Admin one is - the
+    /// same authorization, the same per-key row and the same answer to every member - and switching
+    /// one report off leaves the other seven offered.
+    /// </summary>
+    [Theory]
+    [InlineData(MenuVisibilityKeys.ReportsBookkeeping)]
+    [InlineData(MenuVisibilityKeys.ReportsDaily)]
+    [InlineData(MenuVisibilityKeys.ReportsTransactions)]
+    [InlineData(MenuVisibilityKeys.ReportsReconciliation)]
+    [InlineData(MenuVisibilityKeys.ReportsMachines)]
+    [InlineData(MenuVisibilityKeys.ReportsProducts)]
+    [InlineData(MenuVisibilityKeys.ReportsSiteCommissions)]
+    [InlineData(MenuVisibilityKeys.ReportsGst)]
+    public async Task The_administrator_switches_one_report_off_and_every_member_is_told_about_that_one(string key)
+    {
+        var off = await PutAsync(_factory.AsAdministrator(), key, visible: false);
+
+        Assert.Equal(HttpStatusCode.OK, off.StatusCode);
+        var stored = await ReadOptionAsync(off);
+        Assert.Equal(key, stored.Key);
+        Assert.Equal("Reports", stored.Group);
+        Assert.False(stored.Visible);
+        var row = Assert.Single(await _factory.MenuVisibilityRowsAsync());
+        Assert.Equal(key, row.Key);
+        Assert.False(row.Visible);
+        Assert.Equal([key], await SwitchedOffKeysAsync());
+
+        var on = await PutAsync(_factory.AsAdministrator(), key, visible: true);
+
+        Assert.Equal(HttpStatusCode.OK, on.StatusCode);
+        Assert.True((await ReadOptionAsync(on)).Visible);
+        Assert.Empty(await SwitchedOffKeysAsync());
     }
 
     /// <summary>
@@ -188,6 +251,14 @@ public class SuperAdminMenuVisibilityApiTests
             visible: false);
 
         Assert.Equal(HttpStatusCode.Forbidden, write.StatusCode);
+
+        // And a Reports key is the same surface, with nothing of its own: the same refusal (#1153).
+        var report = await PutAsync(
+            _factory.Authenticated(objectId),
+            MenuVisibilityKeys.ReportsBookkeeping,
+            visible: false);
+
+        Assert.Equal(HttpStatusCode.Forbidden, report.StatusCode);
         Assert.Empty(await _factory.MenuVisibilityRowsAsync());
         Assert.Empty(await SwitchedOffKeysAsync());
     }
@@ -297,6 +368,10 @@ public class SuperAdminMenuVisibilityApiTests
         var write = await PutAsync(client, MenuVisibilityKeys.Imports, visible: false);
 
         Assert.Equal(HttpStatusCode.Forbidden, write.StatusCode);
+
+        var report = await PutAsync(client, MenuVisibilityKeys.ReportsDaily, visible: false);
+
+        Assert.Equal(HttpStatusCode.Forbidden, report.StatusCode);
         Assert.Empty(await _factory.MenuVisibilityRowsAsync());
     }
 
@@ -366,6 +441,36 @@ public class SuperAdminMenuVisibilityApiTests
         var preview = await owner.PostAsync(PreviewUrl, content: null);
 
         Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+    }
+
+    /// <summary>
+    /// The same criterion for a report (issue #1153): a switched-off report's own endpoint answers
+    /// the Owner exactly what it answered before, with its capability, plan and provider checks
+    /// untouched. The answer is compared with the one from before the switch rather than asserted as
+    /// a fixed status, because what those checks decide is this business's business - the point is
+    /// that the switch decides none of it.
+    /// </summary>
+    [Fact]
+    public async Task Switching_a_report_off_does_not_change_what_its_endpoint_answers()
+    {
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        var before = await owner.GetAsync(BookkeepingReportUrl);
+
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await PutAsync(
+                _factory.AsAdministrator(),
+                MenuVisibilityKeys.ReportsBookkeeping,
+                visible: false)).StatusCode);
+
+        var after = await _factory
+            .Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId)
+            .GetAsync(BookkeepingReportUrl);
+
+        Assert.Equal(before.StatusCode, after.StatusCode);
+        Assert.Equal(
+            await before.Content.ReadAsStringAsync(),
+            await after.Content.ReadAsStringAsync());
     }
 
     /// <summary>
@@ -478,8 +583,9 @@ public class SuperAdminMenuVisibilityApiTests
     private static Option Read(JsonElement option) =>
         new(
             option.GetProperty("key").GetString()!,
+            option.GetProperty("group").GetString()!,
             option.GetProperty("label").GetString()!,
             option.GetProperty("visible").GetBoolean());
 
-    private sealed record Option(string Key, string Label, bool Visible);
+    private sealed record Option(string Key, string Group, string Label, bool Visible);
 }

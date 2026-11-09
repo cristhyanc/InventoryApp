@@ -10,12 +10,13 @@ namespace Inventory.Application.PlatformOptions;
 /// which it was.
 /// </summary>
 /// <param name="Key">The destination's catalogue key.</param>
+/// <param name="Group">Its menu group, from the catalogue (issue #1153).</param>
 /// <param name="Label">Its display label, from the catalogue.</param>
 /// <param name="Visible">
 /// Whether it is offered to members who are not the platform administrator. A Super Admin keeps
 /// every destination in both states.
 /// </param>
-public sealed record MenuVisibilityOptionState(string Key, string Label, bool Visible);
+public sealed record MenuVisibilityOptionState(string Key, string Group, string Label, bool Visible);
 
 /// <summary>
 /// What the application currently offers, destination by destination (issue #1148).
@@ -83,6 +84,7 @@ public sealed class GetMenuVisibility
         return new MenuVisibility(
             [.. MenuVisibilityCatalogue.Options.Select(option => new MenuVisibilityOptionState(
                 option.Key,
+                option.Group,
                 option.Label,
                 !switchedOff.Contains(option.Key)))]);
     }
@@ -162,6 +164,6 @@ public sealed class SetMenuVisibility
             stored,
             updatedAtUtc));
 
-        return new MenuVisibilityOptionState(option.Key, option.Label, stored);
+        return new MenuVisibilityOptionState(option.Key, option.Group, option.Label, stored);
     }
 }

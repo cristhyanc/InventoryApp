@@ -43,6 +43,57 @@ public class MenuVisibilityTests
     }
 
     /// <summary>
+    /// Every answered destination carries the menu group the catalogue put it in (issue #1153), so
+    /// the Super Admin surface renders its Reports and Admin sections from the server's own answer
+    /// rather than from a second copy of the grouping.
+    /// </summary>
+    [Fact]
+    public async Task Every_answered_destination_carries_its_catalogue_group()
+    {
+        var visibility = await new GetMenuVisibility(new FakeMenuVisibilityStore())
+            .Handle(CancellationToken.None);
+
+        Assert.Equal(
+            MenuVisibilityCatalogue.Options.Select(option => (option.Key, option.Group, option.Label)),
+            visibility.Options.Select(option => (option.Key, option.Group, option.Label)));
+    }
+
+    /// <summary>
+    /// Each of the eight Reports destinations (issue #1153) behaves exactly as an Admin one does: it
+    /// defaults to On with nothing stored, one switch stores and audits that one key, and the shared
+    /// answer then names it as switched off. Every key is asserted individually, because a key that
+    /// was declared but could not be operated would be a switch nobody can use.
+    /// </summary>
+    [Theory]
+    [InlineData(MenuVisibilityKeys.ReportsBookkeeping)]
+    [InlineData(MenuVisibilityKeys.ReportsDaily)]
+    [InlineData(MenuVisibilityKeys.ReportsTransactions)]
+    [InlineData(MenuVisibilityKeys.ReportsReconciliation)]
+    [InlineData(MenuVisibilityKeys.ReportsMachines)]
+    [InlineData(MenuVisibilityKeys.ReportsProducts)]
+    [InlineData(MenuVisibilityKeys.ReportsSiteCommissions)]
+    [InlineData(MenuVisibilityKeys.ReportsGst)]
+    public async Task A_reports_destination_defaults_to_offered_and_is_switched_like_any_other(string key)
+    {
+        var store = new FakeMenuVisibilityStore();
+        var audit = new FakeMenuVisibilityAudit();
+
+        Assert.True((await new GetMenuVisibility(store).Handle(CancellationToken.None)).IsVisible(key));
+
+        var stored = await Switch(store, audit).Handle(key, visible: false, CancellationToken.None);
+
+        Assert.NotNull(stored);
+        Assert.Equal(key, stored.Key);
+        Assert.Equal(MenuVisibilityGroups.Reports, stored.Group);
+        Assert.False(stored.Visible);
+        Assert.Equal(new StoredMenuVisibility(key, false), Assert.Single(store.Writes));
+        Assert.Equal(key, Assert.Single(audit.Entries).Key);
+        Assert.Equal(
+            [key],
+            (await new GetMenuVisibility(store).Handle(CancellationToken.None)).SwitchedOffKeys);
+    }
+
+    /// <summary>
     /// A stored answer is reported as it is, in both directions, and only for the key it was stored
     /// for: switching one destination off leaves every other one offered.
     /// </summary>

@@ -1,7 +1,7 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { Subject, catchError, of, take, takeUntil } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
-import { adminEntriesWithVisibilityKey } from '../../../layout/navigation';
+import { entriesWithVisibilityKey } from '../../../layout/navigation';
 import { MenuVisibilityOption, MenuVisibilityService } from '../../../services/menu-visibility.service';
 
 /**
@@ -24,24 +24,40 @@ export interface MenuVisibilityRow {
 
   /**
    * The other declared menu entries this one switch also covers (issue #1151), read from
-   * `adminEntriesWithVisibilityKey`. Empty for a key one entry declares, which is every key today;
+   * `entriesWithVisibilityKey`. Empty for a key one entry declares, which is every key today;
    * the Reimbursement Report of #1152 declares `admin.imports` and appears here with it.
    */
   readonly alsoCovers: readonly string[];
 }
 
 /**
- * The Super Admin **Menu Visibility** page (issue #1151): every switchable Admin destination, the
- * state each one is in, and the one control that switches it for everybody but a Super Admin.
+ * One menu group as this page lists it (issue #1153): the group's own heading, and the rows under it
+ * in the order the server reported them.
+ *
+ * The grouping is **the server's answer**, not a decision here: the catalogue reports each
+ * destination's group and reports them grouped, so the sections are the groups in the order they
+ * first appear - `Reports` above `Admin` - and a group the catalogue adds later needs no change here.
+ */
+export interface MenuVisibilitySection {
+  readonly group: string;
+  readonly rows: MenuVisibilityRow[];
+}
+
+/**
+ * The Super Admin **Menu Visibility** page (issues #1151 and #1153): every switchable destination -
+ * the business Reports above the Admin maintenance tools - the state each one is in, and the one
+ * control that switches it for everybody but a Super Admin.
  *
  * **It is the only place these switches are managed.** Issue #873 put one switch on the Admin hub
  * beside one card; the hub now only renders the result, and the switch for all of them - including
  * Historical GST Classification, whose saved state is unchanged - is here.
  *
- * **The catalogue is the server's answer, not a copy of it.** The keys, their labels and their order
- * come from `GET /api/super-admin/menu-visibility`, so every declared destination is listed whatever
- * this business's plan, provider or capabilities are: the setting is the platform's, about no
- * business, and this page reads nothing of one. Integrations, Users, Roles and Business Settings are
+ * **The catalogue is the server's answer, not a copy of it.** The keys, their groups, their labels
+ * and their order come from `GET /api/super-admin/menu-visibility`, so every declared destination is
+ * listed whatever this business's plan, provider or capabilities are: the setting is the platform's,
+ * about no business, and this page reads nothing of one. A report locked by this business's plan or
+ * its Nayax connection is listed here exactly like any other, because what is being switched is
+ * whether the destination is offered at all. Integrations, Users, Roles and Business Settings are
  * never in that catalogue (the owner's decision of 9 November 2026) and so are never listed or
  * hidden here.
  *
@@ -65,8 +81,8 @@ export interface MenuVisibilityRow {
   templateUrl: './super-admin-menu-visibility.component.html'
 })
 export class SuperAdminMenuVisibilityComponent implements OnInit, OnDestroy {
-  /** Starts empty: no row is shown before the catalogue has been read. */
-  rows: MenuVisibilityRow[] = [];
+  /** Starts empty: no section and no row is shown before the catalogue has been read. */
+  sections: MenuVisibilitySection[] = [];
 
   /** True while the catalogue read has not answered. */
   loading = true;
@@ -156,20 +172,31 @@ export class SuperAdminMenuVisibilityComponent implements OnInit, OnDestroy {
         this.loading = false;
         if (catalogue === null) {
           this.loadFailed = true;
-          this.rows = [];
+          this.sections = [];
           return;
         }
 
-        this.rows = catalogue.options.map((option) => ({
-          key: option.key,
-          label: option.label,
-          visible: option.visible,
-          saving: false,
-          error: null,
-          alsoCovers: adminEntriesWithVisibilityKey(option.key)
-            .map((entry) => entry.label)
-            .filter((label) => label !== option.label)
-        }));
+        this.sections = catalogue.options.reduce<MenuVisibilitySection[]>((sections, option) => {
+          const row: MenuVisibilityRow = {
+            key: option.key,
+            label: option.label,
+            visible: option.visible,
+            saving: false,
+            error: null,
+            alsoCovers: entriesWithVisibilityKey(option.key)
+              .map((entry) => entry.label)
+              .filter((label) => label !== option.label)
+          };
+          // The server reports the catalogue grouped, so a group is a run of consecutive options and
+          // the sections come out in the order it listed them - Reports above Admin.
+          const current = sections[sections.length - 1];
+          if (current !== undefined && current.group === option.group) {
+            current.rows.push(row);
+            return sections;
+          }
+
+          return [...sections, { group: option.group, rows: [row] }];
+        }, []);
       });
   }
 }

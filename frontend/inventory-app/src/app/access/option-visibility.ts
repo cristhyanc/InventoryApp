@@ -1,6 +1,6 @@
 /**
- * Which switchable Admin menu destinations the application currently offers, as
- * `GET /api/me/access` reports it (issues #873, #1148 and #1151).
+ * Which switchable menu destinations the application currently offers, as `GET /api/me/access`
+ * reports it (issues #873, #1148, #1151 and #1153).
  *
  * The answer is a list of **keys that are switched off**, from the closed catalogue the server owns
  * (`Inventory.Application.PlatformOptions.MenuVisibilityCatalogue`). Issue #873 had exactly one
@@ -15,7 +15,8 @@
  * comes from the capability set beside it, and the endpoints behind each page authorize every request
  * themselves in both states (see docs/architecture.md § Switchable Admin menu visibility). A
  * switched-off destination therefore hides a page rather than protecting one, exactly as a hidden
- * menu entry always has.
+ * menu entry always has - and that is as true of the Reports group issue #1153 added as it is of the
+ * Admin one: a switched-off report keeps its capability, plan and provider rules exactly as they are.
  *
  * `undefined` wherever this type is accepted means the answer is **not known** - nothing has been
  * read, the read failed, or an API that does not report it answered - and then nothing is hidden and
@@ -33,16 +34,24 @@ export interface OptionVisibility {
 }
 
 /**
- * Every switchable destination's key, in the catalogue's own order - which is the Admin menu's order
- * and the order the Menu Visibility page lists them in.
+ * Every switchable destination's key, in the catalogue's own order - which is the menu's order,
+ * Reports above Admin, and the order the Menu Visibility page lists its sections and rows in.
  *
  * It is the frontend's copy of a **server-owned** catalogue, kept so that the declared menu entries
  * can be checked against it at build time (`layout/navigation.spec.ts`): a menu entry declaring a key
- * no catalogue row backs would be a switch nobody could ever operate. The page itself lists the keys
- * and labels the API reports, never this list, so a catalogue the server extends needs no change here
- * for the page to show it.
+ * no catalogue row backs would be a switch nobody could ever operate. The page itself lists the keys,
+ * groups and labels the API reports, never this list, so a catalogue the server extends needs no
+ * change here for the page to show it.
  */
 export const MENU_VISIBILITY_KEYS = [
+  'reports.bookkeeping',
+  'reports.daily',
+  'reports.transactions',
+  'reports.reconciliation',
+  'reports.machines',
+  'reports.products',
+  'reports.site-commissions',
+  'reports.gst',
   'admin.site-commission-agreements',
   'admin.imports',
   'admin.historical-cost-recovery',

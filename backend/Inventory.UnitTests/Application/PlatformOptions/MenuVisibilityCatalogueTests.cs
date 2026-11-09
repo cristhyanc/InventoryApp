@@ -4,7 +4,7 @@ using Xunit;
 namespace InventoryApi.Tests.Application.PlatformOptions;
 
 /// <summary>
-/// The closed catalogue of switchable menu destinations (issue #1148).
+/// The closed catalogue of switchable menu destinations (issues #1148 and #1153).
 ///
 /// <para>It is a <em>compiled</em> list rather than a feature-flag framework: a caller cannot invent
 /// a key, and which keys exist is a reviewed decision in one place. This file pins the list
@@ -15,14 +15,23 @@ namespace InventoryApi.Tests.Application.PlatformOptions;
 public class MenuVisibilityCatalogueTests
 {
     /// <summary>
-    /// The seven Admin keys of the acceptance criterion, in the order the Admin menu declares them.
-    /// Reports are deliberately absent (owner's decision, 9 November 2026, tracked in #1153), and so
-    /// are Integrations, Users, Roles and Business Settings, which are never switchable.
+    /// The eight Reports keys of issue #1153 and the seven Admin keys of issue #1148, in the order
+    /// the menu declares them - Reports above Admin, each group in its own menu order, which is the
+    /// order the Super Admin page lists its sections and rows in. Integrations, Users, Roles and
+    /// Business Settings are deliberately absent, being never switchable.
     /// </summary>
     [Fact]
-    public void The_catalogue_is_exactly_the_seven_switchable_admin_destinations() =>
+    public void The_catalogue_is_exactly_the_switchable_reports_and_admin_destinations() =>
         Assert.Equal(
             [
+                "reports.bookkeeping",
+                "reports.daily",
+                "reports.transactions",
+                "reports.reconciliation",
+                "reports.machines",
+                "reports.products",
+                "reports.site-commissions",
+                "reports.gst",
                 "admin.site-commission-agreements",
                 "admin.imports",
                 "admin.historical-cost-recovery",
@@ -38,6 +47,14 @@ public class MenuVisibilityCatalogueTests
     public void Every_key_carries_the_destinations_display_label() =>
         Assert.Equal(
             [
+                "Bookkeeping",
+                "Daily",
+                "Transactions",
+                "Reconciliation",
+                "Machines",
+                "Products",
+                "Site Commissions",
+                "GST",
                 "Site Commission Agreements",
                 "Imports",
                 "Historical Cost Recovery",
@@ -47,6 +64,40 @@ public class MenuVisibilityCatalogueTests
                 "Nayax Sale Timestamp Repair",
             ],
             MenuVisibilityCatalogue.Options.Select(option => option.Label).ToArray());
+
+    /// <summary>
+    /// Every key carries the menu group it belongs to (issue #1153), which is what
+    /// <c>GET /api/super-admin/menu-visibility</c> reports it under and what the Super Admin page
+    /// renders its sections from - Reports first, Admin second, each group contiguous, so the page
+    /// needs no second copy of either the grouping or its wording.
+    /// </summary>
+    [Fact]
+    public void Every_key_carries_its_menu_group_and_the_groups_are_contiguous()
+    {
+        Assert.Equal(
+            [
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Reports,
+                MenuVisibilityGroups.Admin,
+                MenuVisibilityGroups.Admin,
+                MenuVisibilityGroups.Admin,
+                MenuVisibilityGroups.Admin,
+                MenuVisibilityGroups.Admin,
+                MenuVisibilityGroups.Admin,
+                MenuVisibilityGroups.Admin,
+            ],
+            MenuVisibilityCatalogue.Options.Select(option => option.Group).ToArray());
+
+        Assert.Equal(
+            [MenuVisibilityGroups.Reports, MenuVisibilityGroups.Admin],
+            MenuVisibilityCatalogue.Options.Select(option => option.Group).Distinct(StringComparer.Ordinal).ToArray());
+    }
 
     /// <summary>
     /// The keys are unique. A duplicate would make one destination's state depend on which entry a
@@ -66,6 +117,14 @@ public class MenuVisibilityCatalogueTests
     public void The_constants_and_the_catalogue_are_the_same_list() =>
         Assert.Equal(
             [
+                MenuVisibilityKeys.ReportsBookkeeping,
+                MenuVisibilityKeys.ReportsDaily,
+                MenuVisibilityKeys.ReportsTransactions,
+                MenuVisibilityKeys.ReportsReconciliation,
+                MenuVisibilityKeys.ReportsMachines,
+                MenuVisibilityKeys.ReportsProducts,
+                MenuVisibilityKeys.ReportsSiteCommissions,
+                MenuVisibilityKeys.ReportsGst,
                 MenuVisibilityKeys.SiteCommissionAgreements,
                 MenuVisibilityKeys.Imports,
                 MenuVisibilityKeys.HistoricalCostRecovery,
@@ -77,29 +136,36 @@ public class MenuVisibilityCatalogueTests
             MenuVisibilityCatalogue.Options.Select(option => option.Key).ToArray());
 
     /// <summary>
-    /// The keys are namespaced by the menu group they belong to, which is the shape that lets the
+    /// Every key is namespaced by the menu group it belongs to, which is the shape that let the
     /// Reports group of #1153 arrive as <c>reports.*</c> keys with no storage change at all: the
     /// table is keyed by this string and knows nothing about groups.
     /// </summary>
     [Fact]
-    public void Every_key_is_namespaced_under_the_admin_group() =>
+    public void Every_key_is_namespaced_under_its_own_group() =>
         Assert.All(
             MenuVisibilityCatalogue.Options,
-            option => Assert.StartsWith("admin.", option.Key, StringComparison.Ordinal));
+            option => Assert.StartsWith(
+                $"{option.Group.ToLowerInvariant()}.",
+                option.Key,
+                StringComparison.Ordinal));
 
     /// <summary>A key the catalogue declares is found; anything else is not.</summary>
     [Theory]
     [InlineData("admin.imports", true)]
     [InlineData("admin.historical-gst-classification", true)]
+    [InlineData("reports.bookkeeping", true)]
+    [InlineData("reports.site-commissions", true)]
+    [InlineData("reports.gst", true)]
     // The four Admin destinations that are deliberately never switchable.
     [InlineData("admin.users", false)]
     [InlineData("admin.roles", false)]
     [InlineData("admin.business-settings", false)]
     [InlineData("admin.nayax-settings", false)]
-    // Reports, which #1153 will decide and this release does not offer.
+    // A report the Reports group does not hold: there is no such destination to switch.
     [InlineData("reports.sales", false)]
     // A caller cannot reach a key by spelling it differently either: the keys are ordinal.
     [InlineData("Admin.Imports", false)]
+    [InlineData("Reports.GST", false)]
     [InlineData("admin.imports ", false)]
     [InlineData("", false)]
     public void Only_a_declared_key_is_found(string key, bool expected) =>

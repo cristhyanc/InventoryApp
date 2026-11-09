@@ -2061,3 +2061,113 @@ describe('SidebarNavComponent switchable menu visibility (issues #873, #1148 and
     expect(link(host, ROUTE)).toBeNull();
   });
 });
+
+/**
+ * The switchable **Reports** destinations in the menu (issue #1153): the same rule the Admin group
+ * has had since #1151, applied to the eight report keys, with nothing of its own.
+ *
+ * A switched-off report leaves the group for everybody but the platform administrator, the group goes
+ * with the last of them, and nothing about a report's own plan or provider rules is involved - the
+ * business here is connected and entitled throughout, so what is missing is missing because of the
+ * switch.
+ */
+describe('SidebarNavComponent switchable Reports destinations (issue #1153)', () => {
+  const NOTHING_OFF: OptionVisibility = { switchedOffKeys: [] };
+  const EVERY_REPORT_OFF: OptionVisibility = {
+    switchedOffKeys: [
+      'reports.bookkeeping',
+      'reports.daily',
+      'reports.transactions',
+      'reports.reconciliation',
+      'reports.machines',
+      'reports.products',
+      'reports.site-commissions',
+      'reports.gst'
+    ]
+  };
+
+  async function openReports(
+    optionVisibility: OptionVisibility | undefined,
+    options: { diagnosticsAccess?: boolean } = {}
+  ) {
+    const rendered = await render({
+      access: of(granted(CAPABILITIES, optionVisibility)),
+      diagnosticsAccess: of(options.diagnosticsAccess ?? false)
+    });
+    groupToggle(rendered.host, 'Reports').click();
+    rendered.fixture.detectChanges();
+    return rendered;
+  }
+
+  it('leaves out only the report whose key is off, for an eligible member', async () => {
+    const { host } = await openReports({ switchedOffKeys: ['reports.daily'] });
+
+    expect(link(host, '/reports/daily')).toBeNull();
+    expect(link(host, '/reports/bookkeeping')).not.toBeNull();
+    expect(link(host, '/reports/gst')).not.toBeNull();
+    expect(link(host, '/reports/site-commissions')).not.toBeNull();
+  });
+
+  /**
+   * The Site Commissions report and the Admin agreements page are two destinations with two keys:
+   * hiding the reading leaves the page the agreements are maintained from exactly as it was.
+   */
+  it('keeps the Admin agreements page when the Site Commissions report is switched off', async () => {
+    const { host, fixture } = await openReports({ switchedOffKeys: ['reports.site-commissions'] });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/reports/site-commissions')).toBeNull();
+    expect(link(host, '/admin/site-commission-agreements')).not.toBeNull();
+  });
+
+  it('drops the whole Reports group once every report is off, keeping the rest of its heading', async () => {
+    const { host } = await render({ access: of(granted(CAPABILITIES, EVERY_REPORT_OFF)) });
+
+    expect(Array.from(host.querySelectorAll('button')).some((button) => (button.textContent ?? '').includes('Reports'))).toBe(
+      false
+    );
+    // The heading over the group is shared with Expenses, which no switch reaches.
+    expect(link(host, '/expenses')).not.toBeNull();
+    expect(host.textContent).toContain('Finance & reports');
+  });
+
+  it('keeps every report for a super admin, marking exactly the switched-off ones Off', async () => {
+    const { host } = await openReports({ switchedOffKeys: ['reports.daily', 'reports.gst'] }, { diagnosticsAccess: true });
+
+    expect(link(host, '/reports/daily')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, '/reports/gst')?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(link(host, '/reports/daily')?.textContent).toContain('hidden from everybody but a Super Admin');
+    expect(link(host, '/reports/bookkeeping')?.querySelector('.badge')).toBeNull();
+  });
+
+  it('offers every report, with no pill, while nothing is switched off', async () => {
+    const { host } = await openReports(NOTHING_OFF, { diagnosticsAccess: true });
+
+    expect(link(host, '/reports/daily')).not.toBeNull();
+    expect(link(host, '/reports/daily')?.textContent).not.toContain('Off');
+  });
+
+  /** The fail-open rule: an unreported setting hides nothing and shows no pill. */
+  it('offers every report, with no pill, while the setting has not been reported', async () => {
+    const { host } = await openReports(undefined, { diagnosticsAccess: true });
+
+    expect(link(host, '/reports/daily')).not.toBeNull();
+    expect(link(host, '/reports/daily')?.textContent).not.toContain('Off');
+  });
+
+  /** A switch is not a capability: an Operator holds no `Reports.View` in either state. */
+  const OPERATOR = ['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate'] as const;
+
+  it('never offers a report to a role without Reports.View while nothing is off', async () => {
+    const { host } = await render({ access: of(granted(OPERATOR, NOTHING_OFF)) });
+
+    expect(link(host, '/reports/bookkeeping')).toBeNull();
+  });
+
+  it('never offers a report to a role without Reports.View while every key is off', async () => {
+    const { host } = await render({ access: of(granted(OPERATOR, EVERY_REPORT_OFF)) });
+
+    expect(link(host, '/reports/bookkeeping')).toBeNull();
+  });
+});

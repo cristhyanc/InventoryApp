@@ -27,29 +27,42 @@ public sealed record SuperAdminMenuVisibilityResponse(
 }
 
 /// <summary>
-/// One switchable destination as the Super Admin surface reports it (issue #1148), and the body
-/// <c>PUT /api/super-admin/menu-visibility/{key}</c> answers with.
+/// One switchable destination as the Super Admin surface reports it (issues #1148 and #1153), and the
+/// body <c>PUT /api/super-admin/menu-visibility/{key}</c> answers with.
 /// </summary>
 /// <param name="Key">
-/// The destination's server-owned catalogue key - <c>admin.imports</c> and the six beside it. A
-/// client may send one back on the <c>PUT</c> and may never invent one: an unknown key is answered
-/// <c>404</c> with nothing stored.
+/// The destination's server-owned catalogue key - <c>reports.bookkeeping</c>, <c>admin.imports</c>
+/// and the thirteen beside them. A client may send one back on the <c>PUT</c> and may never invent
+/// one: an unknown key is answered <c>404</c> with nothing stored.
+/// </param>
+/// <param name="Group">
+/// The menu group the destination sits in, <c>Reports</c> or <c>Admin</c> (issue #1153), so the page
+/// renders one section per group without keeping a second copy of either the grouping or its wording.
+/// Options arrive grouped and in menu order, Reports first.
 /// </param>
 /// <param name="Label">
-/// The destination's display label, the same words the Admin menu uses, so the page needs no second
-/// copy of that wording.
+/// The destination's display label, the same words the menu uses, so the page needs no second copy of
+/// that wording.
 /// </param>
 /// <param name="Visible">
 /// Whether the destination is offered to members who are not the platform administrator, as it is
 /// now stored or defaulted. A Super Admin keeps every destination in both states.
 /// </param>
-public sealed record SuperAdminMenuVisibilityOptionResponse(string Key, string Label, bool Visible)
+public sealed record SuperAdminMenuVisibilityOptionResponse(
+    string Key,
+    string Group,
+    string Label,
+    bool Visible)
 {
     public static SuperAdminMenuVisibilityOptionResponse From(MenuVisibilityOptionState option)
     {
         ArgumentNullException.ThrowIfNull(option);
 
-        return new SuperAdminMenuVisibilityOptionResponse(option.Key, option.Label, option.Visible);
+        return new SuperAdminMenuVisibilityOptionResponse(
+            option.Key,
+            option.Group,
+            option.Label,
+            option.Visible);
     }
 }
 
