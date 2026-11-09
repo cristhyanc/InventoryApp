@@ -161,10 +161,12 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
     fixture.componentInstance.loading = true;
     fixture.detectChanges();
 
-    // The two imports this page runs, and not Download template, which calls no API. Import
-    // products is a link to its own page since issue #888 and is not a control this flag reaches.
+    // The one import this page still runs, and not Download template, which calls no API. Import
+    // products (issue #888) and Reimbursement Report (issue #1152) are links to their own pages and
+    // are not controls this flag reaches.
     const disabled = Array.from(host.querySelectorAll('button')).filter(button => button.disabled);
-    expect(disabled).toHaveLength(2);
+    expect(disabled).toHaveLength(1);
+    expect(disabled[0].textContent).toContain('Importing');
   });
 });
 
@@ -242,40 +244,42 @@ describe('AdminImportsComponent product catalogue import (issues #739 and #888)'
   });
 });
 
-describe('AdminImportsComponent pending reimbursement XML import (issue #389)', () => {
-  it('imports the pending XML files and reports the imported file and reimbursement counts', async () => {
-    const importPendingXmlFiles = jest.fn(() =>
-      of({ importedFiles: 2, importedReimbursements: 4, skippedFiles: 1, failedFiles: 0 }));
-    const success = jest.fn();
-    const { fixture, host } = await render({ importPendingXmlFiles }, { success });
+/**
+ * The reimbursement report left this page for its own one (issue #1152). What is left here is a
+ * short card that links to it: the ZIP upload, the job status list and the pending reimbursement XML
+ * import are all `/admin/imports/reimbursement-report`'s, with their own specs.
+ */
+describe('AdminImportsComponent Reimbursement Report card (issue #1152)', () => {
+  function card(host: HTMLElement, title: string): HTMLElement | undefined {
+    return Array.from(host.querySelectorAll<HTMLElement>('section.card')).find((section) =>
+      section.querySelector('.card-title')?.textContent?.includes(title)
+    );
+  }
 
-    const button = Array.from(host.querySelectorAll('button')).find(x => x.textContent?.includes('Import XML files'));
-    button?.click();
+  it('links to the Reimbursement Report page instead of hosting the XML import', async () => {
+    const { host } = await render({});
 
-    expect(importPendingXmlFiles).toHaveBeenCalledTimes(1);
-    expect(success).toHaveBeenCalledWith('Imported 2 file(s) and 4 reimbursement(s).');
-    expect(fixture.componentInstance.loading).toBe(false);
+    const reimbursement = card(host, 'Reimbursement Report');
+    expect(reimbursement?.querySelector('a')?.getAttribute('href')).toBe('/admin/imports/reimbursement-report');
+    expect(card(host, 'Import XML files')).toBeUndefined();
+    expect(reimbursement?.querySelector('button')).toBeNull();
   });
 
-  it('reports the API error and clears loading when the XML import fails', async () => {
-    const importPendingXmlFiles = jest.fn(() => throwError(() => ({ error: 'No pending XML files found.' })));
-    const error = jest.fn();
-    const { fixture } = await render({ importPendingXmlFiles }, { error });
+  it('runs no import of its own for it: there is no XML button left to press', async () => {
+    const importPendingXmlFiles = jest.fn();
+    const { host } = await render({ importPendingXmlFiles });
 
-    fixture.componentInstance.importXml();
-
-    expect(error).toHaveBeenCalledWith('No pending XML files found.');
-    expect(fixture.componentInstance.loading).toBe(false);
+    const buttons = Array.from(host.querySelectorAll('button')).map((button) => button.textContent ?? '');
+    expect(buttons.some((text) => text.includes('Import XML files'))).toBe(false);
+    expect(importPendingXmlFiles).not.toHaveBeenCalled();
   });
 
-  it('falls back to the generic XML failure message when the API returns no body', async () => {
-    const importPendingXmlFiles = jest.fn(() => throwError(() => ({})));
-    const error = jest.fn();
-    const { fixture } = await render({ importPendingXmlFiles }, { error });
+  /** The two imports the issue leaves alone are still here, and still this page's own. */
+  it('keeps the Nayax sales upload and the product-catalogue link exactly as they were', async () => {
+    const { host } = await render({});
 
-    fixture.componentInstance.importXml();
-
-    expect(error).toHaveBeenCalledWith('The XML import could not be started.');
+    expect(card(host, 'Import Nayax sales')).toBeDefined();
+    expect(card(host, 'Import products')?.querySelector('a')?.getAttribute('href')).toBe('/products/import');
   });
 });
 
@@ -290,14 +294,24 @@ describe('AdminImportsComponent in a support session (issue #661)', () => {
     const { host } = await render({}, undefined, of(true));
 
     expect(importButton(host, 'Choose sales file').disabled).toBe(true);
-    expect(importButton(host, 'Import XML files').disabled).toBe(true);
   });
 
   it('leaves every import control enabled while no session is active', async () => {
     const { host } = await render({}, undefined, of(false));
 
     expect(importButton(host, 'Choose sales file').disabled).toBe(false);
-    expect(importButton(host, 'Import XML files').disabled).toBe(false);
+  });
+
+  /**
+   * The Reimbursement Report card is a link, not a control this page disables (issue #1152), for the
+   * reason the Import products link is not: it starts nothing, and the destination withholds both of
+   * its writes itself.
+   */
+  it('leaves the Reimbursement Report link in place, because the destination refuses the import itself', async () => {
+    const { host } = await render({}, undefined, of(true));
+
+    const link = Array.from(host.querySelectorAll('a')).find((x) => x.textContent?.includes('Reimbursement Report'));
+    expect(link?.getAttribute('href')).toBe('/admin/imports/reimbursement-report');
   });
 
   /**
@@ -320,14 +334,11 @@ describe('AdminImportsComponent in a support session (issue #661)', () => {
   });
 
   it('calls no import API from a guarded handler while a session is active', async () => {
-    const importPendingXmlFiles = jest.fn();
     const importNayaxSales = jest.fn();
-    const { fixture } = await render({ importPendingXmlFiles, importNayaxSales }, undefined, of(true));
+    const { fixture } = await render({ importNayaxSales }, undefined, of(true));
 
-    fixture.componentInstance.importXml();
     fixture.componentInstance.onSalesSelected(selectionEvent('sales.csv'));
 
-    expect(importPendingXmlFiles).not.toHaveBeenCalled();
     expect(importNayaxSales).not.toHaveBeenCalled();
     expect(fixture.componentInstance.loading).toBe(false);
   });
@@ -409,23 +420,16 @@ describe('AdminImportsComponent Nayax sales plan lock (issue #979)', () => {
   });
 
   it('leaves the other import workflows on this mixed page exactly as they were', async () => {
-    const importPendingXmlFiles = jest.fn(() =>
-      of({ importedFiles: 1, importedReimbursements: 2, skippedFiles: 0, failedFiles: 0 })
-    );
     const success = jest.fn();
-    const { host } = await render(
-      { importPendingXmlFiles },
-      { success },
-      of(false),
-      of(granted(enforced('Free')))
-    );
+    const { host } = await render({}, { success }, of(false), of(granted(enforced('Free'))));
 
-    // The pending reimbursement XML import is not a plan-locked feature and still runs.
-    const xml = button(host, 'Import XML files');
-    expect(xml?.disabled).toBe(false);
-    xml?.click();
-    expect(importPendingXmlFiles).toHaveBeenCalledTimes(1);
-    expect(success).toHaveBeenCalledWith('Imported 1 file(s) and 2 reimbursement(s).');
+    // The reimbursement report is not a plan-locked feature either, and its link is never withheld
+    // (issue #1152): neither it nor the page it leads to depends on the sales-file plan feature.
+    expect(
+      Array.from(host.querySelectorAll('a'))
+        .find((x) => x.textContent?.includes('Reimbursement Report'))
+        ?.getAttribute('href')
+    ).toBe('/admin/imports/reimbursement-report');
 
     // The product catalogue import keeps its link, and the template download calls no API at all.
     expect(

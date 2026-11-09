@@ -27,9 +27,9 @@ export function salesFileImportPlanLockedMessage(requiredPlan: SubscriptionPlanN
 
 /**
  * Dedicated page for the supported import workflows, split out of `AdminComponent`
- * (issue #389, Admin split 2/3): the Nayax sales file upload and its CSV template, and the pending
- * reimbursement XML import. `ImportService` remains the sole authority for both calls, so no
- * import, deduplication, transaction-parsing or reimbursement rule is reimplemented or
+ * (issue #389, Admin split 2/3). Since issue #1152 the one import it still runs itself is the Nayax
+ * sales file upload and its CSV template; `ImportService` remains the sole authority for that call,
+ * so no import, deduplication, transaction-parsing or reimbursement rule is reimplemented or
  * reinterpreted here.
  *
  * <p><strong>Importing the product catalogue happens on its own page</strong> (issue #888):
@@ -38,9 +38,15 @@ export function salesFileImportPlanLockedMessage(requiredPlan: SubscriptionPlanN
  * reading `?review=catalogue` (issue #875) with it, which that issue's own entry point - All
  * Products' Import products button - now points straight at the new page instead.</p>
  *
+ * <p><strong>And so does the reimbursement report</strong> (issue #1152):
+ * `/admin/imports/reimbursement-report` (`ReimbursementReportPageComponent`) hosts #1149's ZIP
+ * upload, its job status list **and** the pending reimbursement XML import that used to be the
+ * `Import XML files` card here, so this page's Reimbursement Report card is a link to it and runs
+ * neither. The Nayax sales upload and the timestamp repair are unchanged.</p>
+ *
  * <p><strong>The Nayax sales card carries an inline plan lock</strong> (issue #979), and only that
- * card: this is a mixed page, so the XML import, the product-catalogue link and the client-side
- * template download are not plan-locked and the page itself is never route-locked. The lock is the
+ * card: this is a mixed page, so the two links beside it and the client-side template download are
+ * not plan-locked and the page itself is never route-locked. The lock is the
  * inline shape of issue #979 rather than the route-level one for exactly that reason, and it is
  * decided from the entitlement `GET /api/me/access` already carries (issue #966), through the same
  * `planLockOf` every other plan lock reads - so this component holds no plan rule of its own.
@@ -115,9 +121,18 @@ export function salesFileImportPlanLockedMessage(requiredPlan: SubscriptionPlanN
 
         <section class="card">
           <div class="card-body">
-            <h2 class="card-title">Import XML files</h2>
-            <p class="mt-1 text-sm value-muted">Process pending reimbursement XML files.</p>
-            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive" (click)="importXml()">Import XML files</button>
+            <h2 class="card-title">Reimbursement Report</h2>
+            <p class="mt-1 text-sm value-muted">
+              Upload the reimbursement report ZIP Nayax emails you, follow what each upload imported,
+              and process pending reimbursement XML files.
+            </p>
+            <!--
+              A link to the import's own page (issue #1152) rather than the buttons that ran here.
+              It is not withheld or disabled during a support session, for the reason the Import
+              products link is not: the destination withholds both of its writes itself, so hiding
+              the link would only hide where the import lives from the page that is meant to say so.
+            -->
+            <a routerLink="/admin/imports/reimbursement-report" class="btn btn-primary mt-4">Open Reimbursement Report</a>
           </div>
         </section>
       </div>
@@ -128,12 +143,12 @@ export class AdminImportsComponent implements OnDestroy {
   loading = false;
 
   /**
-   * Whether a support session is active (issue #661): both imports this page runs are disabled
-   * while it is, because a session grants `ImportsRun` - the capability this page and its endpoints
-   * are gated on - and the backend refuses the write itself only by its read-only method rule,
-   * never by withholding the capability. See `SupportSessionService.active$`. The Import products
-   * link is not one of them: it starts nothing, and `/products/import` applies the same rule itself
-   * (issue #888).
+   * Whether a support session is active (issue #661): the one import this page still runs is
+   * disabled while it is, because a session grants `ImportsRun` - the capability this page and its
+   * endpoints are gated on - and the backend refuses the write itself only by its read-only method
+   * rule, never by withholding the capability. See `SupportSessionService.active$`. Neither link is
+   * one of them: a link starts nothing, and `/products/import` (issue #888) and
+   * `/admin/imports/reimbursement-report` (issue #1152) each apply the same rule themselves.
    */
   sessionActive = false;
 
@@ -232,12 +247,4 @@ export class AdminImportsComponent implements OnDestroy {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'nayax-sales-import-template.csv'; anchor.click(); URL.revokeObjectURL(url);
   }
 
-  importXml(): void {
-    if (this.sessionActive) return;
-    this.loading = true;
-    this.importService.importPendingXmlFiles().subscribe({
-      next: result => { this.loading = false; this.toast.success(`Imported ${result.importedFiles} file(s) and ${result.importedReimbursements} reimbursement(s).`); },
-      error: err => { this.loading = false; this.toast.error(err?.error ?? 'The XML import could not be started.'); }
-    });
-  }
 }

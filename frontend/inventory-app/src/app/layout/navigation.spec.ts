@@ -129,6 +129,8 @@ const adminChildRoutes: { label: string; route: string }[] = [
   { label: 'Integrations', route: '/admin/nayax-settings' },
   { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' },
   { label: 'Imports', route: '/admin/imports' },
+  // Directly after Imports, sharing its switch (issue #1152).
+  { label: 'Reimbursement Report', route: '/admin/imports/reimbursement-report' },
   { label: 'Historical Cost Recovery', route: '/admin/historical-cost-recovery' },
   { label: 'AVCO Transition', route: '/admin/avco-transition' },
   { label: 'Costing Repair', route: '/admin/costing-repair' },
@@ -624,7 +626,8 @@ describe('navigationFor capabilities (issue #528)', () => {
     );
     expect(childRoutes('Admin', manager)).toEqual([
       { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' },
-      { label: 'Imports', route: '/admin/imports' }
+      { label: 'Imports', route: '/admin/imports' },
+      { label: 'Reimbursement Report', route: '/admin/imports/reimbursement-report' }
     ]);
   });
 
@@ -665,7 +668,8 @@ describe('navigationFor capabilities (issue #528)', () => {
     const importsOnly = capabilitySet(['Imports.Run']);
 
     expect(childRoutes('Admin', navigationFor(importsOnly, false, 'offered'))).toEqual([
-      { label: 'Imports', route: '/admin/imports' }
+      { label: 'Imports', route: '/admin/imports' },
+      { label: 'Reimbursement Report', route: '/admin/imports/reimbursement-report' }
     ]);
   });
 
@@ -1040,7 +1044,13 @@ describe('navigationFor with the provider answer (issue #729)', () => {
 
   /** The provider repair and admin tools are hidden outright, not locked. */
   it('hides the Nayax imports and the sale timestamp repair until the connection is usable', () => {
-    const hidden = ['/admin/imports', '/admin/nayax-sale-timestamp-repair'];
+    // The Reimbursement Report (issue #1152) is one of them: with no sales provider there is no
+    // reimbursement report being emailed, so the entry is left out rather than shown locked.
+    const hidden = [
+      '/admin/imports',
+      '/admin/imports/reimbursement-report',
+      '/admin/nayax-sale-timestamp-repair'
+    ];
 
     for (const status of ['NotConfigured', 'NeedsAttention'] as const) {
       const routesOffered = childRoutes('Admin', navigationFor(OWNER, false, 'offered', availability(status))).map(
@@ -1108,7 +1118,8 @@ describe('navigationFor with the provider answer (issue #729)', () => {
     const importsOnly = capabilitySet(['Imports.Run']);
 
     expect(childRoutes('Admin', navigationFor(importsOnly, false, 'offered'))).toEqual([
-      { label: 'Imports', route: '/admin/imports' }
+      { label: 'Imports', route: '/admin/imports' },
+      { label: 'Reimbursement Report', route: '/admin/imports/reimbursement-report' }
     ]);
     expect(labels(navigationFor(importsOnly, false, 'offered', availability('NotConfigured')))).not.toContain('Admin');
     expect(childRoutes('Admin', navigationFor(MANAGER, false, 'offered', availability('NotConfigured')))).toEqual([
@@ -1283,7 +1294,8 @@ describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () =
   /** Every key, with every Admin entry that declares it, written out literally. */
   const KEY_ENTRIES: readonly { readonly key: MenuVisibilityKey; readonly routes: readonly string[] }[] = [
     { key: 'admin.site-commission-agreements', routes: ['/admin/site-commission-agreements'] },
-    { key: 'admin.imports', routes: ['/admin/imports'] },
+    // Two entries, one switch (issue #1152): the Imports page and the Reimbursement Report page.
+    { key: 'admin.imports', routes: ['/admin/imports', '/admin/imports/reimbursement-report'] },
     { key: 'admin.historical-cost-recovery', routes: ['/admin/historical-cost-recovery'] },
     { key: 'admin.avco-transition', routes: ['/admin/avco-transition'] },
     { key: 'admin.costing-repair', routes: ['/admin/costing-repair'] },
@@ -1420,41 +1432,47 @@ describe('switchable Admin menu visibility (issues #873, #1148 and #1151)', () =
 
   /**
    * A shared key (the decision of 9 November 2026): the Reimbursement Report of #1152 declares
-   * `admin.imports` and never gets a key of its own. Until that entry exists this is a fixture
-   * entry declaring the same key - `navigationFor` renders the declared navigation, so a second real
-   * entry cannot be injected into it - and whichever issue adds the real one adds it here.
+   * `admin.imports` and never gets a key of its own, so one switch decides both ways into the
+   * imports. Both entries here are the real declared ones since #1152 built that page - this block
+   * used a fixture entry until it did.
    */
   describe('a key shared by several entries', () => {
-    const reimbursementReport: NavLink = {
-      kind: 'link',
-      label: 'Reimbursement Report',
-      route: '/admin/imports/reimbursement-report',
-      capability: 'Imports.Run',
-      visibilityKey: 'admin.imports'
-    };
+    const REIMBURSEMENT_ROUTE = '/admin/imports/reimbursement-report';
 
     it('switches both entries off together for a member', () => {
       expect(optionSwitchedOff(adminLink('/admin/imports'), off('admin.imports'))).toBe(true);
-      expect(optionSwitchedOff(reimbursementReport, off('admin.imports'))).toBe(true);
-      expect(adminEntries(OWNER, false, off('admin.imports')).map((child) => child.route)).not.toContain(
-        '/admin/imports'
-      );
+      expect(optionSwitchedOff(adminLink(REIMBURSEMENT_ROUTE), off('admin.imports'))).toBe(true);
+
+      const offered = adminEntries(OWNER, false, off('admin.imports')).map((child) => child.route);
+      expect(offered).not.toContain('/admin/imports');
+      expect(offered).not.toContain(REIMBURSEMENT_ROUTE);
     });
 
     it('keeps both for the administrator, each marked Off by the same rule', () => {
-      expect(adminEntries(OWNER, true, off('admin.imports')).map((child) => child.route)).toContain('/admin/imports');
+      const offered = adminEntries(OWNER, true, off('admin.imports')).map((child) => child.route);
+      expect(offered).toContain('/admin/imports');
+      expect(offered).toContain(REIMBURSEMENT_ROUTE);
       expect(optionSwitchedOff(adminLink('/admin/imports'), off('admin.imports'))).toBe(true);
-      expect(optionSwitchedOff(reimbursementReport, off('admin.imports'))).toBe(true);
+      expect(optionSwitchedOff(adminLink(REIMBURSEMENT_ROUTE), off('admin.imports'))).toBe(true);
     });
 
     it('leaves both offered while the shared key is on', () => {
       expect(optionSwitchedOff(adminLink('/admin/imports'), off('admin.costing-repair'))).toBe(false);
-      expect(optionSwitchedOff(reimbursementReport, off('admin.costing-repair'))).toBe(false);
+      expect(optionSwitchedOff(adminLink(REIMBURSEMENT_ROUTE), off('admin.costing-repair'))).toBe(false);
+    });
+
+    /** Neither entry's key is the other's: switching another key off reaches neither. */
+    it('gives the Reimbursement Report no key of its own', () => {
+      expect(adminLink(REIMBURSEMENT_ROUTE).visibilityKey).toBe('admin.imports');
+      expect(MENU_VISIBILITY_KEYS).not.toContain('admin.reimbursement-report');
     });
 
     /** The page's "it also covers ..." sentence is this list, read from the entries themselves. */
     it('reports every Admin entry that declares the key', () => {
-      expect(adminEntriesWithVisibilityKey('admin.imports').map((link) => link.label)).toEqual(['Imports']);
+      expect(adminEntriesWithVisibilityKey('admin.imports').map((link) => link.label)).toEqual([
+        'Imports',
+        'Reimbursement Report'
+      ]);
       expect(adminEntriesWithVisibilityKey('admin.costing-repair').map((link) => link.label)).toEqual([
         'Costing Repair'
       ]);
