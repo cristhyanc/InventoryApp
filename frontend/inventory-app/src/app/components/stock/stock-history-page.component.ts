@@ -162,11 +162,11 @@ export class StockHistoryPageComponent implements OnInit, OnDestroy {
   private historyRequest?: Subscription;
 
   constructor(
-    private route: ActivatedRoute,
-    private stockService: StockService,
-    private productService: ProductService,
-    private localMachineService: LocalMachineService,
-    private provider: ProviderAvailabilityService
+    private readonly route: ActivatedRoute,
+    private readonly stockService: StockService,
+    private readonly productService: ProductService,
+    private readonly localMachineService: LocalMachineService,
+    private readonly provider: ProviderAvailabilityService
   ) {}
 
   ngOnInit(): void {
