@@ -28,7 +28,7 @@
   </header>
 
   @if (adjustmentMessage) {
-    <p class="m-0 rounded-lg bg-rr-ok-bg p-3 text-sm font-semibold text-rr-ok-text" role="status" data-testid="adjustment-applied">{{ adjustmentMessage }}</p>
+    <output class="block rounded-lg bg-rr-ok-bg p-3 text-sm font-semibold text-rr-ok-text" data-testid="adjustment-applied">{{ adjustmentMessage }}</output>
   }
 
   @if (selectedProduct) {

@@ -402,7 +402,7 @@ export class StockHistoryPageComponent implements OnInit {
   /** The product's unit label (for example `375 mL`), which is its pack size and never a quantity. */
   unitLabel(product: Product): string {
     const unit = product.unit?.trim();
-    return unit ? unit : 'Not set';
+    return unit || 'Not set';
   }
 
   reasonLabel(reason: StockAdjustmentReason): string {
