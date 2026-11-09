@@ -17,10 +17,10 @@ import {
  */
 
 /** The states the server moves on from by itself, so the list keeps asking while one is reported. */
-const RUNNING_STATES: readonly ReimbursementImportJobState[] = [
+const RUNNING_STATES: ReadonlySet<ReimbursementImportJobState> = new Set([
   ReimbursementImportJobState.Queued,
   ReimbursementImportJobState.Processing
-];
+]);
 
 const JOB_STATE_LABELS: Readonly<Record<ReimbursementImportJobState, string>> = {
   [ReimbursementImportJobState.Queued]: 'Queued',
@@ -65,7 +65,7 @@ export function reimbursementFileOutcomeLabel(outcome: ReimbursementImportFileOu
 
 /** Whether the server is still expected to move this job on by itself. */
 export function isReimbursementJobRunning(job: ReimbursementImportJobSummary): boolean {
-  return RUNNING_STATES.includes(job.state);
+  return RUNNING_STATES.has(job.state);
 }
 
 /** Whether any of these jobs is still running, which is the whole of the refresh rule. */
