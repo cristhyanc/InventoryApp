@@ -1,4 +1,5 @@
-import { Component, ElementRef, OnInit, ViewChild } from '@angular/core';
+import { Component, ElementRef, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
@@ -77,7 +78,7 @@ export interface AppliedStockHistoryFilter {
   ],
   templateUrl: './stock-history-page.component.html'
 })
-export class StockHistoryPageComponent implements OnInit {
+export class StockHistoryPageComponent implements OnInit, OnDestroy {
   products: Product[] = [];
 
   /**
@@ -153,6 +154,13 @@ export class StockHistoryPageComponent implements OnInit {
 
   @ViewChild('adjustButton') private readonly adjustButton?: ElementRef<HTMLButtonElement>;
 
+  /**
+   * The history request in flight. Filters apply as soon as they change, so requests can overlap;
+   * starting a new one cancels this one, so an older answer arriving last can never replace the
+   * movements, paging, loading or error state of the filters now applied.
+   */
+  private historyRequest?: Subscription;
+
   constructor(
     private route: ActivatedRoute,
     private stockService: StockService,
@@ -224,7 +232,8 @@ export class StockHistoryPageComponent implements OnInit {
     this.error = '';
     this.expanded.clear();
     const productId = this.filters.productId;
-    this.stockService
+    this.historyRequest?.unsubscribe();
+    this.historyRequest = this.stockService
       .historyPage({
         productId: this.filters.productId,
         from: this.filters.from || null,
@@ -251,6 +260,10 @@ export class StockHistoryPageComponent implements OnInit {
           this.loading = false;
         }
       });
+  }
+
+  ngOnDestroy(): void {
+    this.historyRequest?.unsubscribe();
   }
 
   /** Any filter change restarts at the first page, so a narrowed filter cannot land past its end. */

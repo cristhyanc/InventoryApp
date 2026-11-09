@@ -252,6 +252,57 @@ describe('StockHistoryPageComponent paging', () => {
   });
 });
 
+describe('StockHistoryPageComponent overlapping requests', () => {
+  it('lets only the latest request update the ledger when an older one answers last', () => {
+    const older = new Subject<StockHistoryPage>();
+    const newer = new Subject<StockHistoryPage>();
+    const { component, historyPage } = createHarness({ result: older.asObservable() });
+    historyPage.mockReturnValueOnce(newer.asObservable() as never);
+
+    component.filters.reason = StockAdjustmentReason.Damaged;
+    component.applyFilters();
+
+    newer.next(page({ items: [entry({ id: 2, reason: StockAdjustmentReason.Damaged })], page: 1, pageSize: 25, totalCount: 1 }));
+    newer.complete();
+    expect(component.loading).toBe(false);
+
+    // The superseded unfiltered request answers afterwards, with a different page and size.
+    older.next(page({ items: [entry({ id: 1 }), entry({ id: 3 })], page: 2, pageSize: 100, totalCount: 300, hasMore: true }));
+    older.complete();
+
+    expect(component.history?.items.map((item) => item.id)).toEqual([2]);
+    expect(component.currentPage).toBe(1);
+    expect(component.filters.pageSize).toBe(25);
+    expect(component.loading).toBe(false);
+    expect(component.error).toBe('');
+  });
+
+  it('ignores a superseded request that fails after the latest one succeeded', () => {
+    const older = new Subject<StockHistoryPage>();
+    const newer = new Subject<StockHistoryPage>();
+    const { component, historyPage } = createHarness({ result: older.asObservable() });
+    historyPage.mockReturnValueOnce(newer.asObservable() as never);
+
+    component.applyFilters();
+    newer.next(page());
+    newer.complete();
+    older.error({ error: 'Stock history is unavailable.' });
+
+    expect(component.error).toBe('');
+    expect(component.history?.items).toHaveLength(1);
+  });
+
+  it('cancels the request in flight when the page is left', () => {
+    const pending = new Subject<StockHistoryPage>();
+    const { component } = createHarness({ result: pending.asObservable() });
+    expect(pending.observed).toBe(true);
+
+    component.ngOnDestroy();
+
+    expect(pending.observed).toBe(false);
+  });
+});
+
 describe('StockHistoryPageComponent states', () => {
   it('reports loading until the history arrives', () => {
     const pending = new Subject<StockHistoryPage>();
