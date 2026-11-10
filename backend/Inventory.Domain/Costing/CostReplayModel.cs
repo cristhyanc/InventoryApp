@@ -15,8 +15,13 @@ public sealed record CostReplayAdjustment(
     decimal? UnitCost,
     bool HasReceiptItemLink);
 
-/// <summary>A completed sale of the product, identified by its Nayax transaction ID.</summary>
-public sealed record CostReplaySale(long TransactionId, DateTime AuthorizationTime);
+/// <summary>
+/// A completed sale of the product, identified by its Nayax transaction ID.
+/// <see cref="NayaxProductCostPrice"/> is the transaction-level Nayax <c>Product Cost Price</c>
+/// persisted on the sale, or <see langword="null"/> when Nayax sent none: precedence step 2 of the
+/// historical sale cost, which the replay uses only for a sale the ledger cannot cost.
+/// </summary>
+public sealed record CostReplaySale(long TransactionId, DateTime AuthorizationTime, decimal? NayaxProductCostPrice = null);
 
 /// <summary>
 /// A costing-only historical repair as the replay sees it (issue #359): the persisted facts of one
@@ -76,6 +81,13 @@ public static class CostDataQualityIssueCodes
     public const string NegativePhysicalStock = "NegativePhysicalStock";
     public const string NegativeCostingStock = "NegativeCostingStock";
 
+    /// <summary>
+    /// Non-fatal: a completed sale had no known ledger cost (no recorded costed stock before it) and
+    /// was costed at the latest costed purchase before it, or else at its own Nayax
+    /// <c>Product Cost Price</c>.
+    /// </summary>
+    public const string CostFallback = "CostFallback";
+
     /// <summary>Non-fatal: a costed restock that predates receipt-item linking.</summary>
     public const string LegacyUnlinkedCostedRestock = "LegacyUnlinkedCostedRestock";
 
@@ -110,8 +122,38 @@ public sealed record CostReplayRepairOutcome(
     decimal InventoryValueAfter,
     decimal? AverageUnitCostAfter);
 
-/// <summary>The weighted-average unit cost a replayed completed sale consumed.</summary>
-public sealed record CostReplaySaleCost(CostReplaySale Sale, decimal UnitCost);
+/// <summary>
+/// Where the unit cost the replay assigned to a completed sale came from.
+/// </summary>
+public enum CostReplaySaleCostSource
+{
+    /// <summary>The weighted-average cost of the costed stock the sale consumed from the ledger.</summary>
+    Ledger = 0,
+
+    /// <summary>
+    /// The ledger had no known cost before the sale (no costed stock recorded, or it had run out), so
+    /// the sale was costed at the unit cost of the latest costed purchase (restock) replayed before
+    /// it - an estimate, reported as such.
+    /// </summary>
+    LastPurchase = 1,
+
+    /// <summary>
+    /// The ledger had no known cost and no costed purchase had been replayed before the sale, so the
+    /// sale was costed at its own transaction-level Nayax <c>Product Cost Price</c>.
+    /// </summary>
+    NayaxCost = 2,
+}
+
+/// <summary>
+/// The unit cost the replay assigned to a completed sale, and where it came from. A sale costed by
+/// <see cref="CostReplaySaleCostSource.LastPurchase"/> or <see cref="CostReplaySaleCostSource.NayaxCost"/>
+/// consumes no costing inventory, because the ledger never held the unit it sold: recording the
+/// missing purchase or a costing repair before it makes the next replay cost it from the ledger.
+/// </summary>
+public sealed record CostReplaySaleCost(
+    CostReplaySale Sale,
+    decimal UnitCost,
+    CostReplaySaleCostSource Source = CostReplaySaleCostSource.Ledger);
 
 /// <summary>
 /// The result of replaying a product's cost history. <see cref="TargetSaleUnitCost"/> is the

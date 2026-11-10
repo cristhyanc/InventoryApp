@@ -507,6 +507,7 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/settings/nayax-connection/retest", "POST", Capability.IntegrationManage)]
     [InlineData("api/settings/nayax-connection/status", "GET", Capability.DashboardView)]
     [InlineData("api/nayax-sales-sync", "POST", Capability.DashboardView)]
+    [InlineData("api/inventory-cost-attention", "GET", Capability.DashboardView)]
     [InlineData("api/admin/inventory-cost-repair/preview", "POST", Capability.DataRepair)]
     [InlineData("api/admin/inventory-cost-repair/apply", "POST", Capability.DataRepair)]
     [InlineData("api/admin/inventory-cost-transition/preview", "POST", Capability.DataRepair)]

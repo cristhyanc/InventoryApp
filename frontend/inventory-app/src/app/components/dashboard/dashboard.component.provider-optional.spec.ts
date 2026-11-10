@@ -14,6 +14,7 @@ import {
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
+import { InventoryCostAttentionService } from '../../services/inventory-cost-attention.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
@@ -233,6 +234,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       },
       { provide: MachineService, useValue: { getAll: () => doubles.machines$ ?? of([MACHINE]) } },
       { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
+      { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
       { provide: SiteService, useValue: { getAll: () => doubles.sites$ ?? of([SITE]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: doubles.syncLatest ?? (() => of(SYNC_RAN)) } },
       { provide: SupportSessionService, useValue: { active$: doubles.sessionActive ?? of(false) } },

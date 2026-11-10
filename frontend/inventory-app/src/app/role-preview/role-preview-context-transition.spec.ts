@@ -39,6 +39,8 @@ const REMINDER = '/api/machine-restock-sync/reminder';
 const HIDDEN_REMINDER = { applicable: false as const, reason: 'NoProviderMachines' };
 /** The Dashboard's Nayax sales review alert (issue #1105), answered as nothing to review. */
 const REVIEW_SUMMARY = '/api/nayax-sale-review/summary';
+// The Dashboard's "costs need attention" alert asks for its list as the page renders.
+const COST_ATTENTION = '/api/inventory-cost-attention';
 const NOTHING_TO_REVIEW = { needsReviewCount: 0, notCountedCount: 0 };
 
 /** One answer's Dashboard, as the figures a test can recognise on screen. */
@@ -297,6 +299,7 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: str
   // own child component as the page renders, so it is already outstanding by now.
   answer(REMINDER, HIDDEN_REMINDER);
   answer(REVIEW_SUMMARY, NOTHING_TO_REVIEW);
+  answer(COST_ATTENTION, []);
   answer(LOW_STOCK, []);
   answer(SUMMARY, summary(figures));
   answer(SYNC, null);

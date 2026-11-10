@@ -8619,9 +8619,24 @@ applies to **both** paths and the request-driven one needed it as much as the qu
 replay that failed was simply forgotten, because the sale was already stored and the next
 synchronization therefore reported no affected products and never came back to it, leaving that
 product's costing position stale until its next sale. `SyncLatestNayaxSales` now drains every pending
-row after every persist and raises a still-failing product as the one `InventoryCostDataQualityException`
-it always did. The row records no quantity, cost, value or sale, so losing one would mean a replay is
+row after every persist. A product that still fails no longer fails the sync (10 November 2026): the
+sales are stored and every other product was rebuilt, so the run completes, and the failed product keeps
+its row and failure code and is reported by name on the Dashboard through `GET api/inventory-cost-attention`
+(see [Products needing cost attention](#products-needing-cost-attention)). The row records no quantity, cost, value or sale, so losing one would mean a replay is
 not retried, never a wrong figure. See [Nayax SQS sales reader](#nayax-sqs-sales-reader-issue-1103).
+
+**A sale past the recorded stock is costed by fallback, not failed** (repository owner's decision of
+10 November 2026). When `WeightedAverageCostReplay` reaches a completed sale and the ledger has no known
+cost (no costed stock was recorded before it, or it had run out), it costs the sale at the unit cost of
+the latest costed purchase (a `Restock` with a valid unit cost) replayed *before* that sale, else at the
+sale's own Nayax `Product Cost Price`, and reports a non-fatal `CostFallback` issue. The sale is staged
+as `Costed` with `CostSource = Estimated` (latest purchase) or `NayaxTransactionExport` (Nayax cost), and
+it consumes no costing quantity or value, because the ledger never held the unit it sold - nothing is
+fabricated into `CostingQuantity`/`InventoryValue`. Recording the missing purchase, or a costing repair,
+before the sale makes the next replay cost it from the ledger again. Only a sale with no ledger cost, no
+earlier costed purchase and no valid Nayax cost is still a fatal `MissingOpening`/`UnknownCost` history.
+A costing repair is a costed acquisition but not a purchase, so it is never used as the "latest
+purchase". See `AGENTS.md` § Inventory and historical costing invariants for the full precedence.
 
 The weighted-average cost rules are Domain-owned (issue #295, child 1 of #149).
 `Inventory.Domain.Costing.WeightedAverageCostReplay` replays a product's Domain-owned cost events
@@ -10098,10 +10113,11 @@ rebuilds the same batch produced for the other products - that silently left the
 and value stale until their own next sale. `EfLatestNayaxSalesStore.RebuildInventoryCostsAsync`
 therefore rebuilds every affected product it can, saves them in one `SaveChangesAsync`, leaves a
 product whose replay has a fatal issue exactly as it was (the rebuild use case stages nothing for
-it), and only then raises the collected failures together as one
-`InventoryCostDataQualityException`. The failure is never swallowed: like any other fatal costing
-data-quality failure it is an internal data-integrity error, so it still surfaces as a logged,
-generic `500`. Products a previous failed sync left stale recover on their next rebuild, because a
+it), and only then reports the collected failures. The failure is never swallowed: the product
+keeps its pending rebuild row with its attempt count and failure code, every later run retries it,
+and the Dashboard names it (see [Products needing cost attention](#products-needing-cost-attention)).
+Since 10 November 2026 it no longer fails `POST api/nayax-sales-sync` with a generic `500`: one
+product's gap in its stock history used to stop the whole business's sales sync on every visit. Products a previous failed sync left stale recover on their next rebuild, because a
 rebuild always replays the product's full history after its transition baseline.
 
 `NayaxSalesSyncController` is a thin adapter that invokes the use case and maps it
@@ -17956,9 +17972,23 @@ that product's costing position stayed stale until its next sale. A queue reader
   wrong figure.
 - **The request-driven synchronization records and drains the same rows.** The store is shared, so this
   fixes the existing failure mode on that path too: `SyncLatestNayaxSales` now drains every pending row
-  after *every* persist rather than only the products its own batch touched, and raises a still-failing
-  product as the one `InventoryCostDataQualityException` it always did. See [Historical inventory
+  after *every* persist rather than only the products its own batch touched. A still-failing product
+  does not fail the sync; it is reported on the Dashboard instead (see [Products needing cost
+  attention](#products-needing-cost-attention)), and the hourly reconciliation still records no
+  success while one is pending. See [Historical inventory
   cost](#historical-inventory-cost).
+
+#### Products needing cost attention
+
+`GET api/inventory-cost-attention` (`InventoryCostAttentionController`, Dashboard.View, no plan gate)
+lists the caller's products whose pending rebuild's last attempt failed - `PendingInventoryCostRebuilds`
+rows with a `LastFailureCode` - with the product's current name, attempt count and last attempt, oldest
+first. It is read through `GetProductsNeedingCostAttention` and the `IProductCostAttentionReader` port
+(`EfProductCostAttentionReader`); both tables are tenant-owned, so the central query filters keep it to
+the caller's business. It carries no price, cost, value or quantity. The Dashboard's Needs attention
+panel shows it as "Costs for N products could not be recalculated", naming the products. This is what
+replaced the business-wide "Latest Nayax sales could not be synchronized" warning that one product's
+failed rebuild used to cause on every visit; that warning now appears only when the sync itself fails.
 
 #### Queue outcomes
 

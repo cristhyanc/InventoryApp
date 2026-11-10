@@ -424,8 +424,8 @@ public class ReconcileNayaxSalesWithProviderTests
         var drains = 0;
         world.Store.Setup(x => x.RebuildInventoryCostsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => ++drains == 1
-                // The pre-drain reports the failure; the sync's own drain raises it, which is the
-                // behaviour the request-driven path has always had.
+                // Every drain reports the failure. The sync completes regardless - the sales are
+                // stored - but the reconciliation's own last drain still sees it and records no success.
                 ? new InventoryCostRebuildDrainResult([99], ["Product 99: unreplayable history."])
                 : new InventoryCostRebuildDrainResult([99], ["Product 99: unreplayable history."]));
 

@@ -130,7 +130,12 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
             sale.UnitCostAtSale = saleCost.UnitCost;
             sale.CostOfGoodsSold = saleCost.UnitCost;
             sale.CostingStatus = SaleCostingStatus.Costed;
-            sale.CostSource = SaleCostSource.InventoryLedger;
+            sale.CostSource = saleCost.Source switch
+            {
+                CostReplaySaleCostSource.LastPurchase => SaleCostSource.Estimated,
+                CostReplaySaleCostSource.NayaxCost => SaleCostSource.NayaxTransactionExport,
+                _ => SaleCostSource.InventoryLedger,
+            };
         }
     }
 
@@ -208,7 +213,7 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
             var salesByInput = new Dictionary<CostReplaySale, NayaxSales>(sales.Count, ReferenceEqualityComparer.Instance);
             foreach (var sale in sales)
             {
-                var input = new CostReplaySale(sale.TransactionID, sale.MachineAuthorizationTime);
+                var input = new CostReplaySale(sale.TransactionID, sale.MachineAuthorizationTime, sale.NayaxProductCostPrice);
                 saleInputs.Add(input);
                 salesByInput.Add(input, sale);
             }
