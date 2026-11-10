@@ -18,8 +18,9 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
 /// The site row and the machine rows under it are read from one table through two adapters, and
-/// issue #1012's invariant is that for each of the four published periods the site figure is exactly
-/// the sum of the gross revenue of the machines standing at it. This test is the only place both
+/// issue #1012's invariant is that for each published period the site figure is exactly
+/// the sum of the gross revenue of the machines standing at it - the four periods it published, and
+/// since issue #1177 the previous comparable day as well. This test is the only place both
 /// production paths run over the same seeded sales: <see cref="GetSiteSummaries"/> with the real
 /// <see cref="EfSiteFactsStore"/> for the site figure, and the real
 /// <see cref="EfMachineDashboardFactsStore"/> for each machine's own figure, over one relational
@@ -91,13 +92,17 @@ public class SiteRevenueMatchesMachineRevenueTests : IDisposable
         Assert.Equal(left.CurrentWeek.GrossRevenue + right.CurrentWeek.GrossRevenue, site.CurrentWeekRevenue);
         Assert.Equal(left.LastWeek.GrossRevenue + right.LastWeek.GrossRevenue, site.LastWeekRevenue);
         Assert.Equal(left.MonthToDate.GrossRevenue + right.MonthToDate.GrossRevenue, site.MonthToDateRevenue);
+        Assert.Equal(
+            left.PreviousComparableDayGrossRevenue + right.PreviousComparableDayGrossRevenue,
+            site.PreviousComparableDayRevenue);
 
-        // The fixtures really do put money in each of the four periods, so the equalities above are
-        // not four pairs of zeroes agreeing with each other.
+        // The fixtures really do put money in each of the five periods, so the equalities above are
+        // not five pairs of zeroes agreeing with each other.
         Assert.Equal(3m, site.TodayRevenue);
-        Assert.Equal(26m, site.CurrentWeekRevenue);
+        Assert.Equal(135m, site.CurrentWeekRevenue);
         Assert.Equal(60m, site.LastWeekRevenue);
-        Assert.Equal(62m, site.MonthToDateRevenue);
+        Assert.Equal(171m, site.MonthToDateRevenue);
+        Assert.Equal(68m, site.PreviousComparableDayRevenue);
     }
 
     /// <summary>
@@ -155,6 +160,17 @@ public class SiteRevenueMatchesMachineRevenueTests : IDisposable
             CompletedSale(4, LeftMachineId, 23m, Utc(2023, 10, 1, 13, 0)),
             // Thursday 5 October 2023, 09:00 AEDT: today.
             CompletedSale(5, LeftMachineId, 3m, Utc(2023, 10, 4, 22, 0)),
+            // Wednesday 4 October 2023, 07:00 and 09:00 AEDT: inside the previous comparable day,
+            // which runs to 10:00 on that day because the read is taken at 10:00 today (issue
+            // #1177). Both instants fall on UTC 3 October, a different date from their business day.
+            CompletedSale(10, LeftMachineId, 31m, Utc(2023, 10, 3, 20, 0)),
+            CompletedSale(11, RightMachineId, 37m, Utc(2023, 10, 3, 22, 0)),
+            // Wednesday 4 October 2023, 10:00:00.001 AEDT: one millisecond past the cutoff, so it is
+            // in this week and the month but in neither baseline figure.
+            CompletedSale(12, LeftMachineId, 41m, Utc(2023, 10, 3, 23, 0, 0, 1)),
+            // Refunded, inside the previous comparable day: both figures apply the same
+            // completed-sale policy there as they do to today.
+            RefundedTransaction(13, LeftMachineId, 999m, Utc(2023, 10, 3, 21, 0)),
             // Sunday 24 September 2023, 23:59:59.999 AEST: the week before last week, which no
             // published period covers.
             CompletedSale(6, LeftMachineId, 29m, Utc(2023, 9, 24, 13, 59, 59, 999)),

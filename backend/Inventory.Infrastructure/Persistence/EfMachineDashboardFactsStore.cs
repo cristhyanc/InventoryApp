@@ -69,6 +69,13 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
         var monthToDateFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.MonthToDate, machineId, cancellationToken);
         var twoWeeksAgoFacts = await BuildPeriodFactsAsync(lastSales, agreements, siteId, window.TwoWeeksAgo, machineId, cancellationToken);
 
+        // Today's baseline is revenue only (issue #1177), so it is summed here from the same
+        // completed sales the period figures above are built from and asks the fee engine for
+        // nothing: no profit is published for it, so no commission is resolved and no processing fee
+        // is looked up for its business dates.
+        var previousComparableDayGrossRevenue = CompletedSales(lastSales, window.PreviousComparableDay)
+            .Sum(sale => sale.SettlementValue);
+
         var completedSales = lastSales.Where(sale => NayaxSaleCountingPolicy.IsCountedSale(sale.TransactionStatusId, sale.SqsVerification)).ToList();
         var statusInputs = new MachineProfitabilityStatusInputs(
             completedSales.Any(sale => !sale.CostOfGoodsSold.HasValue),
@@ -80,7 +87,8 @@ public sealed class EfMachineDashboardFactsStore : IMachineDashboardFactsStore
                     (!agreement.EffectiveTo.HasValue || agreement.EffectiveTo.Value.Date >= sale.MachineAuthorizationTime.Date)) != 1));
 
         return new MachineDashboardFacts(
-            today0, currentWeekFacts, previousComparableWeekFacts, lastWeekFacts, monthToDateFacts, twoWeeksAgoFacts, statusInputs);
+            today0, currentWeekFacts, previousComparableWeekFacts, lastWeekFacts, monthToDateFacts, twoWeeksAgoFacts,
+            previousComparableDayGrossRevenue, statusInputs);
     }
 
     private static List<NayaxSales> CompletedSales(List<NayaxSales> sales, MachineDashboardPeriodUtc period) =>

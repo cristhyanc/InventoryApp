@@ -1,3 +1,5 @@
+using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
@@ -98,8 +100,114 @@ public class EfMachineDashboardFactsStoreTests
         Assert.False(facts.Today.ProfitInputs.HasMissingFeeRates);
     }
 
+    /// <summary>
+    /// The previous comparable day (issue #1177), over the relational database and the real Sydney
+    /// calendar. 01:30 on Thursday 12 March in Sydney is ninety minutes into today, so the baseline
+    /// is Wednesday 11 March from its own midnight (10 March 13:00 UTC) to 01:30 (10 March 14:30
+    /// UTC). Each seeded transaction sits on one side of a boundary the figure would get wrong if it
+    /// were derived from the UTC date, from a fixed offset or from a different counting policy.
+    /// </summary>
+    [Fact]
+    public async Task PreviousComparableDay_counts_the_sales_before_the_same_time_yesterday_and_no_others()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = Db(connection);
+        db.NayaxSales.AddRange(
+            // 00:00 on Wednesday 11 March in Sydney: exactly the baseline's first instant, on the
+            // UTC day before it.
+            CardSale(1, new DateTime(2026, 3, 10, 13, 0, 0, DateTimeKind.Utc), settlementValue: 7m, costOfGoodsSold: 1m),
+            // 01:00 on Wednesday 11 March in Sydney: before the cutoff, and its UTC date (10 March)
+            // is not its business date (11 March).
+            CardSale(2, new DateTime(2026, 3, 10, 14, 0, 0, DateTimeKind.Utc), settlementValue: 11m, costOfGoodsSold: 1m),
+            // 23:59:59.999 on Tuesday 10 March in Sydney: one millisecond before the baseline began.
+            CardSale(3, new DateTime(2026, 3, 10, 12, 59, 59, 999, DateTimeKind.Utc), settlementValue: 1000m, costOfGoodsSold: 1m),
+            // 20:00 on Wednesday 11 March in Sydney: yesterday, but long after the cutoff. This is
+            // the sale a comparison against yesterday's *whole* day would wrongly include.
+            CardSale(4, YesterdayInSydney, settlementValue: 2000m, costOfGoodsSold: 1m),
+            // 01:00 on Thursday 12 March in Sydney: today, which the baseline it is compared with
+            // must never reach into.
+            CardSale(5, TodayInSydney, settlementValue: 13m, costOfGoodsSold: 1m),
+            // Refunded, before the cutoff: counted by neither figure, because the baseline uses the
+            // same completed-sale policy today's revenue uses.
+            RefundedCardSale(6, new DateTime(2026, 3, 10, 13, 30, 0, DateTimeKind.Utc), settlementValue: 3000m));
+        await db.SaveChangesAsync();
+
+        var facts = await Store(db).GetFactsAsync(MachineId, SiteId, Time.Window, CancellationToken.None);
+
+        Assert.Equal(18m, facts.PreviousComparableDayGrossRevenue);
+        Assert.Equal(13m, facts.Today.GrossRevenue);
+    }
+
+    /// <summary>
+    /// A baseline with no completed sale is an honest <c>0</c>: the machine traded today and not at
+    /// the same point yesterday, which is a real comparison and not a missing figure.
+    /// </summary>
+    [Fact]
+    public async Task PreviousComparableDay_is_zero_when_no_completed_sale_falls_in_it()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = Db(connection);
+        db.NayaxSales.Add(CardSale(1, TodayInSydney, settlementValue: 6m, costOfGoodsSold: 3m));
+        await db.SaveChangesAsync();
+
+        var facts = await Store(db).GetFactsAsync(MachineId, SiteId, Time.Window, CancellationToken.None);
+
+        Assert.Equal(0m, facts.PreviousComparableDayGrossRevenue);
+        Assert.Equal(6m, facts.Today.GrossRevenue);
+    }
+
+    /// <summary>
+    /// The baseline is revenue only (issue #1177): it carries no profit, so no processing fee is
+    /// looked up for it. The fee engine is still asked for exactly the six periods whose direct
+    /// profit subtracts one, and never for the previous comparable day.
+    /// </summary>
+    [Fact]
+    public async Task PreviousComparableDay_asks_the_fee_engine_for_nothing()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = Db(connection);
+        db.NayaxSales.Add(CardSale(
+            1, new DateTime(2026, 3, 10, 14, 0, 0, DateTimeKind.Utc), settlementValue: 11m, costOfGoodsSold: 1m));
+        await db.SaveChangesAsync();
+        var fees = new RecordingProcessingFees(TestFinancialUseCases.ProcessingFees(db, Time.Calendar));
+
+        var facts = await new EfMachineDashboardFactsStore(db, fees)
+            .GetFactsAsync(MachineId, SiteId, Time.Window, CancellationToken.None);
+
+        Assert.Equal(11m, facts.PreviousComparableDayGrossRevenue);
+        Assert.Equal(6, fees.Periods.Count);
+        Assert.DoesNotContain(
+            Time.Window.PreviousComparableDay.StartUtc, fees.Periods.Select(period => period.StartUtc));
+        Assert.DoesNotContain(
+            new DateTime(2026, 3, 11), fees.Periods.Select(period => period.FirstBusinessDate));
+    }
+
     private static EfMachineDashboardFactsStore Store(AppDbContext db) =>
         new(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar));
+
+    /// <summary>
+    /// The production fee use case with every business-day period it was asked for recorded, so a
+    /// period that must not consult the fee engine can be shown not to.
+    /// </summary>
+    private sealed class RecordingProcessingFees : IGetNayaxProcessingFees
+    {
+        private readonly IGetNayaxProcessingFees _inner;
+
+        public RecordingProcessingFees(IGetNayaxProcessingFees inner) => _inner = inner;
+
+        public List<NayaxProcessingFeeBusinessPeriod> Periods { get; } = [];
+
+        public Task<NayaxProcessingFeeResult> Handle(
+            DateTime fromDate, DateTime toDate, long? machineId, CancellationToken cancellationToken) =>
+            _inner.Handle(fromDate, toDate, machineId, cancellationToken);
+
+        public Task<NayaxProcessingFeeResult> HandleBusinessPeriod(
+            NayaxProcessingFeeBusinessPeriod period, long? machineId, CancellationToken cancellationToken)
+        {
+            Periods.Add(period);
+            return _inner.HandleBusinessPeriod(period, machineId, cancellationToken);
+        }
+    }
 
     private static NayaxSales CardSale(
         long transactionId, DateTime authorizationTimeUtc, decimal settlementValue, decimal costOfGoodsSold) =>
@@ -111,6 +219,19 @@ public class EfMachineDashboardFactsStoreTests
             CostOfGoodsSold = costOfGoodsSold,
             PaymentMethod = "Credit Card",
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
+            MachineAuthorizationTime = authorizationTimeUtc
+        };
+
+    private static NayaxSales RefundedCardSale(
+        long transactionId, DateTime authorizationTimeUtc, decimal settlementValue) =>
+        new()
+        {
+            TransactionID = transactionId,
+            MachineID = MachineId,
+            SettlementValue = settlementValue,
+            CostOfGoodsSold = 1m,
+            PaymentMethod = "Credit Card",
+            TransactionStatusId = NayaxTransactionStatusIds.Refunded,
             MachineAuthorizationTime = authorizationTimeUtc
         };
 

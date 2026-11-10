@@ -150,6 +150,13 @@ public class OperatorReadableFinancialFigureTests
             FigureOutcome.Withheld,
             "Issue #1012, as above."),
         new(
+            "SiteSummaryDto.PreviousComparableDayRevenue",
+            FigureOutcome.Withheld,
+            "Issue #1177 added Today's baseline; issue #697's rule is unchanged and covers it, for "
+                + "the same reason the two periods above are covered - it is one more sum over the "
+                + "completed-sales read that is not made at all for a caller without the "
+                + "capability."),
+        new(
             "SiteProductDto.EstimatedCardProfit",
             FigureOutcome.Withheld,
             "Issue #697: null without the capability, and GetSiteProducts resolves neither the card "
@@ -169,6 +176,13 @@ public class OperatorReadableFinancialFigureTests
         new("MachineResponse.TwoWeeksAgoDirectProfit", FigureOutcome.Withheld, "Issue #698."),
         new("MachineResponse.PreviousComparableWeekDirectProfit", FigureOutcome.Withheld, "Issue #698."),
         new("MachineResponse.MonthToDateDirectProfit", FigureOutcome.Withheld, "Issue #698."),
+        new(
+            "MachineResponse.PreviousComparableDayGrossRevenue",
+            FigureOutcome.Withheld,
+            "Issue #1177 added Today's baseline; issue #698's rule is unchanged and covers it, "
+                + "because the figure is one more sum over the same completed sales and is written "
+                + "out as null by MachineResponseMapper.Redacted. It carries no profit, so there is "
+                + "no matching direct-profit figure to account for."),
         new(
             "MachineResponse.ProfitabilityStatus",
             FigureOutcome.Withheld,

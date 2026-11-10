@@ -74,7 +74,9 @@ public sealed class MachineAndProductFinancialRedactionApiTests
 
     /// <summary>
     /// Every <c>MachineResponse</c> field <c>Dashboard.ViewFinancials</c> governs: the six periods'
-    /// gross revenue, the six matching direct-profit figures and the profitability status.
+    /// gross revenue, the six matching direct-profit figures, the profitability status and - since
+    /// issue #1177 - the previous comparable day's gross revenue, which is governed by the same rule
+    /// because it is one more sum over the same completed sales.
     /// </summary>
     private static readonly string[] RestrictedMachineFields =
     [
@@ -82,7 +84,7 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         "twoWeeksAgoGrossRevenue", "previousComparableWeekGrossRevenue", "monthToDateGrossRevenue",
         "todayDirectProfit", "currentWeekDirectProfit", "lastWeekDirectProfit",
         "twoWeeksAgoDirectProfit", "previousComparableWeekDirectProfit", "monthToDateDirectProfit",
-        "profitabilityStatus",
+        "profitabilityStatus", "previousComparableDayGrossRevenue",
     ];
 
     /// <summary>
@@ -152,6 +154,11 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         Assert.Equal(ApiFactory.CostedSaleValue, costed.GetProperty("currentWeekGrossRevenue").GetDecimal());
         Assert.Equal(ApiFactory.CostedSaleValue, costed.GetProperty("monthToDateGrossRevenue").GetDecimal());
         Assert.Equal(0m, costed.GetProperty("lastWeekGrossRevenue").GetDecimal());
+
+        // Issue #1177's baseline is published to a caller who may see the figures, and the seeded
+        // machine made no sale at the same point yesterday, so the honest answer is 0 - which is
+        // what makes the Operator's null above a withheld figure rather than an empty period.
+        Assert.Equal(0m, costed.GetProperty("previousComparableDayGrossRevenue").GetDecimal());
         Assert.NotEqual(JsonValueKind.Null, costed.GetProperty("todayDirectProfit").ValueKind);
         Assert.True(costed.GetProperty("todayDirectProfit").GetDecimal() > 0m);
 

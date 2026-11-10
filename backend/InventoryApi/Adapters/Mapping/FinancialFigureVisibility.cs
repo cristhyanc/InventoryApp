@@ -8,7 +8,8 @@ namespace InventoryApi.Adapters.Mapping;
 /// <para>Issue #527 established that the week's revenue and the value of the business's inventory at
 /// cost are not sent to a role without <c>Dashboard.ViewFinancials</c>, and issue #681 closed the
 /// endpoint that reported that valuation on its own. The machine and product endpoints carry the
-/// same kind of figure - six periods of gross revenue, their direct profit, the profitability status
+/// same kind of figure - six periods of gross revenue, their direct profit, the previous comparable
+/// day's gross revenue (issue #1177), the profitability status
 /// and each product's inventory value - while existing for restocking work an Operator does, so they
 /// cannot be refused wholesale the way an endpoint with an <c>AuthorizeAttribute</c> can. The
 /// response is projected without those figures instead, and this is the one thing that says

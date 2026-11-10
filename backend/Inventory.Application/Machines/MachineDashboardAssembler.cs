@@ -60,7 +60,11 @@ internal static class MachineDashboardAssembler
             monthToDate.DirectProfit,
             twoWeeksAgo.DirectProfit,
             profitabilityStatus,
-            machine.CustomerID);
+            machine.CustomerID,
+            // Revenue only (issue #1177): the baseline carries no direct profit, so no policy is
+            // applied to it here and it is not one of the profits the missing-fee-rate status above
+            // is decided from.
+            facts.PreviousComparableDayGrossRevenue);
     }
 
     private static (decimal GrossRevenue, decimal? DirectProfit) Resolve(MachineDashboardPeriodFacts period) =>

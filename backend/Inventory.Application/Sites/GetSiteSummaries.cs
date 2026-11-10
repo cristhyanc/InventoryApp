@@ -23,7 +23,8 @@ namespace Inventory.Application.Sites;
 ///
 /// <para><b>Four published sales periods, and no period arithmetic of its own</b> (issue #1012). A
 /// summary publishes today, week-to-date, last week and month-to-date revenue, plus the
-/// previous-comparable-week baseline of the one comparison these figures carry. Each is
+/// previous-comparable-week baseline of the week's comparison and - since issue #1177 - the
+/// previous-comparable-day baseline of Today's. Each is
 /// <see cref="MachineDashboardWindow"/>'s own period of that name, compared against the same
 /// persisted instants with the same inclusive bounds the machine rows use, which is what makes a
 /// site's figure the sum of the gross revenue of the machine rows grouped under it for every one of
@@ -236,11 +237,18 @@ public sealed class GetSiteSummaries
     /// comparable week shares a start with - is earlier in the first half of one.
     /// <see cref="MachineDashboardWindow.TwoWeeksAgo"/> is deliberately absent: a site row publishes
     /// no figure for it, so reading it would be reading sales nothing reports.
+    ///
+    /// <see cref="MachineDashboardWindow.PreviousComparableDay"/> is in the minimum because the rule
+    /// is "every period this row publishes, from its own first instant" and it is now one of them -
+    /// not because it widens the bound. It never can: yesterday's start is inside the current
+    /// business week except on a Monday, when it is inside last week, both of which are already
+    /// here, so this bound and every figure that depends on it are unchanged (issue #1177).
     /// </summary>
     private static DateTime EarliestPublishedPeriodStartUtc(MachineDashboardWindow window) =>
         new[]
         {
             window.Today.StartUtc,
+            window.PreviousComparableDay.StartUtc,
             window.CurrentWeek.StartUtc,
             window.PreviousComparableWeek.StartUtc,
             window.LastWeek.StartUtc,
@@ -333,7 +341,10 @@ public sealed class GetSiteSummaries
             RevenueIn(sales, window.PreviousComparableWeek),
             RevenueIn(sales, window.LastWeek),
             RevenueIn(sales, window.MonthToDate),
-            machineStocks);
+            machineStocks,
+            // Today's own baseline (issue #1177), summed by the same RevenueIn over the same read:
+            // one more of the window's periods, with no arithmetic of its own here either.
+            RevenueIn(sales, window.PreviousComparableDay));
     }
 
     /// <summary>

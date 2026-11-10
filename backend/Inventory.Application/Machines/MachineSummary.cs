@@ -23,6 +23,14 @@ namespace Inventory.Application.Machines;
 /// <c>CustomerID</c>, the same value the site reads group the fleet by and publish as a site's id -
 /// or <c>null</c> when the machine is at no site (issue #980). It is copied from the machine read,
 /// never derived, so the dashboard can list each site's machines under that site.</para>
+///
+/// <para><paramref name="PreviousComparableDayGrossRevenue"/> is Today's own baseline (issue
+/// #1177): the completed-sale revenue of
+/// <see cref="MachineDashboardWindow.PreviousComparableDay"/>, counted exactly as
+/// <paramref name="TodayGrossRevenue"/> is counted. It is <b>revenue only</b> - there is
+/// deliberately no matching direct profit, so the period resolves no commission and looks up no
+/// processing fee - and it is appended last so every figure that came before it keeps its name,
+/// order and value.</para>
 /// </summary>
 public sealed record MachineSummary(
     long MachineId,
@@ -43,4 +51,5 @@ public sealed record MachineSummary(
     decimal? MonthToDateDirectProfit,
     decimal? TwoWeeksAgoDirectProfit,
     string? ProfitabilityStatus,
-    long? SiteId);
+    long? SiteId,
+    decimal PreviousComparableDayGrossRevenue);

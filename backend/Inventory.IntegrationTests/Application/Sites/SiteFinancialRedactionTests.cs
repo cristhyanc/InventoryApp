@@ -66,6 +66,7 @@ public class SiteFinancialRedactionTests
         Assert.Null(site.PreviousComparableWeekRevenue);
         Assert.Null(site.LastWeekRevenue);
         Assert.Null(site.MonthToDateRevenue);
+        Assert.Null(site.PreviousComparableDayRevenue);
     }
 
     /// <summary>
@@ -94,12 +95,15 @@ public class SiteFinancialRedactionTests
         var site = Assert.Single(await Summaries(role, facts));
 
         Assert.Equal(9m, site.TodayRevenue);
-        Assert.Equal(9m, site.CurrentWeekRevenue);
+        Assert.Equal(14m, site.CurrentWeekRevenue);
         Assert.Equal(3m, site.PreviousComparableWeekRevenue);
         // The 3.00 sale is at the previous comparable week's start, which is also last week's start
-        // and inside the month, so last week is that sale and month to date is both of them.
+        // and inside the month, so last week is that sale and month to date is all three.
         Assert.Equal(3m, site.LastWeekRevenue);
-        Assert.Equal(12m, site.MonthToDateRevenue);
+        Assert.Equal(17m, site.MonthToDateRevenue);
+        // The 5.00 sale is inside yesterday's elapsed time (issue #1177) and inside this week, so a
+        // caller who holds the capability is given a real baseline rather than an empty one.
+        Assert.Equal(5m, site.PreviousComparableDayRevenue);
         Assert.Single(facts.CompletedSalesRequests);
     }
 
@@ -123,6 +127,7 @@ public class SiteFinancialRedactionTests
         Assert.Null(asOperator.PreviousComparableWeekRevenue);
         Assert.Null(asOperator.LastWeekRevenue);
         Assert.Null(asOperator.MonthToDateRevenue);
+        Assert.Null(asOperator.PreviousComparableDayRevenue);
         Assert.Equal(asOwner.SiteId, asOperator.SiteId);
         Assert.Equal(asOwner.SiteName, asOperator.SiteName);
         Assert.Equal(asOwner.MachineCount, asOperator.MachineCount);
@@ -152,7 +157,8 @@ public class SiteFinancialRedactionTests
             .Handle(CancellationToken.None));
 
         Assert.Equal(9m, site.TodayRevenue);
-        Assert.Equal(12m, site.MonthToDateRevenue);
+        Assert.Equal(17m, site.MonthToDateRevenue);
+        Assert.Equal(5m, site.PreviousComparableDayRevenue);
     }
 
     /// <summary>
@@ -318,6 +324,8 @@ public class SiteFinancialRedactionTests
                 new(MachineId, SettlementValue: 9m, MachineAuthorizationTime: Time.NowUtc),
                 new(MachineId, SettlementValue: 3m,
                     MachineAuthorizationTime: Time.Window.PreviousComparableWeek.StartUtc),
+                new(MachineId, SettlementValue: 5m,
+                    MachineAuthorizationTime: Time.Window.PreviousComparableDay.StartUtc),
             ],
             costBasis: CostBasis,
             commissionByPrice: CommissionByPrice,
