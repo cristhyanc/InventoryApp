@@ -228,25 +228,6 @@ public sealed class PdfPageCounter : IPdfPageCounter
     }
 
     /// <summary>
-    /// The non-negative integer beside <paramref name="key"/>, or <see langword="false"/> when there
-    /// is no such key or its value is not one.
-    /// </summary>
-    private static bool TryIntegerValue(ReadOnlySpan<byte> window, ReadOnlySpan<byte> key, out int value)
-    {
-        value = 0;
-        var at = FindKey(window, key);
-        if (at < 0)
-        {
-            return false;
-        }
-
-        var index = at + key.Length;
-        SkipWhitespace(window, ref index);
-
-        return TryInteger(window, ref index, out value);
-    }
-
-    /// <summary>
     /// Where the name <paramref name="key"/> first appears in <paramref name="window"/> as a whole
     /// name - so <c>/Prev</c> is not found inside <c>/PrevX</c> - or -1.
     /// </summary>
@@ -297,27 +278,6 @@ public sealed class PdfPageCounter : IPdfPageCounter
         reference = new ObjectReference(number, generation);
 
         return true;
-    }
-
-    /// <summary>
-    /// How much of the object starting at <paramref name="start"/> is its dictionary: up to its
-    /// <c>endobj</c>, up to the <c>stream</c> keyword that ends a stream object's dictionary, and in
-    /// any case no further than <see cref="MaxDictionaryBytes"/>.
-    /// </summary>
-    private static int DictionaryLength(ReadOnlySpan<byte> content, int start)
-    {
-        var window = Window(content, start, MaxDictionaryBytes);
-        var length = window.Length;
-
-        var end = window.IndexOf("endobj"u8);
-        if (end >= 0)
-        {
-            length = end;
-        }
-
-        var stream = window[..length].IndexOf("stream"u8);
-
-        return stream >= 0 ? stream : length;
     }
 
     /// <summary>
@@ -482,42 +442,55 @@ public sealed class PdfPageCounter : IPdfPageCounter
                 if (offset >= content.Length
                     || visited.Count >= MaxRevisions
                     || !visited.Add(offset)
-                    || !table.TryReadSection(content, offset, out var trailer))
+                    || !table.TryReadSection(content, offset, out var trailer)
+                    || !table.TryApplyTrailer(trailer, isActive: visited.Count == 1, out next))
                 {
                     return null;
-                }
-
-                // A hybrid file keeps part of its active graph in a cross-reference stream, and an
-                // encrypted one cannot be read without decrypting it: neither can be verified here.
-                if (FindKey(trailer, "/XRefStm"u8) >= 0 || FindKey(trailer, "/Encrypt"u8) >= 0)
-                {
-                    return null;
-                }
-
-                if (visited.Count == 1)
-                {
-                    // Only the active trailer names the catalogue; an older one is history.
-                    if (!TryReference(trailer, "/Root"u8, out var root))
-                    {
-                        return null;
-                    }
-
-                    table.Root = root;
-                }
-
-                next = null;
-                if (FindKey(trailer, "/Prev"u8) >= 0)
-                {
-                    if (!TryIntegerValue(trailer, "/Prev"u8, out var previous))
-                    {
-                        return null;
-                    }
-
-                    next = previous;
                 }
             }
 
             return table;
+        }
+
+        /// <summary>
+        /// Takes what one revision's trailer says: the catalogue, when it is the active (newest)
+        /// trailer, and the offset of the previous section, if any. A hybrid file keeps part of its
+        /// active graph in a cross-reference stream and an encrypted one cannot be read without
+        /// decrypting it, so neither is accepted.
+        /// </summary>
+        private bool TryApplyTrailer(ReadOnlySpan<byte> trailer, bool isActive, out int? previous)
+        {
+            previous = null;
+
+            if (FindKey(trailer, "/XRefStm"u8) >= 0 || FindKey(trailer, "/Encrypt"u8) >= 0)
+            {
+                return false;
+            }
+
+            // Only the active trailer names the catalogue; an older one is history.
+            if (isActive)
+            {
+                if (!TryReference(trailer, "/Root"u8, out var root))
+                {
+                    return false;
+                }
+
+                Root = root;
+            }
+
+            if (FindKey(trailer, "/Prev"u8) < 0)
+            {
+                return true;
+            }
+
+            if (!TryIntegerValue(trailer, "/Prev"u8, out var offset))
+            {
+                return false;
+            }
+
+            previous = offset;
+
+            return true;
         }
 
         /// <summary>
@@ -593,20 +566,21 @@ public sealed class PdfPageCounter : IPdfPageCounter
 
             index += 4;
 
-            for (var subsections = 0; ; subsections++)
-            {
-                SkipWhitespace(content, ref index);
-                if (content[index..].StartsWith("trailer"u8))
-                {
-                    index += 7;
-                    break;
-                }
+            var subsections = 0;
+            SkipWhitespace(content, ref index);
 
+            while (!content[index..].StartsWith("trailer"u8))
+            {
                 if (subsections >= MaxSubsections || !TryReadSubsection(content, ref index))
                 {
                     return false;
                 }
+
+                subsections++;
+                SkipWhitespace(content, ref index);
             }
+
+            index += 7;
 
             SkipWhitespace(content, ref index);
             if (!content[index..].StartsWith("<<"u8))
@@ -664,6 +638,46 @@ public sealed class PdfPageCounter : IPdfPageCounter
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// The non-negative integer beside <paramref name="key"/>, or <see langword="false"/> when there
+        /// is no such key or its value is not one.
+        /// </summary>
+        private static bool TryIntegerValue(ReadOnlySpan<byte> window, ReadOnlySpan<byte> key, out int value)
+        {
+            value = 0;
+            var at = FindKey(window, key);
+            if (at < 0)
+            {
+                return false;
+            }
+
+            var index = at + key.Length;
+            SkipWhitespace(window, ref index);
+
+            return TryInteger(window, ref index, out value);
+        }
+
+        /// <summary>
+        /// How much of the object starting at <paramref name="start"/> is its dictionary: up to its
+        /// <c>endobj</c>, up to the <c>stream</c> keyword that ends a stream object's dictionary, and in
+        /// any case no further than <see cref="MaxDictionaryBytes"/>.
+        /// </summary>
+        private static int DictionaryLength(ReadOnlySpan<byte> content, int start)
+        {
+            var window = Window(content, start, MaxDictionaryBytes);
+            var length = window.Length;
+
+            var end = window.IndexOf("endobj"u8);
+            if (end >= 0)
+            {
+                length = end;
+            }
+
+            var stream = window[..length].IndexOf("stream"u8);
+
+            return stream >= 0 ? stream : length;
         }
     }
 }
