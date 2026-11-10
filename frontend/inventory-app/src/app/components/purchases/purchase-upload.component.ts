@@ -118,6 +118,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   form = {
     title: '',
     notes: '',
+    invoiceNumber: '',
     totalAmount: null as number | null,
     deliveryCost: null as number | null,
     deliveryGstClassification: GstClassification.Unknown,
@@ -200,6 +201,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.form = {
       title: '',
       notes: '',
+      invoiceNumber: '',
       totalAmount: null,
       deliveryCost: null,
       deliveryGstClassification: GstClassification.Unknown,
@@ -359,6 +361,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
         file: this.selectedFile,
         title: this.form.title.trim(),
         notes: this.form.notes || null,
+        // Sent as typed (issue #1162): the API trims it and stores blank as none, so nothing here
+        // has to agree with it about what "blank" or "trimmed" mean.
+        invoiceNumber: this.form.invoiceNumber || null,
         totalAmount: this.form.totalAmount,
         deliveryCost: this.form.deliveryCost,
         deliveryGstClassification: this.chargeClassification(

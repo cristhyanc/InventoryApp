@@ -11095,6 +11095,62 @@ grants `Purchasing.Operate`, so this page hides its own writes (see
 [Extending write-control hiding to Purchases and Suppliers](#extending-write-control-hiding-to-purchases-and-suppliers-issue-657)).
 Replacing a document is still not offered anywhere, so the Edit Purchase page is unchanged.
 
+#### A purchase's invoice number (issue #1162)
+
+A purchase records the supplier's own receipt or invoice number, so a user can see on the purchase which
+document it came from - and so receipt scanning (the rest of #975) has somewhere to put the number it reads.
+It is **one optional field and nothing else**: `Receipts.InvoiceNumber`, nullable, at most 100 characters,
+added by the additive `AddPurchaseInvoiceNumber` migration with **no backfill**, because a purchase recorded
+before it holds no supplier document number anywhere in this database and deriving one from the title, the
+notes or a document's file name would state an invoice number nobody entered.
+
+**Blank is none, and what is stored is trimmed.** `Inventory.Domain.Purchases.PurchaseInvoiceNumberPolicy` is
+the one place those rules live: `Normalize` trims the submission and answers `null` for anything that is only
+whitespace, and `IsWithinLimit` measures the trimmed value against `MaxLength` (100), which is also the
+mapped column's length - so the column and the refusal cannot disagree about what fits. "Nothing was typed",
+"spaces were typed" and "the field was cleared" are therefore one stored state rather than three blanks a
+reader would have to tell apart, and only the surrounding whitespace is removed: the case, the inner spacing
+and the punctuation are the supplier's own. An over-long number is **refused by name**
+(`PurchaseInvoiceNumberPolicy.TooLongMessage`, answered as `400`) rather than truncated, because a truncated
+invoice number is a different invoice number and would be reported back as though it were what the supplier
+printed.
+
+**Both write paths apply those rules in the same place, before anything is written.**
+`Inventory.Application.Purchases.PurchaseInvoiceNumberSubmission.Normalized` is called by `UploadPurchase` -
+after the existing GST check and **before** the document is stored or the purchase is written - and by
+`UpdatePurchase` before it hands the edit to the store's transaction, exactly as `PurchaseGstSubmission`
+already is. So a refused request leaves no purchase, no line, no stock movement and no bytes in storage, and
+an accepted one reaches `EfPurchaseStore` already normalised. The store then writes the value it is given,
+which is what lets an edit clear the number: it is assigned like `Notes`, so submitting none stores none.
+
+**Nothing about money or stock is involved.** An invoice number is a reference to paperwork, so the purchase's
+amounts, its lines, its GST classification and provenance, its restock movements, the affected products'
+costing quantity, inventory value and weighted-average cost, and its supplier-order allocation are all
+untouched by recording, changing or clearing one - `PurchaseInvoiceNumberApiTests` asserts that over HTTP by
+comparing the purchase's own fields, its lines, its restock movement and the product's whole costing position
+across an edit that changes only this field.
+
+**Tenant boundary.** The number is a column on a tenant-owned row, read and written through the ordinary
+query filters and the ownership enforcer with nothing added: another business's purchase is simply not there,
+so neither its invoice number nor the fact that it has one is readable, by id or in the list.
+
+**Contract change.** The published `Purchase` schema gains the nullable `invoiceNumber` beside `notes`, and
+the purchase read, the purchase list, the create and the attach responses all carry it - `null` for a purchase
+that records none, never `""` and never omitted, so a client reads "no invoice number" the way it already
+reads "no document". `PublishedResponseSchemaContractTests` records that as the third movement of its
+baselines since issue #304, and `PurchaseResponseJsonContractTests` pins the key's position. The create and
+edit requests take one more optional `invoiceNumber` form field; omitting it is what every existing client
+does, which records none and - on an edit - clears what was there, the same way an omitted `notes` field
+already behaves.
+
+**The frontend.** The field is one optional input in the shared Add/Edit layout's **Purchase details** header
+section (`PurchaseFormLayoutComponent`), labelled "Invoice number (optional)" and capped at 100 characters by
+the input itself; it is never validated in the browser, because the server is the only thing that decides what
+is too long. Both pages send what was typed rather than trimming it themselves, and send nothing for an empty
+field. The Purchases list has its own **Invoice number** column showing the number where there is one and the
+same muted dash the table already uses elsewhere where there is none. There is no search, no filter and no
+duplicate warning: those are explicitly out of this issue's scope.
+
 #### Reorder-alert machine-product fan-out (issue #47)
 
 The low-stock endpoints (`GET /api/products/alerts/low-stock`, and
@@ -12302,7 +12358,7 @@ supplier order, and its "Unable to load supplier order" and Cancel links point a
 
 #### Shared Add/Edit purchase layout (issue #1029)
 
-Add Purchase and Edit Purchase render one presentational layout, `components/purchases/purchase-form/purchase-form-layout.component.ts`, from the owner-approved Stitch design: Purchase details (supplier, date, title and the receipt control), Purchased items, the collapsible Additional costs and Notes, the Purchase summary and a sticky Cancel / Save purchase bar. Screenshots at 360/390/768/1440px are in `docs/screenshots/issue-1029/`, produced by `frontend/inventory-app/e2e/visual/purchase-form-redesign.visual.ts` against synthetic API answers.
+Add Purchase and Edit Purchase render one presentational layout, `components/purchases/purchase-form/purchase-form-layout.component.ts`, from the owner-approved Stitch design: Purchase details (supplier, date, title, the optional invoice number of [A purchase's invoice number](#a-purchases-invoice-number-issue-1162) and the receipt control), Purchased items, the collapsible Additional costs and Notes, the Purchase summary and a sticky Cancel / Save purchase bar. Screenshots at 360/390/768/1440px are in `docs/screenshots/issue-1029/`, produced by `frontend/inventory-app/e2e/visual/purchase-form-redesign.visual.ts` against synthetic API answers.
 
 - **Who owns what.** The layout owns presentation state only: which optional sections are expanded, which lines were touched and whether Save was pressed (the touched/submitted validation display). `PurchaseUploadComponent` (Add) and `PurchaseEditFormComponent` (Edit) still own their form object and lines, pass them in by reference, and keep every rule that differs between creating and editing - what a save submits, which GST classifications are sent (Add omits Not classified; Edit sends only changed ones with each stored line's `id`), how the date becomes an instant, and where Cancel goes. Field ids and `data-testid`s are prefixed per form (`editTitle`, `edit-purchase-item`), so both pages keep the ids their tests and the end-to-end suite use.
 - **One line-price module.** Every quantity and price change goes through the existing `purchase-line-price.ts` (`enterLineTotal`, `enterUnitCost`, `syncPurchaseLinePrice`), so the last-edited-field rule, the unrounded submitted unit cost and the four-decimal calculated display are unchanged. A line now starts with no product (`productId` 0) and both forms refuse to submit a line without one.
@@ -12358,7 +12414,9 @@ boundary](#page-composition-boundary-issue-191):
   the same validation. Issue #707 then added per-line price entry and the line-price validation this
   form now performs before it emits a payload, and issue #878 made it the two linked Unit price and
   Total price inputs described in
-  [Per-line price entry](#per-line-price-entry-total-paid-or-unit-price-issue-707); every other field
+  [Per-line price entry](#per-line-price-entry-total-paid-or-unit-price-issue-707), and issue #1162 added
+  the optional invoice number of
+  [A purchase's invoice number](#a-purchases-invoice-number-issue-1162) beside the title; every other field
   is still the one listed here. Every issue #431 rule still holds and its tests moved with the code: only a
   changed classification is submitted, a stored line travels with its own `id` and keeps its product,
   an absent charge submits no classification, and an unchanged purchase date is resubmitted as the

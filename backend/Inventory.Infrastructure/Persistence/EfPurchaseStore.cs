@@ -123,6 +123,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         {
             Title = fields.Title ?? string.Empty,
             Notes = fields.Notes,
+            InvoiceNumber = fields.InvoiceNumber,
             TotalAmount = fields.TotalAmount,
             DeliveryCost = fields.DeliveryCost,
             PackageCost = fields.PackageCost,
@@ -391,6 +392,9 @@ public sealed class EfPurchaseStore : IPurchaseStore
             purchase.PackageGstClassification, purchase.PackageGstClassificationSource);
         purchase.Title = string.IsNullOrWhiteSpace(fields.Title) ? purchase.Title : fields.Title;
         purchase.Notes = fields.Notes;
+        // Assigned like the notes above, which is what lets an edit clear it (issue #1162): the
+        // caller submits the number it wants stored, and none means none.
+        purchase.InvoiceNumber = fields.InvoiceNumber;
         purchase.TotalAmount = fields.TotalAmount;
         purchase.DeliveryCost = fields.DeliveryCost;
         purchase.PackageCost = fields.PackageCost;
@@ -813,6 +817,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         purchase.BusinessId,
         purchase.Title,
         purchase.Notes,
+        purchase.InvoiceNumber,
         purchase.TotalAmount,
         purchase.DeliveryCost,
         purchase.DeliveryGstClassification,

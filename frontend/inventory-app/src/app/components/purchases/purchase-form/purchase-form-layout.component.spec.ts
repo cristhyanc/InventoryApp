@@ -10,6 +10,7 @@ function emptyForm(overrides: Partial<PurchaseFormFields> = {}): PurchaseFormFie
   return {
     title: 'Acme — 24 Oct 2026',
     notes: '',
+    invoiceNumber: '',
     totalAmount: null,
     deliveryCost: null,
     deliveryGstClassification: GstClassification.Unknown,
@@ -128,6 +129,45 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
     refresh();
 
     expect(text()).toContain('Enter a purchase title.');
+  });
+
+  describe('invoice number (issue #1162)', () => {
+    it('offers an optional Invoice number field in the purchase details section', async () => {
+      await render();
+
+      const field = host.querySelector<HTMLInputElement>('#invoiceNumber');
+      expect(field).not.toBeNull();
+      expect(field!.required).toBe(false);
+      expect(field!.maxLength).toBe(100);
+      const label = host.querySelector<HTMLLabelElement>('label[for="invoiceNumber"]');
+      expect(label?.textContent?.trim()).toBe('Invoice number (optional)');
+      // In the header section beside the supplier, date and title - not in an optional panel.
+      expect(field!.closest('section')?.querySelector('h2')?.textContent?.replace(/\s+/g, ' ').trim())
+        .toBe('Purchase details');
+    });
+
+    it('shows the number the form holds and writes what is typed back to it', async () => {
+      const form = emptyForm({ invoiceNumber: 'INV-123' });
+      await render({ form });
+
+      const field = host.querySelector<HTMLInputElement>('#invoiceNumber')!;
+      expect(field.value).toBe('INV-123');
+
+      field.value = 'INV-456';
+      field.dispatchEvent(new Event('input'));
+
+      expect(form.invoiceNumber).toBe('INV-456');
+    });
+
+    it('never reports a problem for an empty invoice number, even after Save was pressed', async () => {
+      await render({ form: emptyForm({ invoiceNumber: '' }) });
+
+      (byTestId('purchase-save') as HTMLButtonElement).click();
+      refresh();
+
+      expect(host.querySelectorAll('.field-error')).toHaveLength(0);
+      expect(host.querySelector<HTMLInputElement>('#invoiceNumber')!.getAttribute('aria-invalid')).toBeNull();
+    });
   });
 
   it('reports a typed title, and a supplier or date change, for the page to act on', async () => {

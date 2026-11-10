@@ -23,6 +23,11 @@ import { ReceiptTotalComparison, compareReceiptTotal, purchaseTotal } from './pu
 export interface PurchaseFormFields {
   title: string;
   notes: string;
+  /**
+   * The supplier's own receipt or invoice number (issue #1162), as typed. Empty is "none": the form
+   * sends no number at all for it, and the API stores none.
+   */
+  invoiceNumber: string;
   totalAmount: number | null;
   deliveryCost: number | null;
   deliveryGstClassification: GstClassification;

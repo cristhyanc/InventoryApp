@@ -13,6 +13,12 @@ export interface PurchaseUploadPayload {
   file: File | null;
   title: string;
   notes?: string | null;
+  /**
+   * The supplier's own receipt or invoice number (issue #1162). `null` or omitted sends no
+   * `invoiceNumber` part at all, which records none on a create and clears the stored one on an
+   * edit; the API trims what it is sent and stores blank as none.
+   */
+  invoiceNumber?: string | null;
   totalAmount?: number | null;
   deliveryCost?: number | null;
   /**
@@ -177,11 +183,18 @@ export class PurchaseService {
     );
   }
 
-  /** The title/notes/amount/charge/GST/date/supplier fields shared by a create and an update multipart request. */
+  /**
+   * The title/notes/invoice-number/amount/charge/GST/date/supplier fields shared by a create and an
+   * update multipart request.
+   */
   private appendPurchaseFormFields(formData: FormData, payload: Omit<PurchaseUploadPayload, 'file' | 'items'>): void {
     formData.append('title', payload.title);
     if (payload.notes !== undefined && payload.notes !== null)
       formData.append('notes', payload.notes);
+    // Omitted rather than sent empty when there is none (issue #1162), which is how an edit clears
+    // the stored number: the API stores no number for a part it is not sent and for a blank one.
+    if (payload.invoiceNumber !== undefined && payload.invoiceNumber !== null)
+      formData.append('invoiceNumber', payload.invoiceNumber);
     if (payload.totalAmount !== undefined && payload.totalAmount !== null)
       formData.append('totalAmount', String(payload.totalAmount));
     if (payload.deliveryCost !== undefined && payload.deliveryCost !== null)

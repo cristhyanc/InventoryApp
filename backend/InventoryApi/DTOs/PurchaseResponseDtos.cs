@@ -19,6 +19,15 @@ public sealed record PurchaseResponse
     public required int Id { get; init; }
     public required string Title { get; init; }
     public string? Notes { get; init; }
+
+    /// <summary>
+    /// The supplier's own receipt or invoice number (issue #1162), emitted trimmed and <c>null</c>
+    /// for a purchase that records none - which is every purchase that existed before that issue.
+    /// The key is on the wire in both states, so a client reads "no invoice number" from a
+    /// <c>null</c> rather than from an absent member.
+    /// </summary>
+    public string? InvoiceNumber { get; init; }
+
     public decimal? TotalAmount { get; init; }
     public decimal? DeliveryCost { get; init; }
 

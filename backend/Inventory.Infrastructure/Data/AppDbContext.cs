@@ -6,6 +6,7 @@ using Inventory.Domain.MachineStock;
 using Inventory.Domain.NayaxSqs;
 using Inventory.Domain.PriceCatalogue;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Purchases;
 using Inventory.Domain.Stock;
 using Inventory.Domain.Subscriptions;
 using Inventory.Domain.Suppliers;
@@ -1166,6 +1167,12 @@ public class AppDbContext : DbContext
                 + @"OR (""StoredFileName"" IS NOT NULL AND ""ContentType"" IS NOT NULL "
                 + @"AND ""FileName"" IS NOT NULL AND ""FileSizeBytes"" IS NOT NULL)"));
         modelBuilder.Entity<PurchaseItem>().ToTable("ReceiptItems");
+
+        // The supplier's own receipt/invoice number (issue #1162). The length is the Domain's, so the
+        // column and the refusal the use cases give cannot disagree about what fits.
+        modelBuilder.Entity<Purchase>()
+            .Property(r => r.InvoiceNumber)
+            .HasMaxLength(PurchaseInvoiceNumberPolicy.MaxLength);
 
         modelBuilder.Entity<Purchase>()
             .Property(r => r.TotalAmount)

@@ -96,6 +96,11 @@ public sealed class UploadPurchase
         // Before the document is saved, so an unsupported classification stores nothing at all.
         PurchaseGstSubmission.EnsureClassificationsAreSupported(fields, items);
 
+        // Before the document is saved too, for the same reason: an over-long invoice number is
+        // refused with nothing written, and the number that is accepted is stored trimmed, with
+        // blank stored as none (issue #1162).
+        fields = PurchaseInvoiceNumberSubmission.Normalized(fields);
+
         // Resolved before the document is saved too, and before the write transaction opens: a
         // completion that cannot name who decided it is not auditable, so an unidentifiable caller
         // is refused rather than recorded as blank.

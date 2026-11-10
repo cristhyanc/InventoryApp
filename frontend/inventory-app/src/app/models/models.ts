@@ -1193,6 +1193,12 @@ export interface Purchase {
   id: number;
   title: string;
   notes?: string | null;
+  /**
+   * The supplier's own receipt or invoice number (issue #1162), trimmed as the API stored it, and
+   * `null` for a purchase that records none - which is every purchase recorded before that issue.
+   * Blank is never stored, so an empty string never arrives here.
+   */
+  invoiceNumber?: string | null;
   totalAmount?: number | null;
   deliveryCost?: number | null;
   deliveryGstClassification?: GstClassification;

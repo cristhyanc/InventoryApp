@@ -2701,6 +2701,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<long?>("FileSizeBytes")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("InvoiceNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Notes")
                         .HasColumnType("TEXT");
 

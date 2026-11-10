@@ -14,12 +14,17 @@ namespace Inventory.Application.Purchases;
 /// supporting document at all, and then all four are <c>null</c> together rather than blank. They
 /// are never half present - <c>Inventory.Domain.Purchases.PurchaseDocumentPolicy</c> states that
 /// rule and a database <c>CHECK</c> constraint enforces it.</para>
+///
+/// <para><see cref="InvoiceNumber"/> is the supplier's own receipt or invoice number (issue #1162),
+/// stored trimmed and <c>null</c> for a purchase that records none - which is every purchase that
+/// existed before that issue.</para>
 /// </summary>
 public sealed record PurchaseRecord(
     int Id,
     int BusinessId,
     string Title,
     string? Notes,
+    string? InvoiceNumber,
     decimal? TotalAmount,
     decimal? DeliveryCost,
     GstClassification DeliveryGstClassification,

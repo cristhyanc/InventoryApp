@@ -72,6 +72,7 @@ public class ComputePurchaseGstSummaryTests
             BusinessId: 1,
             Title: "Weekly restock",
             Notes: null,
+            InvoiceNumber: null,
             TotalAmount: null,
             DeliveryCost: deliveryCost,
             DeliveryGstClassification: delivery,

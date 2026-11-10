@@ -119,7 +119,18 @@ public class AddAttachmentStorageQuotaMigrationTests
         await MigrateToAsync(db, TargetMigration);
 
         await using var verify = TestAppDbContext.Unrestricted(OptionsFor(connection));
-        var purchase = await verify.Receipts.AsNoTracking().SingleAsync();
+        // Projected rather than materialised as an entity: this database stops at TargetMigration, so
+        // a column a later additive migration adds to Receipts (issue #1162's InvoiceNumber is the
+        // current example) exists in the model but not here. The values asserted are unchanged.
+        var purchase = await verify.Receipts.AsNoTracking()
+            .Select(receipt => new
+            {
+                receipt.FileName,
+                receipt.StoredFileName,
+                receipt.ContentType,
+                receipt.FileSizeBytes,
+            })
+            .SingleAsync();
         Assert.Equal(
             ("receipt.jpg", "stored-receipt.jpg", "image/jpeg", 3456L),
             (purchase.FileName, purchase.StoredFileName, purchase.ContentType, purchase.FileSizeBytes));
