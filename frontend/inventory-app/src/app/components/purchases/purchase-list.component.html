@@ -26,6 +26,7 @@
           <thead class="table-head">
             <tr>
               <th scope="col" class="table-cell">Purchase</th>
+              <th scope="col" class="table-cell">Invoice number</th>
               <th scope="col" class="table-cell">Supplier</th>
               <th scope="col" class="table-cell">Purchase Date</th>
               <th scope="col" class="table-cell">Items</th>
@@ -71,6 +72,16 @@
                       }
                     </div>
                   </div>
+                </td>
+                <!-- The supplier's own receipt or invoice number (issue #1162), shown only where the
+                     purchase records one; one that records none keeps the muted placeholder every
+                     other unavailable value in this table uses. -->
+                <td class="table-cell">
+                  @if (r.invoiceNumber) {
+                    <span data-testid="purchase-invoice-number" class="break-words">{{ r.invoiceNumber }}</span>
+                  } @else {
+                    <span data-testid="purchase-no-invoice-number" class="value-muted">&mdash;</span>
+                  }
                 </td>
                 <td class="table-cell">{{ r.supplier?.name ?? 'None' }}</td>
                 <td class="table-cell whitespace-nowrap">{{ r.purchaseDate | date:'mediumDate' }}</td>

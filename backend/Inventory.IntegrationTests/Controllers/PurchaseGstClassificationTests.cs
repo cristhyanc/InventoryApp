@@ -618,7 +618,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
         return await CreateController(db).Upload(
-            CreateFile(), "Weekly restock", null, null, deliveryCost, deliveryGst, packageCost, packageGst,
+            CreateFile(), "Weekly restock", null, null, null, deliveryCost, deliveryGst, packageCost, packageGst,
             new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc), null, Serialize(items),
             completeSupplierOrderId: null, completeSupplierOrderFingerprint: null);
     }
@@ -646,7 +646,7 @@ public sealed class PurchaseGstClassificationTests : IDisposable
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
         return await CreateController(db).Update(
-            id, "Weekly restock", null, null, deliveryCost, deliveryGst, packageCost, packageGst,
+            id, "Weekly restock", null, null, null, deliveryCost, deliveryGst, packageCost, packageGst,
             new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc), null, Serialize(items));
     }
 

@@ -124,6 +124,7 @@ export class PurchaseEditFormComponent {
   editForm = {
     title: '',
     notes: '',
+    invoiceNumber: '',
     totalAmount: null as number | null,
     deliveryCost: null as number | null,
     deliveryGstClassification: GstClassification.Unknown,
@@ -206,6 +207,9 @@ export class PurchaseEditFormComponent {
     this.saveRequested.emit({
       title: this.editForm.title.trim(),
       notes: this.editForm.notes || null,
+      // Sent as typed (issue #1162), and as nothing when the field was cleared - which is how the
+      // stored number is removed: the API stores no number for a blank or absent one.
+      invoiceNumber: this.editForm.invoiceNumber || null,
       totalAmount: this.editForm.totalAmount,
       deliveryCost: this.editForm.deliveryCost,
       deliveryGstClassification: this.chargeClassificationToSubmit(
@@ -290,6 +294,7 @@ export class PurchaseEditFormComponent {
     this.editForm = {
       title: purchase.title,
       notes: purchase.notes ?? '',
+      invoiceNumber: purchase.invoiceNumber ?? '',
       totalAmount: purchase.totalAmount ?? null,
       deliveryCost: purchase.deliveryCost ?? null,
       deliveryGstClassification: delivery,

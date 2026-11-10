@@ -89,13 +89,30 @@ public class AllowPurchaseWithoutDocumentMigrationTests
 
             // The purchase that already had a document still has exactly the document it had, and
             // its line, its stock movement and its product's costing position are untouched.
-            var purchase = await after.Receipts.AsNoTracking().Include(r => r.Items).SingleAsync();
+            // Projected rather than materialised as an entity: this database stops at
+            // TargetMigration, so a column a later additive migration adds to Receipts (issue #1162's
+            // InvoiceNumber is the current example) exists in the model but not here. The values
+            // asserted are unchanged.
+            var purchase = await after.Receipts.AsNoTracking()
+                .Select(receipt => new
+                {
+                    receipt.Id,
+                    receipt.Title,
+                    receipt.FileName,
+                    receipt.StoredFileName,
+                    receipt.ContentType,
+                    receipt.FileSizeBytes,
+                    receipt.TotalAmount,
+                    receipt.DeliveryCost,
+                    receipt.PackageCost,
+                })
+                .SingleAsync();
             Assert.Equal(
                 ("scan.jpg", "abc.jpg", "image/jpeg", 2048L),
                 (purchase.FileName, purchase.StoredFileName, purchase.ContentType, purchase.FileSizeBytes));
             Assert.Equal((20.90m, 5.00m, 2.70m), (purchase.TotalAmount, purchase.DeliveryCost, purchase.PackageCost));
             Assert.Equal("Weekly restock", purchase.Title);
-            var item = Assert.Single(purchase.Items);
+            var item = Assert.Single(await after.ReceiptItems.AsNoTracking().ToListAsync());
             Assert.Equal((purchase.Id, 1L, 12m, 1.10m), (item.ReceiptId, item.ProductId, item.Quantity, item.UnitCost));
             var movement = await after.StockAdjustments.AsNoTracking().SingleAsync();
             Assert.Equal((item.Id, 12, 1.10m, 13.20m), (movement.ReceiptItemId, movement.QuantityChange, movement.UnitCost, movement.TotalCost));

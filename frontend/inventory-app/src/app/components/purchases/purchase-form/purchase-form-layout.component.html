@@ -52,6 +52,24 @@
           <p class="field-error m-0" [id]="fieldId('titleError')">{{ titleProblem }}</p>
         }
       </div>
+
+      <!--
+        The supplier's own receipt or invoice number (issue #1162). Optional, so it is never
+        validated here: the server trims it, stores blank as none, and is the only thing that
+        refuses one that is too long.
+      -->
+      <div class="field">
+        <label class="field-label" [for]="fieldId('invoiceNumber')">Invoice number (optional)</label>
+        <input
+          [id]="fieldId('invoiceNumber')"
+          [attr.data-testid]="testId('purchase-invoice-number')"
+          [attr.name]="fieldId('invoiceNumber')" [ngModelOptions]="{ standalone: true }"
+          type="text"
+          maxlength="100"
+          autocomplete="off"
+          [(ngModel)]="form.invoiceNumber"
+        />
+      </div>
     </div>
     <div class="border-t border-rr-line px-4 py-3">
       <app-purchase-receipt-field

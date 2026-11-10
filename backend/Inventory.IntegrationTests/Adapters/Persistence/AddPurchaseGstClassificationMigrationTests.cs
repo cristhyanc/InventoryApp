@@ -76,13 +76,36 @@ public class AddPurchaseGstClassificationMigrationTests
                 (await MigrationSchemaProbe.ColumnNamesAsync(connection, "Receipts"))
                     .Where(name => name.Contains("Gst", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
 
-            var purchase = await after.Receipts.Include(r => r.Items).SingleAsync();
+            // Projected rather than materialised as an entity, for the same reason the product below
+            // is: this database stops at TargetMigration, so a column a later additive migration adds
+            // to Receipts (issue #1162's InvoiceNumber is the current example) exists in the model but
+            // not in this database. The values asserted are unchanged.
+            var purchase = await after.Receipts
+                .Select(receipt => new
+                {
+                    receipt.DeliveryGstClassification,
+                    receipt.DeliveryGstClassificationSource,
+                    receipt.PackageGstClassification,
+                    receipt.PackageGstClassificationSource,
+                    receipt.TotalAmount,
+                    receipt.DeliveryCost,
+                    receipt.PackageCost,
+                })
+                .SingleAsync();
             Assert.Equal(GstClassification.Unknown, purchase.DeliveryGstClassification);
             Assert.Equal(GstClassificationSource.Unknown, purchase.DeliveryGstClassificationSource);
             Assert.Equal(GstClassification.Unknown, purchase.PackageGstClassification);
             Assert.Equal(GstClassificationSource.Unknown, purchase.PackageGstClassificationSource);
 
-            var item = Assert.Single(purchase.Items);
+            var item = Assert.Single(await after.ReceiptItems
+                .Select(line => new
+                {
+                    line.GstClassification,
+                    line.GstClassificationSource,
+                    line.Quantity,
+                    line.UnitCost,
+                })
+                .ToListAsync());
             Assert.Equal(GstClassification.Unknown, item.GstClassification);
             Assert.Equal(GstClassificationSource.Unknown, item.GstClassificationSource);
 

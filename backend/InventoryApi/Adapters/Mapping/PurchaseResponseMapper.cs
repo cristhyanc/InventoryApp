@@ -31,6 +31,7 @@ public static class PurchaseResponseMapper
             Id = record.Id,
             Title = record.Title,
             Notes = record.Notes,
+            InvoiceNumber = record.InvoiceNumber,
             TotalAmount = record.TotalAmount,
             DeliveryCost = record.DeliveryCost,
             DeliveryGstClassification = record.DeliveryGstClassification,

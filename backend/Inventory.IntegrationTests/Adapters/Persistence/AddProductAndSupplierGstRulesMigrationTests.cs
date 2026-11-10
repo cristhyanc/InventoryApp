@@ -123,12 +123,31 @@ public class AddProductAndSupplierGstRulesMigrationTests
 
             // The purchase classifications issue #429 persisted are exactly where they were: the
             // rule columns are configuration and reclassify nothing.
-            var purchase = await after.Receipts.Include(r => r.Items).SingleAsync();
+            // Projected rather than materialised as an entity, for the same reason the product above
+            // is: a column a later additive migration adds to Receipts (issue #1162's InvoiceNumber)
+            // is in the model and not in this database.
+            var purchase = await after.Receipts
+                .Select(receipt => new
+                {
+                    receipt.DeliveryGstClassification,
+                    receipt.DeliveryGstClassificationSource,
+                    receipt.PackageGstClassification,
+                    receipt.PackageGstClassificationSource,
+                })
+                .SingleAsync();
             Assert.Equal(GstClassification.Taxable, purchase.DeliveryGstClassification);
             Assert.Equal(GstClassificationSource.Manual, purchase.DeliveryGstClassificationSource);
             Assert.Equal(GstClassification.GstFree, purchase.PackageGstClassification);
             Assert.Equal(GstClassificationSource.Manual, purchase.PackageGstClassificationSource);
-            var item = Assert.Single(purchase.Items);
+            var item = Assert.Single(await after.ReceiptItems
+                .Select(line => new
+                {
+                    line.GstClassification,
+                    line.GstClassificationSource,
+                    line.Quantity,
+                    line.UnitCost,
+                })
+                .ToListAsync());
             Assert.Equal(GstClassification.Taxable, item.GstClassification);
             Assert.Equal(GstClassificationSource.Manual, item.GstClassificationSource);
             Assert.Equal((12m, 1.10m), (item.Quantity, item.UnitCost));

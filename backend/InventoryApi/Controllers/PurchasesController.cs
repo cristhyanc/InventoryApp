@@ -109,7 +109,8 @@ public class PurchasesController : ControllerBase
         return File(file.Content, file.ContentType, file.FileName);
     }
 
-    // multipart/form-data: file (optional, issue #976) + title + notes + totalAmount + deliveryCost
+    // multipart/form-data: file (optional, issue #976) + title + notes + invoiceNumber (optional,
+    // issue #1162) + totalAmount + deliveryCost
     // + deliveryGstClassification + packageCost + packageGstClassification + purchaseDate
     // + supplierId + items + completeSupplierOrderId + completeSupplierOrderFingerprint
     [HttpPost]
@@ -119,6 +120,7 @@ public class PurchasesController : ControllerBase
         IFormFile? file,
         [FromForm] string title,
         [FromForm] string? notes,
+        [FromForm] string? invoiceNumber,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
         [FromForm] GstClassification? deliveryGstClassification,
@@ -144,7 +146,7 @@ public class PurchasesController : ControllerBase
                 ToFileInput(file),
                 new PurchaseFields(
                     title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
-                    deliveryGstClassification, packageGstClassification),
+                    deliveryGstClassification, packageGstClassification, invoiceNumber),
                 (ParseItems(items) ?? []).Select(ToItemInput).ToList(),
                 ToCompletionRequest(completeSupplierOrderId, completeSupplierOrderFingerprint),
                 CancellationToken.None);
@@ -199,6 +201,7 @@ public class PurchasesController : ControllerBase
         int id,
         [FromForm] string? title,
         [FromForm] string? notes,
+        [FromForm] string? invoiceNumber,
         [FromForm] decimal? totalAmount,
         [FromForm] decimal? deliveryCost,
         [FromForm] GstClassification? deliveryGstClassification,
@@ -217,7 +220,7 @@ public class PurchasesController : ControllerBase
                 id,
                 new PurchaseFields(
                     title, notes, totalAmount, deliveryCost, packageCost, purchaseDate, supplierId,
-                    deliveryGstClassification, packageGstClassification),
+                    deliveryGstClassification, packageGstClassification, invoiceNumber),
                 ParseItems(items)?.Select(ToItemInput).ToList(),
                 CancellationToken.None);
         }

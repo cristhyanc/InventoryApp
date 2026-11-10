@@ -162,6 +162,32 @@ describe('PurchaseUploadComponent supplier-order receipt navigation (issue #387)
   });
 });
 
+describe('PurchaseUploadComponent invoice number (issue #1162)', () => {
+  it('starts a new purchase with no invoice number', () => {
+    const { component } = readyToUpload();
+
+    expect(component.form.invoiceNumber).toBe('');
+  });
+
+  it('submits the invoice number that was typed', () => {
+    const { component, upload } = readyToUpload();
+    component.form.invoiceNumber = ' INV-123 ';
+
+    component.upload();
+
+    // Sent as typed: the server trims it, so the form never has to agree with it about trimming.
+    expect(uploadedPayload(upload).invoiceNumber).toBe(' INV-123 ');
+  });
+
+  it('submits no invoice number when the field was left empty', () => {
+    const { component, upload } = readyToUpload();
+
+    component.upload();
+
+    expect(uploadedPayload(upload).invoiceNumber).toBeNull();
+  });
+});
+
 describe('PurchaseUploadComponent GST classification mapping (issue #431)', () => {
   it('starts a new line and both charges as Not classified', () => {
     const { component } = readyToUpload();

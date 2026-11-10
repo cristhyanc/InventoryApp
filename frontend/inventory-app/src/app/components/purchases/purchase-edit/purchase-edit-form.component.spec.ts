@@ -133,6 +133,27 @@ describe('PurchaseEditFormComponent field inventory (issue #475)', () => {
     ]);
   });
 
+  it('opens on the stored invoice number, and on none for a purchase that records none', () => {
+    expect(createForm(purchase({ invoiceNumber: 'INV-123' })).component.editForm.invoiceNumber).toBe('INV-123');
+    expect(createForm(purchase({ invoiceNumber: null })).component.editForm.invoiceNumber).toBe('');
+    expect(createForm(purchase()).component.editForm.invoiceNumber).toBe('');
+  });
+
+  it('saves a changed invoice number, and saves none when it was cleared', () => {
+    const changed = createForm(purchase({ invoiceNumber: 'INV-123' }));
+    changed.component.editForm.invoiceNumber = ' INV-456 ';
+    changed.component.submit();
+
+    // Sent as typed: the server trims it and stores blank as none.
+    expect(changed.saved[0].invoiceNumber).toBe(' INV-456 ');
+
+    const cleared = createForm(purchase({ invoiceNumber: 'INV-123' }));
+    cleared.component.editForm.invoiceNumber = '';
+    cleared.component.submit();
+
+    expect(cleared.saved[0].invoiceNumber).toBeNull();
+  });
+
   it('keeps the line and subtotal arithmetic the inline editor used', () => {
     const { component } = createForm(purchase({ items: [item({ id: 11, quantity: 3, unitCost: 2 })] }));
 

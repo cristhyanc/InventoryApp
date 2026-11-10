@@ -20,6 +20,16 @@ public class Purchase : IBusinessOwned
     public int Id { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Notes { get; set; }
+
+    /// <summary>
+    /// The supplier's own receipt or invoice number for this purchase (issue #1162, sub-issue A of
+    /// #975). Optional, at most 100 characters, stored trimmed, and <c>null</c> for a purchase that
+    /// records none - which is what the additive <c>AddPurchaseInvoiceNumber</c> migration leaves on
+    /// every row that already existed, with no backfill.
+    /// <c>Inventory.Domain.Purchases.PurchaseInvoiceNumberPolicy</c> is where those rules are written.
+    /// </summary>
+    public string? InvoiceNumber { get; set; }
+
     public decimal? TotalAmount { get; set; }
     public decimal? DeliveryCost { get; set; }
 

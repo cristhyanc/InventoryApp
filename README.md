@@ -2218,6 +2218,14 @@ Screenshots: [Add, filled, 1440px](docs/screenshots/issue-1029/add-filled-1440px
 - **Title.** A new purchase opens on today's date with a suggested title made from the supplier and the date
   (for example "Sample Wholesale — 24 Oct 2026"), which follows the supplier and date until you type a title of
   your own. Nothing ever replaces a title you typed, or the title of a purchase you are editing.
+- **Invoice number (optional).** The supplier's own receipt or invoice number, beside the supplier, date and
+  title in **Purchase details**. Leave it empty if you have none — nothing about the purchase changes either
+  way. What you type is stored without the spaces around it (" INV-123 " is saved as "INV-123"), up to 100
+  characters; a longer one is refused with a message and nothing is saved, rather than being shortened into a
+  different number. Editing a purchase shows the number it holds, and clearing the field removes it. The
+  Purchases list has an **Invoice number** column that shows it, with a dash for a purchase that records none
+  — including every purchase recorded before this field existed. Purchases are not searched or filtered by it,
+  and two purchases may carry the same number: nothing warns about a duplicate.
 - **Products.** Each line's product is a search box over your own products: type part of the name and pick it
   from the list, which shows the product's size or unit where it has one. A new line starts with no product
   chosen, and a line cannot be saved until it has one. **Quantity** is always individual units, never cartons.

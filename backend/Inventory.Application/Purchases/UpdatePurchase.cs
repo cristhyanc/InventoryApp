@@ -18,7 +18,8 @@ public sealed class UpdatePurchase
     }
 
     /// <exception cref="InvalidOperationException">
-    /// A submitted GST classification is unsupported, or the store rejects the edit.
+    /// A submitted GST classification is unsupported, the submitted invoice number is too long, or
+    /// the store rejects the edit.
     /// </exception>
     public Task<PurchaseRecord?> Handle(
         int id, PurchaseFields fields, IReadOnlyList<PurchaseItemInput>? items, CancellationToken cancellationToken)
@@ -27,6 +28,9 @@ public sealed class UpdatePurchase
         // the edit's transaction opens and nothing is written (issue #429).
         PurchaseGstSubmission.EnsureClassificationsAreSupported(fields, items);
 
-        return _store.UpdateAsync(id, fields, items, cancellationToken);
+        // Likewise for the invoice number (issue #1162): an over-long one is refused before the
+        // transaction opens, and the accepted one reaches the store trimmed, with blank as none - so
+        // an edit that clears it stores no number rather than an empty string.
+        return _store.UpdateAsync(id, PurchaseInvoiceNumberSubmission.Normalized(fields), items, cancellationToken);
     }
 }
