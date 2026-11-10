@@ -330,10 +330,6 @@ public sealed class PdfPageCounter : IPdfPageCounter
         return IsDelimited(window, index + expected.Length);
     }
 
-    /// <summary>At most <paramref name="length"/> bytes of <paramref name="content"/> from <paramref name="start"/>.</summary>
-    private static ReadOnlySpan<byte> Window(ReadOnlySpan<byte> content, int start, int length) =>
-        content.Slice(start, Math.Min(length, content.Length - start));
-
     /// <summary>Whether the byte at <paramref name="index"/> ends the token before it.</summary>
     private static bool IsDelimited(ReadOnlySpan<byte> content, int index) =>
         index >= content.Length || IsNameBoundary(content[index]);
@@ -679,5 +675,9 @@ public sealed class PdfPageCounter : IPdfPageCounter
 
             return stream >= 0 ? stream : length;
         }
+
+        /// <summary>At most <paramref name="length"/> bytes of <paramref name="content"/> from <paramref name="start"/>.</summary>
+        private static ReadOnlySpan<byte> Window(ReadOnlySpan<byte> content, int start, int length) =>
+            content.Slice(start, Math.Min(length, content.Length - start));
     }
 }
