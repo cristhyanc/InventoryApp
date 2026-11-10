@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using Inventory.Application.SupportSessions;
@@ -204,8 +205,8 @@ public sealed class ReconcileNayaxSalesWithProvider
         {
             // Every pending inventory-cost rebuild this business has, before anything else. A replay
             // that failed earlier is a durable row and this is what retries it; it makes no Nayax
-            // call, and its failures reappear in the sync's own drain below, which is what decides
-            // whether this run counted as a success.
+            // call, and a product that still fails is retried again by the drains below; the last of
+            // them is what decides whether this run counted as a success.
             await _sales.RebuildInventoryCostsAsync(cancellationToken).ConfigureAwait(false);
 
             var outcome = await _sync
@@ -225,7 +226,21 @@ public sealed class ReconcileNayaxSalesWithProvider
             // product's rebuild in the evidence write's own transaction; this drains them through the
             // same path and failure handling as the sync, and a product that cannot be replayed keeps
             // its pending row for the next run.
-            await _sales.RebuildInventoryCostsAsync(cancellationToken).ConfigureAwait(false);
+            var drained = await _sales.RebuildInventoryCostsAsync(cancellationToken).ConfigureAwait(false);
+
+            // The sync no longer fails on a product whose cost history cannot be replayed - the sales
+            // are stored and that product is reported on the Dashboard instead - but this run still
+            // records no success while one is pending: it created or inherited work it did not
+            // finish, so what a later feature would read as "checked" is not true yet. Everything it
+            // did is kept, exactly as for any other failure, and the next hour tries again.
+            if (drained.Failures.Count > 0)
+            {
+                return counts with
+                {
+                    Outcome = NayaxSalesReconciliationOutcome.Failed,
+                    Failure = nameof(InventoryCostDataQualityException),
+                };
+            }
 
             // Last, and only here: the machine list and every machine's lastSales were read, the save
             // committed, every rebuild drained and every observation recorded. A run that threw

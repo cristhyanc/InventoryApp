@@ -359,9 +359,11 @@ public class RebuildProductCostTests
     {
         var store = new FakeLedgerStore(new InventoryCostLedger(
             new CostReplayProduct(1, 0, null, null),
-            [new CostReplayAdjustment(1, Day(1), DomainStock.StockAdjustmentReason.Restock, 1, 2m, true)],
-            [new CostReplaySale(9, Day(2)), new CostReplaySale(10, Day(3))],
             [],
+            [new CostReplaySale(9, Day(2)), new CostReplaySale(10, Day(3))],
+            // A costing repair, not a purchase, so the sale past it has no latest purchase cost to
+            // fall back on, and no Nayax cost either: still a fatal history.
+            [new CostReplayRepair(1, Day(1), 1, 2m)],
             null));
 
         var exception = await Assert.ThrowsAsync<InventoryCostDataQualityException>(

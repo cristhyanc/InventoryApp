@@ -20,6 +20,7 @@ import { ConfigService } from '../../services/config.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { MachineService } from '../../services/machine.service';
 import { NayaxSaleReviewService } from '../../services/nayax-sale-review.service';
+import { InventoryCostAttentionService } from '../../services/inventory-cost-attention.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import {
   PURCHASE_COST_MAX_IDS_PER_REQUEST,
@@ -214,6 +215,7 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       { provide: SiteService, useValue: { getAll: () => of([]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
       { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
+      { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummariesBatched: getSummaries } },
@@ -647,6 +649,7 @@ describe('Dashboard Reorder priorities enrichment reads (issue #1017)', () => {
         { provide: SiteService, useValue: { getAll: () => of([]) } },
         { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) } },
         { provide: NayaxSaleReviewService, useValue: { summary: () => of({ needsReviewCount: 0, notCountedCount: 0 }) } },
+        { provide: InventoryCostAttentionService, useValue: { list: () => of([]) } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
         {
