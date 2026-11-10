@@ -6,6 +6,11 @@ import { SupplierService } from '../../services/supplier.service';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import {
+  FakeImageDecoding,
+  fileOfSize,
+  installFakeImageDecoding
+} from '../shared/image-upload-preparation.spec-helpers';
 
 function expense(overrides: Partial<OperatingExpense> = {}): OperatingExpense {
   return {
@@ -122,5 +127,113 @@ describe('OperatingExpenseComponent write controls during a support session (iss
     jest.spyOn(window, 'confirm').mockReturnValue(true);
     component.remove(expense());
     expect(remove).toHaveBeenCalledWith(1);
+  });
+});
+
+/**
+ * Shrinking and converting a photo in the browser before an expense's supporting document is
+ * uploaded (issue #1161), through the same shared helper the purchase uploads use.
+ */
+describe('OperatingExpenseComponent supporting-document preparation (issue #1161)', () => {
+  let decoding: FakeImageDecoding | null = null;
+
+  afterEach(() => {
+    decoding?.restore();
+    decoding = null;
+  });
+
+  /** The change event the file input raises, with one chosen file. */
+  function choose(component: OperatingExpenseComponent, file: File): Promise<void> {
+    return component.onAttachmentSelected({ target: { files: [file] } } as unknown as Event);
+  }
+
+  it('uploads the shrunk photo rather than the 5 MB one that was chosen', async () => {
+    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
+    const { component, create } = await render();
+
+    component.startCreate();
+    component.form.description = 'Repair call-out';
+    await choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
+    component.save();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    const sent = create.mock.calls[0][1] as File;
+    expect(sent.size).toBe(450_000);
+    expect(sent.type).toBe('image/jpeg');
+  });
+
+  it('converts a HEIC photo the browser can decode into a .jpg', async () => {
+    decoding = installFakeImageDecoding({ decoded: { width: 3024, height: 4032 }, encodedBytes: 400_000 });
+    const { component, create } = await render();
+
+    component.startCreate();
+    component.form.description = 'Insurance';
+    await choose(component, fileOfSize(3_900_000, 'IMG_0007.HEIC'));
+    component.save();
+
+    expect((create.mock.calls[0][1] as File).name).toBe('IMG_0007.jpg');
+  });
+
+  it('uploads the original HEIC unchanged when the browser cannot decode it', async () => {
+    decoding = installFakeImageDecoding({ decoded: 'undecodable' });
+    const { component, create } = await render();
+    const heic = fileOfSize(3_400_000, 'IMG_0008.heic', 'image/heic');
+
+    component.startCreate();
+    component.form.description = 'Insurance';
+    await choose(component, heic);
+    component.save();
+
+    expect(create.mock.calls[0][1]).toBe(heic);
+  });
+
+  it('leaves a PDF alone', async () => {
+    decoding = installFakeImageDecoding();
+    const { component, create } = await render();
+    const pdf = fileOfSize(3 * 1024 * 1024, 'tax-invoice.pdf', 'application/pdf');
+
+    component.startCreate();
+    component.form.description = 'Accounting';
+    await choose(component, pdf);
+    component.save();
+
+    expect(create.mock.calls[0][1]).toBe(pdf);
+    expect(decoding.decodeCalls).toEqual([]);
+  });
+
+  it('saves nothing while the photo is still being prepared, and says so', async () => {
+    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
+    const { fixture, component, host, create } = await render();
+
+    component.startCreate();
+    component.form.description = 'Repair call-out';
+    const selection = choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
+    fixture.detectChanges();
+
+    expect(component.attachmentPreparing).toBe(true);
+    expect(host.querySelector('[data-testid="expense-attachment-preparing"]')).not.toBeNull();
+    component.save();
+    expect(create).not.toHaveBeenCalled();
+
+    await selection;
+    fixture.detectChanges();
+
+    expect(component.attachmentPreparing).toBe(false);
+    expect(host.querySelector('[data-testid="expense-attachment-preparing"]')).toBeNull();
+    component.save();
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a prepared photo when the form is cancelled', async () => {
+    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
+    const { component } = await render();
+
+    component.startCreate();
+    await choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
+    expect(component.selectedAttachment).not.toBeNull();
+
+    component.cancel();
+
+    expect(component.selectedAttachment).toBeNull();
   });
 });

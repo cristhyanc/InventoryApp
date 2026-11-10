@@ -8,6 +8,7 @@ import { LocalMachineService } from '../../services/local-machine.service';
 import { Supplier, LocalMachine } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { IconComponent } from '../shared/icon.component';
+import { prepareImageForUpload } from '../shared/image-upload-preparation';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
@@ -35,6 +36,11 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  *   the subtitle drops the Nayax sentence - but an expense already recorded under it keeps it, in
  *   the table, in the filter and on the edit form, because a recorded expense is a fact about the
  *   past and this page must never quietly reclassify one.
+ * - The **supporting document** goes through the shared browser preparation of issue #1161 before it
+ *   is uploaded: a photo is shrunk, and converted to JPEG where the browser can read HEIC, so what
+ *   is stored and what counts against the business's attachment storage is the smaller file. That
+ *   takes a moment, during which the field says so and Save waits for it; a PDF, an already small
+ *   image, and a photo the browser cannot decode are all uploaded exactly as they were chosen.
  */
 @Component({
   selector: 'app-operating-expense',
@@ -181,7 +187,11 @@ import { SupportSessionService } from '../../support-session/support-session.ser
               <label class="field">
                 <span class="field-label">Supporting Document</span>
                 <span class="field-hint">Receipt, invoice or other supporting document</span>
-                <input type="file" accept=".jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf" (change)="onAttachmentSelected($event)">
+                <input type="file" accept=".jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf" [disabled]="attachmentPreparing" (change)="onAttachmentSelected($event)">
+                @if (attachmentPreparing) {
+                  <!-- Issue #1161: the photo is shrunk here, so what is uploaded is what is stored. -->
+                  <output data-testid="expense-attachment-preparing" class="field-hint">Preparing photo…</output>
+                }
               </label>
               <label class="field">
                 <span class="field-label">Notes</span>
@@ -192,7 +202,7 @@ import { SupportSessionService } from '../../support-session/support-session.ser
               <button type="button" class="btn btn-link btn-sm mt-3" (click)="viewAttachment(editing)">View document</button>
             }
             <div class="page-actions mt-4">
-              <button type="button" class="btn btn-primary" [disabled]="sessionActive" (click)="save()">Save</button>
+              <button type="button" class="btn btn-primary" [disabled]="sessionActive || attachmentPreparing" (click)="save()">Save</button>
               <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
             </div>
           </div>
@@ -274,6 +284,8 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   machines: LocalMachine[] = [];
   editing: OperatingExpense | null = null;
   selectedAttachment: File | null = null;
+  /** Whether the chosen supporting document is still being shrunk or converted (issue #1161). */
+  attachmentPreparing = false;
   filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number; machineId?: number } = {};
   form: OperatingExpensePayload = this.emptyForm();
   /**
@@ -390,9 +402,27 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   // rather than merely invisible or inert - the endpoint refuses it either way.
   startCreate(): void { if (this.sessionActive) { return; } this.editing = { id: 0, ...this.emptyForm() }; this.form = this.emptyForm(); this.selectedAttachment = null; }
   startEdit(expense: OperatingExpense): void { if (this.sessionActive) { return; } this.editing = expense; this.selectedAttachment = null; this.form = { expenseDate: expense.expenseDate.substring(0, 10), category: expense.category, description: expense.description, amountExGst: expense.amountExGst, gstAmount: expense.gstAmount, totalAmount: expense.totalAmount, supplierId: expense.supplierId, siteId: expense.siteId, machineId: expense.machineId, servicePeriodStart: expense.servicePeriodStart, servicePeriodEnd: expense.servicePeriodEnd, notes: expense.notes }; }
-  onAttachmentSelected(event: Event): void { this.selectedAttachment = (event.target as HTMLInputElement).files?.[0] ?? null; }
+  /**
+   * The chosen document, prepared for upload first (issue #1161): a photo is shrunk and HEIC
+   * converted where the browser can, and anything else is kept exactly as it was chosen.
+   */
+  async onAttachmentSelected(event: Event): Promise<void> {
+    const file = (event.target as HTMLInputElement).files?.[0] ?? null;
+    this.selectedAttachment = null;
+    if (!file) { return; }
+
+    this.attachmentPreparing = true;
+    try {
+      this.selectedAttachment = await prepareImageForUpload(file);
+    } finally {
+      this.attachmentPreparing = false;
+    }
+  }
   cancel(): void { this.editing = null; this.selectedAttachment = null; }
-  save(): void { if (this.sessionActive || !this.form.description.trim()) { return; } const request = this.editing?.id ? this.service.update(this.editing.id, this.form, this.selectedAttachment) : this.service.create(this.form, this.selectedAttachment); request.subscribe(() => { this.editing = null; this.selectedAttachment = null; this.load(); }); }
+  // Nothing is saved while a chosen photo is still being prepared: the file this would upload does
+  // not exist yet, so saving would store the expense with no supporting document at all. Save is
+  // disabled then, and this is the same guard where the write happens.
+  save(): void { if (this.sessionActive || this.attachmentPreparing || !this.form.description.trim()) { return; } const request = this.editing?.id ? this.service.update(this.editing.id, this.form, this.selectedAttachment) : this.service.create(this.form, this.selectedAttachment); request.subscribe(() => { this.editing = null; this.selectedAttachment = null; this.load(); }); }
   remove(expense: OperatingExpense): void { if (!this.sessionActive && confirm(`Delete expense "${expense.description}"?`)) this.service.delete(expense.id).subscribe(() => this.load()); }
   categoryLabel(category: OperatingExpenseCategory): string { return this.categoryNames[Number(category)]?.replace(/([a-z])([A-Z])/g, '$1 $2') ?? 'Other'; }
   total(field: 'amountExGst' | 'gstAmount' | 'totalAmount'): number { return this.expenses.reduce((sum, item) => sum + Number(item[field] || 0), 0); }

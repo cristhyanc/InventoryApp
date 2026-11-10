@@ -11,7 +11,10 @@
     (change)="onFileSelected($event)"
   />
 
-  @if (pendingFile) {
+  @if (preparing) {
+    <!-- Issue #1161: a phone photo is shrunk here, so the size shown next is the size uploaded. -->
+    <output class="text-sm text-rr-muted" data-testid="purchase-receipt-preparing">Preparing photo…</output>
+  } @else if (pendingFile) {
     <div class="flex max-w-full flex-wrap items-center self-start gap-x-3 gap-y-1 rounded-lg border border-rr-teal-border bg-rr-teal-tint px-3 py-2 text-sm">
       <span class="flex min-w-0 items-center gap-2 text-rr-navy">
         <app-icon name="receipt" [size]="18" />

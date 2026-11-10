@@ -4,6 +4,7 @@ import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { Purchase } from '../../../models/models';
 import { PurchaseService } from '../../../services/purchase.service';
 import { ToastService } from '../../../services/toast.service';
+import { prepareImageForUpload } from '../../shared/image-upload-preparation';
 
 /** What a failed attach says when the API offered no sentence of its own. */
 export const ATTACH_FAILED_MESSAGE = 'Could not add the document. Try again.';
@@ -16,6 +17,11 @@ export const ATTACH_FAILED_MESSAGE = 'Could not add the document. Try again.';
  * on one row out of many - which is exactly the page-composition boundary of issue #191 (see
  * docs/architecture.md § Page composition boundary). The list composes it back in through
  * `@Input`/`@Output` and reloads when it reports a document was added.</p>
+ *
+ * <p>A chosen photo goes through the shared browser preparation of issue #1161 first - shrunk, and
+ * converted to JPEG where the browser can read HEIC - so what is sent is what the row's own size and
+ * the business's storage allowance are measured on. Preparing takes a moment, during which the row
+ * says so and Add document waits; a file that cannot be improved is sent exactly as chosen.</p>
  *
  * <p>It is deliberately not a <em>replace</em>: it is only rendered for a purchase with no
  * document, and the API answers `409` if one arrives in the meantime - which is shown as the
@@ -37,6 +43,9 @@ export class PurchaseDocumentAttachComponent {
   saving = false;
   error = '';
 
+  /** Whether the chosen photo is still being shrunk or converted (issue #1161). */
+  preparing = false;
+
   constructor(
     private readonly purchaseService: PurchaseService,
     private readonly toastService: ToastService
@@ -47,14 +56,27 @@ export class PurchaseDocumentAttachComponent {
     return `purchase-document-${this.purchase.id}`;
   }
 
-  onFileSelected(event: Event): void {
+  async onFileSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
-    this.selectedFile = input.files?.length ? input.files[0] : null;
+    const file = input.files?.length ? input.files[0] : null;
     this.error = '';
+    this.selectedFile = null;
+    if (!file) {
+      return;
+    }
+
+    this.preparing = true;
+    try {
+      this.selectedFile = await prepareImageForUpload(file);
+    } finally {
+      this.preparing = false;
+    }
   }
 
   attach(): void {
-    if (!this.selectedFile || this.saving) {
+    // Nothing is sent while a photo is still being prepared: the file this would upload does not
+    // exist yet. The button is disabled then, and this is the same guard where the write happens.
+    if (!this.selectedFile || this.saving || this.preparing) {
       return;
     }
 

@@ -4,10 +4,14 @@
     [id]="inputId"
     type="file"
     accept="image/*,.pdf"
-    [disabled]="saving"
+    [disabled]="saving || preparing"
     [attr.aria-label]="'Add a document to ' + purchase.title"
     (change)="onFileSelected($event)"
   />
+  @if (preparing) {
+    <!-- Issue #1161: the photo is shrunk here, so what is sent is what the quota is measured on. -->
+    <output data-testid="purchase-document-attach-preparing" class="text-xs text-rr-muted">Preparing photo…</output>
+  }
   @if (selectedFile) {
     <button
       data-testid="purchase-document-attach-upload"

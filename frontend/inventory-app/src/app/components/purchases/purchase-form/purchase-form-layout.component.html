@@ -60,6 +60,7 @@
         [stored]="storedReceipt"
         [disabled]="saving"
         (pendingFileChange)="pendingFileChange.emit($event)"
+        (preparingChange)="onReceiptPreparing($event)"
         (previewStored)="previewStoredReceipt.emit()"
       />
     </div>
@@ -416,7 +417,7 @@
   -->
   <div class="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30 -mx-4 flex items-center justify-between gap-3 border-t border-rr-line bg-white px-4 py-3 sm:-mx-6 sm:px-6 lg:bottom-0">
     <button type="button" class="rr-button-secondary" [attr.data-testid]="testId('purchase-cancel')" (click)="cancel()">Cancel</button>
-    <button type="submit" class="rr-button-primary" [attr.data-testid]="testId('purchase-save')" [disabled]="saving || sessionActive">
+    <button type="submit" class="rr-button-primary" [attr.data-testid]="testId('purchase-save')" [disabled]="saving || sessionActive || receiptPreparing">
       <app-icon name="check_circle" [size]="18" />
       {{ saving ? 'Saving...' : 'Save purchase' }}
     </button>
