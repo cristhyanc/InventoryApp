@@ -4417,6 +4417,36 @@ all: `SaveAsync` is called only when there is something to store, and the purcha
 values are stored as `NULL` together (see
 [A purchase's document is optional](#a-purchases-document-is-optional-issue-976)).
 
+**The browser may shrink or convert an image before it uploads it (issue #1161), and no server rule
+changes.** One shared frontend helper,
+`frontend/inventory-app/src/app/components/shared/image-upload-preparation.ts`, runs on the file a
+person chose, before it is sent, at all three upload places: the purchase form's receipt field
+(`purchase-receipt-field.component.ts`, which Add Purchase and Edit purchase both compose), the
+Purchases list's attach-document row (`purchase-document-attach.component.ts`), and the operating
+expense's supporting document (`operating-expense.component.ts`). It decodes the image with
+`createImageBitmap(file, { imageOrientation: 'from-image' })` — which is what applies the camera's
+orientation flag — draws it onto a canvas at a longest side of at most 2000 px, and encodes JPEG at
+quality 0.8. The result is used only when it is smaller than the original, or when the original is
+HEIC/HEIF, which has to be converted whatever it weighs because most browsers cannot read it at all;
+the file is then renamed to the same base name with a `.jpg` extension, so the extension, the
+content type and the bytes agree. A PDF, an image already under 1 MiB and within 2000 px, a format
+this browser cannot decode, a browser with no `createImageBitmap`, a missing canvas context and an
+encoder that produces nothing all return the **original file unchanged**, and none of them is
+reported to the person: the server's own rules are what refuse a file. HEIC is therefore converted
+only where the browser decodes it (Safari today) — no decoding library is bundled, so there is no
+new dependency and no third-party notice. The page holds the prepared file, so the size it shows,
+the bytes that reach `IDocumentStorage` and the bytes charged against the business's attachment
+storage quota (issue #968) are the same file; preparing is asynchronous, so each of the three places
+disables its own save while it is in progress rather than uploading nothing. For the same reason the
+operating expense page — the one place where a single form and a single chosen file are reused for
+every expense it edits — ties each preparation to the selection that started it: Cancel, Add
+Expense, Edit Expense and choosing another file each invalidate the preparation still running, and a
+photo that finishes afterwards is discarded rather than attached to whichever expense is open by
+then, and cannot clear the preparing state that is holding Save for a newer photo.
+`Inventory.Domain.Purchases.PurchaseDocumentPolicy` and
+`Inventory.Domain.Expenses.ExpenseAttachmentPolicy` are untouched: the 10 MiB ceiling and the allowed
+extensions still decide, and nothing on the server converts, inspects or resizes an image.
+
 `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` writes new documents to
 `{ContentRoot}/protected-files/{category}/`, reads them back from there or, failing that, from
 the legacy `{WebRoot}/{category}/` location, and refuses to overwrite an existing document or to

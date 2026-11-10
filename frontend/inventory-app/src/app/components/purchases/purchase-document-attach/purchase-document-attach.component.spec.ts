@@ -4,6 +4,11 @@ import { Observable, of, throwError } from 'rxjs';
 import { GstClassification, GstClassificationSource, Purchase } from '../../../models/models';
 import { PurchaseService } from '../../../services/purchase.service';
 import { ToastService } from '../../../services/toast.service';
+import {
+  FakeImageDecoding,
+  fileOfSize,
+  installFakeImageDecoding
+} from '../../shared/image-upload-preparation.spec-helpers';
 import { ATTACH_FAILED_MESSAGE, PurchaseDocumentAttachComponent } from './purchase-document-attach.component';
 
 /** A purchase recorded with no supporting document at all (issue #976). */
@@ -32,7 +37,7 @@ function purchase(): Purchase {
 }
 
 async function render(answer: Observable<Purchase> = of(purchase())) {
-  const attachDocument = jest.fn(() => answer);
+  const attachDocument = jest.fn((_purchaseId: number, _file: File) => answer);
   const success = jest.fn();
   await TestBed.configureTestingModule({
     imports: [PurchaseDocumentAttachComponent],
@@ -59,8 +64,8 @@ async function render(answer: Observable<Purchase> = of(purchase())) {
 }
 
 /** The change event the file input raises, with one chosen file. */
-function choose(component: PurchaseDocumentAttachComponent, file: File): void {
-  component.onFileSelected({ target: { files: [file] } } as unknown as Event);
+function choose(component: PurchaseDocumentAttachComponent, file: File): Promise<void> {
+  return component.onFileSelected({ target: { files: [file] } } as unknown as Event);
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -69,7 +74,7 @@ describe('PurchaseDocumentAttachComponent (issue #976)', () => {
   it('sends the chosen document for that purchase and reports it was added', async () => {
     const { component, attachDocument, attached, success } = await render();
     const file = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
-    choose(component, file);
+    await choose(component, file);
 
     component.attach();
 
@@ -100,7 +105,7 @@ describe('PurchaseDocumentAttachComponent (issue #976)', () => {
     const { component, attached } = await render(
       throwError(() => new HttpErrorResponse({ status: 409, error: refusal }))
     );
-    choose(component, new File(['content'], 'invoice.pdf', { type: 'application/pdf' }));
+    await choose(component, new File(['content'], 'invoice.pdf', { type: 'application/pdf' }));
 
     component.attach();
 
@@ -111,7 +116,7 @@ describe('PurchaseDocumentAttachComponent (issue #976)', () => {
 
   it('falls back to its own message when the failure carries no sentence', async () => {
     const { component } = await render(throwError(() => new HttpErrorResponse({ status: 500 })));
-    choose(component, new File(['content'], 'invoice.pdf', { type: 'application/pdf' }));
+    await choose(component, new File(['content'], 'invoice.pdf', { type: 'application/pdf' }));
 
     component.attach();
 
@@ -131,9 +136,75 @@ describe('PurchaseDocumentAttachComponent (issue #976)', () => {
 
     expect(host.querySelector('[data-testid="purchase-document-attach-upload"]')).toBeNull();
 
-    choose(component, new File(['content'], 'invoice.pdf', { type: 'application/pdf' }));
+    await choose(component, new File(['content'], 'invoice.pdf', { type: 'application/pdf' }));
     fixture.detectChanges();
 
     expect(host.querySelector('[data-testid="purchase-document-attach-upload"]')).not.toBeNull();
+  });
+
+  /** Issue #1161: the same shared helper every other attachment upload uses. */
+  describe('shrinking a photo before it is sent (issue #1161)', () => {
+    let decoding: FakeImageDecoding | null = null;
+
+    afterEach(() => {
+      decoding?.restore();
+      decoding = null;
+    });
+
+    it('sends the shrunk photo rather than the 5 MB one that was chosen', async () => {
+      decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
+      const { component, attachDocument } = await render();
+
+      await choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
+      component.attach();
+
+      expect(attachDocument).toHaveBeenCalledTimes(1);
+      const sent = attachDocument.mock.calls[0][1] as File;
+      expect(sent.size).toBe(450_000);
+      expect(sent.type).toBe('image/jpeg');
+    });
+
+    it('converts a HEIC photo the browser can decode into a .jpg', async () => {
+      decoding = installFakeImageDecoding({ decoded: { width: 3024, height: 4032 }, encodedBytes: 400_000 });
+      const { component, attachDocument } = await render();
+
+      await choose(component, fileOfSize(3_900_000, 'IMG_0007.heic', 'image/heic'));
+      component.attach();
+
+      expect((attachDocument.mock.calls[0][1] as File).name).toBe('IMG_0007.jpg');
+    });
+
+    it('sends the original HEIC when the browser cannot decode it, and shows no error of its own', async () => {
+      decoding = installFakeImageDecoding({ decoded: 'undecodable' });
+      const { component, attachDocument } = await render();
+      const heic = fileOfSize(3_400_000, 'IMG_0008.heic', 'image/heic');
+
+      await choose(component, heic);
+      component.attach();
+
+      expect(attachDocument).toHaveBeenCalledWith(7, heic);
+      expect(component.error).toBe('');
+    });
+
+    it('adds nothing while the photo is still being prepared', async () => {
+      decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
+      const { fixture, component, host, attachDocument } = await render();
+
+      const selection = choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
+      fixture.detectChanges();
+
+      expect(component.preparing).toBe(true);
+      expect(host.querySelector('[data-testid="purchase-document-attach-preparing"]')).not.toBeNull();
+      component.attach();
+      expect(attachDocument).not.toHaveBeenCalled();
+
+      await selection;
+      fixture.detectChanges();
+
+      expect(component.preparing).toBe(false);
+      expect(host.querySelector('[data-testid="purchase-document-attach-preparing"]')).toBeNull();
+      component.attach();
+      expect(attachDocument).toHaveBeenCalledTimes(1);
+    });
   });
 });

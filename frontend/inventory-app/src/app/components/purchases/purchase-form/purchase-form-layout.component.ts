@@ -132,6 +132,13 @@ export class PurchaseFormLayoutComponent implements OnChanges {
   titleTouched = false;
 
   /**
+   * Whether the receipt field is still shrinking or converting a chosen photo (issue #1161). Save
+   * waits for it: the file the page would upload does not exist yet, and saving now would record
+   * the purchase with no receipt at all.
+   */
+  receiptPreparing = false;
+
+  /**
    * Whether the person opened (`true`) or closed (`false`) an optional section. `null` follows its
    * content: an empty section starts collapsed and one holding a value starts expanded. Collapsing
    * only hides the fields; their values stay in the form and are still saved.
@@ -293,7 +300,18 @@ export class PurchaseFormLayoutComponent implements OnChanges {
 
   // ---- Actions ------------------------------------------------------------------------------
 
+  /** The receipt field reports a photo being prepared, or finished with (issue #1161). */
+  onReceiptPreparing(preparing: boolean): void {
+    this.receiptPreparing = preparing;
+  }
+
   submit(): void {
+    // Checked here as well as disabled on the button, so a save that would lose the chosen receipt
+    // is actually unavailable rather than merely inert.
+    if (this.receiptPreparing) {
+      return;
+    }
+
     this.submitAttempted = true;
     this.submitted.emit();
   }

@@ -1,4 +1,9 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import {
+  FakeImageDecoding,
+  fileOfSize,
+  installFakeImageDecoding
+} from '../../shared/image-upload-preparation.spec-helpers';
 import { PurchaseReceiptFieldComponent } from './purchase-receipt-field.component';
 
 describe('PurchaseReceiptFieldComponent (issue #1029)', () => {
@@ -7,6 +12,12 @@ describe('PurchaseReceiptFieldComponent (issue #1029)', () => {
   let host: HTMLElement;
   let changes: (File | null)[];
   let previews: number;
+  let decoding: FakeImageDecoding | null = null;
+
+  afterEach(() => {
+    decoding?.restore();
+    decoding = null;
+  });
 
   beforeEach(async () => {
     await TestBed.configureTestingModule({ imports: [PurchaseReceiptFieldComponent] }).compileComponents();
@@ -28,16 +39,65 @@ describe('PurchaseReceiptFieldComponent (issue #1029)', () => {
     expect((byTestId('purchase-receipt-input') as HTMLInputElement).accept).toBe('image/*,.pdf');
   });
 
-  it('opens the file chooser from Attach receipt and reports the chosen file', () => {
+  it('opens the file chooser from Attach receipt and reports the chosen file', async () => {
     const input = byTestId('purchase-receipt-input') as HTMLInputElement;
     const click = jest.spyOn(input, 'click').mockImplementation(() => undefined);
     byTestId('purchase-receipt-attach')!.click();
     expect(click).toHaveBeenCalled();
 
     const file = new File(['scan'], 'receipt.pdf', { type: 'application/pdf' });
-    component.onFileSelected({ target: { files: [file], value: 'C:\\fakepath\\receipt.pdf' } } as unknown as Event);
+    await component.onFileSelected({ target: { files: [file], value: 'C:\\fakepath\\receipt.pdf' } } as unknown as Event);
 
     expect(changes).toEqual([file]);
+  });
+
+  /**
+   * Issue #1161: the photo is shrunk before it is reported, so the size this control shows, the
+   * bytes the purchase uploads and what counts against the business's storage allowance are one
+   * and the same file.
+   */
+  it('shrinks a phone photo before reporting it, and shows the size that will be uploaded', async () => {
+    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_560 });
+    // What the page does with the reported file: it becomes the pending receipt this control shows.
+    component.pendingFileChange.subscribe((file) => fixture.componentRef.setInput('pendingFile', file));
+
+    const photo = fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg');
+    await component.onFileSelected({ target: { files: [photo], value: '' } } as unknown as Event);
+    fixture.detectChanges();
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]?.size).toBe(450_560);
+    expect(byTestId('purchase-receipt-name')?.textContent).toBe('IMG_4312.jpg');
+    expect(host.textContent).toContain('440 KB');
+  });
+
+  it('converts a HEIC photo the browser can decode into a .jpg', async () => {
+    decoding = installFakeImageDecoding({ decoded: { width: 3024, height: 4032 }, encodedBytes: 400_000 });
+
+    await component.onFileSelected(
+      { target: { files: [fileOfSize(3_900_000, 'IMG_0007.HEIC')], value: '' } } as unknown as Event);
+
+    expect(changes[0]?.name).toBe('IMG_0007.jpg');
+    expect(changes[0]?.type).toBe('image/jpeg');
+  });
+
+  it('says it is preparing the photo while it is being shrunk, and reports that to the form', async () => {
+    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_560 });
+    const preparing: boolean[] = [];
+    component.preparingChange.subscribe((value) => preparing.push(value));
+
+    const selection = component.onFileSelected(
+      { target: { files: [fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg')], value: '' } } as unknown as Event);
+    fixture.detectChanges();
+    expect(byTestId('purchase-receipt-preparing')).not.toBeNull();
+    expect(component.preparing).toBe(true);
+
+    await selection;
+    fixture.detectChanges();
+
+    expect(component.preparing).toBe(false);
+    expect(byTestId('purchase-receipt-preparing')).toBeNull();
+    expect(preparing).toEqual([true, false]);
   });
 
   it('shows a chosen file with Preview, Replace and Remove, and hides Attach', () => {
