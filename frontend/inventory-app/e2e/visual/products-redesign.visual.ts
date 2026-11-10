@@ -214,6 +214,30 @@ async function expectNoHorizontalOverflow(page: Page): Promise<void> {
   expect(overflow).toBeLessThanOrEqual(0);
 }
 
+/**
+ * Issue #1179: the open help panel must wrap its whole explanation inside its own width. The
+ * desktop Cheapest supplier heading is `whitespace-nowrap`, and the panel - top layer or not -
+ * inherits from that heading in the DOM, so this is measured on the panel itself: a panel that
+ * scrolls sideways has a scrollWidth wider than its clientWidth (1px allows for rounding).
+ */
+async function expectHelpPanelWraps(page: Page): Promise<void> {
+  const panel = page.getByTestId('help-toggletip-panel');
+  await expect(panel).toBeVisible();
+  const size = await panel.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return {
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      left: box.left,
+      right: box.right,
+      viewport: window.innerWidth
+    };
+  });
+  expect(size.scrollWidth).toBeLessThanOrEqual(size.clientWidth + 1);
+  expect(size.left).toBeGreaterThanOrEqual(0);
+  expect(size.right).toBeLessThanOrEqual(size.viewport);
+}
+
 async function capture(page: Page, name: string, fullPage = true): Promise<void> {
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: join(screenshotDirectory, `${name}.png`), fullPage });
@@ -326,4 +350,41 @@ test.describe('Products redesign (issue #1093, issue #1098)', () => {
       await expect(compare).toBeFocused();
     });
   }
+});
+
+test.describe('Cheapest supplier help wraps without horizontal scrolling (issue #1179)', () => {
+  const issueScreenshots = resolve(__dirname, '..', '..', '..', '..', 'docs', 'screenshots', 'issue-1179');
+  mkdirSync(issueScreenshots, { recursive: true });
+
+  for (const width of [1440, 390, 360]) {
+    test(`Cheapest supplier help open at ${width}px`, async ({ page }) => {
+      await openProducts(page, width);
+      const trigger = page.locator('button[aria-label="About Cheapest supplier"]:visible').first();
+      await trigger.scrollIntoViewIfNeeded();
+      await trigger.click();
+
+      const panel = page.getByTestId('help-toggletip-panel');
+      await expect(panel).toHaveText(/when it was last checked\.$/);
+      await expectHelpPanelWraps(page);
+      await expectNoHorizontalOverflow(page);
+      await page.screenshot({ path: join(issueScreenshots, `products-cheapest-supplier-help-${width}px.png`) });
+
+      await page.keyboard.press('Escape');
+      await expect(panel).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+    });
+  }
+
+  test('Cheapest supplier help opens and closes from the keyboard at 1440px', async ({ page }) => {
+    await openProducts(page, 1440);
+    const trigger = page.locator('button[aria-label="About Cheapest supplier"]:visible').first();
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await expectHelpPanelWraps(page);
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('help-toggletip-panel')).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
 });

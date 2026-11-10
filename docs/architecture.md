@@ -9797,10 +9797,22 @@ stays readable at 360px, and flipped above the button when there is no room belo
 on scroll and resize outside the Angular zone, since placing it changes nothing Angular renders. A
 browser with no Popover API still renders and places the panel; only the top layer is lost.
 
+The help text always wraps within the panel's viewport-constrained width and the panel never
+scrolls horizontally (issue #1179). The top layer does not stop CSS inheritance: the panel still
+inherits from the element it is placed in, and the Products page's Cheapest supplier heading is
+`whitespace-nowrap`, which once put the whole explanation on one line inside the 288px panel with a
+sideways scrollbar (the browser's default `[popover]` style is `overflow: auto`). The panel therefore
+resets `white-space` itself (`whitespace-normal`) and lets a long word or URL break (`break-words`),
+so a caller's heading or cell styles cannot widen it; the caller's own `whitespace-nowrap` on the
+heading text stays as it is.
+
 Jest covers everything the component itself decides (`help-toggletip.component.spec.ts`). The top
 layer, hit testing and layout are the platform's and are not emulated under jsdom, so the
 not-clipped, inside-the-viewport result is proved in a real browser by the Playwright captures named
-above instead.
+above instead. The wrapping is proved the same way: the Cheapest supplier help tests in
+`e2e/visual/products-redesign.visual.ts` (1440px, 390px and 360px, plus keyboard open and Escape)
+and `e2e/visual/dashboard-redesign.visual.ts` (1440px, 390px and 360px) assert the open panel's
+`scrollWidth` is no wider than its `clientWidth` and that it stays inside the viewport.
 
 #### Site and machine performance (issue #987)
 
