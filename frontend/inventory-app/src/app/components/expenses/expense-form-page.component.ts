@@ -32,6 +32,13 @@ export const EXPENSE_NETWORK_SAVE_FAILURE =
   'The expense was not saved. Check your connection and try again.';
 
 /**
+ * The one notice both pages show while a support session is active (issue #1167). It is deliberately
+ * a single shared sentence rather than one worded per page: Add and Edit refuse the same thing - any
+ * write to an expense from outside the business - and the issue requires the same note on both.
+ */
+export const EXPENSE_SUPPORT_SESSION_NOTE = "Expenses can't be added during a support session.";
+
+/**
  * Add expense and Edit expense (issue #1167), reached at `/expenses/new` and `/expenses/:id/edit`.
  *
  * Recording an expense used to be a card the `/expenses` register opened above itself; these are the
@@ -176,14 +183,11 @@ export class ExpenseFormPageComponent implements OnInit, OnDestroy, PendingWorkG
   }
 
   /**
-   * Why no form is shown, or none may be saved, during a support session. Adding is refused
-   * outright; an existing expense is still shown, read-only, because reading it is not a write.
+   * Why no form is shown, or none may be saved, during a support session: the same note on both
+   * pages, as issue #1167 requires. Adding is refused outright; an existing expense is still shown,
+   * read-only, because reading it is not a write.
    */
-  get supportSessionNote(): string {
-    return this.creating
-      ? "Expenses can't be added during a support session."
-      : "Expenses can't be changed during a support session.";
-  }
+  readonly supportSessionNote = EXPENSE_SUPPORT_SESSION_NOTE;
 
   /** Whether the whole form is withheld: only Add expense during a support session. */
   get addBlockedBySession(): boolean {

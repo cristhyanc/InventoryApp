@@ -13,7 +13,11 @@ import {
 } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
-import { EXPENSE_UNSAVED_LEAVE_WARNING, ExpenseFormPageComponent } from './expense-form-page.component';
+import {
+  EXPENSE_SUPPORT_SESSION_NOTE,
+  EXPENSE_UNSAVED_LEAVE_WARNING,
+  ExpenseFormPageComponent
+} from './expense-form-page.component';
 import { ExpenseFormComponent } from './expense-form.component';
 
 /** The single-expense read's own shape: a nested `supplier`, and the two timestamps. */
@@ -536,12 +540,14 @@ describe('ExpenseFormPageComponent leaving the page (issue #1167)', () => {
  * save. Reading an expense is not a write, so Edit still shows it.
  */
 describe('ExpenseFormPageComponent during a support session (issue #1167)', () => {
+  it('is the sentence the issue specifies', () => {
+    expect(EXPENSE_SUPPORT_SESSION_NOTE).toBe("Expenses can't be added during a support session.");
+  });
+
   it('withholds the Add expense form entirely, and says why', async () => {
     const { host } = await render({ id: null, sessionActive: true });
 
-    expect(testId(host, 'expense-form-support-session')?.textContent).toContain(
-      "Expenses can't be added during a support session."
-    );
+    expect(testId(host, 'expense-form-support-session')?.textContent).toContain(EXPENSE_SUPPORT_SESSION_NOTE);
     expect(testId(host, 'expense-form')).toBeNull();
     expect(testId(host, 'expense-form-session-back')?.textContent?.trim()).toBe('Back to expenses');
   });
@@ -549,13 +555,27 @@ describe('ExpenseFormPageComponent during a support session (issue #1167)', () =
   it('shows an existing expense read-only, with no primary action, and says why', async () => {
     const { fixture, host } = await render({ id: '7', sessionActive: true });
 
-    expect(testId(host, 'expense-form-support-session')?.textContent).toContain(
-      "Expenses can't be changed during a support session."
-    );
+    expect(testId(host, 'expense-form-support-session')?.textContent).toContain(EXPENSE_SUPPORT_SESSION_NOTE);
     expect(testId(host, 'expense-form')).not.toBeNull();
     expect(testId(host, 'expense-form-submit')).toBeNull();
     expect((testId(host, 'expense-form-fields') as HTMLFieldSetElement).disabled).toBe(true);
     expect(form(fixture).form.description).toBe('Annual policy');
+  });
+
+  it('shows one and the same notice on Add expense and on Edit expense', async () => {
+    const { fixture, host, paramMap } = await render({ id: null, sessionActive: true });
+    const note = () => testId(host, 'expense-form-support-session')?.textContent?.trim();
+
+    expect(heading(host)).toBe('Add expense');
+    expect(note()).toBe(EXPENSE_SUPPORT_SESSION_NOTE);
+
+    // The same page carried to an edit address: the notice is one shared sentence, so it does not
+    // change with the address it is shown on.
+    paramMap.next(convertToParamMap({ id: '7' }));
+    fixture.detectChanges();
+
+    expect(heading(host)).toBe('Edit expense');
+    expect(note()).toBe(EXPENSE_SUPPORT_SESSION_NOTE);
   });
 
   it('writes nothing even if the page\'s save handler is invoked directly', async () => {
