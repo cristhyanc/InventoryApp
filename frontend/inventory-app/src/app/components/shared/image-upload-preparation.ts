@@ -37,10 +37,10 @@ export const UNTOUCHED_IMAGE_SIZE_LIMIT_BYTES = 1024 * 1024;
 const JPEG_CONTENT_TYPE = 'image/jpeg';
 
 /** The image extensions this helper recognises when the browser reported no content type. */
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'];
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
 
 /** The HEIC/HEIF extensions, which are what an iPhone photo arrives as. */
-const HEIC_EXTENSIONS = ['.heic', '.heif'];
+const HEIC_EXTENSIONS = new Set(['.heic', '.heif']);
 
 /**
  * The file to upload for the one the person chose: a JPEG of at most
@@ -123,12 +123,12 @@ function isPreparableImage(file: File): boolean {
   if (file.type.startsWith('image/')) {
     return true;
   }
-  return IMAGE_EXTENSIONS.includes(extensionOf(file.name));
+  return IMAGE_EXTENSIONS.has(extensionOf(file.name));
 }
 
 /** Whether this is an iPhone photo: a browser that cannot read HEIC reports no type for one. */
 function isHeic(file: File): boolean {
-  return HEIC_EXTENSIONS.includes(extensionOf(file.name)) ||
+  return HEIC_EXTENSIONS.has(extensionOf(file.name)) ||
     file.type === 'image/heic' || file.type === 'image/heif';
 }
 
