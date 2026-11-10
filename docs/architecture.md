@@ -4423,7 +4423,9 @@ changes.** One shared frontend helper,
 person chose, before it is sent, at all three upload places: the purchase form's receipt field
 (`purchase-receipt-field.component.ts`, which Add Purchase and Edit purchase both compose), the
 Purchases list's attach-document row (`purchase-document-attach.component.ts`), and the operating
-expense's supporting document (`operating-expense.component.ts`). It decodes the image with
+expense's supporting document (`expense-form.component.ts`, the form Add expense and Edit expense
+share since issue #1167; it was `operating-expense.component.ts` while that form was a card the
+register opened above itself). It decodes the image with
 `createImageBitmap(file, { imageOrientation: 'from-image' })` — which is what applies the camera's
 orientation flag — draws it onto a canvas at a longest side of at most 2000 px, and encodes JPEG at
 quality 0.8. The result is used only when it is smaller than the original, or when the original is
@@ -4438,11 +4440,11 @@ new dependency and no third-party notice. The page holds the prepared file, so t
 the bytes that reach `IDocumentStorage` and the bytes charged against the business's attachment
 storage quota (issue #968) are the same file; preparing is asynchronous, so each of the three places
 disables its own save while it is in progress rather than uploading nothing. For the same reason the
-operating expense page — the one place where a single form and a single chosen file are reused for
-every expense it edits — ties each preparation to the selection that started it: Cancel, Add
-Expense, Edit Expense and choosing another file each invalidate the preparation still running, and a
-photo that finishes afterwards is discarded rather than attached to whichever expense is open by
-then, and cannot clear the preparing state that is holding Save for a newer photo.
+expense form ties each preparation to the selection that started it: choosing another file, and
+reopening the form on a freshly read expense (what "Reload the expense" does after a conflicting
+save), each invalidate the preparation still running, and a photo that finishes afterwards is
+discarded rather than attached to the expense the form is showing by then, and cannot clear the
+preparing state that is holding Save for a newer photo.
 `Inventory.Domain.Purchases.PurchaseDocumentPolicy` and
 `Inventory.Domain.Expenses.ExpenseAttachmentPolicy` are untouched: the 10 MiB ceiling and the allowed
 extensions still decide, and nothing on the server converts, inspects or resizes an image.
@@ -5144,14 +5146,20 @@ read-only method rule is still what would refuse the write if a page failed to h
 
 **What each page hides or disables, and why hidden rather than disabled differs by control.**
 `OperatingExpenseComponent` hides Add Expense (a page action, like the rest of this build's create
-entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete), and disables
-Save on the open edit form (following `ProductFormComponent`) - a session cannot open an edit form in
-the first place once Edit is hidden, but Save still checks the flag so a form already open when a
-session starts cannot submit. `SiteCommissionAgreementsComponent` disables its single Save agreement
+entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete). Since issue
+#1167 Add Expense and Edit are links to `/expenses/new` and `/expenses/:id/edit` rather than controls
+that open a card on the register, so `ExpenseFormPageComponent` refuses the write on its own account
+as well - and must, because those addresses can be reached directly: `/expenses/new` shows no form at
+all during a session, `/expenses/:id/edit` shows the expense read-only with no primary action, and
+the page's save handler checks the flag before it calls the API. Both addresses show **one shared
+notice**, `EXPENSE_SUPPORT_SESSION_NOTE` ("Expenses can't be added during a support session."), and
+deliberately not a sentence worded per page: Add and Edit refuse the same thing - any write to an
+expense from outside the business - and one sentence is what issue #1167 asks both pages for.
+`SiteCommissionAgreementsComponent` disables its single Save agreement
 button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
 Payment control - the input group and the button together - hides rather than disables, since (like
 Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
-guarded handler (`startCreate`, `startEdit`, `save`, `remove` on the expense page;
+guarded handler (`remove` on the expense register and `onSave` on the expense form page;
 `saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
 calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
 rather than merely invisible or inert.
@@ -5162,9 +5170,11 @@ session; only the controls that attempt a write are touched. Server-side enforce
 rule behind `ExpensesManage` and `SiteCommissionsManage` alike - is unchanged.
 
 **What proves it.** `operating-expense.component.spec.ts`, added by this slice, covers Add
-Expense/Edit/Delete being hidden and Save being disabled while a session is active, each guarded
-handler (`startCreate`, `startEdit`, `save`, `remove`) refusing to call the service when invoked
-directly, and normal create/edit/delete behaviour while no session is active.
+Expense/Edit/Delete being hidden while a session is active, `remove` refusing to call the service
+when invoked directly, and normal delete behaviour while no session is active;
+`expense-form-page.component.spec.ts` covers the same rule on the two form pages since issue #1167 -
+no Add form, a read-only Edit, `onSave` refusing to call the service when invoked directly, and the
+one shared notice being the same sentence on both addresses.
 `site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
 agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
 is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
@@ -6952,12 +6962,14 @@ the page reports on.
 - **The stock adjustment form** (`StockAdjustmentFormComponent`) takes its machine list from the page
   as an input and is no longer on this signal either (issue #746). It keeps the rule the signal
   taught: a failed read is an error in place of the field, never an empty one.
-- **Expenses** (`OperatingExpenseComponent`) is on this signal for its categories and its wording
-  only: without `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and
-  drops the Nayax sentence from its subtitle. An expense already recorded under that category
-  **keeps** it - in the table, in the Category filter and on the edit form, which offers the category
-  whenever the expense being edited carries it - because a recorded expense is a fact about the past
-  and this page must never quietly reclassify one. Its machine field and its list's machine filter are
+- **Expenses** (`OperatingExpenseComponent`, and `ExpenseFormComponent` since issue #1167 moved the
+  form onto its own pages) is on this signal for its categories and its wording
+  only: without `providerRecords` the form stops offering "Nayax monthly fee" for a **new** expense
+  and the register drops the Nayax sentence from its subtitle. An expense already recorded under that
+  category **keeps** it - in the table, in the Category filter and on the edit page, whose form offers
+  the category whenever the expense being edited carries it - because a recorded expense is a fact
+  about the past and these pages must never quietly reclassify one. The machine field and the
+  register's machine filter are
   the business's own machines (issue #746).
 
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
@@ -6983,9 +6995,11 @@ permission refusal prevents while an unrelated feature stays loadable, and the f
 errors.
 `pick-list.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
 cover each screen's hidden control, its error state, and the empty list neither may be confused with;
-`stock-history-page.component.provider-optional.spec.ts` and
-`operating-expense.component.provider-optional.spec.ts` cover what is left of this signal on those
-two screens after issue #746 - the source option, the Nayax fee category and the subtitle;
+`stock-history-page.component.provider-optional.spec.ts`,
+`operating-expense.component.provider-optional.spec.ts` and (since issue #1167, where the expense
+form moved to its own pages) `expense-form.component.provider-optional.spec.ts` cover what is left of
+this signal on those two screens after issue #746 - the source option, the expense register's
+subtitle and the Nayax fee category the form offers;
 `nayax-connection-wizard.component.spec.ts` covers the signal being refreshed by a save and a
 re-test, including the per-feature permissions a re-test found, granted and refused alike;
 `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
@@ -7580,6 +7594,32 @@ order, and it loads its purchase from the route id rather than from navigation s
 edit URL and a refresh both work, and Save and Cancel both return to `/purchases`. See [Purchase
 edit page](#purchase-edit-page-issue-475) for the page, its states and what moved out of the list.
 
+`/expenses/new` and `/expenses/:id/edit` (issue #1167) are Add expense and Edit expense, both served
+by `ExpenseFormPageComponent`, which replaced the card the `/expenses` register used to open above
+itself. They carry exactly the three guards `/expenses` carries — `MsalGuard`, `accountStateGuard`
+and `requireCapability('Expenses.Manage')` — plus `canDeactivate: [confirmExpenseFormLeave]`, the
+same `PendingWorkGuarded` arrangement New/Edit Product uses (`expense-form-leave.guard.ts` beside
+`product-form-leave.guard.ts`): an in-app departure from unsaved changes asks first, the page raises
+the browser's own `beforeunload` prompt for a reload or a closed tab, and a successful save leaves
+without asking. `/expenses/new` is a two-segment path and `/expenses/:id/edit` a three-segment one,
+so neither can shadow the other or the single-segment `/expenses` in any declaration order, and the
+page loads its expense from the route id through `OperatingExpenseService.getById` rather than from
+navigation state — a bookmarked edit URL and a refresh both work, a non-numeric id is the same
+"not found" as a missing expense, and the register keeps no form of its own. Rendered geometry is
+checked in a real browser by `e2e/visual/expense-form-pages.visual.ts` (mocked API, captures in
+`docs/screenshots/issue-1167/` at 1440px and 390px, overflow measured down to 360px, Tab order and
+touch-target heights); like every visual run it is human-invoked and runs in neither
+`scripts/validate.sh` nor CI.
+
+**The register's filters are the return context.** `/expenses` reads and writes its applied filters
+as the query parameters `from`, `to`, `category`, `supplierId` and `machineId` (parsed in one place,
+`components/expenses/expense-register-filters.ts`): Apply filters writes them to the address, opening
+`/expenses` with them applies them, and a parameter carrying a value the application cannot use is
+ignored rather than refused, so a stale bookmark opens the register instead of an error. Add expense
+and Edit expense receive those same parameters and return to `/expenses` carrying them on a
+successful save, on Cancel and on Back to expenses; without them they return to the plain `/expenses`.
+The sidebar link stays `/expenses` and is unaffected.
+
 The static host must rewrite unknown application paths to `index.html`; otherwise refreshing a deep link such as `/reports/bookkeeping` or the Entra redirect landing on `/auth` will bypass Angular and return a host-level 404. `frontend/inventory-app/src/staticwebapp.config.json` (copied to the deployed output root by the `assets` build option) declares that Azure Static Web Apps `navigationFallback`, rewriting unmatched paths to `/index.html` while excluding `/assets/*` and static file extensions.
 
 **Admin decomposition (issue #388, Admin split 1/3).** `AdminComponent` was decomposed into
@@ -7891,7 +7931,7 @@ The frontend has one shared visual language, recreated from Material Dashboard 3
 - `DesignSystemShowcaseComponent` renders every shared class in one place. It is the reference rendering when the visual language changes, and it is what puts the shared classes into the generated `styles.css`. It is deliberately absent from `app.routes.ts` entirely.
 - `WidgetGalleryComponent` (issue #411) renders the shared widgets and the whole bundled icon set so the series' required screenshots can be taken from the real components inside the real shell. It reaches the router through `designSystemRoutes` in `design-system.routes.ts`, which returns **an empty route list in every optimized build** and the single `__design-system/widgets` path only on the unoptimized dev and `e2e` servers; `design-system.routes.spec.ts` asserts both branches. It calls no API and holds no business logic.
 
-**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
+**Visual evidence.** `frontend/inventory-app/e2e/playwright.visual.config.ts` plus `e2e/visual/` screenshot at 1440px and 390px and write the PNGs to version-controlled directories under `docs/screenshots/`. `shared-widgets.visual.ts` captures the design-system fixture — the confirmation dialog, the loading indicator, each toast variant, the open multi-select dropdown and the icon strip — into `docs/screenshots/issue-411/`. `sidebar-navigation.visual.ts` (issue #456) captures the shell's own navigation into `docs/screenshots/issue-456/`: the expanded sidebar, the sidebar with its groups open, the active item beside inactive ones, the collapsed desktop rail (skipped at 390px, which has a drawer and no rail) and the top bar beside it. The run starts the Angular dev server alone: no API, no database, no external service; the one real route it opens, `/machines`, is opened only so a navigation item is the active one, and its unanswerable data request is never what is captured. `new-product-master-product-suggestions.visual.ts` (issue #1052) captures the New Product **Name** field's catalogue suggestions into `docs/screenshots/issue-1052/`: the open panel with two size variants of one product, and the whole page after one is taken, with the filled-in Name and Unit Label and the supplier-price-tracking note and its opt-out. It answers every `/api/` request in the browser with neutral synthetic data, as `purchase-form-redesign.visual.ts` does, because the page is a real routed page rather than a fixture; it submits nothing, so no product is created and no master product is linked. `reimbursement-report.visual.ts` (issue #1152) captures the Reimbursement Report page into `docs/screenshots/issue-1152/`: the whole page at 1440px with a failed upload expanded, the long list at 390px, and the empty state in the first phone viewport. It answers every `/api/` request with neutral synthetic uploads the same way, starts no import, and asserts in the browser what jsdom cannot — no horizontal overflow, the computed 16px `.page` gutter at 390px, and each upload's summary stacked at 390px and a row at 1440px. `expense-form-pages.visual.ts` (issue #1167) captures Add expense and Edit expense into `docs/screenshots/issue-1167/`: `/expenses/new` and `/expenses/7/edit` — the latter with a stored supporting document — at 1440px and 390px. It answers every `/api/` request with neutral synthetic data the same way and refuses every write, so no expense is created or updated and no document is uploaded, and it asserts in the browser what jsdom cannot: no horizontal overflow of the page or of any of the three sections at 1440px, 390px or **360px** (the narrowest width issue #1167 names, measured but not captured), the three amounts on one row above `sm` and stacked below it, Tab walking the form in reading order from Back to expenses through to the primary action, and 44px action targets at 390px. Regenerate with `npm run e2e:install` (once) then `npm run e2e:visual` from `frontend/inventory-app`. It is a human-invoked evidence run, not part of `scripts/validate.sh`, because it needs a browser download that normal validation deliberately avoids — and it rewrites **every** screenshot of every visual run, so an unscoped run re-renders the other issues' evidence too, and text rasterization differences between hosts can change those PNGs without anything in the application changing. Name the file (`npm run e2e:visual -- visual/<file>.visual.ts`) to regenerate one issue's evidence alone.
 
 **Colour tokens.** Gradients are `linear-gradient(195deg, from, to)` and are exposed as `backgroundImage` entries (`bg-md-dark-gradient`, `bg-md-danger-button-gradient`, and one per status).
 
@@ -14256,7 +14296,8 @@ lookup at all and leaves the field the shared wire shape carries `null`. A `null
 single-machine read therefore means only "this route does not resolve it" — a consumer that needs a
 machine's local id reads the fleet list, which is the read the expense form makes. Giving the detail
 route its own answer, or its own wire shape, is #741's decision to take. The expense form
-(`components/expenses/operating-expense.component.ts`) submits `machine.localMachineId`, and a listed
+(`components/expenses/expense-form.component.ts` since issue #1167, `operating-expense.component.ts`
+before it) submits `machine.localMachineId`, and a listed
 machine with no local record is not offered at all — there is no id to store for it. The server does
 not trust the form: `CreateOperatingExpense`/`UpdateOperatingExpense` check the submitted machine
 against the business's machines through `ILocalMachineStore` (which reads through the ordinary tenant
@@ -14343,7 +14384,9 @@ machine list, and so no machine field at all, even with machines of its own reco
 the G group exists to fix.
 
 **Three screens, one source.** `StockAdjustmentFormComponent` (fed by its page),
-`StockHistoryPageComponent` and `OperatingExpenseComponent` read `LocalMachineService.getAll()`
+`StockHistoryPageComponent` and the expense screens - `OperatingExpenseComponent` for the register's
+filter, and `ExpenseFormPageComponent` feeding `ExpenseFormComponent`'s field since issue #1167 -
+read `LocalMachineService.getAll()`
 (`GET /api/local-machines`, issue #740) and key every option by `LocalMachine.id`. That is the same
 id they submitted before, so nothing about a stored movement or expense changes; what changed is that
 the id now comes from the resource that owns it instead of from a provider read that could not be
@@ -14404,7 +14447,10 @@ support-session guard changed. Every role that can reach these screens already h
 `operating-expense.component.local-machines.spec.ts` each cover the four cases the issue names -
 without a provider, with one, with a deactivated machine, and with a failed read - plus the
 outstanding read and the id that is actually submitted; the Stock History spec also asserts the
-adjustment field through its page, which is where the form's list comes from. The expense spec covers
+adjustment field through its page, which is where the form's list comes from. Since issue #1167 the
+expense **field**'s half of those cases lives in `expense-form.component.local-machines.spec.ts`,
+where the form now does, and `expense-form-page.component.spec.ts` covers the page making the
+`/api/local-machines` read and reporting its failure in the field's place. The expense spec covers
 the list's Machine filter over the same four cases, including the deactivated machine it lists and the
 local id it narrows by, and `operating-expense.service.spec.ts` pins the request itself: the chosen id
 is sent as `machineId`, and no machine parameter is sent while none is chosen.

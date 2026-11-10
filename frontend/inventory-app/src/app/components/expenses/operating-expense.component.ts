@@ -1,51 +1,58 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute, Params, Router, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
-import { OperatingExpense, OperatingExpenseCategory, OperatingExpensePayload, OperatingExpenseService } from '../../services/operating-expense.service';
+import { OperatingExpense, OperatingExpenseCategory, OperatingExpenseService } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { Supplier, LocalMachine } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { IconComponent } from '../shared/icon.component';
-import { prepareImageForUpload } from '../shared/image-upload-preparation';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { OPERATING_EXPENSE_CATEGORIES, expenseCategoryLabel } from './expense-categories';
+import {
+  ExpenseRegisterFilters,
+  expenseFilterQueryParams,
+  readExpenseFilters,
+  sameExpenseFilterParams
+} from './expense-register-filters';
 
 /**
  * Operating Expenses: the manual expenses a business records itself.
  *
+ * This is the **register**. Since issue #1167 it records nothing itself: Add Expense and each row's
+ * Edit open the dedicated `/expenses/new` and `/expenses/:id/edit` pages, and the card this page used
+ * to open above itself is gone. What is stored, calculated or attached is unchanged - those pages
+ * make the same two requests against the same endpoints.
+ *
+ * **The applied filters live in the address.** `from`, `to`, `category`, `supplierId` and `machineId`
+ * are query parameters: Apply filters writes them, opening `/expenses` with them applies them, and
+ * Add and Edit carry them so a save, a Cancel or Back to expenses returns to the register the
+ * operator left. A parameter carrying a value this application cannot use is ignored, not refused.
+ *
  * **Nothing on this page needs Nayax to work, and without Nayax it stops mentioning it** (issue
  * #728, decision P9 of issue #329).
  *
- * - The **machine** field attributes an expense to one of the business's **own** machine records,
- *   read from `/api/local-machines` (issue #746, G2b of #329). It needs no provider: the id it
- *   submits is `LocalMachine.id`, which is exactly what `OperatingExpense.MachineId` holds (issue
- *   #780). A **new** expense is offered only the **active** machines; an expense being edited keeps
- *   its own machine on the list even once it has been deactivated, because the cost was incurred
- *   while that machine was in service and retiring it must not silently detach the expense - see
- *   `machineOptions`. A read that **failed** reports itself where the field was and one still
- *   outstanding says it is loading; neither is ever presented as "no machines".
- * - The list's **machine filter** narrows the expenses to one of those machines through the
- *   `machineId` parameter `GET /api/operating-expenses` has accepted since issue #780 - the same
- *   local id, so no contract changes. Unlike the field it lists the **deactivated** machines too,
- *   because an expense incurred on a machine that has since been retired has to stay findable; see
- *   `machineFilterShown`.
- * - The **"Nayax monthly fee"** category and the Nayax wording in the page subtitle need only Nayax
- *   to be part of this business. Without it the category is not offered for a **new** expense and
- *   the subtitle drops the Nayax sentence - but an expense already recorded under it keeps it, in
- *   the table, in the filter and on the edit form, because a recorded expense is a fact about the
- *   past and this page must never quietly reclassify one.
- * - The **supporting document** goes through the shared browser preparation of issue #1161 before it
- *   is uploaded: a photo is shrunk, and converted to JPEG where the browser can read HEIC, so what
- *   is stored and what counts against the business's attachment storage is the smaller file. That
- *   takes a moment, during which the field says so and Save waits for it; a PDF, an already small
- *   image, and a photo the browser cannot decode are all uploaded exactly as they were chosen.
+ * - The list's **machine filter** narrows the expenses to one of the business's **own** machine
+ *   records through the `machineId` parameter `GET /api/operating-expenses` has accepted since issue
+ *   #780 - the same local id, so no contract changes. It lists the **deactivated** machines too,
+ *   because an expense incurred on a machine that has since been retired is still a cost that was
+ *   incurred and has to stay findable; see `machineFilterShown`. A read that **failed** reports
+ *   itself where the filter was and one still outstanding says it is loading; neither is ever
+ *   presented as "no machines".
+ * - The **"Nayax monthly fee"** category stays in the filter whether or not Nayax is part of the
+ *   business, because recorded expenses still carry it, and the subtitle drops the Nayax sentence
+ *   without it. Whether a **new** expense may be recorded under it is the form's rule
+ *   (`expense-form.component.ts`).
+ * - The **supporting document** is protected by the API, so each row's View fetches it through
+ *   `HttpClient` and opens it from a temporary object URL.
  */
 @Component({
   selector: 'app-operating-expense',
   standalone: true,
-  imports: [CommonModule, FormsModule, IconComponent],
+  imports: [CommonModule, FormsModule, RouterLink, IconComponent],
   template: `
     <div class="page">
       <header class="page-header">
@@ -55,10 +62,16 @@ import { SupportSessionService } from '../../support-session/support-session.ser
         </div>
         <div class="page-actions">
           @if (!sessionActive) {
-            <button type="button" class="btn btn-primary" (click)="startCreate()">
+            <!-- The applied filters travel with the link, so Save, Cancel and Back come back here. -->
+            <a
+              routerLink="/expenses/new"
+              [queryParams]="returnQueryParams"
+              class="btn btn-primary"
+              data-testid="expenses-add"
+            >
               <app-icon name="add" [size]="16" />
               Add Expense
-            </button>
+            </a>
           }
         </div>
       </header>
@@ -115,99 +128,9 @@ import { SupportSessionService } from '../../support-session/support-session.ser
               </label>
             }
           </div>
-          <button type="button" class="btn btn-secondary btn-sm mt-3" (click)="load()">Apply filters</button>
+          <button type="button" class="btn btn-secondary btn-sm mt-3" (click)="applyFilters()">Apply filters</button>
         </div>
       </section>
-
-      @if (editing) {
-        <section class="card">
-          <div class="card-header">
-            <h2 class="card-title">{{ editing.id ? 'Edit Expense' : 'Add Expense' }}</h2>
-          </div>
-          <div class="card-body">
-            <div class="grid gap-3 md:grid-cols-3">
-              <label class="field">
-                <span class="field-label">Date</span>
-                <input type="date" [(ngModel)]="form.expenseDate">
-              </label>
-              <label class="field">
-                <span class="field-label">Category</span>
-                <select [(ngModel)]="form.category">
-                  @for (category of formCategories; track category) {
-                    <option [ngValue]="category">{{ categoryLabel(category) }}</option>
-                  }
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label">Description</span>
-                <input [(ngModel)]="form.description">
-              </label>
-              <label class="field">
-                <span class="field-label">Amount ex GST</span>
-                <input type="number" step="0.01" [(ngModel)]="form.amountExGst">
-              </label>
-              <label class="field">
-                <span class="field-label">GST</span>
-                <input type="number" step="0.01" [(ngModel)]="form.gstAmount">
-              </label>
-              <label class="field">
-                <span class="field-label">Total</span>
-                <input type="number" step="0.01" [(ngModel)]="form.totalAmount">
-              </label>
-              <label class="field">
-                <span class="field-label">Supplier</span>
-                <select [(ngModel)]="form.supplierId">
-                  <option [ngValue]="null">Whole business</option>
-                  @for (supplier of suppliers; track supplier.id) {
-                    <option [ngValue]="supplier.id">{{ supplier.name }}</option>
-                  }
-                </select>
-              </label>
-              @if (machinesError) {
-                <div class="field">
-                  <span class="field-label">Machine (optional)</span>
-                  <p data-testid="machine-field-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
-                </div>
-              } @else if (machinesLoading) {
-                <div class="field">
-                  <span class="field-label">Machine (optional)</span>
-                  <output data-testid="machine-field-loading" class="field-hint">Loading machines…</output>
-                </div>
-              } @else if (machineFieldShown) {
-                <label class="field">
-                  <span class="field-label">Machine (optional)</span>
-                  <select id="expense-machine" [(ngModel)]="form.machineId">
-                    <option [ngValue]="null">None</option>
-                    @for (machine of machineOptions; track machine.id) {
-                      <option [ngValue]="machine.id">{{ machine.name }}</option>
-                    }
-                  </select>
-                </label>
-              }
-              <label class="field">
-                <span class="field-label">Supporting Document</span>
-                <span class="field-hint">Receipt, invoice or other supporting document</span>
-                <input type="file" accept=".jpg,.jpeg,.png,.pdf,.webp,.heic,image/*,application/pdf" [disabled]="attachmentPreparing" (change)="onAttachmentSelected($event)">
-                @if (attachmentPreparing) {
-                  <!-- Issue #1161: the photo is shrunk here, so what is uploaded is what is stored. -->
-                  <output data-testid="expense-attachment-preparing" class="field-hint">Preparing photo…</output>
-                }
-              </label>
-              <label class="field">
-                <span class="field-label">Notes</span>
-                <input [(ngModel)]="form.notes">
-              </label>
-            </div>
-            @if (editing.attachmentFileName) {
-              <button type="button" class="btn btn-link btn-sm mt-3" (click)="viewAttachment(editing)">View document</button>
-            }
-            <div class="page-actions mt-4">
-              <button type="button" class="btn btn-primary" [disabled]="sessionActive || attachmentPreparing" (click)="save()">Save</button>
-              <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
-            </div>
-          </div>
-        </section>
-      }
 
       <section class="card">
         <div class="card-body p-0">
@@ -246,10 +169,15 @@ import { SupportSessionService } from '../../support-session/support-session.ser
                     <td class="table-cell">
                       @if (!sessionActive) {
                         <div class="flex gap-2">
-                          <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(expense)">
+                          <a
+                            [routerLink]="['/expenses', expense.id, 'edit']"
+                            [queryParams]="returnQueryParams"
+                            class="btn btn-sm btn-secondary"
+                            data-testid="expenses-edit"
+                          >
                             <app-icon name="edit" [size]="16" />
                             Edit
-                          </button>
+                          </a>
                           <button type="button" class="btn btn-sm btn-danger" (click)="remove(expense)">
                             <app-icon name="delete" [size]="16" />
                             Delete
@@ -277,74 +205,100 @@ import { SupportSessionService } from '../../support-session/support-session.ser
   `
 })
 export class OperatingExpenseComponent implements OnInit, OnDestroy {
-  readonly categories = Object.values(OperatingExpenseCategory).filter(x => typeof x === 'number') as OperatingExpenseCategory[];
-  readonly categoryNames = ['NayaxMonthlyFee', 'Insurance', 'RepairsAndMaintenance', 'Software', 'Accounting', 'PhoneInternet', 'VehicleTravel', 'BankFees', 'Other'];
+  readonly categories = OPERATING_EXPENSE_CATEGORIES;
   expenses: OperatingExpense[] = []; suppliers: Supplier[] = [];
   /** Every machine this business has recorded, active and inactive alike (issue #746). */
   machines: LocalMachine[] = [];
-  editing: OperatingExpense | null = null;
-  selectedAttachment: File | null = null;
-  /** Whether the chosen supporting document is still being shrunk or converted (issue #1161). */
-  attachmentPreparing = false;
+  /** The filter controls on screen, which become the applied filters when Apply is pressed. */
+  filters: ExpenseRegisterFilters = {};
   /**
-   * Which selection the document being prepared belongs to (issue #1161). Preparation is
-   * asynchronous and `selectedAttachment` is shared by every expense this page edits, so a photo
-   * chosen for one expense can finish after Cancel, Add Expense, Edit Expense or another file has
-   * moved the form on. Each of those takes a fresh number, and a preparation that comes back
-   * holding an old one is discarded: it neither attaches its photo to the expense that replaced it
-   * nor clears the newer selection's preparing state.
+   * The filters the list on screen was read with - the ones in the address. Add and Edit are linked
+   * with these rather than with {@link filters}, so an edit made halfway through changing a filter
+   * returns to the register the operator is actually looking at.
    */
-  private attachmentSelection = 0;
-  filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number; machineId?: number } = {};
-  form: OperatingExpensePayload = this.emptyForm();
+  appliedFilters: ExpenseRegisterFilters = {};
   /**
-   * Whether a support session is active (issue #659, extending #554): Add/Edit/Delete hide and
-   * Save disables itself while it is, because a session grants `ExpensesManage` - the capability
-   * this page would otherwise gate those writes on - and the backend refuses the write itself
-   * only by its read-only method rule, never by withholding the capability. See
-   * `SupportSessionService.active$`.
+   * Whether a support session is active (issue #659, extending #554): Add/Edit/Delete hide while it
+   * is, because a session grants `ExpensesManage` - the capability this page would otherwise gate
+   * those writes on - and the backend refuses the write itself only by its read-only method rule,
+   * never by withholding the capability. See `SupportSessionService.active$`.
    */
   sessionActive = false;
   /** Set when the machine list could not be read at all; never shown as "no machines". */
   machinesError = '';
   /** Whether that read is still outstanding, which is not the same as there being no machines. */
   machinesLoading = false;
-  /** Whether Nayax is part of this business at all; the Nayax fee category and subtitle need it. */
+  /** Whether Nayax is part of this business at all; the subtitle's Nayax sentence needs it. */
   providerRecordsAvailable = true;
   // Supporting documents are protected by the API, so they are fetched through HttpClient
   // (which attaches the bearer token) and opened from a temporary object URL.
   private readonly objectUrls = new ObjectUrlCache();
-  private readonly sessionActiveSubscription: Subscription;
+  private readonly subscriptions = new Subscription();
   constructor(
     public service: OperatingExpenseService,
     private supplierService: SupplierService,
     private localMachineService: LocalMachineService,
     private provider: ProviderAvailabilityService,
+    private router: Router,
+    private route: ActivatedRoute,
     supportSession: SupportSessionService
   ) {
-    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.subscriptions.add(supportSession.active$.subscribe((active) => (this.sessionActive = active)));
   }
   ngOnInit(): void {
-    this.load();
-    this.supplierService.getAll().subscribe(x => this.suppliers = x);
+    this.subscriptions.add(this.supplierService.getAll().subscribe(x => this.suppliers = x));
     this.loadMachines();
-    this.provider.featureOffered('providerRecords').subscribe(available => (this.providerRecordsAvailable = available));
+    this.subscriptions.add(
+      this.provider.featureOffered('providerRecords').subscribe(available => (this.providerRecordsAvailable = available))
+    );
+    // The address is what the list is read from, so a link, a bookmark, a reload and the return from
+    // Add or Edit all show the same filtered register.
+    this.subscriptions.add(
+      this.route.queryParamMap.subscribe(params => {
+        this.filters = readExpenseFilters(params);
+        this.appliedFilters = { ...this.filters };
+        this.load();
+      })
+    );
+  }
+
+  /** The applied filters as the query parameters Add and Edit carry, and come back with. */
+  get returnQueryParams(): Params {
+    return expenseFilterQueryParams(this.appliedFilters);
+  }
+
+  /**
+   * Apply filters: the chosen filters become the address, which is what reads the list. Pressing it
+   * without having changed anything names the address already shown, which the router would ignore,
+   * so the list is re-read directly - Apply has always been a way to ask the server again.
+   */
+  applyFilters(): void {
+    const requested = expenseFilterQueryParams(this.filters);
+    if (sameExpenseFilterParams(requested, expenseFilterQueryParams(this.appliedFilters))) {
+      this.load();
+      return;
+    }
+    // The applied filters are set by the address this navigation produces, never ahead of it, so a
+    // navigation that does not happen cannot leave the links claiming a register nobody is looking at.
+    this.router.navigate(['/expenses'], { queryParams: requested });
   }
 
   private loadMachines(): void {
     this.machinesLoading = true;
     this.machinesError = '';
-    this.localMachineService.getAll().subscribe({
-      next: machines => {
-        this.machines = machines ?? [];
-        this.machinesLoading = false;
-      },
-      error: () => {
-        this.machines = [];
-        this.machinesError = 'The machine list could not be loaded, so an expense cannot be attributed to a machine.';
-        this.machinesLoading = false;
-      }
-    });
+    this.subscriptions.add(
+      this.localMachineService.getAll().subscribe({
+        next: machines => {
+          this.machines = machines ?? [];
+          this.machinesLoading = false;
+        },
+        error: () => {
+          this.machines = [];
+          this.machinesError = 'The machine list could not be loaded, so an expense cannot be attributed to a machine.';
+          this.machinesLoading = false;
+        }
+      })
+    );
   }
 
   /** The page's own wording: without Nayax it describes only what this business does record. */
@@ -352,40 +306,6 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
     return this.providerRecordsAvailable
       ? 'Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.'
       : 'Manual expenses only. Commissions, delivery and packaging remain separately sourced.';
-  }
-
-  /**
-   * The categories the form offers. Without a provider the Nayax monthly fee is not one of them -
-   * there is no Nayax account to be billed by - unless the expense being edited already carries it,
-   * because dropping the category an existing expense is recorded under would silently reclassify
-   * it the next time somebody saved the form.
-   */
-  get formCategories(): OperatingExpenseCategory[] {
-    if (this.providerRecordsAvailable || this.form.category === OperatingExpenseCategory.NayaxMonthlyFee) {
-      return this.categories;
-    }
-    return this.categories.filter(category => category !== OperatingExpenseCategory.NayaxMonthlyFee);
-  }
-
-  /**
-   * The machines an expense may be attributed to (issue #746): the business's **active** machines,
-   * plus the machine the expense **being edited** already names, even once that machine has been
-   * deactivated. Keeping it is what stops a retired machine's historical expense from losing its
-   * attribution the next time somebody saves the form; the backend accepts a deactivated machine
-   * for exactly that reason (issue #780). It is taken from the stored expense rather than from the
-   * form, so choosing "None" and changing one's mind still offers it.
-   */
-  get machineOptions(): LocalMachine[] {
-    const recorded = this.editing?.machineId ?? null;
-    return this.machines.filter(machine => machine.isActive || machine.id === recorded);
-  }
-
-  /**
-   * Whether an expense may be attributed to a machine at all: only when there is a machine to
-   * attribute it to. A failed or outstanding read is reported in the field's place instead.
-   */
-  get machineFieldShown(): boolean {
-    return this.machinesError === '' && !this.machinesLoading && this.machineOptions.length > 0;
   }
 
   /**
@@ -399,56 +319,17 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   get machineFilterShown(): boolean {
     return this.machinesError === '' && !this.machinesLoading && this.machines.some(machine => machine.isActive);
   }
-  ngOnDestroy(): void { this.objectUrls.releaseAll(); this.sessionActiveSubscription.unsubscribe(); }
+  ngOnDestroy(): void { this.objectUrls.releaseAll(); this.subscriptions.unsubscribe(); }
   viewAttachment(expense: OperatingExpense): void {
     this.service.getAttachment(expense.id).subscribe({
       next: blob => window.open(this.objectUrls.create(blob), '_blank', 'noopener'),
       error: err => console.error('Failed to open supporting document', err)
     });
   }
-  load(): void { this.service.getAll(this.filters).subscribe(x => this.expenses = x); }
-  // Checked here as well as hidden/disabled in the template, so the write is actually unavailable
-  // rather than merely invisible or inert - the endpoint refuses it either way.
-  startCreate(): void { if (this.sessionActive) { return; } this.editing = { id: 0, ...this.emptyForm() }; this.form = this.emptyForm(); this.forgetAttachment(); }
-  startEdit(expense: OperatingExpense): void { if (this.sessionActive) { return; } this.editing = expense; this.forgetAttachment(); this.form = { expenseDate: expense.expenseDate.substring(0, 10), category: expense.category, description: expense.description, amountExGst: expense.amountExGst, gstAmount: expense.gstAmount, totalAmount: expense.totalAmount, supplierId: expense.supplierId, siteId: expense.siteId, machineId: expense.machineId, servicePeriodStart: expense.servicePeriodStart, servicePeriodEnd: expense.servicePeriodEnd, notes: expense.notes }; }
-  /**
-   * The chosen document, prepared for upload first (issue #1161): a photo is shrunk and HEIC
-   * converted where the browser can, and anything else is kept exactly as it was chosen. The
-   * preparation belongs to the selection that started it, so a photo that finishes after the form
-   * has moved to another expense is thrown away rather than attached to that other expense.
-   */
-  async onAttachmentSelected(event: Event): Promise<void> {
-    const file = (event.target as HTMLInputElement).files?.[0] ?? null;
-    const selection = this.forgetAttachment();
-    if (!file) { return; }
-
-    this.attachmentPreparing = true;
-    try {
-      const prepared = await prepareImageForUpload(file);
-      if (selection !== this.attachmentSelection) { return; }
-      this.selectedAttachment = prepared;
-    } finally {
-      // Only this selection's own preparing state: a newer selection is still preparing its own
-      // photo, and clearing its state here would let Save run before that photo exists.
-      if (selection === this.attachmentSelection) { this.attachmentPreparing = false; }
-    }
-  }
-  cancel(): void { this.editing = null; this.forgetAttachment(); }
-  /**
-   * Forgets the chosen supporting document and invalidates any preparation still running for it,
-   * returning the number the new selection is identified by (issue #1161).
-   */
-  private forgetAttachment(): number {
-    this.selectedAttachment = null;
-    this.attachmentPreparing = false;
-    return ++this.attachmentSelection;
-  }
-  // Nothing is saved while a chosen photo is still being prepared: the file this would upload does
-  // not exist yet, so saving would store the expense with no supporting document at all. Save is
-  // disabled then, and this is the same guard where the write happens.
-  save(): void { if (this.sessionActive || this.attachmentPreparing || !this.form.description.trim()) { return; } const request = this.editing?.id ? this.service.update(this.editing.id, this.form, this.selectedAttachment) : this.service.create(this.form, this.selectedAttachment); request.subscribe(() => { this.editing = null; this.forgetAttachment(); this.load(); }); }
+  load(): void { this.service.getAll(this.appliedFilters).subscribe(x => this.expenses = x); }
+  // Checked here as well as hidden in the template, so the write is actually unavailable rather
+  // than merely invisible - the endpoint refuses it either way.
   remove(expense: OperatingExpense): void { if (!this.sessionActive && confirm(`Delete expense "${expense.description}"?`)) this.service.delete(expense.id).subscribe(() => this.load()); }
-  categoryLabel(category: OperatingExpenseCategory): string { return this.categoryNames[Number(category)]?.replace(/([a-z])([A-Z])/g, '$1 $2') ?? 'Other'; }
+  categoryLabel(category: OperatingExpenseCategory): string { return expenseCategoryLabel(category); }
   total(field: 'amountExGst' | 'gstAmount' | 'totalAmount'): number { return this.expenses.reduce((sum, item) => sum + Number(item[field] || 0), 0); }
-  private emptyForm(): OperatingExpensePayload { return { expenseDate: new Date().toISOString().substring(0, 10), category: OperatingExpenseCategory.Other, description: '', amountExGst: 0, gstAmount: 0, totalAmount: 0, supplierId: null, siteId: null, machineId: null, notes: null }; }
 }
