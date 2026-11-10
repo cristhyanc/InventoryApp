@@ -1,16 +1,12 @@
 import { TestBed } from '@angular/core/testing';
-import { Observable, of } from 'rxjs';
+import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
+import { BehaviorSubject, Observable, of } from 'rxjs';
 import { OperatingExpenseComponent } from './operating-expense.component';
 import { OperatingExpense, OperatingExpenseCategory, OperatingExpenseService } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { SupportSessionService } from '../../support-session/support-session.service';
-import {
-  FakeImageDecoding,
-  fileOfSize,
-  installFakeImageDecoding
-} from '../shared/image-upload-preparation.spec-helpers';
 
 function expense(overrides: Partial<OperatingExpense> = {}): OperatingExpense {
   return {
@@ -27,24 +23,25 @@ function expense(overrides: Partial<OperatingExpense> = {}): OperatingExpense {
 
 async function render(overrides: {
   sessionActive?: Observable<boolean>;
-  create?: jest.Mock;
-  update?: jest.Mock;
   remove?: jest.Mock;
   expenses?: OperatingExpense[];
+  queryParams?: Record<string, string>;
 } = {}) {
-  const create = overrides.create ?? jest.fn(() => of(expense()));
-  const update = overrides.update ?? jest.fn(() => of(expense()));
   const remove = overrides.remove ?? jest.fn(() => of(undefined));
+  const getAll = jest.fn(() => of(overrides.expenses ?? [expense()]));
+  const queryParamMap = new BehaviorSubject(convertToParamMap(overrides.queryParams ?? {}));
 
   await TestBed.configureTestingModule({
     imports: [OperatingExpenseComponent],
     providers: [
+      provideRouter([]),
+      { provide: ActivatedRoute, useValue: { queryParamMap } },
       {
         provide: OperatingExpenseService,
         useValue: {
-          getAll: jest.fn(() => of(overrides.expenses ?? [expense()])),
-          create,
-          update,
+          getAll,
+          create: jest.fn(() => of(expense())),
+          update: jest.fn(() => of(expense())),
           delete: remove
         }
       },
@@ -57,8 +54,22 @@ async function render(overrides: {
 
   const fixture = TestBed.createComponent(OperatingExpenseComponent);
   fixture.detectChanges();
-  return { fixture, component: fixture.componentInstance, host: fixture.nativeElement as HTMLElement, create, update, remove };
+  return {
+    fixture,
+    component: fixture.componentInstance,
+    host: fixture.nativeElement as HTMLElement,
+    getAll,
+    remove,
+    queryParamMap,
+    router: TestBed.inject(Router)
+  };
 }
+
+const linkHrefs = (host: HTMLElement, testId: string) =>
+  Array.from(host.querySelectorAll(`a[data-testid="${testId}"]`)).map((link) => link.getAttribute('href'));
+
+const applyFilters = (host: HTMLElement) =>
+  Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Apply filters')!;
 
 afterEach(() => TestBed.resetTestingModule());
 
@@ -66,331 +77,161 @@ afterEach(() => TestBed.resetTestingModule());
  * Hiding expense write controls and guarding their handlers during a support session (issue #659,
  * extending #554). A session grants `ExpensesManage`, so this page's controls would otherwise
  * still render and its handlers would otherwise still call the API.
+ *
+ * Since issue #1167 Add Expense and Edit are links to the dedicated pages rather than buttons that
+ * open a card here, so what the register must withhold is those links; the pages refuse the write
+ * themselves as well (see `expense-form-page.component.spec.ts`).
  */
 describe('OperatingExpenseComponent write controls during a support session (issue #659)', () => {
   it('hides Add Expense, Edit and Delete while a session is active', async () => {
     const { host } = await render({ sessionActive: of(true) });
 
-    const buttonText = Array.from(host.querySelectorAll('button')).map((b) => b.textContent?.trim());
-    expect(buttonText).not.toContain('Add Expense');
-    expect(buttonText).not.toContain('Edit');
-    expect(buttonText).not.toContain('Delete');
+    expect(linkHrefs(host, 'expenses-add')).toEqual([]);
+    expect(linkHrefs(host, 'expenses-edit')).toEqual([]);
+    expect(Array.from(host.querySelectorAll('button')).map((b) => b.textContent?.trim())).not.toContain('Delete');
   });
 
   it('shows Add Expense, Edit and Delete while no session is active', async () => {
     const { host } = await render({ sessionActive: of(false) });
 
-    const buttonText = Array.from(host.querySelectorAll('button')).map((b) => b.textContent?.trim());
-    expect(buttonText).toContain('Add Expense');
-    expect(buttonText).toContain('Edit');
-    expect(buttonText).toContain('Delete');
+    expect(linkHrefs(host, 'expenses-add')).toEqual(['/expenses/new']);
+    expect(linkHrefs(host, 'expenses-edit')).toEqual(['/expenses/1/edit']);
+    expect(Array.from(host.querySelectorAll('button')).map((b) => b.textContent?.trim())).toContain('Delete');
   });
 
-  it('disables Save while a session is active and editing is forced open', async () => {
-    const { fixture, component, host } = await render({ sessionActive: of(true) });
-
-    component.editing = { ...expense(), id: 0 };
-    fixture.detectChanges();
-
-    const saveButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Save') as HTMLButtonElement;
-    expect(saveButton.disabled).toBe(true);
-  });
-
-  it('does not create, edit, save or delete while a session is active, even if the handlers are invoked directly', async () => {
-    const { component, create, update, remove } = await render({ sessionActive: of(true) });
-
-    component.startCreate();
-    expect(component.editing).toBeNull();
-
-    component.startEdit(expense());
-    expect(component.editing).toBeNull();
-
-    component.form.description = 'Should not save';
-    component.save();
-    expect(create).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
+  it('does not delete while a session is active, even if the handler is invoked directly', async () => {
+    const { component, remove } = await render({ sessionActive: of(true) });
 
     component.remove(expense());
+
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it('creates, edits and deletes normally while no session is active', async () => {
-    const { component, create, remove } = await render({ sessionActive: of(false) });
-
-    component.startCreate();
-    expect(component.editing).not.toBeNull();
-
-    component.form.description = 'New expense';
-    component.save();
-    expect(create).toHaveBeenCalled();
-
+  it('deletes normally while no session is active', async () => {
+    const { component, remove } = await render({ sessionActive: of(false) });
     jest.spyOn(window, 'confirm').mockReturnValue(true);
+
     component.remove(expense());
+
     expect(remove).toHaveBeenCalledWith(1);
   });
 });
 
 /**
- * Shrinking and converting a photo in the browser before an expense's supporting document is
- * uploaded (issue #1161), through the same shared helper the purchase uploads use.
+ * The register records nothing itself since issue #1167: Add Expense and each row's Edit are links
+ * to `/expenses/new` and `/expenses/:id/edit`, and no form is left on this page.
  */
-describe('OperatingExpenseComponent supporting-document preparation (issue #1161)', () => {
-  let decoding: FakeImageDecoding | null = null;
+describe('OperatingExpenseComponent Add and Edit navigation (issue #1167)', () => {
+  it('links Add Expense to the Add expense page', async () => {
+    const { host } = await render();
 
-  afterEach(() => {
-    decoding?.restore();
-    decoding = null;
+    expect(linkHrefs(host, 'expenses-add')).toEqual(['/expenses/new']);
   });
 
-  /** The change event the file input raises, with one chosen file. */
-  function choose(component: OperatingExpenseComponent, file: File): Promise<void> {
-    return component.onAttachmentSelected({ target: { files: [file] } } as unknown as Event);
-  }
+  it("links each row's Edit to that expense's Edit page", async () => {
+    const { host } = await render({ expenses: [expense({ id: 7 }), expense({ id: 9 })] });
 
-  it('uploads the shrunk photo rather than the 5 MB one that was chosen', async () => {
-    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
-    const { component, create } = await render();
-
-    component.startCreate();
-    component.form.description = 'Repair call-out';
-    await choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
-    component.save();
-
-    expect(create).toHaveBeenCalledTimes(1);
-    const sent = create.mock.calls[0][1] as File;
-    expect(sent.size).toBe(450_000);
-    expect(sent.type).toBe('image/jpeg');
+    expect(linkHrefs(host, 'expenses-edit')).toEqual(['/expenses/7/edit', '/expenses/9/edit']);
   });
 
-  it('converts a HEIC photo the browser can decode into a .jpg', async () => {
-    decoding = installFakeImageDecoding({ decoded: { width: 3024, height: 4032 }, encodedBytes: 400_000 });
-    const { component, create } = await render();
+  it('leaves no expense form on the register', async () => {
+    const { host } = await render();
 
-    component.startCreate();
-    component.form.description = 'Insurance';
-    await choose(component, fileOfSize(3_900_000, 'IMG_0007.HEIC'));
-    component.save();
-
-    expect((create.mock.calls[0][1] as File).name).toBe('IMG_0007.jpg');
-  });
-
-  it('uploads the original HEIC unchanged when the browser cannot decode it', async () => {
-    decoding = installFakeImageDecoding({ decoded: 'undecodable' });
-    const { component, create } = await render();
-    const heic = fileOfSize(3_400_000, 'IMG_0008.heic', 'image/heic');
-
-    component.startCreate();
-    component.form.description = 'Insurance';
-    await choose(component, heic);
-    component.save();
-
-    expect(create.mock.calls[0][1]).toBe(heic);
-  });
-
-  it('leaves a PDF alone', async () => {
-    decoding = installFakeImageDecoding();
-    const { component, create } = await render();
-    const pdf = fileOfSize(3 * 1024 * 1024, 'tax-invoice.pdf', 'application/pdf');
-
-    component.startCreate();
-    component.form.description = 'Accounting';
-    await choose(component, pdf);
-    component.save();
-
-    expect(create.mock.calls[0][1]).toBe(pdf);
-    expect(decoding.decodeCalls).toEqual([]);
-  });
-
-  it('saves nothing while the photo is still being prepared, and says so', async () => {
-    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
-    const { fixture, component, host, create } = await render();
-
-    component.startCreate();
-    component.form.description = 'Repair call-out';
-    const selection = choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
-    fixture.detectChanges();
-
-    expect(component.attachmentPreparing).toBe(true);
-    expect(host.querySelector('[data-testid="expense-attachment-preparing"]')).not.toBeNull();
-    component.save();
-    expect(create).not.toHaveBeenCalled();
-
-    await selection;
-    fixture.detectChanges();
-
-    expect(component.attachmentPreparing).toBe(false);
-    expect(host.querySelector('[data-testid="expense-attachment-preparing"]')).toBeNull();
-    component.save();
-    expect(create).toHaveBeenCalledTimes(1);
-  });
-
-  it('forgets a prepared photo when the form is cancelled', async () => {
-    decoding = installFakeImageDecoding({ decoded: { width: 4000, height: 3000 }, encodedBytes: 450_000 });
-    const { component } = await render();
-
-    component.startCreate();
-    await choose(component, fileOfSize(5 * 1024 * 1024, 'IMG_4312.jpg', 'image/jpeg'));
-    expect(component.selectedAttachment).not.toBeNull();
-
-    component.cancel();
-
-    expect(component.selectedAttachment).toBeNull();
+    expect(host.querySelector('[data-testid="expense-form"]')).toBeNull();
+    expect(host.querySelector('#expense-description')).toBeNull();
+    expect(host.querySelector('input[type="file"]')).toBeNull();
   });
 });
 
 /**
- * A preparation belongs to the selection that started it (issue #1161). Shrinking a photo is
- * asynchronous and this page edits every expense through one shared `selectedAttachment`, so a
- * photo chosen for one expense could otherwise finish after Cancel, Add Expense or Edit Expense had
- * moved the form on - and attach that receipt to a different expense, or clear the preparing state
- * guarding a newer photo so that Save ran before it existed. Each of these specs holds the decode
- * open to put the completion exactly where the defect was.
+ * The applied filters are the register's URL query parameters (issue #1167), which is what lets Add
+ * and Edit bring the operator back to the register they left.
  */
-describe('OperatingExpenseComponent supporting-document preparation outliving its selection (issue #1161)', () => {
-  let decoding: FakeImageDecoding | null = null;
-
-  afterEach(() => {
-    decoding?.restore();
-    decoding = null;
-  });
-
-  /** A deferred preparation: nothing finishes until the spec says which decode may. */
-  function installDeferredPreparation(): FakeImageDecoding {
-    decoding = installFakeImageDecoding({
-      decoded: { width: 4000, height: 3000 },
-      encodedBytes: 450_000,
-      completion: 'deferred'
+describe('OperatingExpenseComponent filters as query parameters (issue #1167)', () => {
+  it('applies the filters the address asks for, and reads the list with them', async () => {
+    const { component, getAll } = await render({
+      queryParams: { from: '2026-01-01', to: '2026-01-31', category: '1', supplierId: '3', machineId: '42' }
     });
-    return decoding;
-  }
 
-  function choose(component: OperatingExpenseComponent, name: string): Promise<void> {
-    const file = fileOfSize(5 * 1024 * 1024, name, 'image/jpeg');
-    return component.onAttachmentSelected({ target: { files: [file] } } as unknown as Event);
-  }
-
-  it('never uploads a photo chosen for one expense to the expense Edit Expense moved to', async () => {
-    const deferred = installDeferredPreparation();
-    const vanService = expense({ id: 7, description: 'Van service' });
-    const liability = expense({ id: 9, description: 'Public liability' });
-    const { component, update } = await render({ expenses: [vanService, liability] });
-
-    component.startEdit(vanService);
-    const vanPhoto = choose(component, 'IMG_VAN.jpg');
-    expect(component.attachmentPreparing).toBe(true);
-
-    component.startEdit(liability);
-    deferred.releaseDecode(0);
-    await vanPhoto;
-
-    expect(component.selectedAttachment).toBeNull();
-    expect(component.attachmentPreparing).toBe(false);
-
-    component.save();
-
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][0]).toBe(9);
-    expect(update.mock.calls[0][2]).toBeNull();
+    expect(component.filters).toEqual({
+      from: '2026-01-01',
+      to: '2026-01-31',
+      category: OperatingExpenseCategory.Insurance,
+      supplierId: 3,
+      machineId: 42
+    });
+    expect(getAll).toHaveBeenLastCalledWith({
+      from: '2026-01-01',
+      to: '2026-01-31',
+      category: OperatingExpenseCategory.Insurance,
+      supplierId: 3,
+      machineId: 42
+    });
   });
 
-  it('never uploads a photo chosen for an expense being edited to the one Add Expense opened', async () => {
-    const deferred = installDeferredPreparation();
-    const vanService = expense({ id: 7, description: 'Van service' });
-    const { component, create, update } = await render({ expenses: [vanService] });
+  it('keeps the Nayax monthly fee as a filterable category, which is parameter value 0', async () => {
+    const { component, getAll } = await render({ queryParams: { category: '0' } });
 
-    component.startEdit(vanService);
-    const vanPhoto = choose(component, 'IMG_VAN.jpg');
-
-    component.startCreate();
-    deferred.releaseDecode(0);
-    await vanPhoto;
-
-    expect(component.selectedAttachment).toBeNull();
-    expect(component.attachmentPreparing).toBe(false);
-
-    component.form.description = 'Stationery';
-    component.save();
-
-    expect(update).not.toHaveBeenCalled();
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][1]).toBeNull();
+    expect(component.filters.category).toBe(OperatingExpenseCategory.NayaxMonthlyFee);
+    expect(getAll).toHaveBeenLastCalledWith({ category: OperatingExpenseCategory.NayaxMonthlyFee });
   });
 
-  it('never attaches a photo that finished after Cancel to the next expense', async () => {
-    const deferred = installDeferredPreparation();
-    const { component, create } = await render();
+  it('ignores unknown and unusable parameter values rather than refusing the page', async () => {
+    const { component, getAll } = await render({
+      queryParams: {
+        from: 'last-tuesday',
+        to: '',
+        category: '99',
+        supplierId: 'abc',
+        machineId: '0',
+        sortBy: 'total'
+      }
+    });
 
-    component.startCreate();
-    const abandonedPhoto = choose(component, 'IMG_ABANDONED.jpg');
-
-    component.cancel();
-    deferred.releaseDecode(0);
-    await abandonedPhoto;
-
-    expect(component.editing).toBeNull();
-    expect(component.selectedAttachment).toBeNull();
-    expect(component.attachmentPreparing).toBe(false);
-
-    component.startCreate();
-    component.form.description = 'Stationery';
-    component.save();
-
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0][1]).toBeNull();
+    expect(component.filters).toEqual({});
+    expect(getAll).toHaveBeenLastCalledWith({});
   });
 
-  it('keeps the newer photo preparing when an earlier one finishes first', async () => {
-    const deferred = installDeferredPreparation();
-    const { component, create } = await render();
+  it('writes the chosen filters to the address when Apply filters is pressed', async () => {
+    const { component, fixture, host, router } = await render();
+    const navigate = jest.spyOn(router, 'navigate').mockResolvedValue(true);
 
-    component.startCreate();
-    component.form.description = 'Repair call-out';
-    const firstPhoto = choose(component, 'IMG_FIRST.jpg');
-    const secondPhoto = choose(component, 'IMG_SECOND.jpg');
+    component.filters = { from: '2026-02-01', category: OperatingExpenseCategory.Software };
+    fixture.detectChanges();
+    applyFilters(host).click();
 
-    deferred.releaseDecode(0);
-    await firstPhoto;
-
-    // The first photo no longer belongs to the selection, so it may neither be attached nor
-    // report that the second photo - still being shrunk - is ready to save.
-    expect(component.selectedAttachment).toBeNull();
-    expect(component.attachmentPreparing).toBe(true);
-    component.save();
-    expect(create).not.toHaveBeenCalled();
-
-    deferred.releaseDecode(1);
-    await secondPhoto;
-
-    expect(component.attachmentPreparing).toBe(false);
-    expect(component.selectedAttachment?.name).toBe('IMG_SECOND.jpg');
-
-    component.save();
-
-    expect(create).toHaveBeenCalledTimes(1);
-    expect((create.mock.calls[0][1] as File).name).toBe('IMG_SECOND.jpg');
+    expect(navigate).toHaveBeenCalledWith(['/expenses'], { queryParams: { from: '2026-02-01', category: '3' } });
   });
 
-  it('does not let an earlier photo replace the one the current selection already prepared', async () => {
-    const deferred = installDeferredPreparation();
-    const { component, create } = await render();
+  it('re-reads the list when Apply filters names the register already shown', async () => {
+    const { host, getAll, router } = await render({ queryParams: { from: '2026-02-01' } });
+    const navigate = jest.spyOn(router, 'navigate').mockResolvedValue(true);
+    expect(getAll).toHaveBeenCalledTimes(1);
 
-    component.startCreate();
-    component.form.description = 'Repair call-out';
-    const firstPhoto = choose(component, 'IMG_FIRST.jpg');
-    const secondPhoto = choose(component, 'IMG_SECOND.jpg');
+    applyFilters(host).click();
 
-    deferred.releaseDecode(1);
-    await secondPhoto;
-    expect(component.selectedAttachment?.name).toBe('IMG_SECOND.jpg');
+    expect(navigate).not.toHaveBeenCalled();
+    expect(getAll).toHaveBeenCalledTimes(2);
+    expect(getAll).toHaveBeenLastCalledWith({ from: '2026-02-01' });
+  });
 
-    deferred.releaseDecode(0);
-    await firstPhoto;
+  it('carries the applied filters, not the half-chosen ones, on the Add and Edit links', async () => {
+    const { component, fixture, host } = await render({ queryParams: { supplierId: '3' } });
 
-    expect(component.selectedAttachment?.name).toBe('IMG_SECOND.jpg');
-    expect(component.attachmentPreparing).toBe(false);
+    // Changing a control without pressing Apply changes what the register is looking at not at all.
+    component.filters = { supplierId: 8 };
+    fixture.detectChanges();
 
-    component.save();
+    expect(linkHrefs(host, 'expenses-add')).toEqual(['/expenses/new?supplierId=3']);
+    expect(linkHrefs(host, 'expenses-edit')).toEqual(['/expenses/1/edit?supplierId=3']);
+  });
 
-    expect((create.mock.calls[0][1] as File).name).toBe('IMG_SECOND.jpg');
+  it('re-reads the list when the address changes under it', async () => {
+    const { getAll, queryParamMap } = await render({ queryParams: { from: '2026-02-01' } });
+
+    queryParamMap.next(convertToParamMap({ from: '2026-03-01' }));
+
+    expect(getAll).toHaveBeenCalledTimes(2);
+    expect(getAll).toHaveBeenLastCalledWith({ from: '2026-03-01' });
   });
 });

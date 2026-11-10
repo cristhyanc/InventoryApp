@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { LocalMachine } from '../../models/models';
 import {
@@ -35,6 +36,8 @@ async function render(options: {
   await TestBed.configureTestingModule({
     imports: [OperatingExpenseComponent],
     providers: [
+      provideRouter([]),
+      { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
       {
         provide: OperatingExpenseService,
         useValue: {
@@ -66,60 +69,39 @@ async function render(options: {
   };
 }
 
-/** The categories the **form** offers, in order. */
-function formCategoryLabels(component: OperatingExpenseComponent): string[] {
-  return component.formCategories.map((category) => component.categoryLabel(category));
-}
-
 const subtitle = (host: HTMLElement) =>
   host.querySelector('[data-testid="expenses-subtitle"]')?.textContent?.trim();
 
 afterEach(() => TestBed.resetTestingModule());
 
 /**
- * Operating Expenses without a usable provider (issue #728). The Nayax monthly fee and the subtitle
- * follow whether Nayax is part of this business at all, and an already-recorded Nayax fee is never
- * taken away from the expense that carries it.
+ * The expense register without a usable provider (issue #728): the subtitle follows whether Nayax is
+ * part of this business at all, and the Nayax monthly fee stays a category the register can show and
+ * filter by, because recorded expenses still carry it.
  *
- * The **machine** field no longer follows the provider at all: since issue #746 it lists the
- * business's own machine records, and `operating-expense.component.local-machines.spec.ts` covers
- * it.
+ * Which categories a **new or edited** expense may be recorded under moved to the Add/Edit expense
+ * form in issue #1167; `expense-form.component.provider-optional.spec.ts` covers it there. The
+ * **machine** filter no longer follows the provider at all: since issue #746 it lists the business's
+ * own machine records, and `operating-expense.component.local-machines.spec.ts` covers it.
  */
-describe('OperatingExpenseComponent provider-optional form (issue #728)', () => {
-  it('offers the Nayax fee category and the Nayax subtitle when connected', async () => {
-    const { component, host } = await render();
-    component.startCreate();
+describe('OperatingExpenseComponent provider-optional register (issue #728)', () => {
+  it('shows the Nayax subtitle when connected', async () => {
+    const { host } = await render();
 
-    expect(formCategoryLabels(component)).toContain('Nayax Monthly Fee');
     expect(subtitle(host)).toBe(
       'Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.'
     );
   });
 
-  it('drops the Nayax fee from a new expense and the Nayax wording from the subtitle without a provider', async () => {
-    const { component, host } = await render({ status: 'NotConfigured' });
-    component.startCreate();
+  it('drops the Nayax wording from the subtitle without a provider', async () => {
+    const { host } = await render({ status: 'NotConfigured' });
 
-    expect(formCategoryLabels(component)).not.toContain('Nayax Monthly Fee');
-    expect(formCategoryLabels(component)).toContain('Insurance');
     expect(subtitle(host)).toBe('Manual expenses only. Commissions, delivery and packaging remain separately sourced.');
   });
 
-  it('keeps the Nayax fee on an existing expense already recorded under it', async () => {
-    const recorded = expense({ category: OperatingExpenseCategory.NayaxMonthlyFee });
-    const { component } = await render({ status: 'NotConfigured', expenses: [recorded] });
+  it('keeps the Nayax subtitle for a connection that needs attention: the account still bills', async () => {
+    const { host } = await render({ status: 'NeedsAttention' });
 
-    component.startEdit(recorded);
-
-    expect(formCategoryLabels(component)).toContain('Nayax Monthly Fee');
-    expect(component.form.category).toBe(OperatingExpenseCategory.NayaxMonthlyFee);
-  });
-
-  it('keeps the Nayax fee available for a connection that needs attention: the account still bills', async () => {
-    const { component, host } = await render({ status: 'NeedsAttention' });
-    component.startCreate();
-
-    expect(formCategoryLabels(component)).toContain('Nayax Monthly Fee');
     expect(subtitle(host)).toContain('Nayax processing');
   });
 
@@ -129,11 +111,10 @@ describe('OperatingExpenseComponent provider-optional form (issue #728)', () => 
     expect(component.categories.map((category) => component.categoryLabel(category))).toContain('Nayax Monthly Fee');
   });
 
-  it("keeps the machine field whatever the connection says: the machines are this business's own", async () => {
-    const { component } = await render({ status: 'NotConfigured' });
-    component.startCreate();
+  it('still labels a recorded Nayax monthly fee in the register without a provider', async () => {
+    const recorded = expense({ category: OperatingExpenseCategory.NayaxMonthlyFee });
+    const { host } = await render({ status: 'NotConfigured', expenses: [recorded] });
 
-    expect(component.machineFieldShown).toBe(true);
-    expect(component.machinesError).toBe('');
+    expect(host.querySelector('tbody')?.textContent).toContain('Nayax Monthly Fee');
   });
 });
