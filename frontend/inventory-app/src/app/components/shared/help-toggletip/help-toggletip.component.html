@@ -17,6 +17,10 @@
       scrolling table around it can clip it, and `place()` sets its position from the button's own
       rectangle. It is rendered only while open, which is what keeps it out of the accessibility
       tree and out of the page's text when it is closed, in a browser and under Jest alike.
+      The top layer does not stop CSS inheritance, though: the panel still inherits from the element
+      it sits in, such as the Products page's `whitespace-nowrap` Cheapest supplier heading.
+      `whitespace-normal` and `break-words` reset that, so the text always wraps inside the fixed
+      width `place()` gives it and the panel never scrolls sideways (issue #1179).
     -->
     <span
       #panel
@@ -24,7 +28,7 @@
       role="tooltip"
       [id]="panelId"
       data-testid="help-toggletip-panel"
-      class="fixed z-50 block rounded-md-card border border-rr-line bg-white p-3 text-left text-sm font-normal normal-case tracking-normal text-rr-muted shadow-md-lg"
+      class="fixed z-50 block whitespace-normal break-words rounded-md-card border border-rr-line bg-white p-3 text-left text-sm font-normal normal-case tracking-normal text-rr-muted shadow-md-lg"
     ><ng-content /></span>
   }
 </span>

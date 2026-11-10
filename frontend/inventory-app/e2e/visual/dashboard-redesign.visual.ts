@@ -619,11 +619,11 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
 
   /**
    * Issue #1016's own evidence: the Cheapest supplier explanation opened from its help button -
-   * the desktop heading's at 1440px and a narrow-screen card's at 360px. It is a real interaction
+   * the desktop heading's at 1440px and a narrow-screen card's at 390px and 360px. It is a real interaction
    * too, and it is what shows the panel standing beside the button in the browser's top layer,
    * clipped by neither the card nor the scrolling table and inside the narrow viewport.
    */
-  for (const width of [1440, 360]) {
+  for (const width of [1440, 390, 360]) {
     test(`Cheapest supplier help panel open at ${width}px`, async ({ page }) => {
       await openDashboard(page, width);
       await page.locator('section[aria-labelledby="reorder-priorities-title"]').scrollIntoViewIfNeeded();
@@ -632,6 +632,15 @@ test.describe('Restockroo dashboard and navigation visual evidence (issue #972)'
       const panel = page.locator('[data-testid="help-toggletip-panel"]');
       await expect(panel).toBeVisible();
       await expect(panel).toHaveText(/not costs you have paid\.$/);
+      // Issue #1179: the whole sentence wraps inside the panel, which never scrolls sideways and
+      // stays inside the viewport (1px allows for rounding).
+      const size = await panel.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return { scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, left: box.left, right: box.right };
+      });
+      expect(size.scrollWidth).toBeLessThanOrEqual(size.clientWidth + 1);
+      expect(size.left).toBeGreaterThanOrEqual(0);
+      expect(size.right).toBeLessThanOrEqual(width);
       await expectNoHorizontalOverflow(page);
       // The viewport, not the document: the panel is in the top layer, which a full-page capture
       // stitched from a taller viewport would move away from the button it is anchored to.
