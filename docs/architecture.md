@@ -4437,7 +4437,12 @@ only where the browser decodes it (Safari today) — no decoding library is bund
 new dependency and no third-party notice. The page holds the prepared file, so the size it shows,
 the bytes that reach `IDocumentStorage` and the bytes charged against the business's attachment
 storage quota (issue #968) are the same file; preparing is asynchronous, so each of the three places
-disables its own save while it is in progress rather than uploading nothing.
+disables its own save while it is in progress rather than uploading nothing. For the same reason the
+operating expense page — the one place where a single form and a single chosen file are reused for
+every expense it edits — ties each preparation to the selection that started it: Cancel, Add
+Expense, Edit Expense and choosing another file each invalidate the preparation still running, and a
+photo that finishes afterwards is discarded rather than attached to whichever expense is open by
+then, and cannot clear the preparing state that is holding Save for a newer photo.
 `Inventory.Domain.Purchases.PurchaseDocumentPolicy` and
 `Inventory.Domain.Expenses.ExpenseAttachmentPolicy` are untouched: the 10 MiB ceiling and the allowed
 extensions still decide, and nothing on the server converts, inspects or resizes an image.

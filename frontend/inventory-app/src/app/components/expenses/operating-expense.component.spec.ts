@@ -237,3 +237,160 @@ describe('OperatingExpenseComponent supporting-document preparation (issue #1161
     expect(component.selectedAttachment).toBeNull();
   });
 });
+
+/**
+ * A preparation belongs to the selection that started it (issue #1161). Shrinking a photo is
+ * asynchronous and this page edits every expense through one shared `selectedAttachment`, so a
+ * photo chosen for one expense could otherwise finish after Cancel, Add Expense or Edit Expense had
+ * moved the form on - and attach that receipt to a different expense, or clear the preparing state
+ * guarding a newer photo so that Save ran before it existed. Each of these specs holds the decode
+ * open to put the completion exactly where the defect was.
+ */
+describe('OperatingExpenseComponent supporting-document preparation outliving its selection (issue #1161)', () => {
+  let decoding: FakeImageDecoding | null = null;
+
+  afterEach(() => {
+    decoding?.restore();
+    decoding = null;
+  });
+
+  /** A deferred preparation: nothing finishes until the spec says which decode may. */
+  function installDeferredPreparation(): FakeImageDecoding {
+    decoding = installFakeImageDecoding({
+      decoded: { width: 4000, height: 3000 },
+      encodedBytes: 450_000,
+      completion: 'deferred'
+    });
+    return decoding;
+  }
+
+  function choose(component: OperatingExpenseComponent, name: string): Promise<void> {
+    const file = fileOfSize(5 * 1024 * 1024, name, 'image/jpeg');
+    return component.onAttachmentSelected({ target: { files: [file] } } as unknown as Event);
+  }
+
+  it('never uploads a photo chosen for one expense to the expense Edit Expense moved to', async () => {
+    const deferred = installDeferredPreparation();
+    const vanService = expense({ id: 7, description: 'Van service' });
+    const liability = expense({ id: 9, description: 'Public liability' });
+    const { component, update } = await render({ expenses: [vanService, liability] });
+
+    component.startEdit(vanService);
+    const vanPhoto = choose(component, 'IMG_VAN.jpg');
+    expect(component.attachmentPreparing).toBe(true);
+
+    component.startEdit(liability);
+    deferred.releaseDecode(0);
+    await vanPhoto;
+
+    expect(component.selectedAttachment).toBeNull();
+    expect(component.attachmentPreparing).toBe(false);
+
+    component.save();
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0]).toBe(9);
+    expect(update.mock.calls[0][2]).toBeNull();
+  });
+
+  it('never uploads a photo chosen for an expense being edited to the one Add Expense opened', async () => {
+    const deferred = installDeferredPreparation();
+    const vanService = expense({ id: 7, description: 'Van service' });
+    const { component, create, update } = await render({ expenses: [vanService] });
+
+    component.startEdit(vanService);
+    const vanPhoto = choose(component, 'IMG_VAN.jpg');
+
+    component.startCreate();
+    deferred.releaseDecode(0);
+    await vanPhoto;
+
+    expect(component.selectedAttachment).toBeNull();
+    expect(component.attachmentPreparing).toBe(false);
+
+    component.form.description = 'Stationery';
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][1]).toBeNull();
+  });
+
+  it('never attaches a photo that finished after Cancel to the next expense', async () => {
+    const deferred = installDeferredPreparation();
+    const { component, create } = await render();
+
+    component.startCreate();
+    const abandonedPhoto = choose(component, 'IMG_ABANDONED.jpg');
+
+    component.cancel();
+    deferred.releaseDecode(0);
+    await abandonedPhoto;
+
+    expect(component.editing).toBeNull();
+    expect(component.selectedAttachment).toBeNull();
+    expect(component.attachmentPreparing).toBe(false);
+
+    component.startCreate();
+    component.form.description = 'Stationery';
+    component.save();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0][1]).toBeNull();
+  });
+
+  it('keeps the newer photo preparing when an earlier one finishes first', async () => {
+    const deferred = installDeferredPreparation();
+    const { component, create } = await render();
+
+    component.startCreate();
+    component.form.description = 'Repair call-out';
+    const firstPhoto = choose(component, 'IMG_FIRST.jpg');
+    const secondPhoto = choose(component, 'IMG_SECOND.jpg');
+
+    deferred.releaseDecode(0);
+    await firstPhoto;
+
+    // The first photo no longer belongs to the selection, so it may neither be attached nor
+    // report that the second photo - still being shrunk - is ready to save.
+    expect(component.selectedAttachment).toBeNull();
+    expect(component.attachmentPreparing).toBe(true);
+    component.save();
+    expect(create).not.toHaveBeenCalled();
+
+    deferred.releaseDecode(1);
+    await secondPhoto;
+
+    expect(component.attachmentPreparing).toBe(false);
+    expect(component.selectedAttachment?.name).toBe('IMG_SECOND.jpg');
+
+    component.save();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect((create.mock.calls[0][1] as File).name).toBe('IMG_SECOND.jpg');
+  });
+
+  it('does not let an earlier photo replace the one the current selection already prepared', async () => {
+    const deferred = installDeferredPreparation();
+    const { component, create } = await render();
+
+    component.startCreate();
+    component.form.description = 'Repair call-out';
+    const firstPhoto = choose(component, 'IMG_FIRST.jpg');
+    const secondPhoto = choose(component, 'IMG_SECOND.jpg');
+
+    deferred.releaseDecode(1);
+    await secondPhoto;
+    expect(component.selectedAttachment?.name).toBe('IMG_SECOND.jpg');
+
+    deferred.releaseDecode(0);
+    await firstPhoto;
+
+    expect(component.selectedAttachment?.name).toBe('IMG_SECOND.jpg');
+    expect(component.attachmentPreparing).toBe(false);
+
+    component.save();
+
+    expect((create.mock.calls[0][1] as File).name).toBe('IMG_SECOND.jpg');
+  });
+});

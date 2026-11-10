@@ -38,6 +38,12 @@ export interface FakeImageDecoding {
   readonly encodeCalls: EncodeCall[];
   /** How many decoded bitmaps were released, which a browser keeps in memory until they are. */
   readonly released: () => number;
+  /**
+   * Lets the decode at `index` (in `decodeCalls` order) finish, for deferred decoding only. This
+   * is how a spec holds one photo's preparation open while the form that chose it moves on, and
+   * how it chooses the order two overlapping preparations finish in.
+   */
+  releaseDecode(index: number): void;
   restore(): void;
 }
 
@@ -50,6 +56,12 @@ export interface FakeImageDecodingOptions {
   context?: 'missing';
   /** `'absent'` for a browser with no `createImageBitmap`. */
   decoder?: 'absent';
+  /**
+   * `'deferred'` holds every decode open until {@link FakeImageDecoding.releaseDecode} finishes it,
+   * which is how a spec proves what happens while a photo is still being prepared and what happens
+   * when its preparation lands after the form that started it has moved on.
+   */
+  completion?: 'deferred';
 }
 
 interface MutableGlobal {
@@ -63,6 +75,8 @@ export function installFakeImageDecoding(options: FakeImageDecodingOptions = {})
   const decodeCalls: DecodeCall[] = [];
   const draws: DrawCall[] = [];
   const encodeCalls: EncodeCall[] = [];
+  /** The decodes still held open, by call order; a released one is cleared from the slot. */
+  const heldDecodes: ((() => void) | undefined)[] = [];
   let released = 0;
 
   const globals = globalThis as MutableGlobal;
@@ -76,16 +90,27 @@ export function installFakeImageDecoding(options: FakeImageDecodingOptions = {})
   } else {
     globals.createImageBitmap = (blob: Blob, bitmapOptions?: ImageBitmapOptions): Promise<ImageBitmap> => {
       decodeCalls.push({ blob, options: bitmapOptions });
-      if (decoded === 'undecodable') {
-        return Promise.reject(new Error('The source image cannot be decoded.'));
-      }
-      return Promise.resolve({
-        width: decoded.width,
-        height: decoded.height,
-        close: () => {
-          released++;
+      return new Promise<ImageBitmap>((resolve, reject) => {
+        const finish = () => {
+          if (decoded === 'undecodable') {
+            reject(new Error('The source image cannot be decoded.'));
+            return;
+          }
+          resolve({
+            width: decoded.width,
+            height: decoded.height,
+            close: () => {
+              released++;
+            }
+          } as unknown as ImageBitmap);
+        };
+
+        if (options.completion === 'deferred') {
+          heldDecodes.push(finish);
+        } else {
+          finish();
         }
-      } as unknown as ImageBitmap);
+      });
     };
   }
 
@@ -113,6 +138,14 @@ export function installFakeImageDecoding(options: FakeImageDecodingOptions = {})
     draws,
     encodeCalls,
     released: () => released,
+    releaseDecode: (index: number) => {
+      const finish = heldDecodes[index];
+      if (finish === undefined) {
+        throw new Error(`No decode is being held open at index ${index}.`);
+      }
+      heldDecodes[index] = undefined;
+      finish();
+    },
     restore: () => {
       if (hadDecoder) {
         globals.createImageBitmap = realDecoder;

@@ -286,6 +286,15 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   selectedAttachment: File | null = null;
   /** Whether the chosen supporting document is still being shrunk or converted (issue #1161). */
   attachmentPreparing = false;
+  /**
+   * Which selection the document being prepared belongs to (issue #1161). Preparation is
+   * asynchronous and `selectedAttachment` is shared by every expense this page edits, so a photo
+   * chosen for one expense can finish after Cancel, Add Expense, Edit Expense or another file has
+   * moved the form on. Each of those takes a fresh number, and a preparation that comes back
+   * holding an old one is discarded: it neither attaches its photo to the expense that replaced it
+   * nor clears the newer selection's preparing state.
+   */
+  private attachmentSelection = 0;
   filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number; machineId?: number } = {};
   form: OperatingExpensePayload = this.emptyForm();
   /**
@@ -400,29 +409,44 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   load(): void { this.service.getAll(this.filters).subscribe(x => this.expenses = x); }
   // Checked here as well as hidden/disabled in the template, so the write is actually unavailable
   // rather than merely invisible or inert - the endpoint refuses it either way.
-  startCreate(): void { if (this.sessionActive) { return; } this.editing = { id: 0, ...this.emptyForm() }; this.form = this.emptyForm(); this.selectedAttachment = null; }
-  startEdit(expense: OperatingExpense): void { if (this.sessionActive) { return; } this.editing = expense; this.selectedAttachment = null; this.form = { expenseDate: expense.expenseDate.substring(0, 10), category: expense.category, description: expense.description, amountExGst: expense.amountExGst, gstAmount: expense.gstAmount, totalAmount: expense.totalAmount, supplierId: expense.supplierId, siteId: expense.siteId, machineId: expense.machineId, servicePeriodStart: expense.servicePeriodStart, servicePeriodEnd: expense.servicePeriodEnd, notes: expense.notes }; }
+  startCreate(): void { if (this.sessionActive) { return; } this.editing = { id: 0, ...this.emptyForm() }; this.form = this.emptyForm(); this.forgetAttachment(); }
+  startEdit(expense: OperatingExpense): void { if (this.sessionActive) { return; } this.editing = expense; this.forgetAttachment(); this.form = { expenseDate: expense.expenseDate.substring(0, 10), category: expense.category, description: expense.description, amountExGst: expense.amountExGst, gstAmount: expense.gstAmount, totalAmount: expense.totalAmount, supplierId: expense.supplierId, siteId: expense.siteId, machineId: expense.machineId, servicePeriodStart: expense.servicePeriodStart, servicePeriodEnd: expense.servicePeriodEnd, notes: expense.notes }; }
   /**
    * The chosen document, prepared for upload first (issue #1161): a photo is shrunk and HEIC
-   * converted where the browser can, and anything else is kept exactly as it was chosen.
+   * converted where the browser can, and anything else is kept exactly as it was chosen. The
+   * preparation belongs to the selection that started it, so a photo that finishes after the form
+   * has moved to another expense is thrown away rather than attached to that other expense.
    */
   async onAttachmentSelected(event: Event): Promise<void> {
     const file = (event.target as HTMLInputElement).files?.[0] ?? null;
-    this.selectedAttachment = null;
+    const selection = this.forgetAttachment();
     if (!file) { return; }
 
     this.attachmentPreparing = true;
     try {
-      this.selectedAttachment = await prepareImageForUpload(file);
+      const prepared = await prepareImageForUpload(file);
+      if (selection !== this.attachmentSelection) { return; }
+      this.selectedAttachment = prepared;
     } finally {
-      this.attachmentPreparing = false;
+      // Only this selection's own preparing state: a newer selection is still preparing its own
+      // photo, and clearing its state here would let Save run before that photo exists.
+      if (selection === this.attachmentSelection) { this.attachmentPreparing = false; }
     }
   }
-  cancel(): void { this.editing = null; this.selectedAttachment = null; }
+  cancel(): void { this.editing = null; this.forgetAttachment(); }
+  /**
+   * Forgets the chosen supporting document and invalidates any preparation still running for it,
+   * returning the number the new selection is identified by (issue #1161).
+   */
+  private forgetAttachment(): number {
+    this.selectedAttachment = null;
+    this.attachmentPreparing = false;
+    return ++this.attachmentSelection;
+  }
   // Nothing is saved while a chosen photo is still being prepared: the file this would upload does
   // not exist yet, so saving would store the expense with no supporting document at all. Save is
   // disabled then, and this is the same guard where the write happens.
-  save(): void { if (this.sessionActive || this.attachmentPreparing || !this.form.description.trim()) { return; } const request = this.editing?.id ? this.service.update(this.editing.id, this.form, this.selectedAttachment) : this.service.create(this.form, this.selectedAttachment); request.subscribe(() => { this.editing = null; this.selectedAttachment = null; this.load(); }); }
+  save(): void { if (this.sessionActive || this.attachmentPreparing || !this.form.description.trim()) { return; } const request = this.editing?.id ? this.service.update(this.editing.id, this.form, this.selectedAttachment) : this.service.create(this.form, this.selectedAttachment); request.subscribe(() => { this.editing = null; this.forgetAttachment(); this.load(); }); }
   remove(expense: OperatingExpense): void { if (!this.sessionActive && confirm(`Delete expense "${expense.description}"?`)) this.service.delete(expense.id).subscribe(() => this.load()); }
   categoryLabel(category: OperatingExpenseCategory): string { return this.categoryNames[Number(category)]?.replace(/([a-z])([A-Z])/g, '$1 $2') ?? 'Other'; }
   total(field: 'amountExGst' | 'gstAmount' | 'totalAmount'): number { return this.expenses.reduce((sum, item) => sum + Number(item[field] || 0), 0); }
