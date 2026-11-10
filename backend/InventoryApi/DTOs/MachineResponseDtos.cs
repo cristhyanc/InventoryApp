@@ -20,7 +20,9 @@ namespace InventoryApi.DTOs;
 /// <para><b>Every revenue, profit and status field is nullable because it may be withheld</b>
 /// (issue #698). A caller without <c>Dashboard.ViewFinancials</c> - today an Operator - still reaches
 /// these endpoints for the restocking work they exist for, and is answered <c>null</c> in all
-/// thirteen of them; <see cref="InventoryApi.Adapters.Mapping.FinancialFigureVisibility"/> is the one
+/// fourteen of them (thirteen, and since issue #1177
+/// <see cref="PreviousComparableDayGrossRevenue"/>);
+/// <see cref="InventoryApi.Adapters.Mapping.FinancialFigureVisibility"/> is the one
 /// thing that decides which projection it gets. A withheld figure must never arrive as <c>0</c>,
 /// which a client would read as a real "no sales" figure, and the gross-revenue fields stay
 /// <c>required</c> so that the redacted projection has to state each withheld figure rather than
@@ -83,4 +85,17 @@ public sealed record MachineResponse
     /// redacted projection: an Operator restocking a site needs to know which machines are there.
     /// </summary>
     public long? SiteId { get; init; }
+
+    /// <summary>
+    /// Yesterday's gross revenue up to the same time of day, which is Today's comparison baseline
+    /// (issue #1177): the completed-sale revenue of the previous business date from its own midnight
+    /// to the time elapsed into today, counted exactly as <see cref="TodayGrossRevenue"/> is.
+    /// Appended after <see cref="SiteId"/> so every key before it keeps its name, order and value.
+    ///
+    /// <para>Revenue only: there is deliberately no <c>previousComparableDayDirectProfit</c>, so no
+    /// processing fee is looked up for this period. <c>0</c> means the machine recorded no completed
+    /// sale in it; <c>null</c> means the figure is withheld, on exactly the same terms as every
+    /// other revenue field here, because it is one more sum over the same completed sales.</para>
+    /// </summary>
+    public required decimal? PreviousComparableDayGrossRevenue { get; init; }
 }

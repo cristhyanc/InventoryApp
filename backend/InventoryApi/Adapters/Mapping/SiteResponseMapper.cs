@@ -40,7 +40,9 @@ public static class SiteResponseMapper
         summary.MachineStocks
             .Select(stock => new SiteMachineStockDto(
                 stock.MachineId, stock.StockPercentage, stock.LowProductCount, stock.EmptyProductCount))
-            .ToList());
+            .ToList(),
+        // Copied across like every other revenue figure (issue #1177), withheld null included.
+        summary.PreviousComparableDayRevenue);
 
     /// <summary>
     /// The light site list row (issue #841). Three already-resolved values copied across: the site

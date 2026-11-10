@@ -9,8 +9,17 @@ public readonly record struct MachineDashboardPeriodFacts(
 
 /// <summary>
 /// A machine's complete dashboard facts as of a reference window: gross revenue and direct-profit
-/// inputs for each of the six rolling comparison periods, and the facts needed to choose its overall
-/// profitability status message.
+/// inputs for each of the six rolling comparison periods that carry a profit, the previous
+/// comparable day's gross revenue, and the facts needed to choose its overall profitability status
+/// message.
+///
+/// <para><see cref="PreviousComparableDayGrossRevenue"/> is Today's own baseline (issue #1177) and
+/// is <b>revenue only</b>: a bare amount rather than a
+/// <see cref="MachineDashboardPeriodFacts"/>, because the period carries no direct profit and
+/// therefore needs no commission resolution and no processing-fee lookup. The figure is the
+/// completed-sale revenue of
+/// <see cref="MachineDashboardWindow.PreviousComparableDay"/>, counted by exactly the policy
+/// <see cref="Today"/>'s revenue is counted by.</para>
 /// </summary>
 public sealed record MachineDashboardFacts(
     MachineDashboardPeriodFacts Today,
@@ -19,6 +28,7 @@ public sealed record MachineDashboardFacts(
     MachineDashboardPeriodFacts LastWeek,
     MachineDashboardPeriodFacts MonthToDate,
     MachineDashboardPeriodFacts TwoWeeksAgo,
+    decimal PreviousComparableDayGrossRevenue,
     MachineProfitabilityStatusInputs StatusInputs);
 
 /// <summary>

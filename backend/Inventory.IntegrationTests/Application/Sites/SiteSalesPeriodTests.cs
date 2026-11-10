@@ -95,6 +95,57 @@ public class SiteSalesPeriodTests
         Assert.Equal(0m, site.LastWeekRevenue);
         Assert.Equal(0m, site.MonthToDateRevenue);
         Assert.Equal(0m, site.PreviousComparableWeekRevenue);
+        Assert.Equal(0m, site.PreviousComparableDayRevenue);
+    }
+
+    /// <summary>
+    /// Today's baseline (issue #1177): yesterday up to the same time of day. Read at 10:00 on
+    /// Thursday 5 October 2023 in Sydney, it is Wednesday 4 October from that day's own midnight
+    /// (3 October 13:00 UTC) to 10:00 (3 October 23:00 UTC) - a period whose first instant falls on
+    /// the <em>previous</em> UTC date, which is what a figure derived from a UTC day would get wrong.
+    /// Both bounds are inclusive, exactly as every other site figure's are.
+    /// </summary>
+    [Fact]
+    public async Task The_previous_comparable_day_counts_yesterday_up_to_the_same_time_only()
+    {
+        var facts = Facts(
+            // Wednesday 4 October 2023, 00:00 AEDT: the baseline's first instant, on UTC 3 October.
+            Sale(LeftMachineId, 7m, Utc(2023, 10, 3, 13, 0)),
+            // Wednesday 4 October 2023, 10:00 AEDT: exactly the cutoff, which is inclusive.
+            Sale(LeftMachineId, 11m, Utc(2023, 10, 3, 23, 0)),
+            // One millisecond later: yesterday, but past the point today has reached.
+            Sale(LeftMachineId, 1000m, Utc(2023, 10, 3, 23, 0, 0, 1)),
+            // Tuesday 3 October 2023, 23:59:59.999 AEDT: one millisecond before the baseline began.
+            Sale(LeftMachineId, 2000m, Utc(2023, 10, 3, 12, 59, 59, 999)),
+            // Today, which the baseline it is compared with must never reach into.
+            Sale(LeftMachineId, 5m, Utc(2023, 10, 4, 22, 0)));
+
+        var site = Assert.Single(await Summaries(AfterTheAedtTransition, facts));
+
+        Assert.Equal(18m, site.PreviousComparableDayRevenue);
+        Assert.Equal(5m, site.TodayRevenue);
+
+        // The excluded sales are in the response's other periods, so they really were read and
+        // really were placed - the baseline left them out rather than the fixture.
+        Assert.Equal(3023m, site.CurrentWeekRevenue);
+    }
+
+    /// <summary>
+    /// Membership is the machine's current site for the baseline too: each site's figure is the sum
+    /// of its own machines' sales in that period and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task The_previous_comparable_day_is_the_sum_of_the_machines_standing_at_the_site()
+    {
+        var facts = Facts(
+            Sale(LeftMachineId, 4m, Utc(2023, 10, 3, 20, 0)),
+            Sale(RightMachineId, 6m, Utc(2023, 10, 3, 21, 0)),
+            Sale(OtherSiteMachineId, 500m, Utc(2023, 10, 3, 20, 0)));
+
+        var summaries = await Summaries(AfterTheAedtTransition, facts, TwoSiteFleet());
+
+        Assert.Equal(10m, summaries.Single(summary => summary.SiteId == SiteId).PreviousComparableDayRevenue);
+        Assert.Equal(500m, summaries.Single(summary => summary.SiteId == OtherSiteId).PreviousComparableDayRevenue);
     }
 
     /// <summary>

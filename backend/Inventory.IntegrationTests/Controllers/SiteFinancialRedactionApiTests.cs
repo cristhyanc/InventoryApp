@@ -42,8 +42,9 @@ namespace InventoryApi.Tests.Controllers;
 /// three responses is the role and nothing else.</para>
 ///
 /// <para>The host runs on a fixed clock, so every period the revenue figures are summed over - the
-/// business day, the week to date, the previous comparable week, and since issue #1012 last week and
-/// month to date - is the same every run, and each figure is a non-zero amount for a caller who may
+/// business day, the week to date, the previous comparable week, since issue #1012 last week and
+/// month to date, and since issue #1177 the previous comparable day - is the same every run, and
+/// each figure is a non-zero amount for a caller who may
 /// see them. A redacted <c>previousComparableWeekRevenue</c> is therefore distinguishable from the
 /// honest <c>0</c> an empty period would report.</para>
 /// </summary>
@@ -54,13 +55,14 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
 
     /// <summary>
     /// The revenue figures <c>Dashboard.ViewFinancials</c> governs on a site row. Issue #1012's two
-    /// additive periods are here for the same reason the first three are: they are sums over the one
-    /// completed-sales read the capability decides whether to make at all.
+    /// additive periods and issue #1177's previous comparable day are here for the same reason the
+    /// first three are: they are sums over the one completed-sales read the capability decides
+    /// whether to make at all.
     /// </summary>
     private static readonly string[] SiteRevenueProperties =
     [
         "todayRevenue", "currentWeekRevenue", "previousComparableWeekRevenue", "lastWeekRevenue",
-        "monthToDateRevenue",
+        "monthToDateRevenue", "previousComparableDayRevenue",
     ];
 
     private readonly ApiFactory _factory;
@@ -123,6 +125,7 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         foreach (var amount in new[]
                  {
                      ApiFactory.TodaysSaleValue, ApiFactory.PreviousComparableWeekSaleValue,
+                     ApiFactory.PreviousComparableDaySaleValue, ApiFactory.YesterdayAfterTheCutoffSaleValue,
                      ApiFactory.EstimatedCardProfit,
                  })
         {
@@ -150,10 +153,37 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var site = Assert.Single((await ReadJsonAsync(response)).EnumerateArray());
         Assert.Equal(ApiFactory.TodaysSaleValue, site.GetProperty("todayRevenue").GetDecimal());
-        Assert.Equal(ApiFactory.TodaysSaleValue, site.GetProperty("currentWeekRevenue").GetDecimal());
+        Assert.Equal(
+            ApiFactory.TodaysSaleValue
+                + ApiFactory.PreviousComparableDaySaleValue
+                + ApiFactory.YesterdayAfterTheCutoffSaleValue,
+            site.GetProperty("currentWeekRevenue").GetDecimal());
         Assert.Equal(
             ApiFactory.PreviousComparableWeekSaleValue,
             site.GetProperty("previousComparableWeekRevenue").GetDecimal());
+    }
+
+    /// <summary>
+    /// The contract for issue #1177's additive field, over the real pipeline: a site row publishes
+    /// <c>previousComparableDayRevenue</c>, and it is yesterday's sales up to the same time of day
+    /// and no further. The host's clock is 15:00 on Thursday 12 March in Sydney, so the baseline is
+    /// Wednesday 11 March to 15:00: the seeded 13:00 sale is in it and the 16:00 sale on the same
+    /// business day is not, while both are in this week and this month.
+    /// </summary>
+    [Theory]
+    [InlineData(ApiFactory.ManagerObjectId)]
+    [InlineData(ApiFactory.OwnerObjectId)]
+    public async Task A_site_row_publishes_yesterdays_sales_up_to_the_same_time(string objectId)
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(objectId).GetAsync(SitesUri);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var site = Assert.Single((await ReadJsonAsync(response)).EnumerateArray());
+        Assert.Equal(
+            ApiFactory.PreviousComparableDaySaleValue,
+            site.GetProperty("previousComparableDayRevenue").GetDecimal());
     }
 
     /// <summary>
@@ -178,7 +208,10 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
         Assert.Equal(
             ApiFactory.PreviousComparableWeekSaleValue, site.GetProperty("lastWeekRevenue").GetDecimal());
         Assert.Equal(
-            ApiFactory.TodaysSaleValue + ApiFactory.PreviousComparableWeekSaleValue,
+            ApiFactory.TodaysSaleValue
+                + ApiFactory.PreviousComparableWeekSaleValue
+                + ApiFactory.PreviousComparableDaySaleValue
+                + ApiFactory.YesterdayAfterTheCutoffSaleValue,
             site.GetProperty("monthToDateRevenue").GetDecimal());
     }
 
@@ -276,6 +309,18 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
 
         /// <summary>The seeded completed sale inside the previous comparable week.</summary>
         public const decimal PreviousComparableWeekSaleValue = 403.21m;
+
+        /// <summary>
+        /// The seeded completed sale inside the previous comparable day (issue #1177): 13:00 on
+        /// Wednesday 11 March in Sydney, which is before the 15:00 the baseline runs to.
+        /// </summary>
+        public const decimal PreviousComparableDaySaleValue = 77.11m;
+
+        /// <summary>
+        /// The seeded completed sale on the same business day but past that cutoff: 16:00 on
+        /// Wednesday 11 March. It belongs to this week and this month and to no baseline figure.
+        /// </summary>
+        public const decimal YesterdayAfterTheCutoffSaleValue = 88.23m;
 
         /// <summary>The seeded product's AVCO unit cost, which every role may see.</summary>
         public const decimal AverageUnitCost = 2m;
@@ -394,7 +439,9 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
 
             db.NayaxSales.AddRange(
                 CompletedSale(transactionId: 1, TodaysSaleValue, NowUtc.AddHours(-2)),
-                CompletedSale(transactionId: 2, PreviousComparableWeekSaleValue, NowUtc.AddDays(-7).AddHours(-2)));
+                CompletedSale(transactionId: 2, PreviousComparableWeekSaleValue, NowUtc.AddDays(-7).AddHours(-2)),
+                CompletedSale(transactionId: 3, PreviousComparableDaySaleValue, NowUtc.AddDays(-1).AddHours(-2)),
+                CompletedSale(transactionId: 4, YesterdayAfterTheCutoffSaleValue, NowUtc.AddDays(-1).AddHours(1)));
 
             await db.SaveChangesAsync();
             _seeded = true;
