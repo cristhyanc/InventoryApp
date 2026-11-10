@@ -425,6 +425,9 @@ public static class ApplicationServiceCollectionExtensions
         // because it is about the process rather than about one business.
         services.AddScoped<ReconcileNayaxSalesWithProvider>();
         services.AddScoped<ReviewNayaxSales>();
+        // The Dashboard's "costs need attention" read: products whose inventory-cost replay failed
+        // and is still pending, now that such a product no longer fails the sales sync.
+        services.AddScoped<GetProductsNeedingCostAttention>();
         // The slot-to-product lookup a queued Nayax SQS message needs (issue #1102), which an SQS
         // message cannot answer itself: it reports the machine's MDB slot and no product id.
         // Scoped like every other Nayax consumer, because the credentials, status gate and

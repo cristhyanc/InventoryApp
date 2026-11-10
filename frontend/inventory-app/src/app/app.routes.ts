@@ -29,6 +29,7 @@ import { PUBLIC_LAYOUT_DATA } from './public/public-layout';
 import { signedOutVisitorGuard } from './public/signed-out-visitor.guard';
 import { confirmPickListLeave } from './components/pick-list/pick-list-leave.guard';
 import { confirmProductFormLeave } from './components/products/product-form-leave.guard';
+import { confirmExpenseFormLeave } from './components/expenses/expense-form-leave.guard';
 
 /**
  * Every authenticated route carries `MsalGuard`, then, since issue #529, `accountStateGuard`, then
@@ -692,6 +693,25 @@ export const routes: Routes = [
       import('./components/admin/business-settings/business-settings.component').then(
         (m) => m.BusinessSettingsComponent
       )
+  },
+  {
+    // Add expense (issue #1167): the card the register used to open above itself is now a page of
+    // its own. It is a two-segment path, so Angular's exact matching keeps it clear of the
+    // three-segment `expenses/:id/edit` whatever the declaration order.
+    path: 'expenses/new',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
+    // Unsaved expense changes ask before they are lost (issue #1167).
+    canDeactivate: [confirmExpenseFormLeave],
+    loadComponent: () =>
+      import('./components/expenses/expense-form-page.component').then((m) => m.ExpenseFormPageComponent)
+  },
+  {
+    path: 'expenses/:id/edit',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
+    // Unsaved expense changes ask before they are lost (issue #1167).
+    canDeactivate: [confirmExpenseFormLeave],
+    loadComponent: () =>
+      import('./components/expenses/expense-form-page.component').then((m) => m.ExpenseFormPageComponent)
   },
   {
     path: 'expenses',

@@ -1,0 +1,198 @@
+<!--
+  The one expense form, used by Add expense and Edit expense (issue #1167), on the Restockroo `rr`
+  scale New/Edit Product established (issue #1111): bounded-width cards, aligned field groups, and an
+  action bar with the page's one primary action. Below `sm` every field stacks.
+
+  Three sections, in this order: Expense details, Amounts, Supporting details. The fieldset holds
+  every field still while a save is in flight or the expense is read-only; the action bar sits outside
+  it so Cancel stays reachable either way.
+-->
+<form class="min-w-0 space-y-6" novalidate data-testid="expense-form" (ngSubmit)="submit()">
+  <fieldset class="m-0 min-w-0 space-y-6 border-0 p-0" [disabled]="saving || readOnly" data-testid="expense-form-fields">
+    <!-- Expense details -->
+    <section
+      class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
+      aria-labelledby="expense-details-heading"
+      data-testid="expense-section-details"
+    >
+      <h2 id="expense-details-heading" class="m-0 mb-4 border-b border-rr-line pb-2 text-base font-semibold text-rr-navy">
+        Expense details
+      </h2>
+
+      <div class="grid items-start gap-4 sm:grid-cols-2">
+        <label class="field">
+          <span class="field-label">Date</span>
+          <input id="expense-date" class="min-h-11" type="date" name="expenseDate" [(ngModel)]="form.expenseDate" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Category</span>
+          <select id="expense-category" class="min-h-11 bg-white" name="category" [(ngModel)]="form.category">
+            @for (category of formCategories; track category) {
+              <option [ngValue]="category">{{ categoryLabel(category) }}</option>
+            }
+          </select>
+        </label>
+
+        <label class="field sm:col-span-2">
+          <span class="field-label">Description *</span>
+          <input
+            id="expense-description"
+            class="min-h-11"
+            name="description"
+            [(ngModel)]="form.description"
+            [attr.aria-invalid]="descriptionInvalid"
+            [attr.aria-describedby]="descriptionInvalid ? 'expense-description-error' : null"
+          />
+          @if (descriptionInvalid) {
+            <!-- Not colour alone: the sentence itself says what is wrong, and the input names it. -->
+            <span id="expense-description-error" class="field-error" data-testid="expense-description-error">
+              Description is required.
+            </span>
+          }
+        </label>
+      </div>
+    </section>
+
+    <!-- Amounts: three independent inputs, submitted exactly as entered. -->
+    <section
+      class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
+      aria-labelledby="expense-amounts-heading"
+      data-testid="expense-section-amounts"
+    >
+      <div class="mb-4 border-b border-rr-line pb-2">
+        <h2 id="expense-amounts-heading" class="m-0 text-base font-semibold text-rr-navy">Amounts</h2>
+        <p class="m-0 mt-0.5 text-xs text-rr-muted">
+          Enter the three amounts exactly as the supplier's document states them. Nothing here is
+          calculated for you.
+        </p>
+      </div>
+
+      <div class="grid items-start gap-4 sm:grid-cols-3">
+        <label class="field">
+          <span class="field-label">Amount ex GST</span>
+          <input id="expense-amount-ex-gst" class="min-h-11" type="number" step="0.01" name="amountExGst" [(ngModel)]="form.amountExGst" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">GST</span>
+          <input id="expense-gst" class="min-h-11" type="number" step="0.01" name="gstAmount" [(ngModel)]="form.gstAmount" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Total</span>
+          <input id="expense-total" class="min-h-11" type="number" step="0.01" name="totalAmount" [(ngModel)]="form.totalAmount" />
+        </label>
+      </div>
+    </section>
+
+    <!-- Supporting details -->
+    <section
+      class="rounded-xl border border-rr-line bg-white p-5 shadow-md-card sm:p-6"
+      aria-labelledby="expense-supporting-heading"
+      data-testid="expense-section-supporting"
+    >
+      <h2 id="expense-supporting-heading" class="m-0 mb-4 border-b border-rr-line pb-2 text-base font-semibold text-rr-navy">
+        Supporting details
+      </h2>
+
+      <div class="grid items-start gap-4 sm:grid-cols-2">
+        <label class="field">
+          <span class="field-label">Supplier</span>
+          <select id="expense-supplier" class="min-h-11 bg-white" name="supplierId" [(ngModel)]="form.supplierId">
+            <option [ngValue]="null">Whole business</option>
+            @for (supplier of suppliers; track supplier.id) {
+              <option [ngValue]="supplier.id">{{ supplier.name }}</option>
+            }
+          </select>
+        </label>
+
+        @if (machinesError) {
+          <div class="field">
+            <span class="field-label">Machine (optional)</span>
+            <p data-testid="machine-field-error" class="m-0 text-sm text-md-danger-text">{{ machinesError }}</p>
+          </div>
+        } @else if (machinesLoading) {
+          <div class="field">
+            <span class="field-label">Machine (optional)</span>
+            <output data-testid="machine-field-loading" class="field-hint">Loading machines…</output>
+          </div>
+        } @else if (machineFieldShown) {
+          <label class="field">
+            <span class="field-label">Machine (optional)</span>
+            <select id="expense-machine" class="min-h-11 bg-white" name="machineId" [(ngModel)]="form.machineId">
+              <option [ngValue]="null">None</option>
+              @for (machine of machineOptions; track machine.id) {
+                <option [ngValue]="machine.id">{{ machine.name }}</option>
+              }
+            </select>
+          </label>
+        }
+
+        <div class="min-w-0 sm:col-span-2">
+          <label class="field">
+            <span class="field-label">Supporting document</span>
+            <span class="field-hint">Receipt, invoice or other supporting document.</span>
+            <input
+              id="expense-attachment"
+              class="min-h-11"
+              type="file"
+              name="attachment"
+              [accept]="accept"
+              [disabled]="attachmentPreparing"
+              (change)="onAttachmentSelected($event)"
+            />
+          </label>
+
+          @if (attachmentPreparing) {
+            <!-- Issue #1161: the photo is shrunk here, so what is uploaded is what is stored. -->
+            <output data-testid="expense-attachment-preparing" class="field-hint">Preparing photo…</output>
+          }
+
+          @if (attachmentFileName) {
+            <p class="m-0 mt-2 flex flex-wrap items-center gap-2 text-sm text-rr-muted" data-testid="expense-current-attachment">
+              <span class="break-all font-medium text-rr-navy">{{ attachmentFileName }}</span>
+              <button
+                type="button"
+                class="btn btn-link btn-sm"
+                data-testid="expense-view-document"
+                (click)="viewDocumentRequested.emit()"
+              >
+                View document
+              </button>
+            </p>
+            <p class="m-0 mt-1 text-xs text-rr-muted" data-testid="expense-attachment-replacement-note">
+              Choosing a new file replaces the stored document.
+            </p>
+          }
+        </div>
+
+        <label class="field sm:col-span-2">
+          <span class="field-label">Notes</span>
+          <input id="expense-notes" class="min-h-11" name="notes" [(ngModel)]="form.notes" />
+        </label>
+      </div>
+    </section>
+  </fieldset>
+
+  <div class="flex flex-wrap items-center justify-end gap-3 border-t border-rr-line pt-4" data-testid="expense-form-actions">
+    <a
+      routerLink="/expenses"
+      [queryParams]="returnQueryParams"
+      class="rr-button-secondary"
+      data-testid="expense-form-cancel"
+    >
+      Cancel
+    </a>
+    @if (!readOnly) {
+      <button
+        type="submit"
+        class="rr-button-primary"
+        data-testid="expense-form-submit"
+        [disabled]="submitDisabled"
+      >
+        {{ submitLabel }}
+      </button>
+    }
+  </div>
+</form>

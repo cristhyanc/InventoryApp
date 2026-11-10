@@ -154,9 +154,9 @@ public enum NayaxSqsRefundApplication
 /// <para>The drain <strong>reports</strong> rather than throws, which issue #1103 needs on both
 /// sides: the queue reader has to tell "this message's product is still failing" from "some other
 /// product of this business is", because the first means keep the message and the second must not
-/// stop it being deleted. The request-driven sync raises these as the one
-/// <see cref="Costing.InventoryCostDataQualityException"/> it always has, so what an operator sees is
-/// unchanged.</para>
+/// stop it being deleted. The request-driven sync does not fail on them: the products keep their pending
+/// rows, and the Dashboard reports them through <see cref="Costing.GetProductsNeedingCostAttention"/>.
+/// The hourly reconciliation records no success while any is reported.</para>
 /// </param>
 public sealed record InventoryCostRebuildDrainResult(
     IReadOnlyCollection<long> StillPendingProductIds,

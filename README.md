@@ -429,7 +429,7 @@ Human-controlled setup this depends on, in addition to the External ID portal wo
 
 MSAL's protected-resource map (`buildProtectedResourceMap` in `auth-config.ts`) is built from `ConfigService.apiBaseUrl`, the same value every HTTP call uses (see [above](#2-how-the-frontend-finds-the-api)), so the bearer token attaches correctly to `/api/*` locally and to the deployed absolute API URL in production, without any code or configuration change between environments. `ConfigService` loads `assets/config.json` on the raw `HttpBackend` rather than the intercepted `HttpClient`, so the MSAL interceptor cannot be constructed — and cannot capture a stale API base URL — before that load has finished.
 
-Protected business documents (purchase documents and operating-expense supporting documents) are stored outside the API's web root and are served only by the authenticated `/api/purchases/{id}/file` and `/api/operating-expenses/{id}/attachment` endpoints. The API registers no static-file middleware, so these documents have no anonymous URL; the frontend fetches them through `HttpClient` and renders them from a temporary object URL.
+Protected business documents (purchase documents and operating-expense supporting documents) are stored outside the API's web root and are served only by the authenticated `/api/purchases/{id}/file` and `/api/operating-expenses/{id}/attachment` endpoints. The API registers no static-file middleware, so these documents have no anonymous URL; the frontend fetches them through `HttpClient` and renders them from a temporary object URL. Since issue #1167 an operating expense and its supporting document are added and edited on their own pages, `/expenses/new` and `/expenses/:id/edit`, rather than in a card on the `/expenses` register, under exactly the same attachment rules: the same upload, the same replacement of a stored document by a newly chosen one, no remove action, and the server still the sole authority on size, type and the business's storage quota.
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
@@ -844,7 +844,7 @@ Beside it, `entitlement.attachmentStorage` carries the business's attachment sto
 
 Each plan includes an amount of purchase and expense attachment storage, and that allowance is enforced once plans are being enforced (issue #968). It is about **documents only**: nothing here ever stops a purchase, an expense or any other record being saved.
 
-- **What counts.** The sizes of the attachments the business's purchases and expenses actually refer to, plus any upload it has in progress. A file left in storage that no record refers to is **not** charged to the business, and neither is an attachment whose size was never recorded — both are reported by [`reconcile-attachment-storage`](#reconciling-attachment-storage-against-the-records-issue-968) instead.
+- **What counts.** The sizes of the attachments the business's purchases and expenses actually refer to, plus any upload it has in progress. A file left in storage that no record refers to is **not** charged to the business, and neither is an attachment whose size was never recorded — both are reported by [`reconcile-attachment-storage`](#reconciling-attachment-storage-against-the-records-issue-968) instead. A phone photo is shrunk in the browser before it is sent, so what counts is that smaller file (see [Photos are shrunk before they are uploaded](#photos-are-shrunk-before-they-are-uploaded)).
 - **Deleting frees it immediately.** Deleting a purchase, an expense or an attachment releases its bytes as soon as that change is saved, whether or not the stored file is removed successfully.
 - **At 80% the business is warned**, and the warning state travels with the plan in the access read above, so the app can say so before anything is refused.
 - **At 100% only new uploads pause.** Viewing, downloading and deleting attachments keep working, and so does recording purchases and expenses — a purchase can be saved [without a receipt](#a-purchase-without-a-receipt) and the document added later. An upload that does not fit is refused with a sentence that says the record can still be saved without it, and nothing is written to storage.
@@ -2321,7 +2321,8 @@ downloads from the list like any other.
   and if somebody else attaches one between your choosing a file and pressing the button, you are told the
   purchase already has a document rather than having theirs quietly thrown away.
 - The receipt itself follows the same rules it always has: an image or a PDF, up to 10 MB. A file that is
-  refused leaves the purchase exactly as it was, with no document recorded.
+  refused leaves the purchase exactly as it was, with no document recorded. A photo is shrunk before it is
+  sent (see [Photos are shrunk before they are uploaded](#photos-are-shrunk-before-they-are-uploaded)).
 - **Add document** is not offered while a Super Admin is looking at your business in a support session, for
   the same reason Delete is not: a support session can read, never write.
 
@@ -2373,6 +2374,29 @@ and record it through Add Purchase as usual, which is still where a purchase is 
 Receipt scanning is off until a key is configured — see
 [`ReceiptScanning__ApiKey`](#configuration-and-secrets) — and the key is provisioned only after the monthly
 scan cap (issue #1164) is in place. The **Scan receipt** screen itself is issue #1166.
+
+## Photos are shrunk before they are uploaded
+
+A photo taken on a phone is routinely 3-8 MB, and on an iPhone it is usually HEIC - a format most browsers
+cannot even display. So when you attach a **photo** to a purchase (on Add Purchase, on Edit purchase, or with
+**Add document** on the Purchases list) or to an **operating expense**, your browser prepares it before it
+leaves your device:
+
+- A photo longer than 2000 px on its longest side is scaled down to 2000 px and saved as a JPEG. A receipt
+  stays easy to read, and a 4 MB photo typically becomes about half a megabyte.
+- A photo taken sideways is uploaded the right way up: the camera's own orientation flag is applied.
+- An **iPhone HEIC** photo is converted to JPEG where your browser can read HEIC (Safari can; Chrome and
+  Firefox cannot). Where it cannot, the original HEIC is uploaded exactly as it is - it is still an accepted
+  file, and nothing stops you attaching it.
+- **PDFs are never touched**, and neither is an image that is already small (under 1 MB and within 2000 px).
+  Nothing is uploaded that is *larger* than what you chose: if shrinking would not help, your own file is sent.
+- The size shown beside the file name, what is stored, and what counts against your plan's
+  [attachment storage](#attachment-storage) are all the file that was actually uploaded.
+- Preparing a photo takes a moment, during which the form says **Preparing photo…** and Save waits for it, so
+  a purchase or an expense is never saved without the receipt you attached.
+
+Nothing about the server's rules changed: an attachment is still an image or a PDF of up to 10 MB, and the
+server decides, exactly as before.
 
 ## Receiving a supplier order: keep it open, or complete it
 

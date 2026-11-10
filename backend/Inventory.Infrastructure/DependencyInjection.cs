@@ -446,6 +446,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         // The Nayax sales review of issue #1105: the Owner's decisions and the Dashboard summary.
         services.AddScoped<INayaxSaleReviewStore, EfNayaxSaleReviewStore>();
+        services.AddScoped<IProductCostAttentionReader, EfProductCostAttentionReader>();
         services.AddScoped<INayaxReconciliationSuccessStore, EfNayaxReconciliationSuccessStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();

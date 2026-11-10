@@ -235,6 +235,8 @@ public class EndpointPlanRequirementTests
 
         // The sales sync is the provider read the Dashboard starts with.
         new("NayaxSalesSyncController.SyncLatest", PlanRequirementKind.ViaProviderGate), // POST api/nayax-sales-sync
+        // The products whose cost replay failed: a read of the business's own rows, no provider call.
+        new("InventoryCostAttentionController.List", PlanRequirementKind.None), // GET api/inventory-cost-attention
 
         // The self-service application runs with a denied scope and creates the business itself.
         new("OnboardingController.Apply", PlanRequirementKind.None), // POST api/onboarding/business-applications

@@ -61,6 +61,7 @@ public static class WeightedAverageCostReplay
         decimal inventoryValue = baseline?.InventoryValue ?? 0;
         decimal? targetSaleUnitCost = null;
         var hasCostedAcquisition = baseline is not null;
+        decimal? lastPurchaseUnitCost = null;
 
         if (baseline is null && events.Count == 0 && product.QuantityInStock != 0 &&
             product.CostingQuantity is null && product.InventoryValue is null)
@@ -106,6 +107,9 @@ public static class WeightedAverageCostReplay
 
                 var (assignedUnitCost, assignedTotalCost) = ApplyAdjustmentCost(
                     product, adjustment, ref costingQuantity, ref inventoryValue, ref hasCostedAcquisition, issues);
+                if (adjustment.Reason == StockAdjustmentReason.Restock && adjustment.QuantityChange > 0 &&
+                    adjustment.UnitCost is { } purchaseUnitCost && purchaseUnitCost >= 0)
+                    lastPurchaseUnitCost = purchaseUnitCost;
                 adjustmentOutcomes.Add(new(
                     adjustment,
                     physicalQuantity,
@@ -121,6 +125,27 @@ public static class WeightedAverageCostReplay
             var unitCost = AverageUnitCost(costingQuantity, inventoryValue);
             if (!unitCost.HasValue || unitCost.Value < 0)
             {
+                // Precedence, as the repository owner decided on 10 November 2026 (AGENTS.md § Inventory
+                // and historical costing invariants): the ledger has no known cost before this sale -
+                // its costed stock was never recorded, or ran out - so the sale takes the unit cost of
+                // the latest costed purchase replayed before it, else the cost Nayax sent with it.
+                // Nothing is fabricated into the ledger: the sale consumes no costing quantity or
+                // value, because the ledger never held the unit it sold, and recording the missing
+                // purchase or a costing repair before it makes the next replay cost it from the
+                // ledger again.
+                var fallback = lastPurchaseUnitCost is { } purchaseCost
+                    ? (UnitCost: (decimal?)purchaseCost, Source: CostReplaySaleCostSource.LastPurchase)
+                    : sale.NayaxProductCostPrice is { } nayaxCost && nayaxCost >= 0
+                        ? (UnitCost: nayaxCost, Source: CostReplaySaleCostSource.NayaxCost)
+                        : (UnitCost: null, Source: CostReplaySaleCostSource.Ledger);
+                if (fallback.UnitCost is { } fallbackCost)
+                {
+                    issues.Add(new(CostDataQualityIssueCodes.CostFallback,
+                        $"Completed Nayax sale {sale.TransactionId} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no known opening cost at {sale.AuthorizationTime:O} and was costed at its {(fallback.Source == CostReplaySaleCostSource.LastPurchase ? "latest purchase" : "Nayax")} cost."));
+                    saleCosts.Add(new(sale, fallbackCost, fallback.Source));
+                    continue;
+                }
+
                 issues.Add(new(hasCostedAcquisition ? CostDataQualityIssueCodes.UnknownCost : CostDataQualityIssueCodes.MissingOpening,
                     $"Completed Nayax sale {sale.TransactionId} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no known opening cost at {sale.AuthorizationTime:O}."));
                 uncostableSales.Add(sale);

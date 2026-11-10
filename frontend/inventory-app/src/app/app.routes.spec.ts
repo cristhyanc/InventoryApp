@@ -46,6 +46,9 @@ import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
 import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
 import { SupplierOrdersComponent } from './components/purchases/supplier-orders.component';
+import { ExpenseFormPageComponent } from './components/expenses/expense-form-page.component';
+import { OperatingExpenseComponent } from './components/expenses/operating-expense.component';
+import { confirmExpenseFormLeave } from './components/expenses/expense-form-leave.guard';
 
 /** A stand-in for whichever page a guard under test is mounted in front of. */
 @Component({ standalone: true, template: 'guarded page' })
@@ -124,6 +127,54 @@ describe('Purchase edit route (issue #475)', () => {
     await expect(loadedComponent('purchases')).resolves.toBe(PurchaseListComponent);
     await expect(loadedComponent('purchases/new')).resolves.toBe(PurchaseUploadComponent);
     await expect(loadedComponent('purchases/orders')).resolves.toBe(SupplierOrdersComponent);
+  });
+});
+
+/**
+ * Add expense and Edit expense (issue #1167), which replaced the card the `/expenses` register used
+ * to open above itself. Both carry exactly the three guards `/expenses` carries - the same
+ * capability over the same expenses - and the leave guard that asks before unsaved changes are lost.
+ */
+describe('Expense form routes (issue #1167)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('serves the Add expense page at /expenses/new, behind the three Expenses.Manage guards', async () => {
+    const guards = route('expenses/new').canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent('expenses/new')).resolves.toBe(ExpenseFormPageComponent);
+  });
+
+  it('serves the Edit expense page at /expenses/:id/edit, behind the same three guards', async () => {
+    const guards = route('expenses/:id/edit').canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent('expenses/:id/edit')).resolves.toBe(ExpenseFormPageComponent);
+  });
+
+  it('requires Expenses.Manage, and nothing else, on both pages', async () => {
+    for (const path of ['expenses/new', 'expenses/:id/edit']) {
+      const capabilityGuard = (route(path).canActivate ?? [])[2] as CanActivateFn;
+
+      expect(await navigateWithCapability(capabilityGuard, ['Expenses.Manage'])).toBe('/target');
+      expect(await navigateWithCapability(capabilityGuard, ['Inventory.Operate', 'Reports.View'])).toBe(
+        `/${ACCESS_NOT_ALLOWED_PATH}`
+      );
+    }
+  });
+
+  it('asks before unsaved expense changes are lost, on both pages', () => {
+    expect(route('expenses/new').canDeactivate).toEqual([confirmExpenseFormLeave]);
+    expect(route('expenses/:id/edit').canDeactivate).toEqual([confirmExpenseFormLeave]);
+  });
+
+  it('leaves /expenses resolving to the register, which keeps no leave guard of its own', async () => {
+    await expect(loadedComponent('expenses')).resolves.toBe(OperatingExpenseComponent);
+    expect(route('expenses').canDeactivate).toBeUndefined();
   });
 });
 

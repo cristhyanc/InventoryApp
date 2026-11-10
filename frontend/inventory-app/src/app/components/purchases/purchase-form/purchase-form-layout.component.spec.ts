@@ -95,6 +95,32 @@ describe('PurchaseFormLayoutComponent (issue #1029)', () => {
     expect(save.textContent?.trim()).toBe('Save purchase');
   });
 
+  /**
+   * Issue #1161: the receipt field shrinks a chosen photo before it reports it, so saving in the
+   * meantime would create the purchase with no receipt at all. Save waits for it.
+   */
+  it('holds Save while the receipt field is still preparing a chosen photo', async () => {
+    await render({ items: [pricedLine()] });
+    const submitted = jest.fn();
+    component.submitted.subscribe(submitted);
+    const receipt = host.querySelector<HTMLElement>('[data-testid="purchase-receipt"]');
+    expect(receipt).not.toBeNull();
+
+    component.onReceiptPreparing(true);
+    refresh();
+
+    expect((byTestId('purchase-save') as HTMLButtonElement).disabled).toBe(true);
+    component.submit();
+    expect(submitted).not.toHaveBeenCalled();
+
+    component.onReceiptPreparing(false);
+    refresh();
+
+    expect((byTestId('purchase-save') as HTMLButtonElement).disabled).toBe(false);
+    component.submit();
+    expect(submitted).toHaveBeenCalledTimes(1);
+  });
+
   it('shows no red errors on an untouched new line, and every problem once Save is pressed', async () => {
     await render({ items: [newLine()] });
     const submitted = jest.fn();

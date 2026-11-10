@@ -41,6 +41,37 @@ export interface OperatingExpense {
   notes?: string | null;
 }
 
+/**
+ * One recorded expense as `GET /api/operating-expenses/{id}` publishes it (issue #1167).
+ *
+ * It is **not** {@link OperatingExpense}, the list row: this endpoint answers the API's
+ * `OperatingExpenseResponse`, which nests the whole `supplier` object instead of flattening it to a
+ * `supplierName`, and adds `createdAt`/`updatedAt`. A client that read `supplierName` here would
+ * read `undefined` on every expense, so the supplier's name is taken from `supplier?.name`.
+ */
+export interface OperatingExpenseDetail {
+  id: number;
+  expenseDate: string;
+  category: OperatingExpenseCategory;
+  description: string;
+  amountExGst: number;
+  gstAmount: number;
+  totalAmount: number;
+  supplierId?: number | null;
+  /** The whole supplier, or `null` for an expense recorded against the whole business. */
+  supplier?: { id: number; name: string } | null;
+  siteId?: number | null;
+  machineId?: number | null;
+  attachmentFileName?: string | null;
+  attachmentContentType?: string | null;
+  attachmentFileSizeBytes?: number | null;
+  servicePeriodStart?: string | null;
+  servicePeriodEnd?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** What create and update submit. `machineId` is a local machine id, as above. */
 export interface OperatingExpensePayload {
   expenseDate: string;
@@ -71,6 +102,16 @@ export class OperatingExpenseService {
     if (filters.machineId !== undefined) params = params.set('machineId', filters.machineId);
     return this.http.get<OperatingExpense[]>(this.baseUrl, { params });
   }
+  /**
+   * One expense, for the Edit expense page (issue #1167). The API answers `404` both for an expense
+   * that does not exist and for one belonging to another business, so the caller treats the two the
+   * same way - as an expense it cannot show - which is the whole of what the tenant boundary tells a
+   * client.
+   */
+  getById(id: number): Observable<OperatingExpenseDetail> {
+    return this.http.get<OperatingExpenseDetail>(`${this.baseUrl}/${id}`);
+  }
+
   create(payload: OperatingExpensePayload, attachment?: File | null): Observable<OperatingExpense> {
     return attachment
       ? this.http.post<OperatingExpense>(this.baseUrl, this.toFormData(payload, attachment))
