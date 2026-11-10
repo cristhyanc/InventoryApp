@@ -78,6 +78,19 @@ public enum PlanFeature
     /// what the business actually paid and is on every plan.</para>
     /// </summary>
     ObservedSupplierPrices = 60,
+
+    /// <summary>
+    /// Turning a receipt image or PDF into a suggested purchase draft (issue #1163, child of #975):
+    /// <c>POST /api/purchases/scan</c>.
+    ///
+    /// <para><strong>It is the one feature that fails closed</strong>
+    /// (<see cref="PlanFeaturePolicy.FailsClosedWhileUnenforced"/>): every scan spends real money at
+    /// an external reader, so while the rollout setting is off - when every other feature is
+    /// unrestricted for everybody - this one is refused rather than opened to every business at
+    /// once. Recording a purchase, attaching its receipt and every other part of purchasing stay on
+    /// every plan; this is only the reading of the image.</para>
+    /// </summary>
+    ReceiptScanning = 70,
 }
 
 /// <summary>
@@ -99,6 +112,7 @@ public static class PlanFeatures
         PlanFeature.SiteCommissions,
         PlanFeature.SalesFileImport,
         PlanFeature.ObservedSupplierPrices,
+        PlanFeature.ReceiptScanning,
     ];
 
     /// <summary>Whether <paramref name="feature"/> is one this code declares.</summary>
@@ -119,6 +133,7 @@ public static class PlanFeatures
         PlanFeature.SiteCommissions => "SiteCommissions",
         PlanFeature.SalesFileImport => "SalesFileImport",
         PlanFeature.ObservedSupplierPrices => "ObservedSupplierPrices",
+        PlanFeature.ReceiptScanning => "ReceiptScanning",
         _ => throw new ArgumentOutOfRangeException(
             nameof(feature), feature, "Only a declared plan feature has a published name."),
     };
@@ -134,11 +149,16 @@ public static class PlanFeatures
 /// credential gate refuses and what the plan page will eventually advertise cannot disagree. The
 /// enforcement points supply it with facts; none of them restates a plan.</para>
 ///
-/// <para><strong>Not enforced is not a plan.</strong> While the rollout setting is off, or while the
-/// grandfathering step has not completed, <see cref="EffectiveEntitlement.Enforced"/> is
-/// <see langword="false"/> and <see cref="Allows"/> is <see langword="true"/> for every feature -
-/// which is the shipped state, and is what makes "until enforcement is switched on, nothing changes
-/// for any business" a property of this one rule rather than of each call site.</para>
+/// <para><strong>Not enforced is not a plan, with one declared exception.</strong> While the rollout
+/// setting is off, or while the grandfathering step has not completed,
+/// <see cref="EffectiveEntitlement.Enforced"/> is <see langword="false"/> and <see cref="Allows"/> is
+/// <see langword="true"/> for every feature a business could already use - which is the shipped
+/// state, and is what makes "until enforcement is switched on, nothing changes for any business" a
+/// property of this one rule rather than of each call site. The exception is a feature that
+/// <see cref="FailsClosedWhileUnenforced"/> names: a feature that costs money per use has no
+/// unrestricted state to fall back to, because "unrestricted" there would mean every business in the
+/// deployment, at the application owner's expense. It is a row in this table rather than a check at a
+/// call site for exactly the reason every other plan decision is.</para>
 ///
 /// <para><strong>Otherwise it fails closed.</strong> An entitlement that is enforced and carries no
 /// plan, or carries one this deployment does not declare, allows nothing that is not free: there is
@@ -164,8 +184,43 @@ public static class PlanFeaturePolicy
         PlanFeature.SiteCommissions => SubscriptionPlan.Pro,
         PlanFeature.SalesFileImport => SubscriptionPlan.Pro,
         PlanFeature.ObservedSupplierPrices => SubscriptionPlan.Starter,
+        PlanFeature.ReceiptScanning => SubscriptionPlan.Pro,
         _ => throw new ArgumentOutOfRangeException(
             nameof(feature), feature, "Only a declared plan feature has a required plan."),
+    };
+
+    /// <summary>
+    /// Whether <paramref name="feature"/> is refused while nothing is enforced, instead of being
+    /// unrestricted like everything else (issue #1163).
+    ///
+    /// <para><strong>Almost nothing is in this list, and a new entry is a commercial decision.</strong>
+    /// The rollout setting being off means "this deployment has not started charging anybody", and the
+    /// honest answer to "may this business use a feature it is not being charged for?" is yes - for
+    /// every feature whose cost is already paid for by running the application at all. A feature that
+    /// spends money at an external service per use is different in kind: there is no state in which
+    /// giving it to every business is the cautious answer, so it is refused with the ordinary plan
+    /// message until the business really is on the plan that includes it.</para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="feature"/> is not declared. There is no fail-closed answer to invent for a
+    /// feature this code does not know.
+    /// </exception>
+    public static bool FailsClosedWhileUnenforced(PlanFeature feature) => feature switch
+    {
+        PlanFeature.SalesProviderIntegration => false,
+        PlanFeature.BookkeepingAndGstReports => false,
+        PlanFeature.ProviderSalesReports => false,
+        PlanFeature.SiteCommissions => false,
+        PlanFeature.SalesFileImport => false,
+        PlanFeature.ObservedSupplierPrices => false,
+        // Every scan spends money at the reader, so there is no "nothing is enforced yet" state in
+        // which opening it to every business is the safe answer (issue #1163, and the launch gate on
+        // #1164's monthly cap).
+        PlanFeature.ReceiptScanning => true,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(feature),
+            feature,
+            "Only a declared plan feature has a fail-closed answer."),
     };
 
     /// <summary>
@@ -189,7 +244,9 @@ public static class PlanFeaturePolicy
 
         if (!entitlement.Enforced)
         {
-            return true;
+            // Unrestricted for everything a business could already use, and refused for the one kind
+            // of feature that has no unrestricted state (issue #1163).
+            return !FailsClosedWhileUnenforced(feature);
         }
 
         return entitlement.Plan is { } plan

@@ -772,6 +772,7 @@ Prices are AUD per business per month, as agreed on issue #965. Whether the adve
 | Daily cheapest-supplier comparisons | — | Yes | Yes |
 | Bookkeeping and GST reports, with exports | — | Yes | Yes |
 | Nayax connection and everything that needs it (below) | — | — | Yes |
+| [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) | — | — | Yes |
 | Connected machines included | — | — | 5, then A$2/month each |
 
 A **connected machine** is a machine on the business's Nayax account, whether or not it is linked in this application; a manual machine is not one. Being above the included allowance is **billed, never blocked**. How that count is taken, how old it may be, and what happens when the Nayax account changes are in [Connected machines and the Pro allowance](#connected-machines-and-the-pro-allowance-issue-978).
@@ -784,7 +785,7 @@ The split is the same one the application already makes for a business with no u
 
 - **Local, and on every plan:** the dashboard, Machines (the business's own records), Inventory — products, categories, Take Inventory, stock history — Purchases, Supplier orders, Suppliers, Expenses, **manual pick-list entry** (recording a pick, including [one run across several machines](#entering-one-pick-run-across-several-machines-issue-904)), and the **Track supplier prices** switch itself (see below).
 - **Starter adds** the daily cheapest-supplier comparisons ([The cheapest supplier, on Needs Ordering](#the-cheapest-supplier-on-needs-ordering) and [Track supplier prices on a product](#track-supplier-prices-on-a-product)) and the two reports that need no provider: **Bookkeeping** and **GST**, with their CSV/XLSX exports.
-- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list).
+- **Pro adds** everything that needs the Nayax connection: Sites, Site Commissions, the **Daily**, **Transactions**, **Reconciliation**, **Machines** and **Products** reports, machine latest sales, Sync Restock, the dashboard's sales refresh, the Nayax sales file import under Admin → Imports, and the **calculated pick-list matrix** (the existing automated connected pick list). It also adds [scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163), which needs no Nayax connection but does cost money per use — and is the one feature that stays refused while enforcement is off, for that reason. Recording a purchase and attaching its receipt stay on every plan.
 
 A paid plan and a usable Nayax connection are separate conditions: a Pro business whose credentials are missing or have stopped working sees exactly today's connection-required pages, and a connected Free or Starter business sees the same "no usable provider" behaviour it would without credentials.
 
@@ -878,6 +879,7 @@ The application stores almost no personal data. It holds a vending business's ow
 - **A member who has never signed in has neither value stored**, and no migration, deployment or startup step ever fills them in: the only thing that writes them is that member's own token. Exactly one surface reads them: the Owner-only members list above (issue #533), which shows them to that business's own Owner and reports an explicit `null` for a member who has never signed in. No other API response carries either value, and the audit event for a member change deliberately carries neither.
 - **An invite's note is free text an Owner typed** (issue #531), so it may well name the person being invited. It is stored on the invite row, shown back to that business's own Owners on the invite list, and nothing else: it decides nothing, nothing looks an invite up by it, and it is deliberately absent from the invite audit event. An invite stores no name and no email address of the person it is for — only the role it grants and the Entra pair of the Owner who created it.
 - **Uploaded business documents** (purchase and expense attachments) may contain whatever the supplier's paperwork contains. They are stored outside the API web root, are readable only through authenticated endpoints, and are never committed to this repository.
+- **A scanned receipt is sent to Anthropic to be read, and this application stores none of it** (issue #1163, [Scanning a receipt into a purchase draft](#scanning-a-receipt-into-a-purchase-draft-issue-1163)). When a Pro business scans a receipt, what leaves this application is the receipt image or PDF itself and the **names and ids of that business's own products and suppliers** — nothing else about either: no cost, no stock level, no price, no GST rule, no contact detail, and nothing about any other business. A receipt is a supplier's paperwork and may name the business, its site and what it bought. **Nothing is stored by this application as a result**: not the file, not the reader's answer, not the draft, and no purchase — the suggestion is returned to the member who asked for it and forgotten. The scan is recorded only as a count: the business id, the outcome, how long it took, how many pages and how many tokens, with **no receipt text, file name or product name in any log**. Scanning is off entirely unless a key is configured ([`ReceiptScanning__ApiKey`](#configuration-and-secrets)), and no other feature sends anything to Anthropic. **Businesses must be told this before the feature is launched**, which belongs with the terms and privacy text the Scan receipt screen (issue #1166) is released behind.
 - **A platform administrator may be granted a time-limited, audited, read-only look at a business's data** (issues #550 and #551). A [support session](#super-admin-support-sessions) records which business, which administrator, why they needed to look, and when the session ran and ended; it lasts 60 minutes, only one may be open at a time, and the record cannot be edited or deleted by the surface that creates it. A request made inside one reads that business and can change nothing — not a row, not a document — and never uses the business's Nayax credentials; it cannot see the members page at all, so members' names and email addresses stay private. Every such request is audited with the endpoint it reached, never with what it read. **Businesses must be told this is possible**, which v1 does in the terms and privacy text; notifying a business's Owners in the app is a documented follow-up. The reason the administrator typed is stored and logged on purpose: it is what makes such access reviewable afterwards.
 
 See [docs/architecture.md § Member display name and email](docs/architecture.md#member-display-name-and-email-issue-524) for the design and the exact write path.
@@ -899,6 +901,12 @@ NayaxSqs__Region
 NayaxSqs__AccessKeyId
 NayaxSqs__SecretAccessKey
 NayaxSqs__VisibilityTimeoutSeconds
+ReceiptScanning__ApiKey
+ReceiptScanning__Model
+ReceiptScanning__TimeoutSeconds
+ReceiptScanning__MaxImageBytes
+ReceiptScanning__MaxPdfBytes
+ReceiptScanning__MaxPdfPages
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
 ExternalId__Instance
@@ -922,6 +930,8 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 `NayaxTokenProtection__ActiveKeyId` and `NayaxTokenProtection__Keys__<key-id>` are the encryption keys a business's **own** stored Nayax access token is protected with (issue #518). Each key is a base64-encoded 256-bit (32-byte) AES key and is a secret: set it with `dotnet user-secrets` locally or Key Vault/App Service configuration in Azure, and never commit it. `ActiveKeyId` names the key new ciphertext is produced with, and the key id is stored beside each ciphertext, so a rotation adds a second `Keys__<key-id>` entry and repoints `ActiveKeyId` while the previous key stays configured until nothing names it any more; removing a key is what retires it, and it makes anything still encrypted with it undecryptable on purpose. A half-configured section — an active key id with no matching key, a value that is not base64, a key of the wrong length — fails at startup with the setting named. **The section is empty in `appsettings.json`, and that is the shipped state**: with no key configured the API starts and runs completely normally, and only storing or reading a *per-business* Nayax token fails closed. Since issue #520 that is what every Nayax call does, so **an environment that uses Nayax must have a key provisioned** — it is a human step, and it must happen before the existing business's credential is moved into the table by [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) (issue #519), which refuses with the setting named until it is. Keep the key configured afterwards: removing the key that encrypted a stored token is what makes that token undecryptable. An environment with no Nayax integration at all needs no key and is unaffected. See [docs/architecture.md § Per-business Nayax connection](docs/architecture.md#per-business-nayax-connection-issue-518) and [§ Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520).
 
 `NayaxSqs__*` are the six settings of the [Nayax SQS sales reader](#the-nayax-sqs-sales-reader-issue-1103) below. `NayaxSqs__SecretAccessKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. The other five are not secrets but are still **absent from `appsettings.json`, which is the shipped state**: with no `NayaxSqs__QueueUrl` the reader is not started at all, the API starts and runs exactly as it did before, and one information line says the reader is off. A queue URL **with** a missing region, key id or secret fails at startup with the setting named, because a deployment that asked for the reader and silently imported nothing would be worse than one that refused to start. `NayaxSqs__VisibilityTimeoutSeconds` must match the queue's own visibility timeout (120 seconds); blank or out of range falls back to that default. All six are read once at startup, so filling them in takes effect on the next restart.
+
+`ReceiptScanning__*` are the settings of [receipt scanning](#scanning-a-receipt-into-a-purchase-draft-issue-1163) (issue #1163). `ReceiptScanning__ApiKey` is a **secret**: set it with `dotnet user-secrets` locally or a Key Vault reference in Azure, never commit it, and never put it in a log, an issue or a pull request. It is **absent from `appsettings.json`, which is the shipped state**: with no key, `POST /api/purchases/scan` answers `503 "Receipt scanning is not available"`, nothing leaves the process, and the rest of the API is untouched — so **deploying without the key is safe**. A key configured beside a broken setting beside it — a blank model, a timeout of zero, a limit of zero, a non-https base URL — fails at startup with the setting named. The other five are not secrets: `ReceiptScanning__Model` defaults to the model decided on issue #1163 on 10 November 2026 after a test on 8 real receipts, `ReceiptScanning__TimeoutSeconds` to 60 (there is **no automatic retry** — a retried scan is a second payment), and `MaxImageBytes`, `MaxPdfBytes` and `MaxPdfPages` to the reader's documented image, PDF and page limits; they are settings rather than constants because a vendor's limits change, and the 10 MB purchase document ceiling applies first in any case. All are read once at startup, so filling them in takes effect on the next restart. **The production key is set only after issue #1164's 100-scan monthly cap is deployed and plan enforcement is on** (the launch gate recorded on #1163); until plan enforcement is on, scanning is refused for every business whatever the key says, because it is the one plan feature that [fails closed](#how-a-plan-is-enforced).
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
@@ -2314,6 +2324,47 @@ downloads from the list like any other.
   refused leaves the purchase exactly as it was, with no document recorded.
 - **Add document** is not offered while a Super Admin is looking at your business in a support session, for
   the same reason Delete is not: a support session can read, never write.
+
+## Scanning a receipt into a purchase draft (issue #1163)
+
+A **Pro** business can have a receipt read for it instead of typing it in. `POST /api/purchases/scan` takes one
+receipt — a JPEG, PNG or WebP photo, or a PDF, up to the same 10 MB a receipt attachment may be — and answers a
+**suggested purchase draft**: the supplier, the purchase date, the invoice number, the receipt total, the
+delivery and packaging charges, and one entry per line with its packs, units per pack, units, amount and unit
+cost. Every value says whether it was **read** off the receipt or **suggested** here, and each line lists what
+is still **missing** so the form can ask for exactly those figures.
+
+**Nothing is saved.** No file is stored, no draft is kept and no purchase is created: you edit the suggestion
+and record it through Add Purchase as usual, which is still where a purchase is created and validated.
+
+- **It needs the Pro plan and the same permission as recording a purchase.** A Free or Starter business is
+  refused with the usual "needs Pro" answer, and nothing is sent anywhere. It is also the one feature that is
+  refused while [plan enforcement](#how-a-plan-is-enforced) is switched off, because every scan costs real
+  money at an outside service — there is no state in which giving it to every business is the cautious answer.
+- **A HEIC photo is refused with "Convert the photo to JPEG and try again."** iPhones often save photos in a
+  format the reader cannot read, even though you can perfectly well attach one to a purchase.
+- **Quantities are what was delivered, not what was ordered**, and a line delivered as nothing is left out.
+- **A pack size that is not printed on the receipt stays unknown** — never 1. A carton whose size the receipt
+  does not state comes back with no units and asks you for the pack size, rather than quietly recording a
+  carton's price as the price of one bottle.
+- **A container deposit levy goes to the drinks it was charged for**, when the receipt's own totals say it is
+  not already inside the drink prices. When they say it is — the usual case for an online order that prints it
+  twice — nothing is added. When the totals say neither, no line's cost is changed and the levy comes back as
+  its own line flagged for review.
+- **Delivery, freight and shipping become the delivery cost, and bags become the packaging cost.** A line that
+  is not stock for resale — an office item, a service fee — comes back as its own "other" line with no product
+  suggested.
+- **Prices are converted to the GST-inclusive figures this application records.** A line printed without GST
+  that the receipt marks as taxable has 10% added; one whose GST the receipt does not state comes back with no
+  unit cost rather than a figure that could be 10% out.
+- **A product or supplier is only ever suggested from your own list**, and a suggestion you do not want is
+  just an edit away. The line always keeps the text the receipt printed.
+- **If the receipt cannot be read** you are told so and nothing else happens: enter the purchase manually.
+  There is no automatic retry, because a retry is a second charge.
+
+Receipt scanning is off until a key is configured — see
+[`ReceiptScanning__ApiKey`](#configuration-and-secrets) — and the key is provisioned only after the monthly
+scan cap (issue #1164) is in place. The **Scan receipt** screen itself is issue #1166.
 
 ## Receiving a supplier order: keep it open, or complete it
 

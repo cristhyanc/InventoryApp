@@ -41,6 +41,10 @@ public class PurchasesControllerTests
             new DeletePurchase(store, storage),
             new ComputePurchaseTotalValidation(),
             new ComputePurchaseGstSummary(),
+            // Receipt scanning in its shipped state - no reader configured - because this file is
+            // about the purchase endpoints; the scan's own tests are ReceiptScanApiTests (issue
+            // #1163).
+            TestPurchaseUseCases.Scan(),
             // An Owner, so a line's nested product carries its inventory value; the role-dependent
             // shape itself is StockAndPurchasingFinancialRedactionApiTests (issue #700).
             TestCurrentCapabilities.Owner);

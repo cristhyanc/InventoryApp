@@ -34,6 +34,7 @@ using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
@@ -59,6 +60,7 @@ using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.NayaxSqs;
+using Inventory.Infrastructure.ReceiptScanning;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Reporting;
@@ -381,6 +383,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IBulkProductGstRuleStore, EfBulkProductGstRuleStore>();
         services.AddScoped<IProductCatalogStore, EfProductCatalogStore>();
         services.AddScoped<IPurchaseStore, EfPurchaseStore>();
+        // The one read receipt scanning makes of the business's own data (issue #1163): two columns
+        // each of its products and suppliers, through the ordinary tenant query filters.
+        services.AddScoped<IReceiptScanCatalogueStore, EfReceiptScanCatalogueStore>();
         services.AddScoped<IInventoryMovementStore, EfInventoryMovementStore>();
         services.AddScoped<IInventoryCostLedgerStore, EfInventoryCostLedgerStore>();
         services.AddScoped<ISaleCostingStore, EfSaleCostingStore>();
@@ -731,6 +736,59 @@ public static class InfrastructureServiceCollectionExtensions
         // Constructed now rather than lazily: validation of the key section belongs at startup.
         var protector = new AesGcmNayaxTokenProtector(options);
         services.AddSingleton<INayaxTokenProtector>(protector);
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers everything receipt scanning needs behind its Application ports (issue #1163): the
+    /// settings, the PDF page counter, the log sink and the typed <c>HttpClient</c> that talks to the
+    /// reader.
+    ///
+    /// Separate from <see cref="AddInfrastructureServices"/>, like <see cref="AddNayaxLynxClient"/>
+    /// and <see cref="AddNayaxTokenProtection"/>, because only the composition root reads
+    /// configuration - which keeps the API key out of Inventory.Application and Inventory.Domain
+    /// entirely. The key is held by <see cref="ReceiptScanningConfiguration"/> and is deliberately not
+    /// reachable through <see cref="IReceiptScanSettings"/>, which is what the use case sees.
+    ///
+    /// <para><strong>Two outcomes, and both are deliberate.</strong> With no
+    /// <c>ReceiptScanning:ApiKey</c> the feature is off: <see cref="IReceiptScanSettings.IsConfigured"/>
+    /// is <see langword="false"/>, the endpoint answers "not available" before anything is read, and
+    /// nothing leaves the process - which is the shipped state and the state of every test host. With
+    /// a key and a broken setting beside it, registration fails here, at startup, with the setting
+    /// named (see <see cref="ReceiptScanningConfiguration.From"/>).</para>
+    ///
+    /// <para>The typed client is registered either way, with the configured base address and the
+    /// configured timeout, because an unconfigured reader refuses on its own
+    /// (<see cref="ClaudeReceiptReader"/> makes no unauthenticated call) and a container that composes
+    /// identically in both states is one fewer thing that can differ between environments. The
+    /// timeout is the <c>HttpClient</c>'s, which is what makes "no automatic retry" structural: there
+    /// is no resilience handler here, deliberately, unlike the Nayax client - a retried scan is a
+    /// second payment.</para>
+    /// </summary>
+    /// <param name="services">The container being built.</param>
+    /// <param name="options">The receipt scanning settings, bound from configuration.</param>
+    /// <exception cref="InvalidOperationException">
+    /// An API key is configured together with a setting that cannot be used.
+    /// </exception>
+    public static IServiceCollection AddReceiptScanning(
+        this IServiceCollection services,
+        ReceiptScanningOptions options)
+    {
+        // Validated now rather than lazily, for the reason the token protection section is: a
+        // half-configured section belongs at startup, not at the first scan.
+        var configuration = ReceiptScanningConfiguration.From(options);
+
+        services.AddSingleton(configuration);
+        services.AddSingleton<IReceiptScanSettings>(configuration);
+        services.AddSingleton<IPdfPageCounter, PdfPageCounter>();
+        services.AddSingleton<IReceiptScanLog, LoggingReceiptScanLog>();
+
+        services.AddHttpClient<IReceiptReader, ClaudeReceiptReader>(http =>
+        {
+            http.BaseAddress = configuration.BaseAddress;
+            http.Timeout = configuration.Timeout;
+        });
 
         return services;
     }

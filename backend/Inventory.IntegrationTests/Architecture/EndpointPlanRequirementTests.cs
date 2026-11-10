@@ -305,6 +305,11 @@ public class EndpointPlanRequirementTests
         new("PurchasesController.GetFile", PlanRequirementKind.None), // GET api/purchases/{id:int}/file
         new("PurchasesController.Update", PlanRequirementKind.None), // PUT api/purchases/{id:int}
         new("PurchasesController.Upload", PlanRequirementKind.None), // POST api/purchases
+        // Reading a receipt is the one purchasing endpoint a plan decides (issue #1163, child of
+        // #975): it spends money at an external reader on every call, which is also why it is the
+        // one feature that fails closed while plan enforcement is off. Recording the purchase the
+        // draft becomes, and attaching the same receipt to it, stay on every plan above.
+        new("PurchasesController.Scan", PlanRequirementKind.Declared, PlanFeature.ReceiptScanning), // POST api/purchases/scan
 
         // The reports. The two that need no provider are Starter; the other six are Pro; the export
         // takes the feature of whichever report it was asked for.
@@ -584,6 +589,7 @@ public class EndpointPlanRequirementTests
     [InlineData("NayaxConnectionController.Save", SubscriptionPlan.Pro)]
     [InlineData("NayaxConnectionController.Retest", SubscriptionPlan.Pro)]
     [InlineData("CheapestSuppliersController.Summary", SubscriptionPlan.Starter)]
+    [InlineData("PurchasesController.Scan", SubscriptionPlan.Pro)]
     public void The_listed_endpoints_require_the_plan_the_issue_assigns_them(
         string endpointKey,
         SubscriptionPlan expected)
@@ -637,6 +643,28 @@ public class EndpointPlanRequirementTests
 
         Assert.Equal(PlanRequirementKind.Declared, entry.Kind);
         Assert.Equal(PriceCollectionEligibilityPolicy.Feature, entry.Feature);
+    }
+
+    /// <summary>
+    /// Issue #1163's fail-closed criterion, read off the endpoint: the receipt scan declares the one
+    /// feature that is refused while plan enforcement is off, and it is the only endpoint in the API
+    /// that declares such a feature. A second one would mean a second surface that is unavailable in
+    /// the shipped state, which is a commercial decision rather than an implementation detail.
+    /// </summary>
+    [Fact]
+    public void Exactly_the_receipt_scan_declares_the_fail_closed_feature()
+    {
+        var failClosed = Inventory
+            .Where(entry => entry.Feature is { } feature
+                && PlanFeaturePolicy.FailsClosedWhileUnenforced(feature))
+            .Select(entry => entry.Endpoint)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["PurchasesController.Scan"], failClosed);
+        Assert.True(
+            PlanFeaturePolicy.FailsClosedWhileUnenforced(PlanFeature.ReceiptScanning),
+            "The receipt scan endpoint must declare the feature that fails closed (issue #1163).");
     }
 
     /// <summary>

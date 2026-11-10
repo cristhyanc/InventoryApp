@@ -21,7 +21,9 @@ This is a small, single-maintainer project without a formal SLA. The maintainer 
 
 In scope: the ASP.NET Core API (`backend/InventoryApi`), the Angular frontend (`frontend/inventory-app`), the GitHub Actions automation in `.github/workflows/`, and repository configuration that affects the security of the above (for example `.gitignore` gaps that could lead to a secret being committed).
 
-Out of scope: third-party services this project depends on (Nayax, Microsoft Entra ID, Azure) — report issues in those services to their respective owners.
+Out of scope: third-party services this project depends on (Nayax, Microsoft Entra ID, Azure, and Anthropic for receipt scanning) — report issues in those services to their respective owners.
+
+One thing this application sends to a third party is worth stating here, because it is business data rather than a credential: when a Pro business **scans a receipt** (issue #1163), the receipt image or PDF and the names and ids of that business's own products and suppliers are sent to Anthropic to be read. Nothing about the scan is stored by this application — not the file, not the answer, not the draft — and no receipt text, file name or product name reaches a log. The feature is off unless an API key is configured. See [README.md § Privacy](README.md#privacy-the-personal-data-this-application-stores) and [docs/architecture.md § Receipt scanning](docs/architecture.md#receipt-scanning-issue-975).
 
 ## Supported versions
 

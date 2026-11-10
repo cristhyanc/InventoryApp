@@ -691,6 +691,8 @@ public sealed class PurchaseGstClassificationTests : IDisposable
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation(),
             new ComputePurchaseGstSummary(),
+            // Receipt scanning in its shipped state - no reader configured (issue #1163).
+            TestPurchaseUseCases.Scan(),
             // An Owner: this file is about GST classification, not about who may see an inventory
             // value, which StockAndPurchasingFinancialRedactionApiTests covers (issue #700).
             TestCurrentCapabilities.Owner);

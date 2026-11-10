@@ -32,6 +32,7 @@ using Inventory.Application.PlatformPlans;
 using Inventory.Application.PriceCatalogue;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
+using Inventory.Application.ReceiptScanning;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Daily;
@@ -445,6 +446,10 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<AttachPurchaseDocument>();
         services.AddScoped<UpdatePurchase>();
         services.AddScoped<DeletePurchase>();
+        // Reading a receipt into a suggested purchase draft (issue #1163). Scoped like every other
+        // use case, and it writes nothing: it holds no store that can write, opens no transaction and
+        // never reaches document storage.
+        services.AddScoped<ScanReceipt>();
         services.AddScoped<ListActiveSupplierOrders>();
         services.AddScoped<GetSupplierOrder>();
         services.AddScoped<CreateSupplierOrder>();
