@@ -62,12 +62,19 @@ public interface IReceiptScanSettings
 /// which is Infrastructure's work (AGENTS.md § Repository map: imported-file readers). The rule about
 /// the number it answers - the limit, and what an unreadable PDF means - stays in
 /// <c>Inventory.Domain.ReceiptScanning.ReceiptScanFilePolicy</c>.</para>
+///
+/// <para><strong>The number must be the pages the document can actually reach, never a count it
+/// declares about itself.</strong> A page count read from the file's own claim is a limit the file
+/// sets for itself: a document declaring one page while holding two hundred would pass the limit and
+/// be uploaded whole (the repair of 10 November 2026). An implementation that cannot verify the
+/// structure answers <see langword="null"/>, which is a refusal.</para>
 /// </summary>
 public interface IPdfPageCounter
 {
     /// <summary>
-    /// How many pages <paramref name="content"/> holds, or <see langword="null"/> when it is not a
-    /// PDF this counter can read - which is a refusal, never an assumption of one page.
+    /// How many pages <paramref name="content"/> holds, verified from the document's own structure,
+    /// or <see langword="null"/> when it is not a PDF whose pages this counter can verify - which is
+    /// a refusal, never an assumption of one page.
     /// </summary>
     int? Count(ReadOnlySpan<byte> content);
 }

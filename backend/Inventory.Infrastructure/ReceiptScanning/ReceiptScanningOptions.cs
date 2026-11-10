@@ -91,9 +91,10 @@ public sealed class ReceiptScanningConfiguration : IReceiptScanSettings
 
     /// <summary>
     /// The default PDF size limit: 32 MB, the reader's documented per-request ceiling. In practice
-    /// the purchase document rules cap a receipt at 10 MB first
-    /// (<c>Inventory.Domain.Purchases.PurchaseDocumentPolicy</c>), so this is the looser of the two
-    /// and exists so the pair cannot silently disagree if that ceiling ever rises.
+    /// the scan endpoint's own upload cap of eight million bytes stops a request first, and the
+    /// purchase document rules cap a receipt at 10 MB after it
+    /// (<c>Inventory.Domain.Purchases.PurchaseDocumentPolicy</c>), so this is the loosest of the
+    /// three and exists so they cannot silently disagree if either ceiling ever rises.
     /// </summary>
     public const long DefaultMaxPdfBytes = 32L * 1024 * 1024;
 

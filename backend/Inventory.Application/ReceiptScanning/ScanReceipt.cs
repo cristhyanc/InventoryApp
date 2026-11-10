@@ -165,9 +165,9 @@ public sealed class ScanReceipt
                 _settings.MaxPdfPages));
 
     /// <summary>
-    /// The file's bytes, read once into memory. A receipt is at most the purchase document ceiling -
-    /// 10 MB - and the reader needs the whole of it, so there is nothing to stream to and nowhere to
-    /// put a temporary copy.
+    /// The file's bytes, read once into memory. A receipt is at most the endpoint's upload cap -
+    /// eight million bytes, inside the purchase document ceiling of 10 MB - and the reader needs the
+    /// whole of it, so there is nothing to stream to and nowhere to put a temporary copy.
     /// </summary>
     private static async Task<byte[]> ReadAsync(PurchaseFileInput file, CancellationToken cancellationToken)
     {

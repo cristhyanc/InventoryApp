@@ -8,6 +8,7 @@ using Inventory.Domain.ReceiptScanning;
 using Inventory.Domain.Subscriptions;
 using Inventory.Infrastructure.ReceiptScanning;
 using InventoryApi.Auth;
+using InventoryApi.Tests.ReceiptScanning;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
@@ -129,6 +130,50 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(0, _factory.Reader.Calls);
+    }
+
+    /// <summary>
+    /// The issue's page-limit criterion over HTTP, and the repair of 10 November 2026 behind it: the
+    /// limit is applied to the pages the document really reaches, not to the <c>/Count</c> it declares.
+    /// This is a complete PDF - catalogue, page tree, cross-reference table, trailer - that writes
+    /// <c>/Count 1</c> and reaches one more page than the configured limit allows. It is refused with
+    /// the page-limit message, and <strong>the reader is not called</strong>, so no part of a hundred
+    /// and one pages is ever uploaded or paid for.
+    /// </summary>
+    [Fact]
+    public async Task A_pdf_that_understates_its_page_count_is_refused_and_the_reader_is_not_called()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        var understated = PdfFixture.Flat(
+            pages: ReceiptScanningConfiguration.DefaultMaxPdfPages + 1,
+            declaredCount: 1);
+
+        var response = await _factory.AsOwner().PostAsync(
+            "/api/purchases/scan", File("receipt.pdf", "application/pdf", understated));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            ReceiptScanFilePolicy.PdfTooManyPagesMessage(ReceiptScanningConfiguration.DefaultMaxPdfPages),
+            await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, _factory.Reader.Calls);
+    }
+
+    /// <summary>
+    /// The other side of the same rule: a PDF within the limit is still scanned, and the page count
+    /// the reader is told is the verified one rather than the document's claim.
+    /// </summary>
+    [Fact]
+    public async Task A_pdf_within_the_page_limit_is_scanned_with_its_verified_page_count()
+    {
+        await _factory.GrantAsync(_factory.TradingBusinessId, SubscriptionPlan.Pro);
+        var twoPages = PdfFixture.Flat(pages: 2, declaredCount: 1);
+
+        var response = await _factory.AsOwner().PostAsync(
+            "/api/purchases/scan", File("receipt.pdf", "application/pdf", twoPages));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, _factory.Reader.Calls);
+        Assert.Equal(2, _factory.Reader.LastRequest!.File.PageCount);
     }
 
     /// <summary>A request with no file part is refused, and nothing is called.</summary>
@@ -305,9 +350,12 @@ public class ReceiptScanApiTests : IClassFixture<ReceiptScanApiTests.ReceiptScan
 
     private static MultipartFormDataContent Jpeg() => File("receipt.jpg", "image/jpeg");
 
-    private static MultipartFormDataContent File(string fileName, string contentType)
+    private static MultipartFormDataContent File(string fileName, string contentType) =>
+        File(fileName, contentType, Encoding.UTF8.GetBytes("not a real photograph"));
+
+    private static MultipartFormDataContent File(string fileName, string contentType, byte[] bytes)
     {
-        var content = new ByteArrayContent(Encoding.UTF8.GetBytes("not a real photograph"));
+        var content = new ByteArrayContent(bytes);
         content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
 
         return new MultipartFormDataContent { { content, "file", fileName } };

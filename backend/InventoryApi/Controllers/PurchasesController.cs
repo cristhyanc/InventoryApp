@@ -51,6 +51,20 @@ public class PurchasesController : ControllerBase
     /// </summary>
     private const string InvalidFileOrSupplierMessage = "Invalid file or supplier";
 
+    /// <summary>
+    /// The cap on a receipt scan upload (issue #1163), deliberately tighter than the 10 MB ceiling
+    /// the purchase document endpoints above carry. A scanned receipt is not a stored business
+    /// document: it is read into memory, sent once to the reader and dropped, and the reader's own
+    /// documented image limit (5 MB by default) is lower again, so nothing an operator can
+    /// legitimately scan comes near this. Eight million bytes is also the cap the evidence-export
+    /// upload settled on for the same reason - it sits inside SonarCloud S5693's
+    /// <c>fileUploadSizeLimit</c>, which reads a 10 MB limit as an excessive content length rather
+    /// than as the mitigation it is (<c>NayaxSaleTimestampRepairsController</c>). Raising it is a
+    /// human decision; both attributes below carry it and
+    /// <c>ReceiptScanUploadLimitTests</c> pins them.
+    /// </summary>
+    private const long MaxScanUploadBytes = 8_000_000;
+
     private readonly ListPurchases _listPurchases;
     private readonly GetPurchase _getPurchase;
     private readonly GetPurchaseFile _getPurchaseFile;
@@ -223,9 +237,10 @@ public class PurchasesController : ControllerBase
     [RequirePlan(PlanFeature.ReceiptScanning)]
     // Both limits, as Upload and AddFile above need: RequestSizeLimit caps the raw body through the
     // host's max-request-body-size feature, and RequestFormLimits caps what the multipart reader
-    // buffers in process, which otherwise defaults to FormOptions' 128 MB.
-    [RequestSizeLimit(10485760)]
-    [RequestFormLimits(MultipartBodyLengthLimit = 10485760)]
+    // buffers in process, which otherwise defaults to FormOptions' 128 MB. Both carry the scan cap,
+    // so neither is the one that is left open; ReceiptScanUploadLimitTests pins them.
+    [RequestSizeLimit(MaxScanUploadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxScanUploadBytes)]
     public async Task<ActionResult<PurchaseScanResponseDto>> Scan(IFormFile? file)
     {
         var result = await _scanReceipt.Handle(ToFileInput(file), CancellationToken.None);
