@@ -148,7 +148,7 @@ public sealed class ClaudeReceiptReader : IReceiptReader
         {
             ["model"] = model,
             ["max_tokens"] = MaxOutputTokens,
-            ["system"] = ReceiptReadPrompt.System(),
+            ["system"] = ReceiptReadPrompt.System,
             ["output_config"] = new JsonObject
             {
                 ["format"] = new JsonObject

@@ -183,6 +183,25 @@ public static class ReceiptScanDraftBuilder
             ? ReceiptScanValue<decimal>.Suggested(charges.Sum(line => line.Arithmetic.Amount!.Value))
             : null;
 
+    // A line whose amount the receipt printed and this application did not change is a
+    // quotation; one carrying a levy share, a discount or a GST conversion is not.
+    private static ReceiptScanValue<decimal>? AmountValue(
+        decimal? amount,
+        decimal levyShare,
+        ReceiptScanPayloadLine line)
+    {
+        if (amount is not { } total)
+        {
+            return null;
+        }
+
+        var isQuotation = levyShare == 0m
+            && line.DiscountTotal == 0m
+            && line.PriceBasis is ReceiptPriceGstBasis.IncludesGst;
+
+        return isQuotation ? ReceiptScanValue<decimal>.Read(total) : ReceiptScanValue<decimal>.Suggested(total);
+    }
+
     private static ReceiptScanLine ToDraftLine(
         EvaluatedLine line,
         decimal levyShare,
@@ -201,14 +220,7 @@ public static class ReceiptScanDraftBuilder
             // Suggested: the units are this application's product of two values it read, not a
             // figure the receipt printed.
             Suggested(line.Arithmetic.Units),
-            amount is { } total
-                // A line whose amount the receipt printed and this application did not change is a
-                // quotation; one carrying a levy share, a discount or a GST conversion is not.
-                ? (levyShare == 0m && line.Line.DiscountTotal == 0m
-                    && line.Line.PriceBasis is ReceiptPriceGstBasis.IncludesGst
-                        ? ReceiptScanValue<decimal>.Read(total)
-                        : ReceiptScanValue<decimal>.Suggested(total))
-                : null,
+            AmountValue(amount, levyShare, line.Line),
             Suggested(unitCost),
             // Only a stock line carries a product suggestion, and only one this business owns.
             line.Line.Kind is ReceiptLineKind.Stock

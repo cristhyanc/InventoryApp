@@ -32,11 +32,16 @@ internal static class ReceiptReadPrompt
     /// <summary>The schema's published name, sent with it.</summary>
     internal const string SchemaName = "receipt_draft";
 
+    private const string JsonString = "string";
+    private const string JsonInteger = "integer";
+    private const string JsonNumber = "number";
+    private const string DescriptionKey = "description";
+
     /// <summary>
     /// The instructions. They describe only how to read a receipt; nothing here can be changed by
     /// what a receipt says.
     /// </summary>
-    internal static string System() =>
+    internal const string System =
         """
         You read one supplier receipt, delivery docket or tax invoice for a small Australian
         vending-machine business and report what is printed on it as JSON.
@@ -139,19 +144,19 @@ internal static class ReceiptReadPrompt
         ["required"] = new JsonArray("lines"),
         ["properties"] = new JsonObject
         {
-            ["supplierName"] = Nullable("string", "The supplier's name exactly as printed."),
-            ["supplierId"] = Nullable("integer", "One of the supplied supplier ids, or null."),
-            ["orderDate"] = Nullable("string", "The date the order was placed, yyyy-MM-dd."),
-            ["receiptDate"] = Nullable("string", "The receipt, transaction or invoice date, yyyy-MM-dd."),
-            ["deliveryDate"] = Nullable("string", "The date the goods were delivered, yyyy-MM-dd."),
-            ["invoiceNumber"] = Nullable("string", "The supplier's invoice or order number as printed."),
-            ["receiptTotal"] = Nullable("number", "The total printed on the receipt, read once."),
+            ["supplierName"] = Nullable(JsonString, "The supplier's name exactly as printed."),
+            ["supplierId"] = Nullable(JsonInteger, "One of the supplied supplier ids, or null."),
+            ["orderDate"] = Nullable(JsonString, "The date the order was placed, yyyy-MM-dd."),
+            ["receiptDate"] = Nullable(JsonString, "The receipt, transaction or invoice date, yyyy-MM-dd."),
+            ["deliveryDate"] = Nullable(JsonString, "The date the goods were delivered, yyyy-MM-dd."),
+            ["invoiceNumber"] = Nullable(JsonString, "The supplier's invoice or order number as printed."),
+            ["receiptTotal"] = Nullable(JsonNumber, "The total printed on the receipt, read once."),
             ["receiptTotalIncludesGst"] = GstAnswer("Whether that printed total includes GST."),
-            ["gstTotal"] = Nullable("number", "The GST total, only if one is printed."),
+            ["gstTotal"] = Nullable(JsonNumber, "The GST total, only if one is printed."),
             ["lines"] = new JsonObject
             {
                 ["type"] = "array",
-                ["description"] = "One entry per printed line that was delivered.",
+                [DescriptionKey] = "One entry per printed line that was delivered.",
                 ["items"] = LineSchema(),
             },
         },
@@ -166,51 +171,51 @@ internal static class ReceiptReadPrompt
         {
             ["text"] = new JsonObject
             {
-                ["type"] = "string",
-                ["description"] = "The line exactly as printed.",
+                ["type"] = JsonString,
+                [DescriptionKey] = "The line exactly as printed.",
             },
             ["kind"] = new JsonObject
             {
-                ["type"] = "string",
+                ["type"] = JsonString,
                 ["enum"] = Tokens(ReceiptLineKinds.All.Select(ReceiptLineKinds.Name)),
-                ["description"] = "What the line is.",
+                [DescriptionKey] = "What the line is.",
             },
-            ["deliveredPacks"] = Nullable("integer", "Packs delivered, supplied, picked or shipped."),
-            ["orderedPacks"] = Nullable("integer", "Packs ordered, when printed. Never the quantity."),
+            ["deliveredPacks"] = Nullable(JsonInteger, "Packs delivered, supplied, picked or shipped."),
+            ["orderedPacks"] = Nullable(JsonInteger, "Packs ordered, when printed. Never the quantity."),
             ["packSize"] = new JsonObject
             {
-                ["type"] = "string",
+                ["type"] = JsonString,
                 ["enum"] = Tokens(ReceiptPackSizes.All.Select(ReceiptPackSizes.Name)),
-                ["description"] =
+                [DescriptionKey] =
                     "\"printed\" when the document prints the pack size, \"single\" for a genuine "
                     + "single item, \"notPrinted\" when it does not. Never guess a pack size.",
             },
-            ["unitsPerPack"] = Nullable("integer", "The printed pack size, only when packSize is \"printed\"."),
-            ["lineTotal"] = Nullable("number", "The line's printed total before discounts."),
-            ["discountTotal"] = Nullable("number", "Discounts printed under this item, as a positive amount."),
+            ["unitsPerPack"] = Nullable(JsonInteger, "The printed pack size, only when packSize is \"printed\"."),
+            ["lineTotal"] = Nullable(JsonNumber, "The line's printed total before discounts."),
+            ["discountTotal"] = Nullable(JsonNumber, "Discounts printed under this item, as a positive amount."),
             ["priceIncludesGst"] = GstAnswer("Whether the printed price includes GST."),
             ["taxable"] = GstAnswer("Whether the document marks this line as carrying GST."),
-            ["gstMarker"] = Nullable("string", "The GST marker you saw, as printed."),
-            ["productId"] = Nullable("integer", "One of the supplied product ids, or null."),
+            ["gstMarker"] = Nullable(JsonString, "The GST marker you saw, as printed."),
+            ["productId"] = Nullable(JsonInteger, "One of the supplied product ids, or null."),
             ["isDrinkContainer"] = new JsonObject
             {
                 ["type"] = "boolean",
-                ["description"] = "True for a drink in a deposit container.",
+                [DescriptionKey] = "True for a drink in a deposit container.",
             },
         },
     };
 
     private static JsonObject GstAnswer(string description) => new()
     {
-        ["type"] = "string",
+        ["type"] = JsonString,
         ["enum"] = Tokens(ReceiptGstAnswers.All),
-        ["description"] = description,
+        [DescriptionKey] = description,
     };
 
     private static JsonObject Nullable(string type, string description) => new()
     {
         ["type"] = new JsonArray(type, "null"),
-        ["description"] = description,
+        [DescriptionKey] = description,
     };
 
     private static JsonArray Tokens(IEnumerable<string> tokens)
